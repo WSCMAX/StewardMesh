@@ -22,6 +22,8 @@ const modules: Module[] = [
   ['Guide', 'Help and walkthroughs'],
 ]
 
+const issuesUrl = import.meta.env.VITE_ISSUES_URL ?? 'https://github.com/WSCMAX/StewardMesh/issues'
+
 export default function App() {
   const [health, setHealth] = useState('Checking service…')
   const [assets, setAssets] = useState<Asset[]>([])
@@ -60,7 +62,7 @@ export default function App() {
         <section aria-labelledby="modules-heading">
           <div className="flex items-end justify-between gap-4">
             <div><h2 id="modules-heading" className="text-xl font-semibold">StewardMesh modules</h2><p className="mt-1 text-sm text-slate-400">Every module has a plain-language descriptor and accessible help.</p></div>
-            <a className="text-sm text-cyan-300 underline underline-offset-4 hover:text-cyan-200" href="https://github.com/maxlemke/OpenInventory/issues">Report an issue</a>
+            <a className="text-sm text-cyan-300 underline underline-offset-4 hover:text-cyan-200" href={issuesUrl}>Report an issue</a>
           </div>
           <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {modules.map(([name, description]) => <article key={name} className="rounded-2xl border border-slate-800 bg-slate-900 p-5 shadow-xl shadow-black/10"><p className="text-lg font-semibold">{name}</p><p className="mt-2 text-sm text-slate-400">{description}</p></article>)}

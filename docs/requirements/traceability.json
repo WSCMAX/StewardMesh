@@ -39,6 +39,78 @@
           "web/src/App.tsx"
         ]
       }
+    },
+    {
+      "requirementId": "SEC-GUARD-001",
+      "featureId": "authorization.security",
+      "artifacts": {
+        "documentation": [
+          "docs/features/dictionary.md",
+          "docs/features/guard.md",
+          "docs/requirements/initial.md"
+        ],
+        "api": [
+          "api/openapi/openapi.yaml",
+          "api/proto/stewardmesh.proto"
+        ],
+        "code": [
+          "internal/config/config.go",
+          "internal/guard/contracts.go",
+          "internal/guard/password.go",
+          "internal/guard/rate_limiter.go",
+          "internal/guard/service.go",
+          "internal/httpapi/server.go",
+          "internal/repository/memory_guard.go",
+          "internal/repository/postgres/guard.go"
+        ],
+        "schema": [
+          "internal/repository/postgres/migrations/0004_guard_local_auth.sql"
+        ],
+        "tests": [
+          "internal/config/config_test.go",
+          "internal/guard/password_test.go",
+          "internal/guard/rate_limiter_test.go",
+          "internal/guard/service_test.go",
+          "internal/httpapi/server_test.go",
+          "internal/repository/contracttest/guard.go",
+          "internal/repository/memory_guard_test.go",
+          "internal/repository/postgres/postgres_integration_test.go"
+        ],
+        "ui": [
+          "web/src/App.tsx"
+        ]
+      }
+    },
+    {
+      "requirementId": "SEC-HTTP-001",
+      "featureId": "authorization.security",
+      "artifacts": {
+        "documentation": [
+          "docs/features/dictionary.md",
+          "docs/features/guard.md",
+          "docs/requirements/initial.md"
+        ],
+        "api": [
+          "api/openapi/openapi.yaml",
+          "api/proto/stewardmesh.proto"
+        ],
+        "code": [
+          "internal/config/config.go",
+          "internal/guard/contracts.go",
+          "internal/guard/service.go",
+          "internal/httpapi/server.go"
+        ],
+        "schema": [
+          "internal/repository/postgres/migrations/0004_guard_local_auth.sql"
+        ],
+        "tests": [
+          "internal/config/config_test.go",
+          "internal/httpapi/server_test.go"
+        ],
+        "ui": [
+          "web/src/App.tsx"
+        ]
+      }
     }
   ]
 }

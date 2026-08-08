@@ -14,6 +14,7 @@ import (
 	"github.com/maxlemke/stewardmesh/internal/config"
 	"github.com/maxlemke/stewardmesh/internal/domain"
 	"github.com/maxlemke/stewardmesh/internal/foundation"
+	"github.com/maxlemke/stewardmesh/internal/guard"
 	"github.com/maxlemke/stewardmesh/internal/httpapi"
 	"github.com/maxlemke/stewardmesh/internal/repository"
 	postgresrepository "github.com/maxlemke/stewardmesh/internal/repository/postgres"
@@ -22,6 +23,8 @@ import (
 
 type foundationRuntime struct {
 	organization domain.Organization
+	guardStore   guard.Store
+	auditor      foundation.Auditor
 	close        func() error
 }
 
@@ -51,14 +54,32 @@ func main() {
 		logger.Error("initialize blob store", "error", err)
 		os.Exit(1)
 	}
+	guardService, err := guard.NewService(
+		runtime.guardStore,
+		guard.NewArgon2idHasher(),
+		runtime.auditor,
+		nil,
+		guard.ServiceConfig{
+			OrganizationID: cfg.OrganizationID,
+			BootstrapToken: cfg.BootstrapToken,
+			SessionTTL:     cfg.SessionTTL,
+		},
+	)
+	cfg.BootstrapToken = ""
+	if err != nil {
+		logger.Error("initialize Guard", "error", err)
+		os.Exit(1)
+	}
 
 	handler := httpapi.NewServer(httpapi.Dependencies{
-		Assets:      assets,
-		Departments: catalog,
-		Users:       catalog,
-		Tags:        catalog,
-		Goals:       catalog,
-		Blobs:       blobStore,
+		Assets:              assets,
+		Departments:         catalog,
+		Users:               catalog,
+		Tags:                catalog,
+		Goals:               catalog,
+		Blobs:               blobStore,
+		Guard:               guardService,
+		SessionCookieSecure: cfg.SessionCookieSecure,
 	}, cfg.AllowedOrigin, runtime.organization)
 	server := &http.Server{
 		Addr:              cfg.Addr,
@@ -94,12 +115,14 @@ func main() {
 func initializeFoundation(ctx context.Context, cfg config.Config) (foundationRuntime, error) {
 	var (
 		organizations repository.OrganizationRepository
+		guardStore    guard.Store
 		auditor       foundation.Auditor = foundation.NopAuditor{}
 		closeRuntime                     = func() error { return nil }
 	)
 	switch cfg.RepositoryDriver {
 	case config.RepositoryDriverMemory:
 		organizations = repository.NewMemoryOrganizationRepository()
+		guardStore = repository.NewMemoryGuardStore()
 	case config.RepositoryDriverPostgres:
 		database, err := postgresrepository.Open(ctx, cfg.DatabaseURL)
 		if err != nil {
@@ -116,6 +139,11 @@ func initializeFoundation(ctx context.Context, cfg config.Config) (foundationRun
 			return foundationRuntime{}, err
 		}
 		auditor, err = postgresrepository.NewAuditor(database)
+		if err != nil {
+			database.Close()
+			return foundationRuntime{}, err
+		}
+		guardStore, err = postgresrepository.NewGuardStore(database)
 		if err != nil {
 			database.Close()
 			return foundationRuntime{}, err
@@ -166,5 +194,10 @@ func initializeFoundation(ctx context.Context, cfg config.Config) (foundationRun
 		closeRuntime()
 		return foundationRuntime{}, fmt.Errorf("audit organization bootstrap: %w", err)
 	}
-	return foundationRuntime{organization: organization, close: closeRuntime}, nil
+	return foundationRuntime{
+		organization: organization,
+		guardStore:   guardStore,
+		auditor:      auditor,
+		close:        closeRuntime,
+	}, nil
 }

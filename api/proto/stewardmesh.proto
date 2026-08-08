@@ -2,11 +2,27 @@ syntax = "proto3";
 
 package stewardmesh.v1;
 
+import "google/protobuf/timestamp.proto";
+
 option go_package = "github.com/maxlemke/stewardmesh/api/proto;stewardmeshv1";
+
+// Requirement: REQ-FOUNDATION-001.
+service FoundationService {
+  rpc GetOrganization(GetOrganizationRequest) returns (Organization);
+}
 
 service AssetService {
   rpc ListAssets(ListAssetsRequest) returns (ListAssetsResponse);
   rpc CreateAsset(CreateAssetRequest) returns (Asset);
+}
+
+message GetOrganizationRequest {}
+
+message Organization {
+  string id = 1;
+  string name = 2;
+  google.protobuf.Timestamp created_at = 3;
+  google.protobuf.Timestamp updated_at = 4;
 }
 
 message ListAssetsRequest {}

@@ -1,0 +1,43 @@
+{
+  "entries": [
+    {
+      "requirementId": "REQ-FOUNDATION-001",
+      "featureId": "platform.foundation",
+      "artifacts": {
+        "documentation": [
+          "docs/features/dictionary.md",
+          "docs/features/foundation.md",
+          "docs/requirements/initial.md"
+        ],
+        "api": [
+          "api/openapi/openapi.yaml",
+          "api/proto/stewardmesh.proto"
+        ],
+        "code": [
+          "internal/bootstrap/organization.go",
+          "internal/config/config.go",
+          "internal/foundation/contracts.go",
+          "internal/repository/contracts.go",
+          "internal/repository/postgres/database.go"
+        ],
+        "schema": [
+          "internal/repository/postgres/migrations/0001_organizations.sql",
+          "internal/repository/postgres/migrations/0002_audit_events.sql",
+          "internal/repository/postgres/migrations/0003_audit_events_organization_occurred_idx.sql"
+        ],
+        "tests": [
+          "cmd/stewardmesh/main_test.go",
+          "internal/bootstrap/organization_test.go",
+          "internal/httpapi/server_test.go",
+          "internal/repository/contracttest/organization.go",
+          "internal/repository/memory_organization_test.go",
+          "internal/repository/postgres/postgres_integration_test.go",
+          "internal/traceability/verify_test.go"
+        ],
+        "ui": [
+          "web/src/App.tsx"
+        ]
+      }
+    }
+  ]
+}

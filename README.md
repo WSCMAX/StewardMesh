@@ -12,9 +12,20 @@ The project standard is Go 1.26.5, Node.js 24.15+, React 19.2.8, TypeScript 7.0.
 
 ```sh
 cp .env.example .env
+set -a
+. ./.env
+set +a
+docker compose -f deploy/docker-compose.yml up -d --wait postgres
+export STEWARDMESH_TEST_DATABASE_URL="${STEWARDMESH_DATABASE_URL}"
 go test ./...
 go run ./cmd/stewardmesh
 ```
+
+PostgreSQL is the default durable foundation adapter. For a deliberate,
+non-durable evaluation without PostgreSQL, set
+`STEWARDMESH_REPOSITORY_DRIVER=memory`. See
+[Foundation](docs/features/foundation.md) for bootstrap, migration, audit, and
+provider-contract behavior.
 
 In another terminal:
 

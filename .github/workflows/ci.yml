@@ -10,6 +10,22 @@ permissions:
 jobs:
   go:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18.4-alpine
+        env:
+          POSTGRES_USER: stewardmesh
+          POSTGRES_PASSWORD: stewardmesh
+          POSTGRES_DB: stewardmesh
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U stewardmesh -d stewardmesh"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      STEWARDMESH_TEST_DATABASE_URL: postgres://stewardmesh:stewardmesh@localhost:5432/stewardmesh?sslmode=disable
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -17,6 +33,7 @@ jobs:
           go-version: '1.26.5'
       - run: go test -race ./...
       - run: go vet ./...
+      - run: go tool govulncheck ./...
 
   web:
     runs-on: ubuntu-latest
@@ -39,14 +56,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.5'
       - name: Verify core documentation
         run: test -f README.md && test -f docs/features/dictionary.md && test -f docs/requirements/initial.md
+      - name: Verify requirement traceability
+        run: go run ./cmd/tracecheck
 
   security:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: aquasecurity/trivy-action@master
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: fs
           scan-ref: .

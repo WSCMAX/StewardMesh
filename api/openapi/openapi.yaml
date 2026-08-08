@@ -1,0 +1,153 @@
+openapi: 3.1.0
+info:
+  title: StewardMesh API
+  version: 0.1.0
+  description: Requirements-driven inventory and lifecycle management API.
+servers:
+  - url: http://localhost:8080
+paths:
+  /healthz:
+    get:
+      operationId: getHealth
+      responses:
+        '200':
+          description: Service health
+  /api/v1/assets:
+    get:
+      operationId: listAssets
+      tags: [Atlas]
+      responses:
+        '200':
+          description: Asset collection
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AssetCollection'
+    post:
+      operationId: createAsset
+      tags: [Atlas]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Asset'
+      responses:
+        '201':
+          description: Asset created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Asset'
+        '400':
+          description: Invalid request
+  /api/v1/departments:
+    get:
+      operationId: listDepartments
+      tags: [People]
+      responses:
+        '200':
+          description: Department collection
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DepartmentCollection'}
+  /api/v1/users:
+    get:
+      operationId: listUsers
+      tags: [People]
+      responses:
+        '200':
+          description: User collection
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/UserCollection'}
+  /api/v1/tags:
+    get:
+      operationId: listTags
+      tags: [Threads]
+      responses:
+        '200':
+          description: Tag collection
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/TagCollection'}
+  /api/v1/goals:
+    get:
+      operationId: listGoals
+      tags: [Threads]
+      responses:
+        '200':
+          description: Goal collection
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/GoalCollection'}
+components:
+  schemas:
+    Asset:
+      type: object
+      required: [id, name, kind]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        kind: {type: string}
+        serialNumber: {type: string}
+        departmentId: {type: string}
+        userId: {type: string}
+        status: {type: string}
+        purchaseDate: {type: string, format: date-time}
+    AssetCollection:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/Asset'}
+    Department:
+      type: object
+      required: [id, name]
+      properties:
+        id: {type: string}
+        name: {type: string}
+    DepartmentCollection:
+      type: object
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/Department'}}
+    User:
+      type: object
+      required: [id, displayName, email]
+      properties:
+        id: {type: string}
+        displayName: {type: string}
+        email: {type: string, format: email}
+        departmentId: {type: string}
+    UserCollection:
+      type: object
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/User'}}
+    Tag:
+      type: object
+      required: [id, name, inheritByDefault]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        parentId: {type: string}
+        inheritByDefault: {type: boolean}
+    TagCollection:
+      type: object
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/Tag'}}
+    Goal:
+      type: object
+      required: [id, name]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        description: {type: string}
+    GoalCollection:
+      type: object
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/Goal'}}

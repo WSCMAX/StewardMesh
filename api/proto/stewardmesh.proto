@@ -1,0 +1,30 @@
+syntax = "proto3";
+
+package stewardmesh.v1;
+
+option go_package = "github.com/maxlemke/stewardmesh/api/proto;stewardmeshv1";
+
+service AssetService {
+  rpc ListAssets(ListAssetsRequest) returns (ListAssetsResponse);
+  rpc CreateAsset(CreateAssetRequest) returns (Asset);
+}
+
+message ListAssetsRequest {}
+
+message ListAssetsResponse {
+  repeated Asset items = 1;
+}
+
+message CreateAssetRequest {
+  Asset asset = 1;
+}
+
+message Asset {
+  string id = 1;
+  string name = 2;
+  string kind = 3;
+  string serial_number = 4;
+  string department_id = 5;
+  string user_id = 6;
+  string status = 7;
+}

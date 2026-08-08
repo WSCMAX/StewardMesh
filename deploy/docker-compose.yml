@@ -1,0 +1,14 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: stewardmesh
+      POSTGRES_PASSWORD: stewardmesh
+      POSTGRES_DB: stewardmesh
+    ports:
+      - "5432:5432"
+    volumes:
+      - stewardmesh-postgres:/var/lib/postgresql/data
+
+volumes:
+  stewardmesh-postgres:

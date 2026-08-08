@@ -47,29 +47,18 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 		organization:    organization,
 	}
 	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", server.health)
-	mux.HandleFunc("/api/v1/assets", server.assetsRoute)
-	mux.HandleFunc("/api/v1/departments", server.departments)
-	mux.HandleFunc("/api/v1/users", server.users)
-	mux.HandleFunc("/api/v1/tags", server.tags)
-	mux.HandleFunc("/api/v1/goals", server.goals)
+	mux.HandleFunc("GET /healthz", server.health)
+	mux.HandleFunc("GET /api/v1/assets", server.listAssets)
+	mux.HandleFunc("POST /api/v1/assets", server.createAsset)
+	mux.HandleFunc("GET /api/v1/departments", server.departments)
+	mux.HandleFunc("GET /api/v1/users", server.users)
+	mux.HandleFunc("GET /api/v1/tags", server.tags)
+	mux.HandleFunc("GET /api/v1/goals", server.goals)
 	return server.securityHeaders(server.cors(mux))
 }
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "product": "StewardMesh", "organizationId": s.organization.ID})
-}
-
-func (s *Server) assetsRoute(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case http.MethodGet:
-		s.listAssets(w, r)
-	case http.MethodPost:
-		s.createAsset(w, r)
-	default:
-		w.Header().Set("Allow", "GET, POST, OPTIONS")
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-	}
 }
 
 func (s *Server) listAssets(w http.ResponseWriter, r *http.Request) {

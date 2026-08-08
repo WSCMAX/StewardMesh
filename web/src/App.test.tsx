@@ -1,6 +1,6 @@
 import { render, screen } from '@testing-library/react'
 import { expect, test } from 'vitest'
-import App from './App.jsx'
+import App from './App'
 
 test('renders StewardMesh modules', () => {
   render(<App />)

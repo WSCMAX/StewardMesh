@@ -8,7 +8,7 @@ StewardMesh is being built with Go, React, Tailwind CSS, PostgreSQL, and provide
 
 ## Development
 
-Requirements: Go 1.21+, Node.js 22+, npm, and optionally Docker.
+The project standard is Go 1.26.5, Node.js 24.15+, React 19.2.8, TypeScript 7.0.2, and Tailwind CSS 4.3.3. Use the pinned versions in `go.mod`, `web/package.json`, and `web/package-lock.json`; optionally use Docker for PostgreSQL.
 
 ```sh
 cp .env.example .env
@@ -21,9 +21,12 @@ In another terminal:
 ```sh
 cd web
 npm install
+npm run typecheck
 npm test
 npm run dev
 ```
+
+The React application uses Tailwind CSS v4's CSS-first configuration and the stable React Compiler through the Vite plugin.
 
 The API is available at `http://localhost:8080`; the web application is available at `http://localhost:5173`.
 

@@ -1,6 +1,19 @@
 import { useEffect, useState } from 'react'
 
-const modules = [
+type Module = readonly [name: string, description: string]
+
+type Asset = {
+  id: string
+  name: string
+  kind: string
+  status: string
+}
+
+type AssetResponse = {
+  items?: Asset[]
+}
+
+const modules: Module[] = [
   ['Atlas', 'Asset inventory'],
   ['Horizon', 'Lifecycle planning'],
   ['Ledger', 'Procurement and budgets'],
@@ -11,15 +24,16 @@ const modules = [
 
 export default function App() {
   const [health, setHealth] = useState('Checking service…')
-  const [assets, setAssets] = useState([])
+  const [assets, setAssets] = useState<Asset[]>([])
 
   useEffect(() => {
     fetch('/healthz')
       .then((response) => response.json())
       .then(() => setHealth('Service connected'))
       .catch(() => setHealth('Start the Go service to connect'))
+
     fetch('/api/v1/assets')
-      .then((response) => response.json())
+      .then((response) => response.json() as Promise<AssetResponse>)
       .then((body) => setAssets(body.items ?? []))
       .catch(() => setAssets([]))
   }, [])

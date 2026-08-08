@@ -18,7 +18,8 @@
           "internal/config/config.go",
           "internal/foundation/contracts.go",
           "internal/repository/contracts.go",
-          "internal/repository/postgres/database.go"
+          "internal/repository/postgres/database.go",
+          "web/vite.config.ts"
         ],
         "schema": [
           "internal/repository/postgres/migrations/0001_organizations.sql",

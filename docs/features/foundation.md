@@ -35,6 +35,10 @@ The application shell announces the configured organization as polite status tex
 
 Use the configurable in-application issue link to report a Foundation problem. Include the correlation ID, but never include credentials or a database URL.
 
+## Application shell
+
+![Foundation application shell](../../output/playwright/foundation/stewardmesh-foundation.png)
+
 ## Audit events
 
 - `organization.bootstrap.created`

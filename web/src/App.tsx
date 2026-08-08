@@ -13,6 +13,13 @@ type AssetResponse = {
   items?: Asset[]
 }
 
+type Organization = {
+  id: string
+  name: string
+}
+
+const defaultIssuesUrl = 'https://github.com/WSCMAX/StewardMesh/issues'
+
 const modules: Module[] = [
   ['Atlas', 'Asset inventory'],
   ['Horizon', 'Lifecycle planning'],
@@ -22,17 +29,49 @@ const modules: Module[] = [
   ['Guide', 'Help and walkthroughs'],
 ]
 
-const issuesUrl = import.meta.env.VITE_ISSUES_URL ?? 'https://github.com/WSCMAX/StewardMesh/issues'
+export function resolvePublicUrl(value: string | undefined, fallback = defaultIssuesUrl) {
+  if (!value) return fallback
+  if (value.startsWith('/') && !value.startsWith('//')) return value
+  try {
+    const url = new URL(value)
+    const isLocalHttp = url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)
+    return url.protocol === 'https:' || isLocalHttp ? url.toString() : fallback
+  } catch {
+    return fallback
+  }
+}
+
+function isOrganization(value: unknown): value is Organization {
+  if (typeof value !== 'object' || value === null) return false
+  const candidate = value as Record<string, unknown>
+  return typeof candidate.id === 'string' && candidate.id.length > 0
+    && typeof candidate.name === 'string' && candidate.name.length > 0 && candidate.name.length <= 200
+}
+
+const issuesUrl = resolvePublicUrl(import.meta.env.VITE_ISSUES_URL)
 
 export default function App() {
   const [health, setHealth] = useState('Checking service…')
   const [assets, setAssets] = useState<Asset[]>([])
+  const [organizationName, setOrganizationName] = useState('Your organization')
 
   useEffect(() => {
     fetch('/healthz')
       .then((response) => response.json())
       .then(() => setHealth('Service connected'))
       .catch(() => setHealth('Start the Go service to connect'))
+
+    // REQ-FOUNDATION-001: surface the configured organization ownership boundary.
+    fetch('/api/v1/organization')
+      .then((response) => {
+        if (!response.ok) throw new Error('organization request failed')
+        return response.json() as Promise<unknown>
+      })
+      .then((organization) => {
+        if (!isOrganization(organization)) throw new Error('invalid organization response')
+        setOrganizationName(organization.name)
+      })
+      .catch(() => setOrganizationName('Your organization'))
 
     fetch('/api/v1/assets')
       .then((response) => response.json() as Promise<AssetResponse>)
@@ -47,6 +86,7 @@ export default function App() {
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.25em] text-cyan-300">Binary Cornfield presents</p>
             <h1 className="mt-1 text-2xl font-semibold tracking-tight">StewardMesh</h1>
+            <p className="mt-1 text-sm text-slate-400" aria-live="polite" data-requirement="REQ-FOUNDATION-001">{organizationName}</p>
           </div>
           <p className="rounded-full border border-emerald-500/30 px-3 py-1 text-sm text-emerald-300" aria-live="polite">{health}</p>
         </div>

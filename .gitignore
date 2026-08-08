@@ -14,5 +14,5 @@ web/.vite/
 *.test
 *.out
 
-data/
-storage/
+/data/
+/storage/

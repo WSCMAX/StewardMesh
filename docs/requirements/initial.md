@@ -10,3 +10,4 @@
 | SEC-HTTP-001 | The HTTP service uses secure defaults. | Timeouts, body limits, security headers, and input validation are covered by tests or configuration. |
 | A11Y-001 | The interface meets WCAG 2.2 AA at minimum. | Keyboard focus, semantic headings, reduced motion, and accessible status messaging are implemented and tested. |
 | DOC-001 | Feature behavior is discoverable. | Branded names always appear with plain-language descriptors and documentation links. |
+| DOC-002 | Users can report issues from the application. | The issue destination is configurable and defaults to the public StewardMesh issues page. |

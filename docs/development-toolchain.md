@@ -10,5 +10,8 @@ StewardMesh standardizes on the newest stable versions validated for the reposit
 | TypeScript | 7.0.2 | `web/package.json` |
 | Tailwind CSS | 4.3.3 | `web/package.json` |
 | Vite | 8.2.1 | `web/package.json` |
+| PostgreSQL | 18.4 | `deploy/docker-compose.yml` and CI |
+| pgx | 5.10.0 | `go.mod` |
+| govulncheck | 1.6.0 | `go.mod` |
 
 Dependencies are pinned exactly and refreshed deliberately. A toolchain upgrade must update the source-of-truth files, run all checks, and document any migration or compatibility changes.

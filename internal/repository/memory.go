@@ -23,6 +23,42 @@ type MemoryCatalog struct {
 	goals       []domain.Goal
 }
 
+type MemoryOrganizationRepository struct {
+	mu            sync.RWMutex
+	organizations map[string]domain.Organization
+}
+
+func NewMemoryOrganizationRepository() *MemoryOrganizationRepository {
+	return &MemoryOrganizationRepository{organizations: make(map[string]domain.Organization)}
+}
+
+func (r *MemoryOrganizationRepository) GetOrganization(_ context.Context, id string) (domain.Organization, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	organization, ok := r.organizations[id]
+	if !ok {
+		return domain.Organization{}, ErrNotFound
+	}
+	return organization, nil
+}
+
+func (r *MemoryOrganizationRepository) BootstrapOrganization(_ context.Context, organization domain.Organization) (domain.Organization, bool, error) {
+	if organization.ID == "" || organization.Name == "" || organization.CreatedAt.IsZero() ||
+		organization.UpdatedAt.IsZero() || organization.UpdatedAt.Before(organization.CreatedAt) {
+		return domain.Organization{}, false, errors.New("valid organization identity and timestamps are required")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if existing, ok := r.organizations[organization.ID]; ok {
+		existing.Name = organization.Name
+		existing.UpdatedAt = organization.UpdatedAt
+		r.organizations[organization.ID] = existing
+		return existing, false, nil
+	}
+	r.organizations[organization.ID] = organization
+	return organization, true, nil
+}
+
 func NewMemoryCatalog() *MemoryCatalog {
 	return &MemoryCatalog{}
 }

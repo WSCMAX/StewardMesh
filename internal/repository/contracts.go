@@ -12,6 +12,14 @@ type AssetRepository interface {
 	Create(ctx context.Context, asset domain.Asset) (domain.Asset, error)
 }
 
+// OrganizationRepository is the durable single-organization bootstrap seam.
+// PostgreSQL is the first adapter; DynamoDB must conform to this same contract.
+// Requirement: REQ-FOUNDATION-001.
+type OrganizationRepository interface {
+	GetOrganization(ctx context.Context, id string) (domain.Organization, error)
+	BootstrapOrganization(ctx context.Context, organization domain.Organization) (domain.Organization, bool, error)
+}
+
 // Postgres and DynamoDB adapters will implement these contracts without
 // leaking storage-specific behavior into application services.
 type DepartmentRepository interface {

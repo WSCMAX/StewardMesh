@@ -1,22 +1,137 @@
+# Requirements: SEC-GUARD-001, SEC-HTTP-001.
 openapi: 3.1.0
 info:
   title: StewardMesh API
-  version: 0.1.0
-  description: Requirements-driven inventory and lifecycle management API.
+  version: 0.2.0
+  description: Requirements-driven inventory, lifecycle, and secure organization management API.
+  license:
+    name: Apache License 2.0
+    identifier: Apache-2.0
 servers:
-  - url: http://localhost:8080
+  - url: /
+security: []
 paths:
   /healthz:
     get:
+      summary: Get service health
       operationId: getHealth
       responses:
         '200':
           description: Service health
+  /api/v1/auth/bootstrap:
+    get:
+      summary: Get administrator bootstrap status
+      operationId: getAdministratorBootstrapStatus
+      tags: [Guard]
+      x-requirement: SEC-GUARD-001
+      responses:
+        '200':
+          description: Whether one-time local administrator setup is required
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/BootstrapStatus'}
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      summary: Create the first administrator
+      operationId: bootstrapAdministrator
+      tags: [Guard]
+      x-requirement: SEC-GUARD-001
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/BootstrapAdministratorRequest'}
+      responses:
+        '201':
+          description: Administrator created and local session established
+          headers:
+            Set-Cookie:
+              description: HttpOnly, SameSite local session cookie; Secure and __Host-prefixed for HTTPS deployments
+              schema: {type: string}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SessionResponse'}
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: Administrator bootstrap is already complete
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+  /api/v1/auth/login:
+    post:
+      summary: Sign in with a local account
+      operationId: loginLocalAccount
+      tags: [Guard]
+      x-requirement: SEC-GUARD-001
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/LoginRequest'}
+      responses:
+        '200':
+          description: Local authentication succeeded
+          headers:
+            Set-Cookie:
+              description: Opaque HttpOnly session cookie
+              schema: {type: string}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SessionResponse'}
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          description: Authentication attempts are temporarily rate limited
+          headers:
+            Retry-After:
+              schema: {type: integer}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+  /api/v1/auth/session:
+    get:
+      summary: Get the current local session
+      operationId: getLocalSession
+      tags: [Guard]
+      x-requirement: SEC-GUARD-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200':
+          description: Current principal and a newly rotated synchronized CSRF token
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SessionResponse'}
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/v1/auth/logout:
+    post:
+      summary: Sign out the current session
+      operationId: logoutLocalSession
+      tags: [Guard]
+      x-requirement: SEC-GUARD-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        '204':
+          description: Session revoked and browser cookie expired
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
   /api/v1/organization:
     get:
+      summary: Get the configured organization
       operationId: getOrganization
       tags: [Foundation]
       x-requirement: REQ-FOUNDATION-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
       parameters:
         - in: header
           name: X-Correlation-ID
@@ -34,79 +149,202 @@ paths:
               schema: {type: string}
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/Organization'
+              schema: {$ref: '#/components/schemas/Organization'}
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
   /api/v1/assets:
     get:
+      summary: List assets
       operationId: listAssets
       tags: [Atlas]
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
       responses:
         '200':
           description: Asset collection
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/AssetCollection'
+              schema: {$ref: '#/components/schemas/AssetCollection'}
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
     post:
+      summary: Create an asset
       operationId: createAsset
       tags: [Atlas]
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/Asset'
+            schema: {$ref: '#/components/schemas/Asset'}
       responses:
         '201':
           description: Asset created
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/Asset'
+              schema: {$ref: '#/components/schemas/Asset'}
         '400':
-          description: Invalid request
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
   /api/v1/departments:
     get:
+      summary: List departments
       operationId: listDepartments
       tags: [People]
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
       responses:
         '200':
           description: Department collection
           content:
             application/json:
               schema: {$ref: '#/components/schemas/DepartmentCollection'}
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
   /api/v1/users:
     get:
+      summary: List users
       operationId: listUsers
       tags: [People]
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
       responses:
         '200':
           description: User collection
           content:
             application/json:
               schema: {$ref: '#/components/schemas/UserCollection'}
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
   /api/v1/tags:
     get:
+      summary: List tags
       operationId: listTags
       tags: [Threads]
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
       responses:
         '200':
           description: Tag collection
           content:
             application/json:
               schema: {$ref: '#/components/schemas/TagCollection'}
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
   /api/v1/goals:
     get:
+      summary: List goals
       operationId: listGoals
       tags: [Threads]
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
       responses:
         '200':
           description: Goal collection
           content:
             application/json:
               schema: {$ref: '#/components/schemas/GoalCollection'}
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
 components:
+  securitySchemes:
+    localCookieAuth:
+      type: apiKey
+      in: cookie
+      name: stewardmesh_session
+      description: Opaque server-side session identifier used only by loopback HTTP development.
+    secureCookieAuth:
+      type: apiKey
+      in: cookie
+      name: __Host-stewardmesh_session
+      description: Opaque, Secure, host-only server-side session identifier used by HTTPS deployments.
+  parameters:
+    CSRFToken:
+      in: header
+      name: X-CSRF-Token
+      required: true
+      description: Unpredictable synchronized token returned with the current session and kept only in application memory.
+      schema:
+        type: string
+        minLength: 32
+        maxLength: 128
+  responses:
+    InvalidRequest:
+      description: Invalid or malformed request
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    Unauthorized:
+      description: Authentication is required or the session is invalid
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    Forbidden:
+      description: CSRF, origin, bootstrap-token, or permission validation failed
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    InternalError:
+      description: Internal service error
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
   schemas:
+    BootstrapStatus:
+      type: object
+      required: [required, tokenRequired, minimumPasswordCharacters]
+      properties:
+        required: {type: boolean}
+        tokenRequired: {type: boolean}
+        minimumPasswordCharacters: {type: integer, minimum: 15}
+    BootstrapAdministratorRequest:
+      type: object
+      additionalProperties: false
+      required: [username, email, displayName, password]
+      properties:
+        username: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{2,63}$'}
+        email: {type: string, format: email, maxLength: 320}
+        displayName: {type: string, minLength: 1, maxLength: 200}
+        password: {type: string, format: password, writeOnly: true, minLength: 15, maxLength: 1024}
+        bootstrapToken: {type: string, format: password, writeOnly: true, minLength: 32, maxLength: 1024}
+    LoginRequest:
+      type: object
+      additionalProperties: false
+      required: [username, password]
+      properties:
+        username: {type: string, minLength: 1, maxLength: 64}
+        password: {type: string, format: password, writeOnly: true, maxLength: 1024}
+    SessionResponse:
+      type: object
+      required: [principal, csrfToken, expiresAt]
+      properties:
+        principal: {$ref: '#/components/schemas/Principal'}
+        csrfToken: {type: string, minLength: 32, maxLength: 128}
+        expiresAt: {type: string, format: date-time}
+    Principal:
+      type: object
+      required: [subject, organizationId, username, email, displayName, roles]
+      properties:
+        subject: {type: string, minLength: 1}
+        organizationId: {type: string, minLength: 1}
+        username: {type: string, minLength: 1}
+        email: {type: string, format: email}
+        displayName: {type: string, minLength: 1}
+        roles:
+          type: array
+          items: {type: string}
     Organization:
       type: object
       required: [id, name, createdAt, updatedAt]

@@ -1,6 +1,6 @@
 package postgres
 
-// Requirement: REQ-FOUNDATION-001.
+// Requirements: REQ-FOUNDATION-001, SEC-GUARD-001.
 
 import (
 	"context"
@@ -62,4 +62,38 @@ func TestOrganizationRepositoryIntegration(t *testing.T) {
 	if loaded.ID != id || loaded.Name != updated.Name {
 		t.Fatalf("unexpected persisted organization %#v", loaded)
 	}
+}
+
+func TestGuardStoreIntegration(t *testing.T) {
+	databaseURL := os.Getenv("STEWARDMESH_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("STEWARDMESH_TEST_DATABASE_URL is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	database, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := Migrate(ctx, database); err != nil {
+		t.Fatal(err)
+	}
+	organizations, err := NewOrganizationRepository(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	organizationID := fmt.Sprintf("guard-integration-%d", time.Now().UnixNano())
+	service, err := bootstrap.NewOrganizationService(organizations)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := service.EnsureOrganization(ctx, organizationID, "Guard Integration"); err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewGuardStore(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contracttest.GuardStore(t, store, organizationID)
 }

@@ -1,0 +1,7 @@
+# OpenAPI quality gate. Public status reads intentionally have no fabricated
+# 4xx response, so this single recommended rule is not applicable.
+extends:
+  - recommended
+
+rules:
+  operation-4xx-response: off

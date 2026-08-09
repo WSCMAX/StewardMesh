@@ -1,15 +1,169 @@
-import { render, screen } from '@testing-library/react'
-import { expect, test } from 'vitest'
+import axe from 'axe-core'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { beforeEach, expect, test, vi } from 'vitest'
 import App, { resolvePublicUrl } from './App'
 
-test('renders StewardMesh modules', () => {
+// Requirements: A11Y-001, SEC-GUARD-001.
+
+const session = {
+  principal: {
+    subject: 'account-1',
+    organizationId: 'example-org',
+    username: 'administrator',
+    email: 'administrator@example.test',
+    displayName: 'Example Administrator',
+    roles: ['Administrator'],
+  },
+  csrfToken: 'csrf-token-with-at-least-thirty-two-characters',
+  expiresAt: '2030-01-01T00:00:00Z',
+}
+
+function jsonResponse(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  })
+}
+
+function installAuthenticatedFetch() {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const path = String(input)
+    if (path === '/healthz') return jsonResponse({ status: 'ok' })
+    if (path === '/api/v1/auth/bootstrap') return jsonResponse({ required: false, tokenRequired: false, minimumPasswordCharacters: 15 })
+    if (path === '/api/v1/auth/session') return jsonResponse(session)
+    if (path === '/api/v1/organization') return jsonResponse({ id: 'example-org', name: 'Example Organization' })
+    if (path === '/api/v1/assets') return jsonResponse({ items: [] })
+    throw new Error(`unexpected request: ${path}`)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  return fetchMock
+}
+
+beforeEach(() => {
+  vi.restoreAllMocks()
+  vi.unstubAllGlobals()
+})
+
+test('restores a server-managed session and renders StewardMesh modules', async () => {
+  installAuthenticatedFetch()
   render(<App />)
   expect(screen.getByRole('heading', { name: 'StewardMesh' })).toBeInTheDocument()
-  expect(screen.getByText('Atlas — Asset inventory')).toBeInTheDocument()
+  expect(await screen.findByText('Atlas — Asset inventory')).toBeInTheDocument()
+  expect(screen.getByText('Signed in as', { exact: false })).toHaveTextContent('Example Administrator')
+  expect(screen.getByText('Guard role:', { exact: false })).toHaveTextContent('Administrator')
+})
+
+test('renders an accessible one-time administrator setup and submits without browser token storage', async () => {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input)
+    if (path === '/healthz') return jsonResponse({ status: 'ok' })
+    if (path === '/api/v1/auth/bootstrap' && !init?.method) {
+      return jsonResponse({ required: true, tokenRequired: true, minimumPasswordCharacters: 15 })
+    }
+    if (path === '/api/v1/auth/bootstrap' && init?.method === 'POST') return jsonResponse(session, 201)
+    if (path === '/api/v1/organization') return jsonResponse({ id: 'example-org', name: 'Example Organization' })
+    if (path === '/api/v1/assets') return jsonResponse({ items: [] })
+    throw new Error(`unexpected request: ${path}`)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  render(<App />)
+
+  expect(await screen.findByRole('heading', { name: 'Create the first administrator' })).toBeInTheDocument()
+  fireEvent.change(screen.getByLabelText('Display name'), { target: { value: 'Example Administrator' } })
+  fireEvent.change(screen.getByLabelText('Email address'), { target: { value: 'administrator@example.test' } })
+  fireEvent.change(screen.getByLabelText('Username'), { target: { value: 'administrator' } })
+  fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'correct horse battery staple' } })
+  fireEvent.change(screen.getByLabelText('Confirm password'), { target: { value: 'correct horse battery staple' } })
+  fireEvent.change(screen.getByLabelText('Deployment bootstrap token'), { target: { value: 'deployment-bootstrap-token-value' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Create administrator' }))
+
+  expect(await screen.findByText('Atlas — Asset inventory')).toBeInTheDocument()
+  const bootstrapCall = fetchMock.mock.calls.find(([path, init]) => path === '/api/v1/auth/bootstrap' && init?.method === 'POST')
+  expect(bootstrapCall).toBeDefined()
+  expect(bootstrapCall?.[1]).toMatchObject({ credentials: 'same-origin' })
+  expect(JSON.parse(String(bootstrapCall?.[1]?.body))).toMatchObject({
+    bootstrapToken: 'deployment-bootstrap-token-value',
+  })
+})
+
+test('omits the bootstrap token when the deployment does not require one', async () => {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input)
+    if (path === '/healthz') return jsonResponse({ status: 'ok' })
+    if (path === '/api/v1/auth/bootstrap' && !init?.method) {
+      return jsonResponse({ required: true, tokenRequired: false, minimumPasswordCharacters: 15 })
+    }
+    if (path === '/api/v1/auth/bootstrap' && init?.method === 'POST') return jsonResponse(session, 201)
+    if (path === '/api/v1/organization') return jsonResponse({ id: 'example-org', name: 'Example Organization' })
+    if (path === '/api/v1/assets') return jsonResponse({ items: [] })
+    throw new Error(`unexpected request: ${path}`)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  render(<App />)
+
+  await screen.findByRole('heading', { name: 'Create the first administrator' })
+  fireEvent.change(screen.getByLabelText('Display name'), { target: { value: 'Example Administrator' } })
+  fireEvent.change(screen.getByLabelText('Email address'), { target: { value: 'administrator@example.test' } })
+  fireEvent.change(screen.getByLabelText('Username'), { target: { value: 'administrator' } })
+  fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'correct horse battery staple' } })
+  fireEvent.change(screen.getByLabelText('Confirm password'), { target: { value: 'correct horse battery staple' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Create administrator' }))
+
+  await screen.findByText('Atlas — Asset inventory')
+  const bootstrapCall = fetchMock.mock.calls.find(([path, init]) => path === '/api/v1/auth/bootstrap' && init?.method === 'POST')
+  const requestBody = JSON.parse(String(bootstrapCall?.[1]?.body)) as Record<string, unknown>
+  expect(requestBody).not.toHaveProperty('bootstrapToken')
+})
+
+test('falls back to login when no authenticated session exists', async () => {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const path = String(input)
+    if (path === '/healthz') return jsonResponse({ status: 'ok' })
+    if (path === '/api/v1/auth/bootstrap') return jsonResponse({ required: false, tokenRequired: false, minimumPasswordCharacters: 15 })
+    if (path === '/api/v1/auth/session') return jsonResponse({ error: { message: 'sign in is required' } }, 401)
+    throw new Error(`unexpected request: ${path}`)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  render(<App />)
+  expect(await screen.findByRole('heading', { name: 'Sign in to StewardMesh' })).toBeInTheDocument()
+  expect(screen.getByLabelText('Username')).toHaveAttribute('autocomplete', 'username')
+  expect(screen.getByLabelText('Password')).toHaveAttribute('autocomplete', 'current-password')
+})
+
+test('Guard administrator setup has no automated WCAG violations', async () => {
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    const path = String(input)
+    if (path === '/healthz') return jsonResponse({ status: 'ok' })
+    if (path === '/api/v1/auth/bootstrap') return jsonResponse({ required: true, tokenRequired: false, minimumPasswordCharacters: 15 })
+    throw new Error(`unexpected request: ${path}`)
+  }))
+  const { container } = render(<App />)
+  await screen.findByRole('heading', { name: 'Create the first administrator' })
+  const results = await axe.run(container)
+  expect(results.violations).toEqual([])
 })
 
 test('allows only safe configurable public links', () => {
   expect(resolvePublicUrl('javascript:alert(1)')).toBe('https://github.com/WSCMAX/StewardMesh/issues')
   expect(resolvePublicUrl('/support/issues')).toBe('/support/issues')
   expect(resolvePublicUrl('https://issues.example.org/project')).toBe('https://issues.example.org/project')
+})
+
+test('password mismatch is announced and receives keyboard focus', async () => {
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    const path = String(input)
+    if (path === '/healthz') return jsonResponse({ status: 'ok' })
+    if (path === '/api/v1/auth/bootstrap') return jsonResponse({ required: true, tokenRequired: false, minimumPasswordCharacters: 15 })
+    throw new Error(`unexpected request: ${path}`)
+  }))
+  render(<App />)
+  await screen.findByRole('heading', { name: 'Create the first administrator' })
+  fireEvent.change(screen.getByLabelText('Display name'), { target: { value: 'Example Administrator' } })
+  fireEvent.change(screen.getByLabelText('Email address'), { target: { value: 'administrator@example.test' } })
+  fireEvent.change(screen.getByLabelText('Username'), { target: { value: 'administrator' } })
+  fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'correct horse battery staple' } })
+  fireEvent.change(screen.getByLabelText('Confirm password'), { target: { value: 'different password value' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Create administrator' }))
+  const alert = await screen.findByRole('alert')
+  await waitFor(() => expect(alert).toHaveFocus())
 })

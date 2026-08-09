@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "openapi:lint": "redocly lint ../api/openapi/openapi.yaml --config ../redocly.yaml",
     "test": "vitest run",
     "typecheck": "tsc -b --pretty false"
   },
@@ -18,6 +19,7 @@
   },
   "devDependencies": {
     "@babel/core": "^8.0.1",
+    "@redocly/cli": "2.46.0",
     "@rolldown/plugin-babel": "^0.2.3",
     "@tailwindcss/vite": "4.3.3",
     "@testing-library/jest-dom": "7.0.0",
@@ -26,6 +28,7 @@
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.4",
     "@vitejs/plugin-react": "6.0.5",
+    "axe-core": "4.13.0",
     "babel-plugin-react-compiler": "1.0.0",
     "jsdom": "30.0.1",
     "tailwindcss": "4.3.3",

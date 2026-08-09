@@ -11,6 +11,20 @@ service FoundationService {
   rpc GetOrganization(GetOrganizationRequest) returns (Organization);
 }
 
+// Guard local authentication contract. OIDC/OAuth providers will implement
+// the same principal boundary in a later SEC-GUARD-001 delivery slice.
+// Secure transport and metadata behavior: SEC-HTTP-001.
+service GuardService {
+  rpc GetBootstrapStatus(GetBootstrapStatusRequest) returns (BootstrapStatus);
+  rpc BootstrapAdministrator(BootstrapAdministratorRequest) returns (AuthenticationSession);
+  rpc AuthenticateLocal(AuthenticateLocalRequest) returns (AuthenticationSession);
+  rpc GetSession(GetSessionRequest) returns (AuthenticationSession);
+  rpc Logout(LogoutRequest) returns (LogoutResponse);
+}
+
+// Authenticated Guard RPCs carry the opaque session bearer in gRPC
+// authorization metadata. The bearer is never repeated in request bodies.
+
 service AssetService {
   rpc ListAssets(ListAssetsRequest) returns (ListAssetsResponse);
   rpc CreateAsset(CreateAssetRequest) returns (Asset);
@@ -23,6 +37,63 @@ message Organization {
   string name = 2;
   google.protobuf.Timestamp created_at = 3;
   google.protobuf.Timestamp updated_at = 4;
+}
+
+// Requirement: SEC-GUARD-001.
+message GetBootstrapStatusRequest {}
+
+message BootstrapStatus {
+  bool required = 1;
+  bool token_required = 2;
+  uint32 minimum_password_characters = 3;
+}
+
+message BootstrapAdministratorRequest {
+  string username = 1;
+  string email = 2;
+  string display_name = 3;
+  string password = 4;
+  string bootstrap_token = 5;
+}
+
+message AuthenticateLocalRequest {
+  string username = 1;
+  string password = 2;
+}
+
+message GetSessionRequest {}
+
+message LogoutRequest {
+  string csrf_token = 1;
+}
+
+message LogoutResponse {}
+
+message AuthenticationSession {
+  Principal principal = 1;
+  string session_token = 2;
+  string csrf_token = 3;
+  google.protobuf.Timestamp expires_at = 4;
+}
+
+message Principal {
+  string subject = 1;
+  string organization_id = 2;
+  string username = 3;
+  string email = 4;
+  string display_name = 5;
+  repeated string roles = 6;
+}
+
+message AuthorizationScope {
+  string kind = 1;
+  string organization_id = 2;
+  string resource_id = 3;
+}
+
+message PermissionGrant {
+  string permission = 1;
+  AuthorizationScope scope = 2;
 }
 
 message ListAssetsRequest {}

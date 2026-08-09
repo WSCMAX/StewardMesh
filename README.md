@@ -27,6 +27,19 @@ non-durable evaluation without PostgreSQL, set
 [Foundation](docs/features/foundation.md) for bootstrap, migration, audit, and
 provider-contract behavior.
 
+On the first web launch, Guard prompts for the one-time local administrator.
+Local passwords use Argon2id and are never stored in plaintext. Sessions use an
+opaque HttpOnly cookie, while CSRF material stays only in application memory.
+See [Guard](docs/features/guard.md) for secure local setup, shared-server
+requirements, permissions, audit behavior, and the planned external identity
+provider boundary.
+
+The loopback development settings in `.env.example` deliberately use an HTTP
+cookie. A shared listener must use an HTTPS allowed origin, secure cookies, and
+a deployment bootstrap token containing at least 32 bytes; configuration fails
+closed otherwise. Put the Go listener behind a same-origin TLS reverse proxy
+and prevent direct public access to its plaintext HTTP socket.
+
 In another terminal:
 
 ```sh

@@ -16,6 +16,7 @@ import (
 	"github.com/maxlemke/stewardmesh/internal/foundation"
 	"github.com/maxlemke/stewardmesh/internal/guard"
 	"github.com/maxlemke/stewardmesh/internal/httpapi"
+	"github.com/maxlemke/stewardmesh/internal/people"
 	"github.com/maxlemke/stewardmesh/internal/repository"
 	postgresrepository "github.com/maxlemke/stewardmesh/internal/repository/postgres"
 	"github.com/maxlemke/stewardmesh/internal/storage"
@@ -24,6 +25,7 @@ import (
 type foundationRuntime struct {
 	organization domain.Organization
 	guardStore   guard.Store
+	peopleStore  people.Store
 	auditor      foundation.Auditor
 	close        func() error
 }
@@ -70,11 +72,17 @@ func main() {
 		logger.Error("initialize Guard", "error", err)
 		os.Exit(1)
 	}
+	peopleService, err := people.NewService(runtime.peopleStore, assets, runtime.auditor, people.ServiceConfig{
+		OrganizationID: cfg.OrganizationID,
+	})
+	if err != nil {
+		logger.Error("initialize People", "error", err)
+		os.Exit(1)
+	}
 
 	handler := httpapi.NewServer(httpapi.Dependencies{
 		Assets:              assets,
-		Departments:         catalog,
-		Users:               catalog,
+		People:              peopleService,
 		Tags:                catalog,
 		Goals:               catalog,
 		Blobs:               blobStore,
@@ -116,6 +124,7 @@ func initializeFoundation(ctx context.Context, cfg config.Config) (foundationRun
 	var (
 		organizations repository.OrganizationRepository
 		guardStore    guard.Store
+		peopleStore   people.Store
 		auditor       foundation.Auditor = foundation.NopAuditor{}
 		closeRuntime                     = func() error { return nil }
 	)
@@ -123,6 +132,7 @@ func initializeFoundation(ctx context.Context, cfg config.Config) (foundationRun
 	case config.RepositoryDriverMemory:
 		organizations = repository.NewMemoryOrganizationRepository()
 		guardStore = repository.NewMemoryGuardStore()
+		peopleStore = repository.NewMemoryPeopleStore()
 	case config.RepositoryDriverPostgres:
 		database, err := postgresrepository.Open(ctx, cfg.DatabaseURL)
 		if err != nil {
@@ -144,6 +154,11 @@ func initializeFoundation(ctx context.Context, cfg config.Config) (foundationRun
 			return foundationRuntime{}, err
 		}
 		guardStore, err = postgresrepository.NewGuardStore(database)
+		if err != nil {
+			database.Close()
+			return foundationRuntime{}, err
+		}
+		peopleStore, err = postgresrepository.NewPeopleStore(database)
 		if err != nil {
 			database.Close()
 			return foundationRuntime{}, err
@@ -197,6 +212,7 @@ func initializeFoundation(ctx context.Context, cfg config.Config) (foundationRun
 	return foundationRuntime{
 		organization: organization,
 		guardStore:   guardStore,
+		peopleStore:  peopleStore,
 		auditor:      auditor,
 		close:        closeRuntime,
 	}, nil

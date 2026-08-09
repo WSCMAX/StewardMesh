@@ -1,0 +1,45 @@
+// Requirements: SEC-HTTP-001, SEC-GUARD-001, REQ-PEOPLE-001.
+
+const httpNoContent = 204
+
+export class ApiRequestError extends Error {
+  status: number
+
+  constructor(status: number, message: string) {
+    super(message)
+    this.name = 'ApiRequestError'
+    this.status = status
+  }
+}
+
+// requestJSON is same-origin by construction. Session cookies remain HttpOnly,
+// and callers must explicitly add the in-memory CSRF value for mutations.
+export async function requestJSON(path: string, init?: RequestInit): Promise<unknown> {
+  if (!path.startsWith('/') || path.startsWith('//')) throw new Error('API path must be same-origin')
+  const response = await fetch(path, {
+    ...init,
+    credentials: 'same-origin',
+    headers: {
+      Accept: 'application/json',
+      ...init?.headers,
+    },
+  })
+  if (!response.ok) {
+    let message = 'The request could not be completed.'
+    try {
+      const body = await response.json() as unknown
+      if (typeof body === 'object' && body !== null) {
+        const error = (body as Record<string, unknown>).error
+        if (typeof error === 'object' && error !== null) {
+          const candidate = (error as Record<string, unknown>).message
+          if (typeof candidate === 'string' && candidate.length > 0 && candidate.length <= 300) message = candidate
+        }
+      }
+    } catch {
+      // The status code remains authoritative when an intermediary returns non-JSON.
+    }
+    throw new ApiRequestError(response.status, message)
+  }
+  if (response.status === httpNoContent) return undefined
+  return response.json() as Promise<unknown>
+}

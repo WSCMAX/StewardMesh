@@ -1,8 +1,8 @@
-# Requirements: SEC-GUARD-001, SEC-HTTP-001.
+# Requirements: REQ-PEOPLE-001, SEC-GUARD-001, SEC-HTTP-001.
 openapi: 3.1.0
 info:
   title: StewardMesh API
-  version: 0.2.0
+  version: 0.3.0
   description: Requirements-driven inventory, lifecycle, and secure organization management API.
   license:
     name: Apache License 2.0
@@ -199,6 +199,7 @@ paths:
       summary: List departments
       operationId: listDepartments
       tags: [People]
+      x-requirement: REQ-PEOPLE-001
       security: [{localCookieAuth: []}, {secureCookieAuth: []}]
       responses:
         '200':
@@ -210,11 +211,136 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+    post:
+      summary: Create a department
+      operationId: createDepartment
+      tags: [People]
+      x-requirement: REQ-PEOPLE-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateDepartmentRequest'}
+      responses:
+        '201':
+          description: Department created
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Department'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/sites:
+    get:
+      summary: List sites
+      operationId: listSites
+      tags: [People]
+      x-requirement: REQ-PEOPLE-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200':
+          description: Site collection restricted to the caller's directory scopes
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SiteCollection'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+    post:
+      summary: Create a site
+      operationId: createSite
+      tags: [People]
+      x-requirement: REQ-PEOPLE-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateSiteRequest'}
+      responses:
+        '201':
+          description: Site created
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Site'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/identities:
+    get:
+      summary: Search directory identities
+      operationId: searchDirectoryIdentities
+      tags: [People]
+      x-requirement: REQ-PEOPLE-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - in: query
+          name: q
+          schema: {type: string, maxLength: 200}
+          description: Case-insensitive display-name or email search.
+        - in: query
+          name: kind
+          schema: {$ref: '#/components/schemas/IdentityKind'}
+        - in: query
+          name: status
+          schema: {$ref: '#/components/schemas/RecordStatus'}
+        - in: query
+          name: departmentId
+          schema: {type: string, pattern: '^[a-f0-9]{32}$'}
+        - in: query
+          name: siteId
+          schema: {type: string, pattern: '^[a-f0-9]{32}$'}
+        - in: query
+          name: limit
+          schema: {type: integer, minimum: 1, maximum: 100, default: 50}
+      responses:
+        '200':
+          description: Directory identities restricted to the caller's organization, site, or department scopes
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/IdentityCollection'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+    post:
+      summary: Create a directory identity
+      operationId: createDirectoryIdentity
+      tags: [People]
+      x-requirement: REQ-PEOPLE-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateIdentityRequest'}
+      responses:
+        '201':
+          description: Directory identity created
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DirectoryIdentity'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
   /api/v1/users:
     get:
-      summary: List users
+      summary: List person identities
       operationId: listUsers
       tags: [People]
+      x-requirement: REQ-PEOPLE-001
+      deprecated: true
+      description: Compatibility alias for a person-kind search through /api/v1/identities.
       security: [{localCookieAuth: []}, {secureCookieAuth: []}]
       responses:
         '200':
@@ -226,6 +352,81 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+  /api/v1/assets/{assetId}/assignments:
+    parameters:
+      - $ref: '#/components/parameters/AssetID'
+    get:
+      summary: List an asset's assignment history
+      operationId: listAssetAssignments
+      tags: [People]
+      x-requirement: REQ-PEOPLE-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200':
+          description: Effective-dated assignment history restricted by directory scope
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AssetAssignmentCollection'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    post:
+      summary: Create an asset assignment
+      operationId: createAssetAssignment
+      tags: [People]
+      x-requirement: REQ-PEOPLE-001
+      description: Requires both organization-scoped directory.write and assets.write permissions.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateAssetAssignmentRequest'}
+      responses:
+        '201':
+          description: Assignment created; a previous active primary or department assignment is effective-dated automatically
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AssetAssignment'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/assets/{assetId}/assignments/{assignmentId}:
+    parameters:
+      - $ref: '#/components/parameters/AssetID'
+      - in: path
+        name: assignmentId
+        required: true
+        schema: {type: string, pattern: '^[a-f0-9]{32}$'}
+    patch:
+      summary: End an active asset assignment
+      operationId: endAssetAssignment
+      tags: [People]
+      x-requirement: REQ-PEOPLE-001
+      description: Requires both organization-scoped directory.write and assets.write permissions.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/EndAssetAssignmentRequest'}
+      responses:
+        '200':
+          description: Assignment ended and retained in history
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AssetAssignment'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
   /api/v1/tags:
     get:
       summary: List tags
@@ -271,6 +472,11 @@ components:
       name: __Host-stewardmesh_session
       description: Opaque, Secure, host-only server-side session identifier used by HTTPS deployments.
   parameters:
+    AssetID:
+      in: path
+      name: assetId
+      required: true
+      schema: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
     CSRFToken:
       in: header
       name: X-CSRF-Token
@@ -293,6 +499,16 @@ components:
           schema: {$ref: '#/components/schemas/Error'}
     Forbidden:
       description: CSRF, origin, bootstrap-token, or permission validation failed
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    NotFound:
+      description: The requested record or referenced record was not found in the organization
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    Conflict:
+      description: The requested change conflicts with existing or effective-dated data
       content:
         application/json:
           schema: {$ref: '#/components/schemas/Error'}
@@ -328,9 +544,14 @@ components:
         password: {type: string, format: password, writeOnly: true, maxLength: 1024}
     SessionResponse:
       type: object
-      required: [principal, csrfToken, expiresAt]
+      required: [principal, permissions, csrfToken, expiresAt]
       properties:
         principal: {$ref: '#/components/schemas/Principal'}
+        permissions:
+          type: array
+          description: Organization-scoped permission hints for interface rendering; server authorization remains authoritative.
+          items: {type: string, pattern: '^[a-z][a-z0-9._-]{2,127}$'}
+          uniqueItems: true
         csrfToken: {type: string, minLength: 32, maxLength: 128}
         expiresAt: {type: string, format: date-time}
     Principal:
@@ -383,30 +604,143 @@ components:
         items:
           type: array
           items: {$ref: '#/components/schemas/Asset'}
+    RecordStatus:
+      type: string
+      enum: [active, inactive]
+    IdentityKind:
+      type: string
+      enum: [person, shared, public, lab]
+    Site:
+      type: object
+      required: [id, organizationId, name, status, revision, createdAt, updatedAt]
+      properties:
+        id: {type: string, pattern: '^[a-f0-9]{32}$'}
+        organizationId: {type: string, minLength: 1, maxLength: 128}
+        name: {type: string, minLength: 1, maxLength: 200}
+        status: {$ref: '#/components/schemas/RecordStatus'}
+        revision: {type: integer, minimum: 1}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    CreateSiteRequest:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 200}
+        status: {$ref: '#/components/schemas/RecordStatus'}
+    SiteCollection:
+      type: object
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/Site'}}
     Department:
       type: object
-      required: [id, name]
+      required: [id, organizationId, name, status, revision, createdAt, updatedAt]
       properties:
-        id: {type: string}
-        name: {type: string}
+        id: {type: string, pattern: '^[a-f0-9]{32}$'}
+        organizationId: {type: string, minLength: 1, maxLength: 128}
+        name: {type: string, minLength: 1, maxLength: 200}
+        siteId: {type: string, pattern: '^[a-f0-9]{32}$'}
+        status: {$ref: '#/components/schemas/RecordStatus'}
+        revision: {type: integer, minimum: 1}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    CreateDepartmentRequest:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 200}
+        siteId: {type: string, pattern: '^[a-f0-9]{32}$'}
+        status: {$ref: '#/components/schemas/RecordStatus'}
     DepartmentCollection:
       type: object
       required: [items]
       properties:
         items: {type: array, items: {$ref: '#/components/schemas/Department'}}
-    User:
+    DirectoryIdentity:
       type: object
-      required: [id, displayName, email]
+      required: [id, organizationId, kind, displayName, status, revision, createdAt, updatedAt]
       properties:
-        id: {type: string}
-        displayName: {type: string}
-        email: {type: string, format: email}
-        departmentId: {type: string}
+        id: {type: string, pattern: '^[a-f0-9]{32}$'}
+        organizationId: {type: string, minLength: 1, maxLength: 128}
+        kind: {$ref: '#/components/schemas/IdentityKind'}
+        displayName: {type: string, minLength: 1, maxLength: 200}
+        email: {type: string, format: email, maxLength: 320}
+        departmentId: {type: string, pattern: '^[a-f0-9]{32}$'}
+        siteId: {type: string, pattern: '^[a-f0-9]{32}$'}
+        status: {$ref: '#/components/schemas/RecordStatus'}
+        provider: {type: string, pattern: '^[a-z0-9][a-z0-9._-]{0,63}$'}
+        providerSubject: {type: string, minLength: 1, maxLength: 255}
+        revision: {type: integer, minimum: 1}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    CreateIdentityRequest:
+      type: object
+      additionalProperties: false
+      required: [kind, displayName]
+      properties:
+        kind: {$ref: '#/components/schemas/IdentityKind'}
+        displayName: {type: string, minLength: 1, maxLength: 200}
+        email:
+          type: string
+          format: email
+          maxLength: 320
+          description: Required when kind is person; optional for shared, public, and lab identities.
+        departmentId: {type: string, pattern: '^[a-f0-9]{32}$'}
+        siteId: {type: string, pattern: '^[a-f0-9]{32}$'}
+        status: {$ref: '#/components/schemas/RecordStatus'}
+        provider: {type: string, pattern: '^[a-z0-9][a-z0-9._-]{0,63}$'}
+        providerSubject: {type: string, minLength: 1, maxLength: 255}
+    IdentityCollection:
+      type: object
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/DirectoryIdentity'}}
     UserCollection:
       type: object
       required: [items]
       properties:
-        items: {type: array, items: {$ref: '#/components/schemas/User'}}
+        items: {type: array, items: {$ref: '#/components/schemas/DirectoryIdentity'}}
+    AssetAssignment:
+      type: object
+      required: [id, organizationId, assetId, assigneeKind, assigneeId, role, effectiveFrom, createdBy, createdAt]
+      properties:
+        id: {type: string, pattern: '^[a-f0-9]{32}$'}
+        organizationId: {type: string, minLength: 1, maxLength: 128}
+        assetId: {type: string, minLength: 1, maxLength: 128}
+        assigneeKind: {type: string, enum: [identity, department]}
+        assigneeId: {type: string, pattern: '^[a-f0-9]{32}$'}
+        role: {type: string, enum: [primary, user, department]}
+        effectiveFrom: {type: string, format: date-time}
+        effectiveTo: {type: string, format: date-time}
+        createdBy: {type: string, minLength: 1, maxLength: 128}
+        createdAt: {type: string, format: date-time}
+    CreateAssetAssignmentRequest:
+      type: object
+      additionalProperties: false
+      required: [assigneeKind, assigneeId, role]
+      properties:
+        assigneeKind: {type: string, enum: [identity, department]}
+        assigneeId: {type: string, pattern: '^[a-f0-9]{32}$'}
+        role:
+          type: string
+          enum: [primary, user, department]
+          description: Identity assignees use primary or user; department assignees use department.
+        effectiveFrom: {type: string, format: date-time}
+    EndAssetAssignmentRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        effectiveTo:
+          type: string
+          format: date-time
+          description: Defaults to the server's current time when omitted.
+    AssetAssignmentCollection:
+      type: object
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/AssetAssignment'}}
     Tag:
       type: object
       required: [id, name, inheritByDefault]

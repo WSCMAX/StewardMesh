@@ -15,18 +15,6 @@ type Asset struct {
 	UpdatedAt    time.Time  `json:"updatedAt"`
 }
 
-type Department struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-}
-
-type User struct {
-	ID           string `json:"id"`
-	DisplayName  string `json:"displayName"`
-	Email        string `json:"email"`
-	DepartmentID string `json:"departmentId,omitempty"`
-}
-
 type Tag struct {
 	ID               string `json:"id"`
 	Name             string `json:"name"`

@@ -30,6 +30,22 @@ service AssetService {
   rpc CreateAsset(CreateAssetRequest) returns (Asset);
 }
 
+// People directory and effective-dated asset assignments.
+// Requirement: REQ-PEOPLE-001. Feature: identity.directory.
+// Directory visibility is derived from authenticated Guard grants and is
+// never accepted from client-provided request fields.
+service PeopleService {
+  rpc ListSites(ListSitesRequest) returns (ListSitesResponse);
+  rpc CreateSite(CreateSiteRequest) returns (Site);
+  rpc ListDepartments(ListDepartmentsRequest) returns (ListDepartmentsResponse);
+  rpc CreateDepartment(CreateDepartmentRequest) returns (Department);
+  rpc SearchIdentities(SearchIdentitiesRequest) returns (SearchIdentitiesResponse);
+  rpc CreateIdentity(CreateIdentityRequest) returns (DirectoryIdentity);
+  rpc ListAssetAssignments(ListAssetAssignmentsRequest) returns (ListAssetAssignmentsResponse);
+  rpc CreateAssetAssignment(CreateAssetAssignmentRequest) returns (AssetAssignment);
+  rpc EndAssetAssignment(EndAssetAssignmentRequest) returns (AssetAssignment);
+}
+
 message GetOrganizationRequest {}
 
 message Organization {
@@ -74,6 +90,7 @@ message AuthenticationSession {
   string session_token = 2;
   string csrf_token = 3;
   google.protobuf.Timestamp expires_at = 4;
+  repeated string permissions = 5;
 }
 
 message Principal {
@@ -114,4 +131,150 @@ message Asset {
   string department_id = 5;
   string user_id = 6;
   string status = 7;
+}
+
+enum RecordStatus {
+  RECORD_STATUS_UNSPECIFIED = 0;
+  RECORD_STATUS_ACTIVE = 1;
+  RECORD_STATUS_INACTIVE = 2;
+}
+
+enum IdentityKind {
+  IDENTITY_KIND_UNSPECIFIED = 0;
+  IDENTITY_KIND_PERSON = 1;
+  IDENTITY_KIND_SHARED = 2;
+  IDENTITY_KIND_PUBLIC = 3;
+  IDENTITY_KIND_LAB = 4;
+}
+
+enum AssigneeKind {
+  ASSIGNEE_KIND_UNSPECIFIED = 0;
+  ASSIGNEE_KIND_IDENTITY = 1;
+  ASSIGNEE_KIND_DEPARTMENT = 2;
+}
+
+enum AssignmentRole {
+  ASSIGNMENT_ROLE_UNSPECIFIED = 0;
+  ASSIGNMENT_ROLE_PRIMARY = 1;
+  ASSIGNMENT_ROLE_USER = 2;
+  ASSIGNMENT_ROLE_DEPARTMENT = 3;
+}
+
+message ListSitesRequest {}
+
+message ListSitesResponse {
+  repeated Site items = 1;
+}
+
+message CreateSiteRequest {
+  string name = 1;
+  RecordStatus status = 2;
+}
+
+message Site {
+  string id = 1;
+  string organization_id = 2;
+  string name = 3;
+  RecordStatus status = 4;
+  uint64 revision = 5;
+  google.protobuf.Timestamp created_at = 6;
+  google.protobuf.Timestamp updated_at = 7;
+}
+
+message ListDepartmentsRequest {}
+
+message ListDepartmentsResponse {
+  repeated Department items = 1;
+}
+
+message CreateDepartmentRequest {
+  string name = 1;
+  string site_id = 2;
+  RecordStatus status = 3;
+}
+
+message Department {
+  string id = 1;
+  string organization_id = 2;
+  string name = 3;
+  string site_id = 4;
+  RecordStatus status = 5;
+  uint64 revision = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp updated_at = 8;
+}
+
+message SearchIdentitiesRequest {
+  string query = 1;
+  IdentityKind kind = 2;
+  RecordStatus status = 3;
+  string department_id = 4;
+  string site_id = 5;
+  uint32 limit = 6;
+}
+
+message SearchIdentitiesResponse {
+  repeated DirectoryIdentity items = 1;
+}
+
+message CreateIdentityRequest {
+  IdentityKind kind = 1;
+  string display_name = 2;
+  string email = 3;
+  string department_id = 4;
+  string site_id = 5;
+  RecordStatus status = 6;
+  string provider = 7;
+  string provider_subject = 8;
+}
+
+message DirectoryIdentity {
+  string id = 1;
+  string organization_id = 2;
+  IdentityKind kind = 3;
+  string display_name = 4;
+  string email = 5;
+  string department_id = 6;
+  string site_id = 7;
+  RecordStatus status = 8;
+  string provider = 9;
+  string provider_subject = 10;
+  uint64 revision = 11;
+  google.protobuf.Timestamp created_at = 12;
+  google.protobuf.Timestamp updated_at = 13;
+}
+
+message ListAssetAssignmentsRequest {
+  string asset_id = 1;
+}
+
+message ListAssetAssignmentsResponse {
+  repeated AssetAssignment items = 1;
+}
+
+message CreateAssetAssignmentRequest {
+  string asset_id = 1;
+  AssigneeKind assignee_kind = 2;
+  string assignee_id = 3;
+  AssignmentRole role = 4;
+  google.protobuf.Timestamp effective_from = 5;
+}
+
+message EndAssetAssignmentRequest {
+  string asset_id = 1;
+  string assignment_id = 2;
+  google.protobuf.Timestamp effective_to = 3;
+}
+
+message AssetAssignment {
+  string id = 1;
+  string organization_id = 2;
+  string asset_id = 3;
+  AssigneeKind assignee_kind = 4;
+  string assignee_id = 5;
+  AssignmentRole role = 6;
+  google.protobuf.Timestamp effective_from = 7;
+  google.protobuf.Timestamp effective_to = 8;
+  string created_by = 9;
+  google.protobuf.Timestamp created_at = 10;
 }

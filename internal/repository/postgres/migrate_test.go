@@ -2,14 +2,14 @@ package postgres
 
 import "testing"
 
-// Requirements: REQ-FOUNDATION-001, SEC-GUARD-001.
+// Requirements: REQ-FOUNDATION-001, SEC-GUARD-001, REQ-PEOPLE-001.
 func TestEmbeddedMigrationsAreOrderedAndChecksummed(t *testing.T) {
 	migrations, err := loadMigrations()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(migrations) != 4 {
-		t.Fatalf("expected 4 platform migrations, got %d", len(migrations))
+	if len(migrations) != 5 {
+		t.Fatalf("expected 5 platform migrations, got %d", len(migrations))
 	}
 	for index, migration := range migrations {
 		expectedVersion := int64(index + 1)

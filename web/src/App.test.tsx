@@ -14,6 +14,7 @@ const session = {
     displayName: 'Example Administrator',
     roles: ['Administrator'],
   },
+  permissions: ['assets.read', 'assets.write', 'directory.read', 'directory.write'],
   csrfToken: 'csrf-token-with-at-least-thirty-two-characters',
   expiresAt: '2030-01-01T00:00:00Z',
 }
@@ -33,6 +34,7 @@ function installAuthenticatedFetch() {
     if (path === '/api/v1/auth/session') return jsonResponse(session)
     if (path === '/api/v1/organization') return jsonResponse({ id: 'example-org', name: 'Example Organization' })
     if (path === '/api/v1/assets') return jsonResponse({ items: [] })
+    if (path === '/api/v1/sites' || path === '/api/v1/departments' || path.startsWith('/api/v1/identities?')) return jsonResponse({ items: [] })
     throw new Error(`unexpected request: ${path}`)
   })
   vi.stubGlobal('fetch', fetchMock)
@@ -63,6 +65,7 @@ test('renders an accessible one-time administrator setup and submits without bro
     if (path === '/api/v1/auth/bootstrap' && init?.method === 'POST') return jsonResponse(session, 201)
     if (path === '/api/v1/organization') return jsonResponse({ id: 'example-org', name: 'Example Organization' })
     if (path === '/api/v1/assets') return jsonResponse({ items: [] })
+    if (path === '/api/v1/sites' || path === '/api/v1/departments' || path.startsWith('/api/v1/identities?')) return jsonResponse({ items: [] })
     throw new Error(`unexpected request: ${path}`)
   })
   vi.stubGlobal('fetch', fetchMock)
@@ -96,6 +99,7 @@ test('omits the bootstrap token when the deployment does not require one', async
     if (path === '/api/v1/auth/bootstrap' && init?.method === 'POST') return jsonResponse(session, 201)
     if (path === '/api/v1/organization') return jsonResponse({ id: 'example-org', name: 'Example Organization' })
     if (path === '/api/v1/assets') return jsonResponse({ items: [] })
+    if (path === '/api/v1/sites' || path === '/api/v1/departments' || path.startsWith('/api/v1/identities?')) return jsonResponse({ items: [] })
     throw new Error(`unexpected request: ${path}`)
   })
   vi.stubGlobal('fetch', fetchMock)

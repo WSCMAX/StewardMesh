@@ -20,16 +20,6 @@ type OrganizationRepository interface {
 	BootstrapOrganization(ctx context.Context, organization domain.Organization) (domain.Organization, bool, error)
 }
 
-// Postgres and DynamoDB adapters will implement these contracts without
-// leaking storage-specific behavior into application services.
-type DepartmentRepository interface {
-	ListDepartments(ctx context.Context) ([]domain.Department, error)
-}
-
-type UserRepository interface {
-	ListUsers(ctx context.Context) ([]domain.User, error)
-}
-
 type TagRepository interface {
 	ListTags(ctx context.Context) ([]domain.Tag, error)
 }

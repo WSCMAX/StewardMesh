@@ -17,10 +17,8 @@ type MemoryAssetRepository struct {
 }
 
 type MemoryCatalog struct {
-	departments []domain.Department
-	users       []domain.User
-	tags        []domain.Tag
-	goals       []domain.Goal
+	tags  []domain.Tag
+	goals []domain.Goal
 }
 
 type MemoryOrganizationRepository struct {
@@ -61,14 +59,6 @@ func (r *MemoryOrganizationRepository) BootstrapOrganization(_ context.Context, 
 
 func NewMemoryCatalog() *MemoryCatalog {
 	return &MemoryCatalog{}
-}
-
-func (c *MemoryCatalog) ListDepartments(_ context.Context) ([]domain.Department, error) {
-	return append([]domain.Department(nil), c.departments...), nil
-}
-
-func (c *MemoryCatalog) ListUsers(_ context.Context) ([]domain.User, error) {
-	return append([]domain.User(nil), c.users...), nil
 }
 
 func (c *MemoryCatalog) ListTags(_ context.Context) ([]domain.Tag, error) {

@@ -111,6 +111,42 @@
           "web/src/App.tsx"
         ]
       }
+    },
+    {
+      "requirementId": "REQ-PEOPLE-001",
+      "featureId": "identity.directory",
+      "artifacts": {
+        "documentation": [
+          "docs/features/dictionary.md",
+          "docs/features/people.md",
+          "docs/requirements/initial.md"
+        ],
+        "api": [
+          "api/openapi/openapi.yaml",
+          "api/proto/stewardmesh.proto"
+        ],
+        "code": [
+          "internal/httpapi/server.go",
+          "internal/people/contracts.go",
+          "internal/people/service.go",
+          "internal/repository/memory_people.go",
+          "internal/repository/postgres/people.go"
+        ],
+        "schema": [
+          "internal/repository/postgres/migrations/0005_people_directory.sql"
+        ],
+        "tests": [
+          "internal/httpapi/server_test.go",
+          "internal/people/service_test.go",
+          "internal/repository/contracttest/people.go",
+          "internal/repository/memory_people_test.go",
+          "internal/repository/postgres/postgres_integration_test.go",
+          "web/src/PeopleDirectory.test.tsx"
+        ],
+        "ui": [
+          "web/src/PeopleDirectory.tsx"
+        ]
+      }
     }
   ]
 }

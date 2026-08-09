@@ -4,8 +4,10 @@
 - **Requirement:** `REQ-PLATFORM-VALKEY-001`
 - **Roadmap issue:** [#41](https://github.com/WSCMAX/StewardMesh/issues/41)
 
-**Traceability status:** planned contract and deployment decision. Implementation
-artifacts will replace the architecture placeholders as issue #41 is delivered.
+**Traceability status:** the provider-neutral contract, disabled mode, bounded
+in-memory adapter, namespaced key builder, and their tests are implemented in
+`internal/cache`. The Valkey adapter and Guard integration remain tracked by
+issue #41.
 
 ## Decision
 
@@ -48,7 +50,10 @@ Future read caching uses decorators around those interfaces.
 Keys include a deployment prefix, schema version, organization ID, resource
 kind, and every visibility/filter dimension that affects the result. Cached
 directory or graph responses must never be reusable across organizations or
-Guard-derived scopes.
+Guard-derived scopes. Variable dimensions are SHA-256 hashed before they enter a
+key so raw account names, client addresses, filters, and other values are not
+accidentally embedded in cache tooling or logs. Hashing is not a confidentiality
+boundary; callers HMAC low-entropy sensitive identifiers before key creation.
 
 Writes commit to the authoritative store first. Cache entries are deleted or
 their namespace generation is advanced only after a successful write. Future

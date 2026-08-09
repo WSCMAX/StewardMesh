@@ -198,13 +198,14 @@
           "docs/architecture/valkey.md"
         ],
         "code": [
-          "docs/architecture/valkey.md"
+          "internal/cache/cache.go"
         ],
         "schema": [
           "docs/architecture/valkey.md"
         ],
         "tests": [
-          "docs/architecture/valkey.md"
+          "internal/cache/cache_test.go",
+          "internal/cache/namespace_test.go"
         ],
         "ui": [
           "docs/architecture/valkey.md"

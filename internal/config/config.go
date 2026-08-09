@@ -32,6 +32,7 @@ type Config struct {
 	BootstrapToken      string
 	SessionCookieSecure bool
 	SessionTTL          time.Duration
+	SeedSynthetic       bool
 	validationError     error
 }
 
@@ -62,8 +63,13 @@ func FromEnv() Config {
 		BootstrapToken:      os.Getenv("STEWARDMESH_BOOTSTRAP_TOKEN"),
 		SessionCookieSecure: sessionCookieSecure,
 		SessionTTL:          sessionTTL,
+		SeedSynthetic:       envBoolDefault("STEWARDMESH_SEED_SYNTHETIC"),
 		validationError:     errors.Join(secureErr, ttlErr),
 	}
+}
+
+func envBoolDefault(key string) bool {
+	return strings.EqualFold(os.Getenv(key), "true")
 }
 
 func (c Config) Validate() error {

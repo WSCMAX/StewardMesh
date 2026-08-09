@@ -11,8 +11,9 @@ import (
 )
 
 const (
-	RequirementID = "REQ-PEOPLE-001"
-	FeatureID     = "identity.directory"
+	RequirementID                   = "REQ-PEOPLE-001"
+	DirectoryExpansionRequirementID = "REQ-DIRECTORY-EXPANSION-001"
+	FeatureID                       = "identity.directory"
 )
 
 var (
@@ -59,10 +60,53 @@ type Site struct {
 	OrganizationID string       `json:"organizationId"`
 	Name           string       `json:"name"`
 	NormalizedName string       `json:"-"`
+	Address        Address      `json:"address"`
 	Status         RecordStatus `json:"status"`
 	Revision       uint64       `json:"revision"`
 	CreatedAt      time.Time    `json:"createdAt"`
 	UpdatedAt      time.Time    `json:"updatedAt"`
+}
+
+// Address is an optional structured postal address for a site. A zero-value
+// address preserves the original site contract for callers that only provide
+// a name and status.
+type Address struct {
+	Line1      string `json:"line1,omitempty"`
+	Line2      string `json:"line2,omitempty"`
+	City       string `json:"city,omitempty"`
+	Region     string `json:"region,omitempty"`
+	PostalCode string `json:"postalCode,omitempty"`
+	Country    string `json:"country,omitempty"`
+}
+
+func (a Address) Empty() bool {
+	return a.Line1 == "" && a.Line2 == "" && a.City == "" && a.Region == "" && a.PostalCode == "" && a.Country == ""
+}
+
+type Building struct {
+	ID             string       `json:"id"`
+	OrganizationID string       `json:"organizationId"`
+	SiteID         string       `json:"siteId"`
+	Name           string       `json:"name"`
+	NormalizedName string       `json:"-"`
+	Status         RecordStatus `json:"status"`
+	Revision       uint64       `json:"revision"`
+	CreatedAt      time.Time    `json:"createdAt"`
+	UpdatedAt      time.Time    `json:"updatedAt"`
+}
+
+type Room struct {
+	ID               string       `json:"id"`
+	OrganizationID   string       `json:"organizationId"`
+	SiteID           string       `json:"siteId"`
+	BuildingID       string       `json:"buildingId"`
+	Number           string       `json:"number"`
+	NormalizedNumber string       `json:"-"`
+	Name             string       `json:"name,omitempty"`
+	Status           RecordStatus `json:"status"`
+	Revision         uint64       `json:"revision"`
+	CreatedAt        time.Time    `json:"createdAt"`
+	UpdatedAt        time.Time    `json:"updatedAt"`
 }
 
 type Department struct {
@@ -133,8 +177,23 @@ type IdentityQuery struct {
 }
 
 type CreateSiteInput struct {
+	Name    string
+	Address Address
+	Status  RecordStatus
+}
+
+type CreateBuildingInput struct {
+	SiteID string
 	Name   string
 	Status RecordStatus
+}
+
+type CreateRoomInput struct {
+	SiteID     string
+	BuildingID string
+	Number     string
+	Name       string
+	Status     RecordStatus
 }
 
 type CreateDepartmentInput struct {
@@ -180,6 +239,13 @@ type Store interface {
 	CreateSite(ctx context.Context, site Site) (Site, error)
 	GetSite(ctx context.Context, organizationID, id string) (Site, error)
 	ListSites(ctx context.Context, organizationID string, visibility Visibility) ([]Site, error)
+
+	CreateBuilding(ctx context.Context, building Building) (Building, error)
+	GetBuilding(ctx context.Context, organizationID, id string) (Building, error)
+	ListBuildings(ctx context.Context, organizationID, siteID string, visibility Visibility) ([]Building, error)
+
+	CreateRoom(ctx context.Context, room Room) (Room, error)
+	ListRooms(ctx context.Context, organizationID, siteID, buildingID string, visibility Visibility) ([]Room, error)
 
 	CreateDepartment(ctx context.Context, department Department) (Department, error)
 	GetDepartment(ctx context.Context, organizationID, id string) (Department, error)

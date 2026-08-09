@@ -1,6 +1,7 @@
 package httpapi
 
-// Requirements: REQ-FOUNDATION-001, REQ-PEOPLE-001, SEC-GUARD-001, SEC-HTTP-001.
+// Requirements: REQ-FOUNDATION-001, REQ-PEOPLE-001,
+// REQ-DIRECTORY-EXPANSION-001, SEC-GUARD-001, SEC-HTTP-001.
 
 import (
 	"encoding/json"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/maxlemke/stewardmesh/internal/bootstrap"
+	"github.com/maxlemke/stewardmesh/internal/directoryexpansion"
 	"github.com/maxlemke/stewardmesh/internal/domain"
 	"github.com/maxlemke/stewardmesh/internal/foundation"
 	"github.com/maxlemke/stewardmesh/internal/guard"
@@ -39,6 +41,7 @@ type Dependencies struct {
 	Goals               repository.GoalRepository
 	Blobs               storage.BlobStore
 	Guard               *guard.Service
+	Graph               directoryexpansion.GraphStore
 	SessionCookieSecure bool
 }
 
@@ -48,6 +51,7 @@ type Server struct {
 	tagsRepo            repository.TagRepository
 	goalsRepo           repository.GoalRepository
 	guard               *guard.Service
+	graph               directoryexpansion.GraphStore
 	allowedOrigin       string
 	organization        bootstrap.Organization
 	sessionCookieSecure bool
@@ -66,6 +70,7 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 		tagsRepo:            deps.Tags,
 		goalsRepo:           deps.Goals,
 		guard:               deps.Guard,
+		graph:               deps.Graph,
 		allowedOrigin:       allowedOrigin,
 		organization:        organization,
 		sessionCookieSecure: deps.SessionCookieSecure,
@@ -82,6 +87,10 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 	mux.Handle("POST /api/v1/assets", server.protected(guard.PermissionAssetsWrite, true, server.createAsset))
 	mux.Handle("GET /api/v1/sites", server.protected("", false, server.listSites))
 	mux.Handle("POST /api/v1/sites", server.protected(guard.PermissionDirectoryWrite, true, server.createSite))
+	mux.Handle("GET /api/v1/buildings", server.protected("", false, server.listBuildings))
+	mux.Handle("POST /api/v1/buildings", server.protected(guard.PermissionDirectoryWrite, true, server.createBuilding))
+	mux.Handle("GET /api/v1/rooms", server.protected("", false, server.listRooms))
+	mux.Handle("POST /api/v1/rooms", server.protected(guard.PermissionDirectoryWrite, true, server.createRoom))
 	mux.Handle("GET /api/v1/departments", server.protected("", false, server.listDepartments))
 	mux.Handle("POST /api/v1/departments", server.protected(guard.PermissionDirectoryWrite, true, server.createDepartment))
 	mux.Handle("GET /api/v1/identities", server.protected("", false, server.listIdentities))
@@ -92,7 +101,34 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 	mux.Handle("PATCH /api/v1/assets/{assetID}/assignments/{assignmentID}", server.protected(guard.PermissionDirectoryWrite, true, server.endAssetAssignment))
 	mux.Handle("GET /api/v1/tags", server.protected(guard.PermissionGoalsRead, false, server.tags))
 	mux.Handle("GET /api/v1/goals", server.protected(guard.PermissionGoalsRead, false, server.goals))
+	mux.Handle("GET /api/v1/graph", server.protected("", false, server.graphView))
 	return server.correlation(server.securityHeaders(server.cors(mux)))
+}
+
+func (s *Server) graphView(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
+	if s.graph == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "graph_unavailable", "relationship graph unavailable")
+		return
+	}
+	if _, ok := s.directoryVisibility(w, r, authentication); !ok {
+		return
+	}
+	query := directoryexpansion.GraphQuery{
+		Search:       r.URL.Query().Get("search"),
+		Kind:         r.URL.Query().Get("kind"),
+		Relationship: r.URL.Query().Get("relationship"),
+	}
+	if value := r.URL.Query().Get("limit"); value != "" {
+		if parsed, err := strconv.Atoi(value); err == nil {
+			query.Limit = parsed
+		}
+	}
+	graph, err := s.graph.Graph(r.Context(), query)
+	if err != nil {
+		writeError(w, r, http.StatusInternalServerError, "graph_error", "unable to load relationship graph")
+		return
+	}
+	writeJSON(w, http.StatusOK, graph)
 }
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
@@ -256,14 +292,107 @@ func (s *Server) createSite(w http.ResponseWriter, r *http.Request, _ guard.Auth
 		return
 	}
 	var input struct {
-		Name   string              `json:"name"`
-		Status people.RecordStatus `json:"status"`
+		Name    string              `json:"name"`
+		Address people.Address      `json:"address"`
+		Status  people.RecordStatus `json:"status"`
 	}
 	if err := decodeJSON(w, r, 32<<10, &input); err != nil {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid site payload")
 		return
 	}
-	created, err := s.people.CreateSite(r.Context(), people.CreateSiteInput{Name: input.Name, Status: input.Status})
+	created, err := s.people.CreateSite(r.Context(), people.CreateSiteInput{
+		Name: input.Name, Address: input.Address, Status: input.Status,
+	})
+	if err != nil {
+		writePeopleError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, created)
+}
+
+func (s *Server) listBuildings(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
+	if s.people == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "repository_unavailable", "people directory unavailable")
+		return
+	}
+	visibility, ok := s.directoryVisibility(w, r, authentication)
+	if !ok {
+		return
+	}
+	items, err := s.people.ListBuildings(r.Context(), r.URL.Query().Get("siteId"), visibility)
+	if err != nil {
+		writePeopleError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) createBuilding(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.people == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "repository_unavailable", "people directory unavailable")
+		return
+	}
+	var input struct {
+		SiteID string              `json:"siteId"`
+		Name   string              `json:"name"`
+		Status people.RecordStatus `json:"status"`
+	}
+	if err := decodeJSON(w, r, 32<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid building payload")
+		return
+	}
+	created, err := s.people.CreateBuilding(r.Context(), people.CreateBuildingInput{
+		SiteID: input.SiteID, Name: input.Name, Status: input.Status,
+	})
+	if err != nil {
+		writePeopleError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, created)
+}
+
+func (s *Server) listRooms(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
+	if s.people == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "repository_unavailable", "people directory unavailable")
+		return
+	}
+	visibility, ok := s.directoryVisibility(w, r, authentication)
+	if !ok {
+		return
+	}
+	items, err := s.people.ListRooms(
+		r.Context(),
+		r.URL.Query().Get("siteId"),
+		r.URL.Query().Get("buildingId"),
+		visibility,
+	)
+	if err != nil {
+		writePeopleError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) createRoom(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.people == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "repository_unavailable", "people directory unavailable")
+		return
+	}
+	var input struct {
+		SiteID     string              `json:"siteId"`
+		BuildingID string              `json:"buildingId"`
+		Number     string              `json:"number"`
+		Name       string              `json:"name"`
+		Status     people.RecordStatus `json:"status"`
+	}
+	if err := decodeJSON(w, r, 32<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid room payload")
+		return
+	}
+	created, err := s.people.CreateRoom(r.Context(), people.CreateRoomInput{
+		SiteID: input.SiteID, BuildingID: input.BuildingID, Number: input.Number,
+		Name: input.Name, Status: input.Status,
+	})
 	if err != nil {
 		writePeopleError(w, r, err)
 		return

@@ -19,9 +19,10 @@ const defaultSearchLimit = 50
 const maximumSearchLimit = 100
 
 var (
-	providerPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
-	recordIDPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
-	assetIDPattern  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
+	providerPattern    = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
+	recordIDPattern    = regexp.MustCompile(`^[a-f0-9]{32}$`)
+	assetIDPattern     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
+	countryCodePattern = regexp.MustCompile(`^[A-Za-z]{2}$`)
 )
 
 type ServiceConfig struct {
@@ -62,6 +63,10 @@ func (s *Service) CreateSite(ctx context.Context, input CreateSiteInput) (Site, 
 	if err != nil {
 		return Site{}, err
 	}
+	address, err := normalizeAddress(input.Address)
+	if err != nil {
+		return Site{}, err
+	}
 	now := s.now()
 	id, err := foundation.NewCorrelationID()
 	if err != nil {
@@ -72,6 +77,7 @@ func (s *Service) CreateSite(ctx context.Context, input CreateSiteInput) (Site, 
 		OrganizationID: s.organizationID,
 		Name:           name,
 		NormalizedName: normalizedName,
+		Address:        address,
 		Status:         status,
 		Revision:       1,
 		CreatedAt:      now,
@@ -80,7 +86,11 @@ func (s *Service) CreateSite(ctx context.Context, input CreateSiteInput) (Site, 
 	if err != nil {
 		return Site{}, err
 	}
-	if err := s.audit(ctx, "people.site.created", "site", created.ID, nil); err != nil {
+	requirementID := RequirementID
+	if !created.Address.Empty() {
+		requirementID = DirectoryExpansionRequirementID
+	}
+	if err := s.auditRequirement(ctx, requirementID, "people.site.created", "site", created.ID, nil); err != nil {
 		return Site{}, fmt.Errorf("audit site creation: %w", err)
 	}
 	return created, nil
@@ -92,6 +102,133 @@ func (s *Service) ListSites(ctx context.Context, visibility Visibility) ([]Site,
 		return nil, ErrScopeRequired
 	}
 	return s.store.ListSites(ctx, s.organizationID, visibility)
+}
+
+func (s *Service) CreateBuilding(ctx context.Context, input CreateBuildingInput) (Building, error) {
+	name, normalizedName, status, err := validateNamedRecord(input.Name, input.Status)
+	if err != nil {
+		return Building{}, err
+	}
+	siteID := strings.TrimSpace(input.SiteID)
+	if !recordIDPattern.MatchString(siteID) {
+		return Building{}, ErrInvalidInput
+	}
+	if _, err := s.store.GetSite(ctx, s.organizationID, siteID); err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return Building{}, ErrReferenceMissing
+		}
+		return Building{}, err
+	}
+	now := s.now()
+	id, err := foundation.NewCorrelationID()
+	if err != nil {
+		return Building{}, fmt.Errorf("create building id: %w", err)
+	}
+	created, err := s.store.CreateBuilding(ctx, Building{
+		ID:             id,
+		OrganizationID: s.organizationID,
+		SiteID:         siteID,
+		Name:           name,
+		NormalizedName: normalizedName,
+		Status:         status,
+		Revision:       1,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	})
+	if err != nil {
+		return Building{}, err
+	}
+	if err := s.auditRequirement(ctx, DirectoryExpansionRequirementID, "people.building.created", "building", created.ID, map[string]string{"siteId": created.SiteID}); err != nil {
+		return Building{}, fmt.Errorf("audit building creation: %w", err)
+	}
+	return created, nil
+}
+
+func (s *Service) ListBuildings(ctx context.Context, siteID string, visibility Visibility) ([]Building, error) {
+	siteID = strings.TrimSpace(siteID)
+	if siteID != "" && !recordIDPattern.MatchString(siteID) {
+		return nil, ErrInvalidInput
+	}
+	visibility = normalizeVisibility(visibility)
+	if visibility.Empty() {
+		return nil, ErrScopeRequired
+	}
+	return s.store.ListBuildings(ctx, s.organizationID, siteID, visibility)
+}
+
+func (s *Service) CreateRoom(ctx context.Context, input CreateRoomInput) (Room, error) {
+	siteID := strings.TrimSpace(input.SiteID)
+	buildingID := strings.TrimSpace(input.BuildingID)
+	if !recordIDPattern.MatchString(siteID) || !recordIDPattern.MatchString(buildingID) {
+		return Room{}, ErrInvalidInput
+	}
+	building, err := s.store.GetBuilding(ctx, s.organizationID, buildingID)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return Room{}, ErrReferenceMissing
+		}
+		return Room{}, err
+	}
+	if building.SiteID != siteID {
+		return Room{}, ErrInvalidInput
+	}
+	number := strings.TrimSpace(input.Number)
+	if number == "" || !utf8.ValidString(number) || utf8.RuneCountInString(number) > 100 {
+		return Room{}, ErrInvalidInput
+	}
+	name := strings.TrimSpace(input.Name)
+	if !utf8.ValidString(name) || utf8.RuneCountInString(name) > 200 {
+		return Room{}, ErrInvalidInput
+	}
+	status := input.Status
+	if status == "" {
+		status = StatusActive
+	}
+	if !validStatus(status) {
+		return Room{}, ErrInvalidInput
+	}
+	now := s.now()
+	id, err := foundation.NewCorrelationID()
+	if err != nil {
+		return Room{}, fmt.Errorf("create room id: %w", err)
+	}
+	created, err := s.store.CreateRoom(ctx, Room{
+		ID:               id,
+		OrganizationID:   s.organizationID,
+		SiteID:           siteID,
+		BuildingID:       buildingID,
+		Number:           number,
+		NormalizedNumber: strings.ToLower(number),
+		Name:             name,
+		Status:           status,
+		Revision:         1,
+		CreatedAt:        now,
+		UpdatedAt:        now,
+	})
+	if err != nil {
+		return Room{}, err
+	}
+	if err := s.auditRequirement(ctx, DirectoryExpansionRequirementID, "people.room.created", "room", created.ID, map[string]string{
+		"buildingId": created.BuildingID,
+		"siteId":     created.SiteID,
+	}); err != nil {
+		return Room{}, fmt.Errorf("audit room creation: %w", err)
+	}
+	return created, nil
+}
+
+func (s *Service) ListRooms(ctx context.Context, siteID, buildingID string, visibility Visibility) ([]Room, error) {
+	siteID = strings.TrimSpace(siteID)
+	buildingID = strings.TrimSpace(buildingID)
+	if (siteID != "" && !recordIDPattern.MatchString(siteID)) ||
+		(buildingID != "" && !recordIDPattern.MatchString(buildingID)) {
+		return nil, ErrInvalidInput
+	}
+	visibility = normalizeVisibility(visibility)
+	if visibility.Empty() {
+		return nil, ErrScopeRequired
+	}
+	return s.store.ListRooms(ctx, s.organizationID, siteID, buildingID, visibility)
 }
 
 func (s *Service) CreateDepartment(ctx context.Context, input CreateDepartmentInput) (Department, error) {
@@ -424,6 +561,31 @@ func validateNamedRecord(value string, status RecordStatus) (string, string, Rec
 	return value, strings.ToLower(value), status, nil
 }
 
+func normalizeAddress(address Address) (Address, error) {
+	address = Address{
+		Line1:      strings.TrimSpace(address.Line1),
+		Line2:      strings.TrimSpace(address.Line2),
+		City:       strings.TrimSpace(address.City),
+		Region:     strings.TrimSpace(address.Region),
+		PostalCode: strings.TrimSpace(address.PostalCode),
+		Country:    strings.ToUpper(strings.TrimSpace(address.Country)),
+	}
+	if address.Empty() {
+		return address, nil
+	}
+	if address.Line1 == "" || address.City == "" || !countryCodePattern.MatchString(address.Country) ||
+		!validBoundedText(address.Line1, 200) || !validBoundedText(address.Line2, 200) ||
+		!validBoundedText(address.City, 100) || !validBoundedText(address.Region, 100) ||
+		!validBoundedText(address.PostalCode, 32) {
+		return Address{}, ErrInvalidInput
+	}
+	return address, nil
+}
+
+func validBoundedText(value string, maximum int) bool {
+	return utf8.ValidString(value) && utf8.RuneCountInString(value) <= maximum
+}
+
 func normalizeEmail(value string) (string, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {
@@ -500,6 +662,10 @@ func actorFromContext(ctx context.Context) string {
 }
 
 func (s *Service) audit(ctx context.Context, action, resourceType, resourceID string, metadata map[string]string) error {
+	return s.auditRequirement(ctx, RequirementID, action, resourceType, resourceID, metadata)
+}
+
+func (s *Service) auditRequirement(ctx context.Context, requirementID, action, resourceType, resourceID string, metadata map[string]string) error {
 	scope, ok := foundation.ScopeFromContext(ctx)
 	if !ok || scope.CorrelationID == "" {
 		correlationID, err := foundation.NewCorrelationID()
@@ -516,7 +682,7 @@ func (s *Service) audit(ctx context.Context, action, resourceType, resourceID st
 	if metadata == nil {
 		metadata = make(map[string]string)
 	}
-	metadata["requirementId"] = RequirementID
+	metadata["requirementId"] = requirementID
 	eventID, err := foundation.NewCorrelationID()
 	if err != nil {
 		return err

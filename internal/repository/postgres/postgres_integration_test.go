@@ -1,6 +1,7 @@
 package postgres
 
-// Requirements: REQ-FOUNDATION-001, SEC-GUARD-001, REQ-PEOPLE-001.
+// Requirements: REQ-FOUNDATION-001, SEC-GUARD-001, REQ-PEOPLE-001,
+// REQ-DIRECTORY-EXPANSION-001.
 
 import (
 	"context"

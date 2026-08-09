@@ -1,6 +1,7 @@
 package httpapi
 
-// Requirements: REQ-FOUNDATION-001, REQ-PEOPLE-001, SEC-GUARD-001, SEC-HTTP-001.
+// Requirements: REQ-FOUNDATION-001, REQ-PEOPLE-001,
+// REQ-DIRECTORY-EXPANSION-001, SEC-GUARD-001, SEC-HTTP-001.
 
 import (
 	"bytes"
@@ -173,7 +174,9 @@ func TestCreateAndListAssetRequiresPermissionAndCSRF(t *testing.T) {
 func TestPeopleAndThreadsCollectionsRequireDirectoryGrants(t *testing.T) {
 	handler := newGuardServer(t)
 	session := bootstrapAdministrator(t, handler)
-	for _, path := range []string{"/api/v1/departments", "/api/v1/users", "/api/v1/tags", "/api/v1/goals"} {
+	for _, path := range []string{
+		"/api/v1/buildings", "/api/v1/rooms", "/api/v1/departments", "/api/v1/users", "/api/v1/tags", "/api/v1/goals",
+	} {
 		req := authenticatedRequest(http.MethodGet, path, nil, session)
 		res := httptest.NewRecorder()
 		handler.ServeHTTP(res, req)
@@ -189,7 +192,34 @@ func TestPeopleDirectoryCreateSearchAndAssignmentHistory(t *testing.T) {
 
 	site := createPeopleRecord[people.Site](t, handler, session, "/api/v1/sites", map[string]any{
 		"name": "Main Campus",
+		"address": map[string]string{
+			"line1": "100 Steward Way", "city": "Madison", "region": "WI",
+			"postalCode": "53703", "country": "US",
+		},
 	})
+	if site.Address.Line1 != "100 Steward Way" || site.Address.Country != "US" {
+		t.Fatalf("unexpected structured site address %#v", site.Address)
+	}
+	building := createPeopleRecord[people.Building](t, handler, session, "/api/v1/buildings", map[string]any{
+		"siteId": site.ID, "name": "Steward Hall",
+	})
+	room := createPeopleRecord[people.Room](t, handler, session, "/api/v1/rooms", map[string]any{
+		"siteId": site.ID, "buildingId": building.ID, "number": "101", "name": "Receiving",
+	})
+	if building.SiteID != site.ID || room.BuildingID != building.ID || room.SiteID != site.ID {
+		t.Fatalf("unexpected location hierarchy %#v %#v", building, room)
+	}
+	for path, expectedID := range map[string]string{
+		"/api/v1/buildings?siteId=" + site.ID:                            building.ID,
+		"/api/v1/rooms?siteId=" + site.ID + "&buildingId=" + building.ID: room.ID,
+	} {
+		req := authenticatedRequest(http.MethodGet, path, nil, session)
+		res := httptest.NewRecorder()
+		handler.ServeHTTP(res, req)
+		if res.Code != http.StatusOK || !bytes.Contains(res.Body.Bytes(), []byte(expectedID)) {
+			t.Fatalf("expected scoped location %s from %s, got %d: %s", expectedID, path, res.Code, res.Body.String())
+		}
+	}
 	department := createPeopleRecord[people.Department](t, handler, session, "/api/v1/departments", map[string]any{
 		"name": "Technology", "siteId": site.ID,
 	})

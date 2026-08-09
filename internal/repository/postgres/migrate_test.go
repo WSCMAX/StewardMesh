@@ -1,15 +1,18 @@
 package postgres
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
-// Requirements: REQ-FOUNDATION-001, SEC-GUARD-001, REQ-PEOPLE-001.
+// Requirements: REQ-FOUNDATION-001, SEC-GUARD-001, REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001.
 func TestEmbeddedMigrationsAreOrderedAndChecksummed(t *testing.T) {
 	migrations, err := loadMigrations()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(migrations) != 5 {
-		t.Fatalf("expected 5 platform migrations, got %d", len(migrations))
+	if len(migrations) != 6 {
+		t.Fatalf("expected 6 platform migrations, got %d", len(migrations))
 	}
 	for index, migration := range migrations {
 		expectedVersion := int64(index + 1)
@@ -18,6 +21,30 @@ func TestEmbeddedMigrationsAreOrderedAndChecksummed(t *testing.T) {
 		}
 		if len(migration.checksum) != 64 {
 			t.Fatalf("expected SHA-256 checksum for migration %d", migration.version)
+		}
+	}
+}
+
+func TestDirectoryExpansionMigrationEnforcesLocationHierarchy(t *testing.T) {
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(migrations) < 6 {
+		t.Fatalf("directory expansion migration is missing")
+	}
+	contents := migrations[5].contents
+	for _, expected := range []string{
+		"people_sites_address_complete",
+		"CREATE TABLE people_buildings",
+		"UNIQUE (organization_id, site_id, id)",
+		"CREATE TABLE people_rooms",
+		"FOREIGN KEY (organization_id, site_id, building_id)",
+		"REFERENCES people_buildings (organization_id, site_id, id)",
+		"UNIQUE (organization_id, building_id, normalized_number)",
+	} {
+		if !strings.Contains(contents, expected) {
+			t.Fatalf("directory expansion migration is missing %q", expected)
 		}
 	}
 }

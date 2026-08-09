@@ -23,17 +23,94 @@ func PeopleStore(t *testing.T, store people.Store, organizationID string) {
 		OrganizationID: organizationID,
 		Name:           "North Campus " + suffix,
 		NormalizedName: "north campus " + suffix,
-		Status:         people.StatusActive,
-		Revision:       1,
-		CreatedAt:      now,
-		UpdatedAt:      now,
+		Address: people.Address{
+			Line1:      "100 College Avenue",
+			Line2:      "Suite 200",
+			City:       "Madison",
+			Region:     "WI",
+			PostalCode: "53703",
+			Country:    "US",
+		},
+		Status:    people.StatusActive,
+		Revision:  1,
+		CreatedAt: now,
+		UpdatedAt: now,
 	}
 	createdSite, err := store.CreateSite(ctx, site)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if createdSite.ID != site.ID {
+	if createdSite.ID != site.ID || createdSite.Address != site.Address {
 		t.Fatalf("unexpected site %#v", createdSite)
+	}
+
+	building := people.Building{
+		ID:             randomID(t),
+		OrganizationID: organizationID,
+		SiteID:         site.ID,
+		Name:           "Science Hall " + suffix,
+		NormalizedName: "science hall " + suffix,
+		Status:         people.StatusActive,
+		Revision:       1,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	createdBuilding, err := store.CreateBuilding(ctx, building)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if createdBuilding.SiteID != site.ID {
+		t.Fatalf("unexpected building %#v", createdBuilding)
+	}
+	duplicateBuilding := building
+	duplicateBuilding.ID = randomID(t)
+	if _, err := store.CreateBuilding(ctx, duplicateBuilding); !errors.Is(err, people.ErrConflict) {
+		t.Fatalf("expected duplicate building conflict, got %v", err)
+	}
+	missingSiteBuilding := building
+	missingSiteBuilding.ID = randomID(t)
+	missingSiteBuilding.SiteID = randomID(t)
+	missingSiteBuilding.Name = "Missing site " + suffix
+	missingSiteBuilding.NormalizedName = "missing site " + suffix
+	if _, err := store.CreateBuilding(ctx, missingSiteBuilding); !errors.Is(err, people.ErrReferenceMissing) {
+		t.Fatalf("expected missing building site reference, got %v", err)
+	}
+	if _, err := store.GetBuilding(ctx, organizationID+"-other", building.ID); !errors.Is(err, people.ErrNotFound) {
+		t.Fatalf("expected organization-scoped building lookup, got %v", err)
+	}
+
+	room := people.Room{
+		ID:               randomID(t),
+		OrganizationID:   organizationID,
+		SiteID:           site.ID,
+		BuildingID:       building.ID,
+		Number:           "101A",
+		NormalizedNumber: "101a",
+		Name:             "Robotics Lab",
+		Status:           people.StatusActive,
+		Revision:         1,
+		CreatedAt:        now,
+		UpdatedAt:        now,
+	}
+	createdRoom, err := store.CreateRoom(ctx, room)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if createdRoom.BuildingID != building.ID || createdRoom.SiteID != site.ID {
+		t.Fatalf("unexpected room %#v", createdRoom)
+	}
+	duplicateRoom := room
+	duplicateRoom.ID = randomID(t)
+	if _, err := store.CreateRoom(ctx, duplicateRoom); !errors.Is(err, people.ErrConflict) {
+		t.Fatalf("expected duplicate room conflict, got %v", err)
+	}
+	mismatchedRoom := room
+	mismatchedRoom.ID = randomID(t)
+	mismatchedRoom.SiteID = randomID(t)
+	mismatchedRoom.Number = "999"
+	mismatchedRoom.NormalizedNumber = "999"
+	if _, err := store.CreateRoom(ctx, mismatchedRoom); !errors.Is(err, people.ErrReferenceMissing) {
+		t.Fatalf("expected room/building site mismatch to fail, got %v", err)
 	}
 
 	department := people.Department{
@@ -76,6 +153,34 @@ func PeopleStore(t *testing.T, store people.Store, organizationID string) {
 	visibleDepartments, err := store.ListDepartments(ctx, organizationID, people.Visibility{SiteIDs: []string{site.ID}})
 	if err != nil || len(visibleDepartments) != 1 || visibleDepartments[0].ID != department.ID {
 		t.Fatalf("site visibility did not restrict departments: %#v, %v", visibleDepartments, err)
+	}
+	visibleBuildings, err := store.ListBuildings(ctx, organizationID, site.ID, departmentOnly)
+	if err != nil || len(visibleBuildings) != 1 || visibleBuildings[0].ID != building.ID {
+		t.Fatalf("department visibility did not resolve buildings: %#v, %v", visibleBuildings, err)
+	}
+	visibleRooms, err := store.ListRooms(ctx, organizationID, site.ID, building.ID, departmentOnly)
+	if err != nil || len(visibleRooms) != 1 || visibleRooms[0].ID != room.ID {
+		t.Fatalf("department visibility did not resolve rooms: %#v, %v", visibleRooms, err)
+	}
+	allBuildings, err := store.ListBuildings(ctx, organizationID, "", people.Visibility{All: true})
+	if err != nil || len(allBuildings) != 1 || allBuildings[0].ID != building.ID {
+		t.Fatalf("unfiltered building list was incomplete: %#v, %v", allBuildings, err)
+	}
+	allRooms, err := store.ListRooms(ctx, organizationID, "", "", people.Visibility{All: true})
+	if err != nil || len(allRooms) != 1 || allRooms[0].ID != room.ID {
+		t.Fatalf("unfiltered room list was incomplete: %#v, %v", allRooms, err)
+	}
+	if mismatched, err := store.ListRooms(ctx, organizationID, randomID(t), building.ID, people.Visibility{All: true}); err != nil || len(mismatched) != 0 {
+		t.Fatalf("mismatched room filters returned records: %#v, %v", mismatched, err)
+	}
+	if hidden, err := store.ListBuildings(ctx, organizationID, site.ID, people.Visibility{SiteIDs: []string{randomID(t)}}); err != nil || len(hidden) != 0 {
+		t.Fatalf("unrelated site visibility exposed buildings: %#v, %v", hidden, err)
+	}
+	if _, err := store.ListRooms(ctx, organizationID, site.ID, building.ID, people.Visibility{}); !errors.Is(err, people.ErrScopeRequired) {
+		t.Fatalf("expected explicit room visibility scope, got %v", err)
+	}
+	if other, err := store.ListBuildings(ctx, organizationID+"-other", site.ID, people.Visibility{All: true}); err != nil || len(other) != 0 {
+		t.Fatalf("organization boundary leaked buildings: %#v, %v", other, err)
 	}
 	visibleIdentities, err := store.SearchIdentities(ctx, organizationID, people.IdentityQuery{Limit: 100}, departmentOnly)
 	if err != nil || len(visibleIdentities) != 2 {

@@ -1,7 +1,8 @@
-# People — Users, departments, and assignments
+# People — Users, locations, departments, and assignments
 
 - **Canonical ID:** `identity.directory`
 - **Requirement:** `REQ-PEOPLE-001`
+- **Location requirement:** `REQ-DIRECTORY-EXPANSION-001`
 - **Roadmap issue:** [#6](https://github.com/WSCMAX/StewardMesh/issues/6)
 
 ## Purpose
@@ -17,7 +18,13 @@ People uses four explicit identity types:
 - **Public users** for equipment available to a broad, non-enumerated population.
 - **Computer lab users** for multi-user lab or classroom equipment.
 
-Sites and departments are independent first-class records. A department may belong to a site. An identity may belong to a department and a site; when a department has a site and the identity does not specify one, the site is inherited. Conflicting department and site references are rejected.
+Sites and departments are independent first-class records. A site can include a
+validated structured address and contain buildings; each building contains
+rooms. Buildings and rooms retain both organization and site ownership, and a
+room's site must match its building. A department may belong to a site. An
+identity may belong to a department and a site; when a department has a site
+and the identity does not specify one, the site is inherited. Conflicting
+department, site, building, and room references are rejected.
 
 Every record carries its organization owner, stable server-generated ID, status, revision, and timestamps. Provider and provider-subject fields reserve a unique mapping seam for future OIDC, OAuth, and SAML provisioning. People does not store passwords, session tokens, or raw identity-provider claims.
 
@@ -28,7 +35,7 @@ Every record carries its organization owner, stable server-generated ID, status,
 - Asset assignment changes also require `assets.write`.
 - Assignment history reads also require `assets.read`.
 
-An organization-scoped `directory.read` grant can see the whole organization directory. A site-scoped grant returns only identities and departments in that site. A department-scoped grant returns only identities in that department and its related site. Every memory and PostgreSQL query receives an explicit visibility object; an empty visibility scope fails closed. Search filters can only narrow the records already allowed by Guard.
+An organization-scoped `directory.read` grant can see the whole organization directory. A site-scoped grant returns only identities, departments, buildings, and rooms in that site. A department-scoped grant returns only identities in that department and its related site, including that site's locations. Every memory and PostgreSQL query receives an explicit visibility object; an empty visibility scope fails closed. Search and location filters can only narrow the records already allowed by Guard.
 
 The web interface uses organization permission hints only to hide unavailable controls. Guard enforces every permission on the server.
 
@@ -47,6 +54,8 @@ Atlas currently supplies the asset-existence check through a small `AssetReader`
 ## APIs and provider boundaries
 
 - `GET|POST /api/v1/sites`
+- `GET|POST /api/v1/buildings`
+- `GET|POST /api/v1/rooms`
 - `GET|POST /api/v1/departments`
 - `GET|POST /api/v1/identities`
 - `GET /api/v1/users` as a deprecated person-only compatibility alias
@@ -54,7 +63,7 @@ Atlas currently supplies the asset-existence check through a small `AssetReader`
 - `PATCH /api/v1/assets/{assetId}/assignments/{assignmentId}`
 - OpenAPI: `api/openapi/openapi.yaml`
 - gRPC contract: `api/proto/stewardmesh.proto`
-- PostgreSQL migration: `internal/repository/postgres/migrations/0005_people_directory.sql`
+- PostgreSQL migrations: `internal/repository/postgres/migrations/0005_people_directory.sql` and `0006_directory_expansion.sql`
 
 The `people.Store` interface is the behavior contract for memory, PostgreSQL, and future DynamoDB adapters. The same conformance suite validates organization isolation, scoped search, unique email and provider mappings, multi-user assignments, replacement history, and ending assignments.
 
@@ -83,6 +92,8 @@ Use the configurable **Report a People issue** link on the workspace to report a
 ## Audit events
 
 - `people.site.created`
+- `people.building.created`
+- `people.room.created`
 - `people.department.created`
 - `people.identity.created`
 - `people.asset_assignment.created`
@@ -90,7 +101,7 @@ Use the configurable **Report a People issue** link on the workspace to report a
 
 ## Validation
 
-- Domain validation and department/site consistency tests
+- Domain validation plus department/site and site/building/room consistency tests
 - PII-safe audit tests
 - Memory and PostgreSQL provider conformance tests
 - PostgreSQL migration and integration tests

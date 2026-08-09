@@ -1,7 +1,7 @@
 # Guard — Authentication, roles, policies, and audit
 
 - **Canonical ID:** `authorization.security`
-- **Requirements:** `SEC-GUARD-001`, `SEC-HTTP-001`, `A11Y-001`, `DOC-001`, `DOC-002`
+- **Requirements:** `SEC-GUARD-001`, `SEC-HTTP-001`, `A11Y-001`, `DOC-001`, `DOC-002`, `REQ-PLATFORM-VALKEY-001`
 - **Roadmap issue:** [#13](https://github.com/WSCMAX/StewardMesh/issues/13)
 
 ## Purpose
@@ -65,7 +65,9 @@ Role assignments carry an explicit organization, site, department, or resource s
 - CORS allows only the configured exact origin and permits credentials only for that origin.
 - Browser mutations require the configured origin and a valid synchronized CSRF header.
 - Login failures use one generic response and are independently limited to five failures per normalized account and direct client in 15 minutes.
-- The local limiter HMACs identifiers, does not retain successful keys, bounds tracked failures, and fails closed for one window if that bound is exhausted.
+- The default local limiter HMACs identifiers, does not retain successful keys, bounds tracked failures, and fails closed for one window if that bound is exhausted.
+- Deployments that set `STEWARDMESH_CACHE_DRIVER=valkey` use the shared Valkey/Redis-compatible counter so multiple replicas enforce the same window. If the configured shared limiter is unavailable, login protection fails closed with a safe service-unavailable response.
+- Sessions, CSRF hashes, grants, permission decisions, and authenticated responses remain authoritative or `no-store`; they are not placed in the cache. See [Valkey architecture](../architecture/valkey.md).
 - Client address logic uses the direct socket address and does not trust forwarded headers.
 - Existing timeout, header-size, correlation, CSP, clickjacking, MIME-sniffing, referrer, and permissions-policy controls remain centralized.
 
@@ -105,6 +107,7 @@ Audit events contain stable account or resource IDs, correlation IDs, actions, t
 - Argon2id format, verification, malformed-parameter, and fuzz tests
 - minimum password and bootstrap-token tests
 - login-rate-limit and uniform-error tests
+- distributed rate-limit, cache outage, TTL, and isolation tests when the Valkey adapter is enabled
 - memory and PostgreSQL provider contract tests
 - session hashing, CSRF rotation, expiration, and revocation tests
 - server-side permission, origin, CORS, JSON-boundary, and header tests

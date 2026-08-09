@@ -1,8 +1,10 @@
 import { type FormEvent, useEffect, useRef, useState } from 'react'
+import { ApiRequestError, requestJSON } from './api'
+import PeopleDirectory from './PeopleDirectory'
 
 type Module = readonly [name: string, description: string]
 
-type Asset = {
+export type Asset = {
   id: string
   name: string
   kind: string
@@ -29,6 +31,7 @@ type Principal = {
 
 type SessionResponse = {
   principal: Principal
+  permissions: string[]
   csrfToken: string
   expiresAt: string
 }
@@ -89,7 +92,9 @@ function isSessionResponse(value: unknown): value is SessionResponse {
   if (typeof candidate.csrfToken !== 'string' || candidate.csrfToken.length < 32 || typeof candidate.expiresAt !== 'string') return false
   if (typeof candidate.principal !== 'object' || candidate.principal === null) return false
   const principal = candidate.principal as Record<string, unknown>
-  return typeof principal.subject === 'string'
+  return Array.isArray(candidate.permissions)
+    && candidate.permissions.every((permission) => typeof permission === 'string')
+    && typeof principal.subject === 'string'
     && typeof principal.organizationId === 'string'
     && typeof principal.username === 'string'
     && typeof principal.email === 'string'
@@ -98,46 +103,6 @@ function isSessionResponse(value: unknown): value is SessionResponse {
     && principal.roles.every((role) => typeof role === 'string')
 }
 
-class ApiRequestError extends Error {
-  status: number
-
-  constructor(status: number, message: string) {
-    super(message)
-    this.name = 'ApiRequestError'
-    this.status = status
-  }
-}
-
-async function requestJSON(path: string, init?: RequestInit): Promise<unknown> {
-  const response = await fetch(path, {
-    ...init,
-    credentials: 'same-origin',
-    headers: {
-      Accept: 'application/json',
-      ...init?.headers,
-    },
-  })
-  if (!response.ok) {
-    let message = 'The request could not be completed.'
-    try {
-      const body = await response.json() as unknown
-      if (typeof body === 'object' && body !== null) {
-        const error = (body as Record<string, unknown>).error
-        if (typeof error === 'object' && error !== null) {
-          const candidate = (error as Record<string, unknown>).message
-          if (typeof candidate === 'string' && candidate.length > 0 && candidate.length <= 300) message = candidate
-        }
-      }
-    } catch {
-      // The status code remains authoritative when an intermediary returns non-JSON.
-    }
-    throw new ApiRequestError(response.status, message)
-  }
-  if (response.status === httpNoContent) return undefined
-  return response.json() as Promise<unknown>
-}
-
-const httpNoContent = 204
 const issuesUrl = resolvePublicUrl(import.meta.env.VITE_ISSUES_URL)
 
 export default function App() {
@@ -147,6 +112,7 @@ export default function App() {
   const [authPhase, setAuthPhase] = useState<AuthPhase>('loading')
   const [principal, setPrincipal] = useState<Principal | null>(null)
   const [csrfToken, setCSRFToken] = useState('')
+  const [permissions, setPermissions] = useState<string[]>([])
   const [tokenRequired, setTokenRequired] = useState(false)
   const [minimumPasswordCharacters, setMinimumPasswordCharacters] = useState(15)
   const [authError, setAuthError] = useState('')
@@ -187,6 +153,7 @@ export default function App() {
           if (!isSessionResponse(session)) throw new Error('invalid session response')
           if (!active) return
           setPrincipal(session.principal)
+          setPermissions(session.permissions)
           setCSRFToken(session.csrfToken)
           setAuthPhase('authenticated')
         } catch (error) {
@@ -233,6 +200,7 @@ export default function App() {
 
   function acceptSession(session: SessionResponse) {
     setPrincipal(session.principal)
+    setPermissions(session.permissions)
     setCSRFToken(session.csrfToken)
     setAuthError('')
     setAuthPhase('authenticated')
@@ -315,6 +283,7 @@ export default function App() {
       })
       setPrincipal(null)
       setCSRFToken('')
+      setPermissions([])
       setAssets([])
       setAuthPhase('login')
     } catch (error) {
@@ -405,6 +374,8 @@ export default function App() {
               <p className="mt-1 text-sm text-slate-400">Asset records are protected by Guard permissions and the organization ownership boundary.</p>
               {assets.length === 0 ? <p className="mt-6 rounded-xl border border-dashed border-slate-700 p-5 text-sm text-slate-400">No assets yet. Add your first server or device through the API to begin.</p> : <ul className="mt-6 divide-y divide-slate-800">{assets.map((asset) => <li className="flex flex-wrap justify-between gap-2 py-4" key={asset.id}><span>{asset.name}</span><span className="text-sm text-slate-400">{asset.kind} · {asset.status}</span></li>)}</ul>}
             </section>
+
+            <PeopleDirectory assets={assets} csrfToken={csrfToken} issuesUrl={issuesUrl} permissions={permissions} />
           </>
         )}
       </main>

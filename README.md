@@ -34,6 +34,11 @@ See [Guard](docs/features/guard.md) for secure local setup, shared-server
 requirements, permissions, audit behavior, and the planned external identity
 provider boundary.
 
+People now provides sites, departments, person/shared/public/lab identities,
+scoped directory search, and effective-dated multi-user asset assignments.
+See [People](docs/features/people.md) for permissions, privacy boundaries,
+provider contracts, assignment behavior, and the guided accessible workflow.
+
 The loopback development settings in `.env.example` deliberately use an HTTP
 cookie. A shared listener must use an HTTPS allowed origin, secure cookies, and
 a deployment bootstrap token containing at least 32 bytes; configuration fails

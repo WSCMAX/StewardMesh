@@ -1,0 +1,195 @@
+// Package people implements the StewardMesh directory and asset assignment domain.
+// Requirement: REQ-PEOPLE-001. Feature: identity.directory.
+package people
+
+import (
+	"context"
+	"errors"
+	"time"
+
+	"github.com/maxlemke/stewardmesh/internal/domain"
+)
+
+const (
+	RequirementID = "REQ-PEOPLE-001"
+	FeatureID     = "identity.directory"
+)
+
+var (
+	ErrNotFound         = errors.New("people record not found")
+	ErrReferenceMissing = errors.New("people reference not found")
+	ErrConflict         = errors.New("people record conflicts with existing data")
+	ErrInvalidInput     = errors.New("invalid people input")
+	ErrScopeRequired    = errors.New("directory visibility scope is required")
+)
+
+type RecordStatus string
+
+const (
+	StatusActive   RecordStatus = "active"
+	StatusInactive RecordStatus = "inactive"
+)
+
+type IdentityKind string
+
+const (
+	IdentityPerson IdentityKind = "person"
+	IdentityShared IdentityKind = "shared"
+	IdentityPublic IdentityKind = "public"
+	IdentityLab    IdentityKind = "lab"
+)
+
+type AssigneeKind string
+
+const (
+	AssigneeIdentity   AssigneeKind = "identity"
+	AssigneeDepartment AssigneeKind = "department"
+)
+
+type AssignmentRole string
+
+const (
+	AssignmentPrimary    AssignmentRole = "primary"
+	AssignmentUser       AssignmentRole = "user"
+	AssignmentDepartment AssignmentRole = "department"
+)
+
+type Site struct {
+	ID             string       `json:"id"`
+	OrganizationID string       `json:"organizationId"`
+	Name           string       `json:"name"`
+	NormalizedName string       `json:"-"`
+	Status         RecordStatus `json:"status"`
+	Revision       uint64       `json:"revision"`
+	CreatedAt      time.Time    `json:"createdAt"`
+	UpdatedAt      time.Time    `json:"updatedAt"`
+}
+
+type Department struct {
+	ID             string       `json:"id"`
+	OrganizationID string       `json:"organizationId"`
+	Name           string       `json:"name"`
+	NormalizedName string       `json:"-"`
+	SiteID         string       `json:"siteId,omitempty"`
+	Status         RecordStatus `json:"status"`
+	Revision       uint64       `json:"revision"`
+	CreatedAt      time.Time    `json:"createdAt"`
+	UpdatedAt      time.Time    `json:"updatedAt"`
+}
+
+// Identity represents a person or a deliberately non-person directory entry.
+// Provider and ProviderSubject reserve a safe mapping seam for future OIDC,
+// OAuth, and SAML provisioning without coupling People to an auth provider.
+type Identity struct {
+	ID              string       `json:"id"`
+	OrganizationID  string       `json:"organizationId"`
+	Kind            IdentityKind `json:"kind"`
+	DisplayName     string       `json:"displayName"`
+	NormalizedName  string       `json:"-"`
+	Email           string       `json:"email,omitempty"`
+	NormalizedEmail string       `json:"-"`
+	DepartmentID    string       `json:"departmentId,omitempty"`
+	SiteID          string       `json:"siteId,omitempty"`
+	Status          RecordStatus `json:"status"`
+	Provider        string       `json:"provider,omitempty"`
+	ProviderSubject string       `json:"providerSubject,omitempty"`
+	Revision        uint64       `json:"revision"`
+	CreatedAt       time.Time    `json:"createdAt"`
+	UpdatedAt       time.Time    `json:"updatedAt"`
+}
+
+type AssetAssignment struct {
+	ID             string         `json:"id"`
+	OrganizationID string         `json:"organizationId"`
+	AssetID        string         `json:"assetId"`
+	AssigneeKind   AssigneeKind   `json:"assigneeKind"`
+	AssigneeID     string         `json:"assigneeId"`
+	Role           AssignmentRole `json:"role"`
+	EffectiveFrom  time.Time      `json:"effectiveFrom"`
+	EffectiveTo    *time.Time     `json:"effectiveTo,omitempty"`
+	CreatedBy      string         `json:"createdBy"`
+	CreatedAt      time.Time      `json:"createdAt"`
+}
+
+// Visibility is mandatory for every read. All means organization-wide access;
+// otherwise records are restricted to the listed department or site scopes.
+type Visibility struct {
+	All           bool
+	DepartmentIDs []string
+	SiteIDs       []string
+}
+
+func (v Visibility) Empty() bool {
+	return !v.All && len(v.DepartmentIDs) == 0 && len(v.SiteIDs) == 0
+}
+
+type IdentityQuery struct {
+	Search       string
+	Kind         IdentityKind
+	Status       RecordStatus
+	DepartmentID string
+	SiteID       string
+	Limit        int
+}
+
+type CreateSiteInput struct {
+	Name   string
+	Status RecordStatus
+}
+
+type CreateDepartmentInput struct {
+	Name   string
+	SiteID string
+	Status RecordStatus
+}
+
+type CreateIdentityInput struct {
+	Kind            IdentityKind
+	DisplayName     string
+	Email           string
+	DepartmentID    string
+	SiteID          string
+	Status          RecordStatus
+	Provider        string
+	ProviderSubject string
+}
+
+type CreateAssetAssignmentInput struct {
+	AssetID       string
+	AssigneeKind  AssigneeKind
+	AssigneeID    string
+	Role          AssignmentRole
+	EffectiveFrom time.Time
+}
+
+type EndAssetAssignmentInput struct {
+	AssetID      string
+	AssignmentID string
+	EffectiveTo  time.Time
+}
+
+// AssetReader is satisfied by the Atlas repository contract. Keeping this
+// interface local lets Atlas become durable without changing People.
+type AssetReader interface {
+	Get(ctx context.Context, id string) (domain.Asset, error)
+}
+
+// Store is provider-neutral. PostgreSQL is the first durable adapter and a
+// future DynamoDB adapter must pass the same conformance tests.
+type Store interface {
+	CreateSite(ctx context.Context, site Site) (Site, error)
+	GetSite(ctx context.Context, organizationID, id string) (Site, error)
+	ListSites(ctx context.Context, organizationID string, visibility Visibility) ([]Site, error)
+
+	CreateDepartment(ctx context.Context, department Department) (Department, error)
+	GetDepartment(ctx context.Context, organizationID, id string) (Department, error)
+	ListDepartments(ctx context.Context, organizationID string, visibility Visibility) ([]Department, error)
+
+	CreateIdentity(ctx context.Context, identity Identity) (Identity, error)
+	GetIdentity(ctx context.Context, organizationID, id string) (Identity, error)
+	SearchIdentities(ctx context.Context, organizationID string, query IdentityQuery, visibility Visibility) ([]Identity, error)
+
+	CreateAssetAssignment(ctx context.Context, assignment AssetAssignment, replaceActiveRole bool) (AssetAssignment, error)
+	EndAssetAssignment(ctx context.Context, organizationID, assetID, assignmentID string, effectiveTo time.Time) (AssetAssignment, error)
+	ListAssetAssignments(ctx context.Context, organizationID, assetID string) ([]AssetAssignment, error)
+}

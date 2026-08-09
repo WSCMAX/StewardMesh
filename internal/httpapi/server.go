@@ -1,6 +1,6 @@
 package httpapi
 
-// Requirements: REQ-FOUNDATION-001, SEC-GUARD-001, SEC-HTTP-001.
+// Requirements: REQ-FOUNDATION-001, REQ-PEOPLE-001, SEC-GUARD-001, SEC-HTTP-001.
 
 import (
 	"encoding/json"
@@ -10,6 +10,8 @@ import (
 	"net"
 	"net/http"
 	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,6 +19,7 @@ import (
 	"github.com/maxlemke/stewardmesh/internal/domain"
 	"github.com/maxlemke/stewardmesh/internal/foundation"
 	"github.com/maxlemke/stewardmesh/internal/guard"
+	"github.com/maxlemke/stewardmesh/internal/people"
 	"github.com/maxlemke/stewardmesh/internal/repository"
 	"github.com/maxlemke/stewardmesh/internal/storage"
 )
@@ -31,8 +34,7 @@ var correlationIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127
 
 type Dependencies struct {
 	Assets              repository.AssetRepository
-	Departments         repository.DepartmentRepository
-	Users               repository.UserRepository
+	People              *people.Service
 	Tags                repository.TagRepository
 	Goals               repository.GoalRepository
 	Blobs               storage.BlobStore
@@ -42,8 +44,7 @@ type Dependencies struct {
 
 type Server struct {
 	assets              repository.AssetRepository
-	departmentsRepo     repository.DepartmentRepository
-	usersRepo           repository.UserRepository
+	people              *people.Service
 	tagsRepo            repository.TagRepository
 	goalsRepo           repository.GoalRepository
 	guard               *guard.Service
@@ -61,8 +62,7 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 	}
 	server := &Server{
 		assets:              deps.Assets,
-		departmentsRepo:     deps.Departments,
-		usersRepo:           deps.Users,
+		people:              deps.People,
 		tagsRepo:            deps.Tags,
 		goalsRepo:           deps.Goals,
 		guard:               deps.Guard,
@@ -80,8 +80,16 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 	mux.Handle("GET /api/v1/organization", server.protected(guard.PermissionOrganizationRead, false, server.getOrganization))
 	mux.Handle("GET /api/v1/assets", server.protected(guard.PermissionAssetsRead, false, server.listAssets))
 	mux.Handle("POST /api/v1/assets", server.protected(guard.PermissionAssetsWrite, true, server.createAsset))
-	mux.Handle("GET /api/v1/departments", server.protected(guard.PermissionDirectoryRead, false, server.departments))
-	mux.Handle("GET /api/v1/users", server.protected(guard.PermissionDirectoryRead, false, server.users))
+	mux.Handle("GET /api/v1/sites", server.protected("", false, server.listSites))
+	mux.Handle("POST /api/v1/sites", server.protected(guard.PermissionDirectoryWrite, true, server.createSite))
+	mux.Handle("GET /api/v1/departments", server.protected("", false, server.listDepartments))
+	mux.Handle("POST /api/v1/departments", server.protected(guard.PermissionDirectoryWrite, true, server.createDepartment))
+	mux.Handle("GET /api/v1/identities", server.protected("", false, server.listIdentities))
+	mux.Handle("POST /api/v1/identities", server.protected(guard.PermissionDirectoryWrite, true, server.createIdentity))
+	mux.Handle("GET /api/v1/users", server.protected("", false, server.listUsers))
+	mux.Handle("GET /api/v1/assets/{assetID}/assignments", server.protected(guard.PermissionAssetsRead, false, server.listAssetAssignments))
+	mux.Handle("POST /api/v1/assets/{assetID}/assignments", server.protected(guard.PermissionDirectoryWrite, true, server.createAssetAssignment))
+	mux.Handle("PATCH /api/v1/assets/{assetID}/assignments/{assignmentID}", server.protected(guard.PermissionDirectoryWrite, true, server.endAssetAssignment))
 	mux.Handle("GET /api/v1/tags", server.protected(guard.PermissionGoalsRead, false, server.tags))
 	mux.Handle("GET /api/v1/goals", server.protected(guard.PermissionGoalsRead, false, server.goals))
 	return server.correlation(server.securityHeaders(server.cors(mux)))
@@ -225,30 +233,227 @@ func (s *Server) listAssets(w http.ResponseWriter, r *http.Request, _ guard.Auth
 	writeJSON(w, http.StatusOK, map[string]any{"items": assets})
 }
 
-func (s *Server) departments(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
-	if s.departmentsRepo == nil {
-		writeError(w, r, http.StatusServiceUnavailable, "repository_unavailable", "department repository unavailable")
+func (s *Server) listSites(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
+	if s.people == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "repository_unavailable", "people directory unavailable")
 		return
 	}
-	items, err := s.departmentsRepo.ListDepartments(r.Context())
+	visibility, ok := s.directoryVisibility(w, r, authentication)
+	if !ok {
+		return
+	}
+	items, err := s.people.ListSites(r.Context(), visibility)
 	if err != nil {
-		writeError(w, r, http.StatusInternalServerError, "repository_error", "unable to list departments")
+		writePeopleError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
-func (s *Server) users(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
-	if s.usersRepo == nil {
-		writeError(w, r, http.StatusServiceUnavailable, "repository_unavailable", "user repository unavailable")
+func (s *Server) createSite(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.people == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "repository_unavailable", "people directory unavailable")
 		return
 	}
-	items, err := s.usersRepo.ListUsers(r.Context())
+	var input struct {
+		Name   string              `json:"name"`
+		Status people.RecordStatus `json:"status"`
+	}
+	if err := decodeJSON(w, r, 32<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid site payload")
+		return
+	}
+	created, err := s.people.CreateSite(r.Context(), people.CreateSiteInput{Name: input.Name, Status: input.Status})
 	if err != nil {
-		writeError(w, r, http.StatusInternalServerError, "repository_error", "unable to list users")
+		writePeopleError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, created)
+}
+
+func (s *Server) listDepartments(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
+	if s.people == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "repository_unavailable", "people directory unavailable")
+		return
+	}
+	visibility, ok := s.directoryVisibility(w, r, authentication)
+	if !ok {
+		return
+	}
+	items, err := s.people.ListDepartments(r.Context(), visibility)
+	if err != nil {
+		writePeopleError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) createDepartment(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.people == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "repository_unavailable", "people directory unavailable")
+		return
+	}
+	var input struct {
+		Name   string              `json:"name"`
+		SiteID string              `json:"siteId"`
+		Status people.RecordStatus `json:"status"`
+	}
+	if err := decodeJSON(w, r, 32<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid department payload")
+		return
+	}
+	created, err := s.people.CreateDepartment(r.Context(), people.CreateDepartmentInput{
+		Name: input.Name, SiteID: input.SiteID, Status: input.Status,
+	})
+	if err != nil {
+		writePeopleError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, created)
+}
+
+func (s *Server) listIdentities(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
+	s.listIdentityCollection(w, r, authentication, "")
+}
+
+// listUsers preserves the initial REST collection as a person-only alias.
+func (s *Server) listUsers(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
+	s.listIdentityCollection(w, r, authentication, people.IdentityPerson)
+}
+
+func (s *Server) listIdentityCollection(w http.ResponseWriter, r *http.Request, authentication guard.Authentication, forcedKind people.IdentityKind) {
+	if s.people == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "repository_unavailable", "people directory unavailable")
+		return
+	}
+	visibility, ok := s.directoryVisibility(w, r, authentication)
+	if !ok {
+		return
+	}
+	query, err := identityQueryFromRequest(r)
+	if err != nil {
+		writeError(w, r, http.StatusBadRequest, "validation_failed", "directory filters are invalid")
+		return
+	}
+	if forcedKind != "" {
+		query.Kind = forcedKind
+	}
+	items, err := s.people.SearchIdentities(r.Context(), query, visibility)
+	if err != nil {
+		writePeopleError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) createIdentity(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.people == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "repository_unavailable", "people directory unavailable")
+		return
+	}
+	var input struct {
+		Kind            people.IdentityKind `json:"kind"`
+		DisplayName     string              `json:"displayName"`
+		Email           string              `json:"email"`
+		DepartmentID    string              `json:"departmentId"`
+		SiteID          string              `json:"siteId"`
+		Status          people.RecordStatus `json:"status"`
+		Provider        string              `json:"provider"`
+		ProviderSubject string              `json:"providerSubject"`
+	}
+	if err := decodeJSON(w, r, 32<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid identity payload")
+		return
+	}
+	created, err := s.people.CreateIdentity(r.Context(), people.CreateIdentityInput{
+		Kind: input.Kind, DisplayName: input.DisplayName, Email: input.Email,
+		DepartmentID: input.DepartmentID, SiteID: input.SiteID, Status: input.Status,
+		Provider: input.Provider, ProviderSubject: input.ProviderSubject,
+	})
+	if err != nil {
+		writePeopleError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, created)
+}
+
+func (s *Server) listAssetAssignments(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
+	if s.people == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "repository_unavailable", "people directory unavailable")
+		return
+	}
+	visibility, ok := s.directoryVisibility(w, r, authentication)
+	if !ok {
+		return
+	}
+	items, err := s.people.ListAssetAssignments(r.Context(), r.PathValue("assetID"), visibility)
+	if err != nil {
+		writePeopleError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) createAssetAssignment(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
+	if s.people == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "repository_unavailable", "people directory unavailable")
+		return
+	}
+	if !s.requireOrganizationPermission(w, r, authentication, guard.PermissionAssetsWrite) {
+		return
+	}
+	var input struct {
+		AssigneeKind  people.AssigneeKind   `json:"assigneeKind"`
+		AssigneeID    string                `json:"assigneeId"`
+		Role          people.AssignmentRole `json:"role"`
+		EffectiveFrom *time.Time            `json:"effectiveFrom"`
+	}
+	if err := decodeJSON(w, r, 32<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid asset assignment payload")
+		return
+	}
+	effectiveFrom := time.Time{}
+	if input.EffectiveFrom != nil {
+		effectiveFrom = input.EffectiveFrom.UTC()
+	}
+	created, err := s.people.CreateAssetAssignment(r.Context(), people.CreateAssetAssignmentInput{
+		AssetID: r.PathValue("assetID"), AssigneeKind: input.AssigneeKind,
+		AssigneeID: input.AssigneeID, Role: input.Role, EffectiveFrom: effectiveFrom,
+	})
+	if err != nil {
+		writePeopleError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, created)
+}
+
+func (s *Server) endAssetAssignment(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
+	if s.people == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "repository_unavailable", "people directory unavailable")
+		return
+	}
+	if !s.requireOrganizationPermission(w, r, authentication, guard.PermissionAssetsWrite) {
+		return
+	}
+	var input struct {
+		EffectiveTo *time.Time `json:"effectiveTo"`
+	}
+	if err := decodeJSON(w, r, 16<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid assignment end payload")
+		return
+	}
+	effectiveTo := time.Time{}
+	if input.EffectiveTo != nil {
+		effectiveTo = input.EffectiveTo.UTC()
+	}
+	ended, err := s.people.EndAssetAssignment(r.Context(), people.EndAssetAssignmentInput{
+		AssetID: r.PathValue("assetID"), AssignmentID: r.PathValue("assignmentID"), EffectiveTo: effectiveTo,
+	})
+	if err != nil {
+		writePeopleError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, ended)
 }
 
 func (s *Server) tags(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
@@ -310,6 +515,62 @@ func (s *Server) createAsset(w http.ResponseWriter, r *http.Request, _ guard.Aut
 		return
 	}
 	writeJSON(w, http.StatusCreated, created)
+}
+
+func identityQueryFromRequest(r *http.Request) (people.IdentityQuery, error) {
+	values := r.URL.Query()
+	limit := 0
+	if rawLimit := strings.TrimSpace(values.Get("limit")); rawLimit != "" {
+		parsed, err := strconv.Atoi(rawLimit)
+		if err != nil {
+			return people.IdentityQuery{}, err
+		}
+		limit = parsed
+	}
+	return people.IdentityQuery{
+		Search:       values.Get("q"),
+		Kind:         people.IdentityKind(values.Get("kind")),
+		Status:       people.RecordStatus(values.Get("status")),
+		DepartmentID: values.Get("departmentId"),
+		SiteID:       values.Get("siteId"),
+		Limit:        limit,
+	}, nil
+}
+
+func (s *Server) directoryVisibility(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) (people.Visibility, bool) {
+	visibility := people.Visibility{}
+	for _, grant := range authentication.Grants {
+		if grant.Permission != guard.PermissionDirectoryRead || grant.Scope.OrganizationID != s.organization.ID {
+			continue
+		}
+		switch grant.Scope.Kind {
+		case guard.ScopeOrganization:
+			return people.Visibility{All: true}, true
+		case guard.ScopeDepartment:
+			visibility.DepartmentIDs = append(visibility.DepartmentIDs, grant.Scope.ResourceID)
+		case guard.ScopeSite:
+			visibility.SiteIDs = append(visibility.SiteIDs, grant.Scope.ResourceID)
+		}
+	}
+	if visibility.Empty() {
+		_ = s.guard.CheckPermission(r.Context(), authentication, guard.PermissionDirectoryRead, guard.Scope{
+			Kind: guard.ScopeOrganization, OrganizationID: s.organization.ID, ResourceID: s.organization.ID,
+		})
+		writeError(w, r, http.StatusForbidden, "permission_denied", "directory permission is required for this operation")
+		return people.Visibility{}, false
+	}
+	return visibility, true
+}
+
+func (s *Server) requireOrganizationPermission(w http.ResponseWriter, r *http.Request, authentication guard.Authentication, permission guard.Permission) bool {
+	err := s.guard.CheckPermission(r.Context(), authentication, permission, guard.Scope{
+		Kind: guard.ScopeOrganization, OrganizationID: s.organization.ID, ResourceID: s.organization.ID,
+	})
+	if err != nil {
+		writeError(w, r, http.StatusForbidden, "permission_denied", "permission is required for this operation")
+		return false
+	}
+	return true
 }
 
 func (s *Server) protected(permission guard.Permission, requireCSRF bool, next authenticatedHandler) http.Handler {
@@ -375,10 +636,26 @@ func (s *Server) writeAuthenticatedSession(w http.ResponseWriter, status int, cr
 
 func sessionResponse(authentication guard.Authentication, csrfToken string) map[string]any {
 	return map[string]any{
-		"principal": authentication.Principal,
-		"csrfToken": csrfToken,
-		"expiresAt": authentication.Session.ExpiresAt,
+		"principal":   authentication.Principal,
+		"permissions": organizationPermissions(authentication),
+		"csrfToken":   csrfToken,
+		"expiresAt":   authentication.Session.ExpiresAt,
 	}
+}
+
+func organizationPermissions(authentication guard.Authentication) []string {
+	seen := make(map[guard.Permission]struct{})
+	for _, grant := range authentication.Grants {
+		if grant.Scope.Kind == guard.ScopeOrganization && grant.Scope.OrganizationID == authentication.Principal.OrganizationID {
+			seen[grant.Permission] = struct{}{}
+		}
+	}
+	permissions := make([]string, 0, len(seen))
+	for permission := range seen {
+		permissions = append(permissions, string(permission))
+	}
+	sort.Strings(permissions)
+	return permissions
 }
 
 func (s *Server) clearSessionCookie(w http.ResponseWriter) {
@@ -463,7 +740,7 @@ func (s *Server) cors(next http.Handler) http.Handler {
 				writeError(w, r, http.StatusForbidden, "origin_denied", "request origin is not allowed")
 				return
 			}
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-CSRF-Token, X-Correlation-ID")
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -525,4 +802,19 @@ func writeError(w http.ResponseWriter, r *http.Request, status int, code, messag
 			"correlationId": correlationID,
 		},
 	})
+}
+
+func writePeopleError(w http.ResponseWriter, r *http.Request, err error) {
+	switch {
+	case errors.Is(err, people.ErrInvalidInput):
+		writeError(w, r, http.StatusBadRequest, "validation_failed", "people directory input is invalid")
+	case errors.Is(err, people.ErrNotFound), errors.Is(err, people.ErrReferenceMissing):
+		writeError(w, r, http.StatusNotFound, "not_found", "the requested directory reference was not found")
+	case errors.Is(err, people.ErrConflict):
+		writeError(w, r, http.StatusConflict, "conflict", "the directory operation conflicts with existing data")
+	case errors.Is(err, people.ErrScopeRequired):
+		writeError(w, r, http.StatusForbidden, "permission_denied", "directory scope is required for this operation")
+	default:
+		writeError(w, r, http.StatusInternalServerError, "repository_error", "the people directory operation could not be completed")
+	}
 }

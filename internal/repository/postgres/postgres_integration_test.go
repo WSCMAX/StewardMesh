@@ -1,6 +1,6 @@
 package postgres
 
-// Requirements: REQ-FOUNDATION-001, SEC-GUARD-001.
+// Requirements: REQ-FOUNDATION-001, SEC-GUARD-001, REQ-PEOPLE-001.
 
 import (
 	"context"
@@ -96,4 +96,38 @@ func TestGuardStoreIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	contracttest.GuardStore(t, store, organizationID)
+}
+
+func TestPeopleStoreIntegration(t *testing.T) {
+	databaseURL := os.Getenv("STEWARDMESH_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("STEWARDMESH_TEST_DATABASE_URL is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	database, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := Migrate(ctx, database); err != nil {
+		t.Fatal(err)
+	}
+	organizations, err := NewOrganizationRepository(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	organizationID := fmt.Sprintf("people-integration-%d", time.Now().UnixNano())
+	service, err := bootstrap.NewOrganizationService(organizations)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := service.EnsureOrganization(ctx, organizationID, "People Integration"); err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewPeopleStore(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contracttest.PeopleStore(t, store, organizationID)
 }

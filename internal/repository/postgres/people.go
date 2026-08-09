@@ -30,10 +30,16 @@ func NewPeopleStore(database *sql.DB) (*PeopleStore, error) {
 func (s *PeopleStore) CreateSite(ctx context.Context, site people.Site) (people.Site, error) {
 	row := s.database.QueryRowContext(ctx, `
 		INSERT INTO people_sites (
-			id, organization_id, name, normalized_name, status, revision, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-		RETURNING id, organization_id, name, normalized_name, status, revision, created_at, updated_at
-	`, site.ID, site.OrganizationID, site.Name, site.NormalizedName, site.Status, site.Revision, site.CreatedAt, site.UpdatedAt)
+			id, organization_id, name, normalized_name, address_line1, address_line2,
+			address_city, address_region, address_postal_code, address_country,
+			status, revision, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+		RETURNING id, organization_id, name, normalized_name, address_line1, address_line2,
+		          address_city, address_region, address_postal_code, address_country,
+		          status, revision, created_at, updated_at
+	`, site.ID, site.OrganizationID, site.Name, site.NormalizedName, site.Address.Line1, site.Address.Line2,
+		site.Address.City, site.Address.Region, site.Address.PostalCode, site.Address.Country,
+		site.Status, site.Revision, site.CreatedAt, site.UpdatedAt)
 	created, err := scanPeopleSite(row)
 	if err != nil {
 		return people.Site{}, mapPeopleStoreError("create site", err)
@@ -43,7 +49,9 @@ func (s *PeopleStore) CreateSite(ctx context.Context, site people.Site) (people.
 
 func (s *PeopleStore) GetSite(ctx context.Context, organizationID, id string) (people.Site, error) {
 	row := s.database.QueryRowContext(ctx, `
-		SELECT id, organization_id, name, normalized_name, status, revision, created_at, updated_at
+		SELECT id, organization_id, name, normalized_name, address_line1, address_line2,
+		       address_city, address_region, address_postal_code, address_country,
+		       status, revision, created_at, updated_at
 		FROM people_sites
 		WHERE organization_id = $1 AND id = $2
 	`, organizationID, id)
@@ -63,7 +71,9 @@ func (s *PeopleStore) ListSites(ctx context.Context, organizationID string, visi
 	}
 	query := strings.Builder{}
 	query.WriteString(`
-		SELECT s.id, s.organization_id, s.name, s.normalized_name, s.status, s.revision, s.created_at, s.updated_at
+		SELECT s.id, s.organization_id, s.name, s.normalized_name, s.address_line1, s.address_line2,
+		       s.address_city, s.address_region, s.address_postal_code, s.address_country,
+		       s.status, s.revision, s.created_at, s.updated_at
 		FROM people_sites s
 		WHERE s.organization_id = $1`)
 	arguments := []any{organizationID}
@@ -102,6 +112,148 @@ func (s *PeopleStore) ListSites(ctx context.Context, organizationID string, visi
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate sites: %w", err)
+	}
+	return result, nil
+}
+
+func (s *PeopleStore) CreateBuilding(ctx context.Context, building people.Building) (people.Building, error) {
+	row := s.database.QueryRowContext(ctx, `
+		INSERT INTO people_buildings (
+			id, organization_id, site_id, name, normalized_name, status, revision, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		RETURNING id, organization_id, site_id, name, normalized_name, status, revision, created_at, updated_at
+	`, building.ID, building.OrganizationID, building.SiteID, building.Name, building.NormalizedName,
+		building.Status, building.Revision, building.CreatedAt, building.UpdatedAt)
+	created, err := scanPeopleBuilding(row)
+	if err != nil {
+		return people.Building{}, mapPeopleStoreError("create building", err)
+	}
+	return created, nil
+}
+
+func (s *PeopleStore) GetBuilding(ctx context.Context, organizationID, id string) (people.Building, error) {
+	row := s.database.QueryRowContext(ctx, `
+		SELECT id, organization_id, site_id, name, normalized_name, status, revision, created_at, updated_at
+		FROM people_buildings
+		WHERE organization_id = $1 AND id = $2
+	`, organizationID, id)
+	building, err := scanPeopleBuilding(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return people.Building{}, people.ErrNotFound
+	}
+	if err != nil {
+		return people.Building{}, fmt.Errorf("get building: %w", err)
+	}
+	return building, nil
+}
+
+func (s *PeopleStore) ListBuildings(ctx context.Context, organizationID, siteID string, visibility people.Visibility) ([]people.Building, error) {
+	if organizationID == "" {
+		return nil, people.ErrInvalidInput
+	}
+	if visibility.Empty() {
+		return nil, people.ErrScopeRequired
+	}
+	query := strings.Builder{}
+	query.WriteString(`
+		SELECT b.id, b.organization_id, b.site_id, b.name, b.normalized_name,
+		       b.status, b.revision, b.created_at, b.updated_at
+		FROM people_buildings b
+		WHERE b.organization_id = $1`)
+	arguments := []any{organizationID}
+	if siteID != "" {
+		arguments = append(arguments, siteID)
+		query.WriteString(fmt.Sprintf(" AND b.site_id = $%d", len(arguments)))
+	}
+	if !visibility.All {
+		predicate, ok := locationVisibilityPredicate("b.organization_id", "b.site_id", visibility, &arguments)
+		if !ok {
+			return nil, people.ErrScopeRequired
+		}
+		query.WriteString(" AND (" + predicate + ")")
+	}
+	query.WriteString(" ORDER BY b.normalized_name, b.id")
+	rows, err := s.database.QueryContext(ctx, query.String(), arguments...)
+	if err != nil {
+		return nil, fmt.Errorf("list buildings: %w", err)
+	}
+	defer rows.Close()
+	result := make([]people.Building, 0)
+	for rows.Next() {
+		building, err := scanPeopleBuilding(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan building: %w", err)
+		}
+		result = append(result, building)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate buildings: %w", err)
+	}
+	return result, nil
+}
+
+func (s *PeopleStore) CreateRoom(ctx context.Context, room people.Room) (people.Room, error) {
+	row := s.database.QueryRowContext(ctx, `
+		INSERT INTO people_rooms (
+			id, organization_id, site_id, building_id, room_number, normalized_number,
+			name, status, revision, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		RETURNING id, organization_id, site_id, building_id, room_number, normalized_number,
+		          name, status, revision, created_at, updated_at
+	`, room.ID, room.OrganizationID, room.SiteID, room.BuildingID, room.Number, room.NormalizedNumber,
+		room.Name, room.Status, room.Revision, room.CreatedAt, room.UpdatedAt)
+	created, err := scanPeopleRoom(row)
+	if err != nil {
+		return people.Room{}, mapPeopleStoreError("create room", err)
+	}
+	return created, nil
+}
+
+func (s *PeopleStore) ListRooms(ctx context.Context, organizationID, siteID, buildingID string, visibility people.Visibility) ([]people.Room, error) {
+	if organizationID == "" {
+		return nil, people.ErrInvalidInput
+	}
+	if visibility.Empty() {
+		return nil, people.ErrScopeRequired
+	}
+	query := strings.Builder{}
+	query.WriteString(`
+		SELECT r.id, r.organization_id, r.site_id, r.building_id, r.room_number, r.normalized_number,
+		       r.name, r.status, r.revision, r.created_at, r.updated_at
+		FROM people_rooms r
+		WHERE r.organization_id = $1`)
+	arguments := []any{organizationID}
+	if siteID != "" {
+		arguments = append(arguments, siteID)
+		query.WriteString(fmt.Sprintf(" AND r.site_id = $%d", len(arguments)))
+	}
+	if buildingID != "" {
+		arguments = append(arguments, buildingID)
+		query.WriteString(fmt.Sprintf(" AND r.building_id = $%d", len(arguments)))
+	}
+	if !visibility.All {
+		predicate, ok := locationVisibilityPredicate("r.organization_id", "r.site_id", visibility, &arguments)
+		if !ok {
+			return nil, people.ErrScopeRequired
+		}
+		query.WriteString(" AND (" + predicate + ")")
+	}
+	query.WriteString(" ORDER BY r.normalized_number, r.id")
+	rows, err := s.database.QueryContext(ctx, query.String(), arguments...)
+	if err != nil {
+		return nil, fmt.Errorf("list rooms: %w", err)
+	}
+	defer rows.Close()
+	result := make([]people.Room, 0)
+	for rows.Next() {
+		room, err := scanPeopleRoom(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan room: %w", err)
+		}
+		result = append(result, room)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate rooms: %w", err)
 	}
 	return result, nil
 }
@@ -447,9 +599,25 @@ type peopleRowScanner interface {
 
 func scanPeopleSite(row peopleRowScanner) (people.Site, error) {
 	var site people.Site
-	err := row.Scan(&site.ID, &site.OrganizationID, &site.Name, &site.NormalizedName, &site.Status,
-		&site.Revision, &site.CreatedAt, &site.UpdatedAt)
+	err := row.Scan(&site.ID, &site.OrganizationID, &site.Name, &site.NormalizedName,
+		&site.Address.Line1, &site.Address.Line2, &site.Address.City, &site.Address.Region,
+		&site.Address.PostalCode, &site.Address.Country, &site.Status, &site.Revision,
+		&site.CreatedAt, &site.UpdatedAt)
 	return site, err
+}
+
+func scanPeopleBuilding(row peopleRowScanner) (people.Building, error) {
+	var building people.Building
+	err := row.Scan(&building.ID, &building.OrganizationID, &building.SiteID, &building.Name,
+		&building.NormalizedName, &building.Status, &building.Revision, &building.CreatedAt, &building.UpdatedAt)
+	return building, err
+}
+
+func scanPeopleRoom(row peopleRowScanner) (people.Room, error) {
+	var room people.Room
+	err := row.Scan(&room.ID, &room.OrganizationID, &room.SiteID, &room.BuildingID, &room.Number,
+		&room.NormalizedNumber, &room.Name, &room.Status, &room.Revision, &room.CreatedAt, &room.UpdatedAt)
+	return room, err
 }
 
 func scanPeopleDepartment(row peopleRowScanner) (people.Department, error) {
@@ -486,6 +654,23 @@ func inPredicate(column string, values []string, arguments *[]any) string {
 		placeholders = append(placeholders, fmt.Sprintf("$%d", len(*arguments)))
 	}
 	return column + " IN (" + strings.Join(placeholders, ", ") + ")"
+}
+
+func locationVisibilityPredicate(organizationColumn, siteColumn string, visibility people.Visibility, arguments *[]any) (string, bool) {
+	predicates := make([]string, 0, 2)
+	if len(visibility.SiteIDs) > 0 {
+		predicates = append(predicates, inPredicate(siteColumn, visibility.SiteIDs, arguments))
+	}
+	if len(visibility.DepartmentIDs) > 0 {
+		departmentPredicate := inPredicate("visible_location_department.id", visibility.DepartmentIDs, arguments)
+		predicates = append(predicates, `EXISTS (
+			SELECT 1 FROM people_departments visible_location_department
+			WHERE visible_location_department.organization_id = `+organizationColumn+`
+			  AND visible_location_department.site_id = `+siteColumn+`
+			  AND `+departmentPredicate+`
+		)`)
+	}
+	return strings.Join(predicates, " OR "), len(predicates) > 0
 }
 
 func escapeLike(value string) string {

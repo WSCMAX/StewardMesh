@@ -62,7 +62,7 @@ func TestVerifyReportsMissingArtifacts(t *testing.T) {
 }
 
 func TestRequirementIDPatternSupportsCatalogFormats(t *testing.T) {
-	for _, id := range []string{"REQ-FOUNDATION-001", "SEC-HTTP-001", "A11Y-001", "DOC-001"} {
+	for _, id := range []string{"REQ-FOUNDATION-001", "REQ-DIRECTORY-EXPANSION-001", "SEC-HTTP-001", "A11Y-001", "DOC-001"} {
 		if !requirementIDPattern.MatchString(id) {
 			t.Fatalf("expected %q to be supported", id)
 		}

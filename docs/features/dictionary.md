@@ -9,7 +9,7 @@ The display format is **branded name — plain-language descriptor**. Canonical 
 | Horizon | `lifecycle.planning` | Lifecycle planning and forecasting | v1 |
 | Ledger | `procurement.finance` | Procurement, budgets, and costs | v1 |
 | Threads | `goals.tags` | Tags, goals, and relationships | v1 |
-| People | `identity.directory` | Users, departments, and assignments | v1 |
+| People | `identity.directory` | Users, locations, departments, and assignments | v1 |
 | Stack | `software.licenses` | Software and licenses | v1 |
 | Patterns | `templates.schemas` | Templates and field validation | v1 |
 | Exchange | `migration.packages` | Import and export | v1 |

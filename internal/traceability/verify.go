@@ -16,7 +16,7 @@ import (
 	"strings"
 )
 
-var requirementIDPattern = regexp.MustCompile(`^((REQ|SEC)-[A-Z0-9]+-[0-9]{3}|(A11Y|DOC)-[0-9]{3})$`)
+var requirementIDPattern = regexp.MustCompile(`^((REQ|SEC)-[A-Z0-9]+(?:-[A-Z0-9]+)*-[0-9]{3}|(A11Y|DOC)-[0-9]{3})$`)
 
 var requiredArtifactKinds = []string{"api", "code", "documentation", "schema", "tests", "ui"}
 

@@ -31,12 +31,17 @@ service AssetService {
 }
 
 // People directory and effective-dated asset assignments.
-// Requirement: REQ-PEOPLE-001. Feature: identity.directory.
+// Requirements: REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001.
+// Feature: identity.directory.
 // Directory visibility is derived from authenticated Guard grants and is
 // never accepted from client-provided request fields.
 service PeopleService {
   rpc ListSites(ListSitesRequest) returns (ListSitesResponse);
   rpc CreateSite(CreateSiteRequest) returns (Site);
+  rpc ListBuildings(ListBuildingsRequest) returns (ListBuildingsResponse);
+  rpc CreateBuilding(CreateBuildingRequest) returns (Building);
+  rpc ListRooms(ListRoomsRequest) returns (ListRoomsResponse);
+  rpc CreateRoom(CreateRoomRequest) returns (Room);
   rpc ListDepartments(ListDepartmentsRequest) returns (ListDepartmentsResponse);
   rpc CreateDepartment(CreateDepartmentRequest) returns (Department);
   rpc SearchIdentities(SearchIdentitiesRequest) returns (SearchIdentitiesResponse);
@@ -169,6 +174,7 @@ message ListSitesResponse {
 message CreateSiteRequest {
   string name = 1;
   RecordStatus status = 2;
+  Address address = 3;
 }
 
 message Site {
@@ -179,6 +185,71 @@ message Site {
   uint64 revision = 5;
   google.protobuf.Timestamp created_at = 6;
   google.protobuf.Timestamp updated_at = 7;
+  Address address = 8;
+}
+
+message Address {
+  string line1 = 1;
+  string line2 = 2;
+  string city = 3;
+  string region = 4;
+  string postal_code = 5;
+  string country = 6;
+}
+
+message ListBuildingsRequest {
+  string site_id = 1;
+}
+
+message ListBuildingsResponse {
+  repeated Building items = 1;
+}
+
+message CreateBuildingRequest {
+  string site_id = 1;
+  string name = 2;
+  RecordStatus status = 3;
+}
+
+message Building {
+  string id = 1;
+  string organization_id = 2;
+  string site_id = 3;
+  string name = 4;
+  RecordStatus status = 5;
+  uint64 revision = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp updated_at = 8;
+}
+
+message ListRoomsRequest {
+  string site_id = 1;
+  string building_id = 2;
+}
+
+message ListRoomsResponse {
+  repeated Room items = 1;
+}
+
+message CreateRoomRequest {
+  string site_id = 1;
+  string building_id = 2;
+  string number = 3;
+  string name = 4;
+  RecordStatus status = 5;
+}
+
+message Room {
+  string id = 1;
+  string organization_id = 2;
+  string site_id = 3;
+  string building_id = 4;
+  string number = 5;
+  string name = 6;
+  RecordStatus status = 7;
+  uint64 revision = 8;
+  google.protobuf.Timestamp created_at = 9;
+  google.protobuf.Timestamp updated_at = 10;
 }
 
 message ListDepartmentsRequest {}

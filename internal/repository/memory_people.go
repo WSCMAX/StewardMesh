@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/maxlemke/stewardmesh/internal/people"
 )
@@ -15,10 +16,14 @@ import (
 type MemoryPeopleStore struct {
 	mu                 sync.RWMutex
 	sites              map[string]people.Site
+	buildings          map[string]people.Building
+	rooms              map[string]people.Room
 	departments        map[string]people.Department
 	identities         map[string]people.Identity
 	assignments        map[string]people.AssetAssignment
 	siteByName         map[string]string
+	buildingByName     map[string]string
+	roomByNumber       map[string]string
 	departmentByName   map[string]string
 	identityByEmail    map[string]string
 	identityByProvider map[string]string
@@ -29,10 +34,14 @@ var _ people.Store = (*MemoryPeopleStore)(nil)
 func NewMemoryPeopleStore() *MemoryPeopleStore {
 	return &MemoryPeopleStore{
 		sites:              make(map[string]people.Site),
+		buildings:          make(map[string]people.Building),
+		rooms:              make(map[string]people.Room),
 		departments:        make(map[string]people.Department),
 		identities:         make(map[string]people.Identity),
 		assignments:        make(map[string]people.AssetAssignment),
 		siteByName:         make(map[string]string),
+		buildingByName:     make(map[string]string),
+		roomByNumber:       make(map[string]string),
 		departmentByName:   make(map[string]string),
 		identityByEmail:    make(map[string]string),
 		identityByProvider: make(map[string]string),
@@ -101,6 +110,117 @@ func (s *MemoryPeopleStore) ListSites(_ context.Context, organizationID string, 
 			return result[i].ID < result[j].ID
 		}
 		return result[i].NormalizedName < result[j].NormalizedName
+	})
+	return result, nil
+}
+
+func (s *MemoryPeopleStore) CreateBuilding(_ context.Context, building people.Building) (people.Building, error) {
+	if !validMemoryBuilding(building) {
+		return people.Building{}, people.ErrInvalidInput
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	site, exists := s.sites[building.SiteID]
+	if !exists || site.OrganizationID != building.OrganizationID {
+		return people.Building{}, people.ErrReferenceMissing
+	}
+	nameKey := peopleKey(building.OrganizationID, building.SiteID, building.NormalizedName)
+	if _, exists := s.buildings[building.ID]; exists {
+		return people.Building{}, people.ErrConflict
+	}
+	if _, exists := s.buildingByName[nameKey]; exists {
+		return people.Building{}, people.ErrConflict
+	}
+	s.buildings[building.ID] = building
+	s.buildingByName[nameKey] = building.ID
+	return building, nil
+}
+
+func (s *MemoryPeopleStore) GetBuilding(_ context.Context, organizationID, id string) (people.Building, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	building, exists := s.buildings[id]
+	if !exists || building.OrganizationID != organizationID {
+		return people.Building{}, people.ErrNotFound
+	}
+	return building, nil
+}
+
+func (s *MemoryPeopleStore) ListBuildings(_ context.Context, organizationID, siteID string, visibility people.Visibility) ([]people.Building, error) {
+	if organizationID == "" {
+		return nil, people.ErrInvalidInput
+	}
+	if visibility.Empty() {
+		return nil, people.ErrScopeRequired
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	result := make([]people.Building, 0)
+	for _, building := range s.buildings {
+		if building.OrganizationID != organizationID || (siteID != "" && building.SiteID != siteID) {
+			continue
+		}
+		if !s.siteVisible(organizationID, building.SiteID, visibility) {
+			continue
+		}
+		result = append(result, building)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].NormalizedName == result[j].NormalizedName {
+			return result[i].ID < result[j].ID
+		}
+		return result[i].NormalizedName < result[j].NormalizedName
+	})
+	return result, nil
+}
+
+func (s *MemoryPeopleStore) CreateRoom(_ context.Context, room people.Room) (people.Room, error) {
+	if !validMemoryRoom(room) {
+		return people.Room{}, people.ErrInvalidInput
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	building, exists := s.buildings[room.BuildingID]
+	if !exists || building.OrganizationID != room.OrganizationID || building.SiteID != room.SiteID {
+		return people.Room{}, people.ErrReferenceMissing
+	}
+	numberKey := peopleKey(room.OrganizationID, room.BuildingID, room.NormalizedNumber)
+	if _, exists := s.rooms[room.ID]; exists {
+		return people.Room{}, people.ErrConflict
+	}
+	if _, exists := s.roomByNumber[numberKey]; exists {
+		return people.Room{}, people.ErrConflict
+	}
+	s.rooms[room.ID] = room
+	s.roomByNumber[numberKey] = room.ID
+	return room, nil
+}
+
+func (s *MemoryPeopleStore) ListRooms(_ context.Context, organizationID, siteID, buildingID string, visibility people.Visibility) ([]people.Room, error) {
+	if organizationID == "" {
+		return nil, people.ErrInvalidInput
+	}
+	if visibility.Empty() {
+		return nil, people.ErrScopeRequired
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	result := make([]people.Room, 0)
+	for _, room := range s.rooms {
+		if room.OrganizationID != organizationID || (siteID != "" && room.SiteID != siteID) ||
+			(buildingID != "" && room.BuildingID != buildingID) {
+			continue
+		}
+		if !s.siteVisible(organizationID, room.SiteID, visibility) {
+			continue
+		}
+		result = append(result, room)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].NormalizedNumber == result[j].NormalizedNumber {
+			return result[i].ID < result[j].ID
+		}
+		return result[i].NormalizedNumber < result[j].NormalizedNumber
 	})
 	return result, nil
 }
@@ -347,10 +467,70 @@ func (s *MemoryPeopleStore) assigneeExists(assignment people.AssetAssignment) bo
 	}
 }
 
+// siteVisible applies the same site/department scope expansion used for sites.
+// The caller must hold at least a read lock.
+func (s *MemoryPeopleStore) siteVisible(organizationID, siteID string, visibility people.Visibility) bool {
+	if visibility.All {
+		return true
+	}
+	for _, visibleSiteID := range visibility.SiteIDs {
+		if visibleSiteID == siteID {
+			return true
+		}
+	}
+	for _, departmentID := range visibility.DepartmentIDs {
+		department, exists := s.departments[departmentID]
+		if exists && department.OrganizationID == organizationID && department.SiteID == siteID {
+			return true
+		}
+	}
+	return false
+}
+
 func validMemorySite(site people.Site) bool {
 	return site.ID != "" && site.OrganizationID != "" && site.Name != "" && site.NormalizedName != "" &&
 		(site.Status == people.StatusActive || site.Status == people.StatusInactive) && site.Revision > 0 &&
-		!site.CreatedAt.IsZero() && !site.UpdatedAt.Before(site.CreatedAt)
+		!site.CreatedAt.IsZero() && !site.UpdatedAt.Before(site.CreatedAt) && validMemoryAddress(site.Address)
+}
+
+func validMemoryAddress(address people.Address) bool {
+	if address.Empty() {
+		return true
+	}
+	return address.Line1 != "" && address.City != "" && asciiCountryCode(address.Country) &&
+		validMemoryText(address.Line1, 200) && validMemoryText(address.Line2, 200) &&
+		validMemoryText(address.City, 100) && validMemoryText(address.Region, 100) &&
+		validMemoryText(address.PostalCode, 32)
+}
+
+func validMemoryBuilding(building people.Building) bool {
+	return building.ID != "" && building.OrganizationID != "" && building.SiteID != "" &&
+		building.Name != "" && building.NormalizedName != "" &&
+		(building.Status == people.StatusActive || building.Status == people.StatusInactive) && building.Revision > 0 &&
+		!building.CreatedAt.IsZero() && !building.UpdatedAt.Before(building.CreatedAt)
+}
+
+func validMemoryRoom(room people.Room) bool {
+	return room.ID != "" && room.OrganizationID != "" && room.SiteID != "" && room.BuildingID != "" &&
+		room.Number != "" && room.NormalizedNumber != "" && validMemoryText(room.Number, 100) && validMemoryText(room.Name, 200) &&
+		(room.Status == people.StatusActive || room.Status == people.StatusInactive) && room.Revision > 0 &&
+		!room.CreatedAt.IsZero() && !room.UpdatedAt.Before(room.CreatedAt)
+}
+
+func validMemoryText(value string, maximum int) bool {
+	return utf8.ValidString(value) && utf8.RuneCountInString(value) <= maximum
+}
+
+func asciiCountryCode(value string) bool {
+	if len(value) != 2 {
+		return false
+	}
+	for _, character := range value {
+		if character < 'A' || character > 'Z' {
+			return false
+		}
+	}
+	return true
 }
 
 func validMemoryDepartment(department people.Department) bool {

@@ -138,6 +138,144 @@ func TestPeopleServiceBuildsTypedDirectoryAndAssignmentHistory(t *testing.T) {
 	}
 }
 
+func TestPeopleServiceCreatesVisibleLocationHierarchy(t *testing.T) {
+	now := time.Date(2026, time.August, 9, 9, 0, 0, 0, time.UTC)
+	auditor := &captureAuditor{}
+	service, err := NewService(
+		repository.NewMemoryPeopleStore(),
+		testAssetReader{assets: map[string]domain.Asset{}},
+		auditor,
+		ServiceConfig{OrganizationID: "example-org", Now: func() time.Time { return now }},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	site, err := service.CreateSite(ctx, CreateSiteInput{
+		Name: " North Campus ",
+		Address: Address{
+			Line1:      " 100 College Avenue ",
+			Line2:      " Suite 200 ",
+			City:       " Madison ",
+			Region:     " WI ",
+			PostalCode: " 53703 ",
+			Country:    " us ",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if site.Address.Line1 != "100 College Avenue" || site.Address.Country != "US" {
+		t.Fatalf("expected canonical structured address, got %#v", site.Address)
+	}
+	building, err := service.CreateBuilding(ctx, CreateBuildingInput{SiteID: site.ID, Name: " Science Hall "})
+	if err != nil {
+		t.Fatal(err)
+	}
+	room, err := service.CreateRoom(ctx, CreateRoomInput{
+		SiteID: site.ID, BuildingID: building.ID, Number: " 101A ", Name: " Robotics Lab ",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if building.Name != "Science Hall" || room.Number != "101A" || room.SiteID != site.ID || room.BuildingID != building.ID {
+		t.Fatalf("unexpected location hierarchy %#v, %#v", building, room)
+	}
+	department, err := service.CreateDepartment(ctx, CreateDepartmentInput{Name: "Engineering", SiteID: site.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherSite, err := service.CreateSite(ctx, CreateSiteInput{Name: "South Campus"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.CreateBuilding(ctx, CreateBuildingInput{SiteID: otherSite.ID, Name: "Library"}); err != nil {
+		t.Fatal(err)
+	}
+
+	buildings, err := service.ListBuildings(ctx, "", Visibility{DepartmentIDs: []string{department.ID}})
+	if err != nil || len(buildings) != 1 || buildings[0].ID != building.ID {
+		t.Fatalf("department visibility did not restrict buildings: %#v, %v", buildings, err)
+	}
+	rooms, err := service.ListRooms(ctx, "", "", Visibility{SiteIDs: []string{site.ID}})
+	if err != nil || len(rooms) != 1 || rooms[0].ID != room.ID {
+		t.Fatalf("site visibility did not restrict rooms: %#v, %v", rooms, err)
+	}
+	mismatched, err := service.ListRooms(ctx, otherSite.ID, building.ID, Visibility{All: true})
+	if err != nil || len(mismatched) != 0 {
+		t.Fatalf("mismatched location filters should be empty: %#v, %v", mismatched, err)
+	}
+	if _, err := service.ListBuildings(ctx, "", Visibility{}); !errors.Is(err, ErrScopeRequired) {
+		t.Fatalf("expected building reads to require visibility, got %v", err)
+	}
+
+	var addressedSiteAuditFound bool
+	var legacySiteAuditFound bool
+	for _, event := range auditor.events {
+		if event.ResourceType == "site" && event.ResourceID == site.ID {
+			addressedSiteAuditFound = event.Metadata["requirementId"] == DirectoryExpansionRequirementID
+		}
+		if event.ResourceType == "site" && event.ResourceID == otherSite.ID {
+			legacySiteAuditFound = event.Metadata["requirementId"] == RequirementID
+		}
+		if (event.ResourceType == "building" || event.ResourceType == "room") &&
+			event.Metadata["requirementId"] != DirectoryExpansionRequirementID {
+			t.Fatalf("location audit used the wrong requirement: %#v", event)
+		}
+	}
+	if !addressedSiteAuditFound || !legacySiteAuditFound {
+		t.Fatalf("site audits did not distinguish addressed and legacy sites: %#v", auditor.events)
+	}
+}
+
+func TestPeopleServiceRejectsInvalidLocations(t *testing.T) {
+	now := time.Date(2026, time.August, 9, 9, 0, 0, 0, time.UTC)
+	service, err := NewService(
+		repository.NewMemoryPeopleStore(),
+		testAssetReader{assets: map[string]domain.Asset{}},
+		foundation.NopAuditor{},
+		ServiceConfig{OrganizationID: "example-org", Now: func() time.Time { return now }},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if _, err := service.CreateSite(ctx, CreateSiteInput{
+		Name: "Incomplete address", Address: Address{Line1: "100 College Avenue"},
+	}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected incomplete address to fail, got %v", err)
+	}
+	if _, err := service.CreateSite(ctx, CreateSiteInput{
+		Name: "Invalid country", Address: Address{Line1: "100 College Avenue", City: "Madison", Country: "USA"},
+	}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected invalid country to fail, got %v", err)
+	}
+	if _, err := service.CreateBuilding(ctx, CreateBuildingInput{SiteID: strings.Repeat("a", 32), Name: "Missing"}); !errors.Is(err, ErrReferenceMissing) {
+		t.Fatalf("expected missing building site to fail, got %v", err)
+	}
+	first, err := service.CreateSite(ctx, CreateSiteInput{Name: "First"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := service.CreateSite(ctx, CreateSiteInput{Name: "Second"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	building, err := service.CreateBuilding(ctx, CreateBuildingInput{SiteID: first.ID, Name: "Main"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.CreateRoom(ctx, CreateRoomInput{SiteID: second.ID, BuildingID: building.ID, Number: "101"}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected mismatched room site to fail, got %v", err)
+	}
+	if _, err := service.CreateRoom(ctx, CreateRoomInput{SiteID: first.ID, BuildingID: building.ID}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected room number validation, got %v", err)
+	}
+	if _, err := service.ListRooms(ctx, "bad", "", Visibility{All: true}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected invalid location filter to fail, got %v", err)
+	}
+}
+
 func TestPeopleServiceRejectsInvalidReferencesAndUnscopedReads(t *testing.T) {
 	now := time.Date(2026, time.August, 9, 8, 0, 0, 0, time.UTC)
 	service, err := NewService(

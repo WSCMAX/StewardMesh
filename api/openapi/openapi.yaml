@@ -1,8 +1,8 @@
-# Requirements: REQ-PEOPLE-001, SEC-GUARD-001, SEC-HTTP-001.
+# Requirements: REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, SEC-GUARD-001, SEC-HTTP-001.
 openapi: 3.1.0
 info:
   title: StewardMesh API
-  version: 0.3.0
+  version: 0.4.0
   description: Requirements-driven inventory, lifecycle, and secure organization management API.
   license:
     name: Apache License 2.0
@@ -272,6 +272,100 @@ paths:
         '400': {$ref: '#/components/responses/InvalidRequest'}
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/buildings:
+    get:
+      summary: List visible buildings
+      operationId: listBuildings
+      tags: [People]
+      x-requirement: REQ-DIRECTORY-EXPANSION-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - in: query
+          name: siteId
+          schema: {type: string, pattern: '^[a-f0-9]{32}$'}
+          description: Optional site filter applied after the caller's directory visibility scope.
+      responses:
+        '200':
+          description: Building collection restricted to visible sites
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/BuildingCollection'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+    post:
+      summary: Create a building beneath a site
+      operationId: createBuilding
+      tags: [People]
+      x-requirement: REQ-DIRECTORY-EXPANSION-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateBuildingRequest'}
+      responses:
+        '201':
+          description: Building created
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Building'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/rooms:
+    get:
+      summary: List visible rooms
+      operationId: listRooms
+      tags: [People]
+      x-requirement: REQ-DIRECTORY-EXPANSION-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - in: query
+          name: siteId
+          schema: {type: string, pattern: '^[a-f0-9]{32}$'}
+          description: Optional site filter applied after the caller's directory visibility scope.
+        - in: query
+          name: buildingId
+          schema: {type: string, pattern: '^[a-f0-9]{32}$'}
+          description: Optional building filter.
+      responses:
+        '200':
+          description: Room collection restricted to visible sites
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RoomCollection'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+    post:
+      summary: Create a room beneath a building
+      operationId: createRoom
+      tags: [People]
+      x-requirement: REQ-DIRECTORY-EXPANSION-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateRoomRequest'}
+      responses:
+        '201':
+          description: Room created
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Room'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
   /api/v1/identities:
     get:
@@ -617,22 +711,92 @@ components:
         id: {type: string, pattern: '^[a-f0-9]{32}$'}
         organizationId: {type: string, minLength: 1, maxLength: 128}
         name: {type: string, minLength: 1, maxLength: 200}
+        address: {$ref: '#/components/schemas/Address'}
         status: {$ref: '#/components/schemas/RecordStatus'}
         revision: {type: integer, minimum: 1}
         createdAt: {type: string, format: date-time}
         updatedAt: {type: string, format: date-time}
+    Address:
+      type: object
+      additionalProperties: false
+      description: Optional as a whole. When any address field is supplied, line1, city, and a two-letter country code are required.
+      properties:
+        line1: {type: string, maxLength: 200}
+        line2: {type: string, maxLength: 200}
+        city: {type: string, maxLength: 100}
+        region: {type: string, maxLength: 100}
+        postalCode: {type: string, maxLength: 32}
+        country:
+          type: string
+          pattern: '^[A-Z]{2}$'
+          description: Uppercase two-letter country code when supplied.
     CreateSiteRequest:
       type: object
       additionalProperties: false
       required: [name]
       properties:
         name: {type: string, minLength: 1, maxLength: 200}
+        address: {$ref: '#/components/schemas/Address'}
         status: {$ref: '#/components/schemas/RecordStatus'}
     SiteCollection:
       type: object
       required: [items]
       properties:
         items: {type: array, items: {$ref: '#/components/schemas/Site'}}
+    Building:
+      type: object
+      required: [id, organizationId, siteId, name, status, revision, createdAt, updatedAt]
+      properties:
+        id: {type: string, pattern: '^[a-f0-9]{32}$'}
+        organizationId: {type: string, minLength: 1, maxLength: 128}
+        siteId: {type: string, pattern: '^[a-f0-9]{32}$'}
+        name: {type: string, minLength: 1, maxLength: 200}
+        status: {$ref: '#/components/schemas/RecordStatus'}
+        revision: {type: integer, minimum: 1}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    CreateBuildingRequest:
+      type: object
+      additionalProperties: false
+      required: [siteId, name]
+      properties:
+        siteId: {type: string, pattern: '^[a-f0-9]{32}$'}
+        name: {type: string, minLength: 1, maxLength: 200}
+        status: {$ref: '#/components/schemas/RecordStatus'}
+    BuildingCollection:
+      type: object
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/Building'}}
+    Room:
+      type: object
+      required: [id, organizationId, siteId, buildingId, number, status, revision, createdAt, updatedAt]
+      properties:
+        id: {type: string, pattern: '^[a-f0-9]{32}$'}
+        organizationId: {type: string, minLength: 1, maxLength: 128}
+        siteId: {type: string, pattern: '^[a-f0-9]{32}$'}
+        buildingId: {type: string, pattern: '^[a-f0-9]{32}$'}
+        number: {type: string, minLength: 1, maxLength: 100}
+        name: {type: string, maxLength: 200}
+        status: {$ref: '#/components/schemas/RecordStatus'}
+        revision: {type: integer, minimum: 1}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    CreateRoomRequest:
+      type: object
+      additionalProperties: false
+      required: [siteId, buildingId, number]
+      properties:
+        siteId: {type: string, pattern: '^[a-f0-9]{32}$'}
+        buildingId: {type: string, pattern: '^[a-f0-9]{32}$'}
+        number: {type: string, minLength: 1, maxLength: 100}
+        name: {type: string, maxLength: 200}
+        status: {$ref: '#/components/schemas/RecordStatus'}
+    RoomCollection:
+      type: object
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/Room'}}
     Department:
       type: object
       required: [id, organizationId, name, status, revision, createdAt, updatedAt]

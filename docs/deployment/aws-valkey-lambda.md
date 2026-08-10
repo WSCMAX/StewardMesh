@@ -6,17 +6,18 @@
 
 This guide defines the AWS target for StewardMesh's shared cache and future
 Lambda HTTP runtime. It is operational guidance, not infrastructure as code.
-The repository does not yet include a Lambda handler or reusable application
-constructor, so the Lambda portions are readiness requirements for the next
-implementation slice rather than a claim that the current server binary can be
-deployed unchanged.
+The repository now includes reusable, transport-neutral application
+construction, but it does not yet include a Lambda handler. The remaining
+Lambda portions are readiness requirements rather than a claim that the
+current server binary can be deployed unchanged.
 
 ## Deployment readiness
 
 | Target | Status | Authentication |
 |---|---|---|
 | Long-running container with ElastiCache Serverless for Valkey | Configuration path implemented; validate against the target cache | Password-authenticated ElastiCache user supplied through `rediss://` |
-| Lambda HTTP handler | Not implemented | Add secret loading and reusable application construction before deployment |
+| Reusable application construction | Implemented | Load secrets before construction and keep migrations disabled in request runtimes |
+| Lambda HTTP handler | Not implemented | Add the transport adapter, secret loading, configurable database pool, and durable blob adapter before deployment |
 | ElastiCache IAM authentication | Not implemented | Add a SigV4 credential provider and token refresh before enabling it |
 
 The cache remains reconstructible and must not contain sessions, CSRF values,
@@ -136,11 +137,17 @@ an additional stateless network boundary is not required.
 
 ## Lambda construction requirements
 
-The next application-construction slice must make these runtime rules
-enforceable:
+`internal/application.New` now constructs the repositories, services, Valkey
+client, and transport-neutral HTTP handler once. It exposes the handler,
+organization metadata, and idempotent cleanup. Its explicit `RunMigrations`
+option lets `cmd/stewardmesh` preserve startup migrations while a future Lambda
+adapter leaves them disabled.
 
-1. Build configuration, the Secrets Manager loader, PostgreSQL pool, Valkey
-   client, services, and HTTP handler once outside the invocation path.
+A future Lambda transport must apply these remaining runtime rules:
+
+1. Load configuration and Secrets Manager values, then call
+   `application.New` once outside the invocation path. Do not reconstruct the
+   PostgreSQL pool, Valkey client, services, or HTTP handler for each request.
 2. Reuse clients across warm invocations and keep connections alive, while
    treating every execution environment as disposable. AWS recommends
    [execution-environment and connection reuse](https://docs.aws.amazon.com/lambda/latest/dg/best-practices.html).
@@ -150,8 +157,8 @@ enforceable:
 4. Keep the Valkey startup `PING`; initialization must fail when a configured
    shared limiter cannot connect. A later outage must continue to return the
    safe service-unavailable response for login attempts.
-5. Run database migrations and synthetic seeding as deployment jobs, never in
-   cold-start initialization.
+5. Pass `RunMigrations: false` and run database migrations and synthetic
+   seeding as deployment jobs, never in cold-start initialization.
 6. Point PostgreSQL at RDS Proxy and make the application pool configurable.
    The current fixed 20-connection pool is too large to multiply across
    unconstrained Lambda environments. AWS documents the pooling and surge
@@ -163,9 +170,9 @@ enforceable:
    or Lambda deployment. The Lambda `/tmp` directory is temporary workspace,
    not authoritative storage.
 
-Do not depend on deferred cleanup running when Lambda freezes or discards an
-execution environment. Expose explicit cleanup from the application factory for
-tests and long-running processes, but make correctness independent of it.
+Do not depend on cleanup running when Lambda freezes or discards an execution
+environment. `Application.Close` exists for tests and long-running processes,
+but runtime correctness must remain independent of it.
 
 ## Observability and rollout validation
 

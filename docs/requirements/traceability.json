@@ -14,6 +14,7 @@
           "api/proto/stewardmesh.proto"
         ],
         "code": [
+          "internal/application/application.go",
           "internal/bootstrap/organization.go",
           "internal/config/config.go",
           "internal/foundation/contracts.go",
@@ -27,7 +28,7 @@
           "internal/repository/postgres/migrations/0003_audit_events_organization_occurred_idx.sql"
         ],
         "tests": [
-          "cmd/stewardmesh/main_test.go",
+          "internal/application/application_test.go",
           "internal/bootstrap/organization_test.go",
           "internal/httpapi/server_test.go",
           "internal/repository/contracttest/organization.go",
@@ -202,6 +203,7 @@
         "code": [
           "cmd/stewardmesh/main.go",
           "deploy/docker-compose.yml",
+          "internal/application/application.go",
           "internal/cache/cache.go",
           "internal/cache/valkey.go",
           "internal/config/config.go",
@@ -213,6 +215,7 @@
           "docs/architecture/valkey.md"
         ],
         "tests": [
+          "internal/application/application_test.go",
           "internal/cache/cache_test.go",
           "internal/cache/namespace_test.go",
           "internal/cache/valkey_test.go",

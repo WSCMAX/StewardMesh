@@ -18,6 +18,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/maxlemke/stewardmesh/internal/foundation"
+	"github.com/maxlemke/stewardmesh/internal/identity"
 )
 
 const (
@@ -219,14 +220,14 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (SessionCredentia
 		return SessionCredentials{}, fmt.Errorf("load account: %w", err)
 	}
 	encodedHash := s.dummyPasswordHash
-	if err == nil {
+	if err == nil && account.PasswordHash != "" {
 		encodedHash = account.PasswordHash
 	}
 	matches, needsRehash, verifyErr := s.hasher.Verify(input.Password, encodedHash)
 	if verifyErr != nil {
 		return SessionCredentials{}, fmt.Errorf("verify stored credential: %w", verifyErr)
 	}
-	if err != nil || !matches || account.Status != "active" || !usernamePattern.MatchString(normalizedUsername) {
+	if err != nil || account.PasswordHash == "" || !matches || account.Status != "active" || !usernamePattern.MatchString(normalizedUsername) {
 		failureErr := errors.Join(
 			s.limiter.Failure(ctx, clientRateKey, now),
 			s.limiter.Failure(ctx, accountRateKey, now),
@@ -267,6 +268,79 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (SessionCredentia
 		return SessionCredentials{}, fmt.Errorf("audit login: %w", err)
 	}
 	return credentials, nil
+}
+
+func (s *Service) LoginOIDC(ctx context.Context, principal identity.OIDCPrincipal) (SessionCredentials, error) {
+	issuer := strings.TrimSpace(principal.Issuer)
+	subject := strings.TrimSpace(principal.Subject)
+	email := strings.ToLower(strings.TrimSpace(principal.Email))
+	displayName := strings.TrimSpace(principal.DisplayName)
+	address, emailErr := mail.ParseAddress(email)
+	if issuer == "" || len(issuer) > 2048 || subject == "" || len(subject) > 512 ||
+		emailErr != nil || address.Address != email || len(email) > 320 || displayName == "" ||
+		utf8.RuneCountInString(displayName) > 200 {
+		s.recordSecurityEvent(ctx, "anonymous", "guard.oidc.login.failed", "external_identity", "unknown", nil)
+		return SessionCredentials{}, ErrInvalidCredential
+	}
+	now := s.now()
+	accountID, err := newID()
+	if err != nil {
+		return SessionCredentials{}, err
+	}
+	assignmentID, err := newID()
+	if err != nil {
+		return SessionCredentials{}, err
+	}
+	username := externalUsername(issuer, subject)
+	account, created, err := s.store.ProvisionExternalAccount(ctx, ExternalAccountProvisioning{
+		Account: Account{
+			ID:                 accountID,
+			OrganizationID:     s.organizationID,
+			Username:           username,
+			NormalizedUsername: username,
+			Email:              email,
+			DisplayName:        displayName,
+			Status:             "active",
+			CreatedAt:          now,
+			UpdatedAt:          now,
+		},
+		Identity: ExternalIdentity{
+			OrganizationID: s.organizationID,
+			Issuer:         issuer,
+			Subject:        subject,
+			AccountID:      accountID,
+			CreatedAt:      now,
+			UpdatedAt:      now,
+		},
+		Administrator:             principal.Administrator,
+		AdministratorAssignmentID: assignmentID,
+		AssignmentSource:          externalAssignmentSource(issuer),
+	})
+	if err != nil {
+		s.recordSecurityEvent(ctx, "anonymous", "guard.oidc.login.failed", "external_identity", "unknown", nil)
+		return SessionCredentials{}, fmt.Errorf("provision OpenID Connect account: %w", err)
+	}
+	if account.Status != "active" {
+		s.recordSecurityEvent(ctx, account.ID, "guard.oidc.login.failed", "account", account.ID, map[string]string{"reason": "disabled"})
+		return SessionCredentials{}, ErrInvalidCredential
+	}
+	credentials, err := s.issueSession(ctx, account.ID)
+	if err != nil {
+		return SessionCredentials{}, err
+	}
+	metadata := map[string]string{
+		"created":             fmt.Sprintf("%t", created),
+		"administratorMapped": fmt.Sprintf("%t", principal.Administrator),
+	}
+	if err := s.audit(ctx, account.ID, "guard.oidc.login.succeeded", "account", account.ID, metadata); err != nil {
+		_ = s.store.RevokeSession(ctx, credentials.Authentication.Session.ID, s.now())
+		return SessionCredentials{}, fmt.Errorf("audit OpenID Connect login: %w", err)
+	}
+	return credentials, nil
+}
+
+func (s *Service) RecordOIDCFailure(ctx context.Context) {
+	s.recordSecurityEvent(ctx, "anonymous", "guard.oidc.login.failed", "external_identity", "unknown", nil)
 }
 
 func (s *Service) AuthenticateSession(ctx context.Context, rawToken string) (Authentication, error) {
@@ -446,6 +520,16 @@ func validatePassword(password string) error {
 
 func normalizeUsername(username string) string {
 	return strings.ToLower(strings.TrimSpace(username))
+}
+
+func externalUsername(issuer, subject string) string {
+	digest := sha256.Sum256([]byte(issuer + "\x00" + subject))
+	return fmt.Sprintf("oidc-%x", digest[:12])
+}
+
+func externalAssignmentSource(issuer string) string {
+	digest := sha256.Sum256([]byte(issuer))
+	return fmt.Sprintf("oidc:%x", digest[:16])
 }
 
 func newID() (string, error) {

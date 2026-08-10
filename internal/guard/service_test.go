@@ -15,6 +15,7 @@ import (
 	"github.com/maxlemke/stewardmesh/internal/cache"
 	"github.com/maxlemke/stewardmesh/internal/foundation"
 	. "github.com/maxlemke/stewardmesh/internal/guard"
+	"github.com/maxlemke/stewardmesh/internal/identity"
 	"github.com/maxlemke/stewardmesh/internal/repository"
 )
 
@@ -157,6 +158,87 @@ func TestServiceBootstrapLoginAuthorizeAndRevoke(t *testing.T) {
 				t.Fatal("audit metadata leaked a password")
 			}
 		}
+	}
+}
+
+func TestServiceJITProvisionsOIDCAccountAndSynchronizesAdministratorMapping(t *testing.T) {
+	store := repository.NewMemoryGuardStore()
+	auditor := &recordingAuditor{}
+	now := time.Now().UTC().Truncate(time.Second)
+	service, err := NewService(store, fastTestHasher{}, auditor, nil, ServiceConfig{
+		OrganizationID: "oidc-organization",
+		SessionTTL:     time.Hour,
+		Now:            func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Bootstrap(context.Background(), BootstrapInput{
+		Username: "administrator", Email: "administrator@example.test", DisplayName: "Administrator",
+		Password: "correct horse battery staple",
+	}, true); err != nil {
+		t.Fatal(err)
+	}
+	principal := identity.OIDCPrincipal{
+		Issuer: "https://identity.example.test/tenant", Subject: "provider-subject",
+		Email: "person@example.test", EmailVerified: true, DisplayName: "Example Person", Administrator: true,
+	}
+	credentials, err := service.LoginOIDC(context.Background(), principal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(credentials.Authentication.Principal.Username, "oidc-") ||
+		credentials.Authentication.Principal.Email != "person@example.test" {
+		t.Fatalf("unexpected external principal %#v", credentials.Authentication.Principal)
+	}
+	if err := service.CheckPermission(context.Background(), credentials.Authentication, PermissionGuardManage, Scope{
+		Kind: ScopeOrganization, OrganizationID: "oidc-organization", ResourceID: "oidc-organization",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	accountID := credentials.Authentication.Principal.Subject
+	if _, err := service.Login(context.Background(), LoginInput{
+		Username: credentials.Authentication.Principal.Username, Password: "not a local password", RateKey: "client",
+	}); !errors.Is(err, ErrInvalidCredential) {
+		t.Fatalf("expected external account to reject local password login, got %v", err)
+	}
+	now = now.Add(time.Minute)
+	principal.Email = "refreshed@example.test"
+	principal.DisplayName = "Refreshed Person"
+	principal.Administrator = false
+	refreshed, err := service.LoginOIDC(context.Background(), principal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refreshed.Authentication.Principal.Subject != accountID || refreshed.Authentication.Principal.Email != "refreshed@example.test" ||
+		len(refreshed.Authentication.Principal.Roles) != 0 || len(refreshed.Authentication.Grants) != 0 {
+		t.Fatalf("unexpected refreshed external principal %#v", refreshed.Authentication)
+	}
+	foundSuccess := false
+	for _, event := range auditor.events {
+		if event.Action == "guard.oidc.login.succeeded" {
+			foundSuccess = true
+		}
+		if strings.Contains(event.ResourceID, principal.Issuer) || strings.Contains(event.ResourceID, principal.Subject) {
+			t.Fatal("audit event exposed provider assertion values")
+		}
+	}
+	if !foundSuccess {
+		t.Fatal("expected OpenID Connect login audit event")
+	}
+}
+
+func TestServiceRejectsInvalidOIDCPrincipal(t *testing.T) {
+	service, err := NewService(repository.NewMemoryGuardStore(), fastTestHasher{}, foundation.NopAuditor{}, nil, ServiceConfig{
+		OrganizationID: "oidc-invalid-organization", SessionTTL: time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.LoginOIDC(context.Background(), identity.OIDCPrincipal{
+		Issuer: "https://identity.example.test", Subject: "subject", Email: "not-an-email", DisplayName: "Person",
+	}); !errors.Is(err, ErrInvalidCredential) {
+		t.Fatalf("expected invalid external principal to fail, got %v", err)
 	}
 }
 

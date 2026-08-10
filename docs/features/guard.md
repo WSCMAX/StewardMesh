@@ -6,9 +6,9 @@
 
 ## Purpose
 
-Guard protects organization and resource operations. This first delivery slice provides one-time local administrator bootstrap, local password authentication, opaque server-side sessions, synchronized CSRF protection, organization-scoped roles, reusable policy bundles, permission enforcement, rate limiting, and security audit events.
+Guard protects organization and resource operations. The implemented boundary provides one-time local administrator bootstrap, local password authentication, OpenID Connect authorization-code login, just-in-time external accounts, opaque server-side sessions, synchronized CSRF protection, organization-scoped roles, reusable policy bundles, permission enforcement, rate limiting, and security audit events.
 
-OIDC/OAuth, SAML, just-in-time provisioning, external group mapping, custom role management, ownership locks, and the role-building interface remain planned Guard slices. Issue #13 stays open until those acceptance criteria are delivered.
+SAML, custom role and scoped-assignment management, ownership locks, and the role-building interface remain planned Guard slices. Issue #13 stays open until those acceptance criteria are delivered.
 
 ## One-time administrator setup
 
@@ -45,6 +45,41 @@ The React application never stores session identifiers or CSRF values in localSt
 
 `STEWARDMESH_SESSION_TTL` defaults to 12 hours and accepts values from 15 minutes through 24 hours.
 
+## OpenID Connect and JIT provisioning
+
+OpenID Connect is disabled unless `STEWARDMESH_OIDC_ISSUER_URL` is configured.
+An enabled provider also requires a client ID, client secret, exact callback
+URL, and an independent transaction secret containing at least 32 bytes. The
+callback must be the configured application origin plus
+`/api/v1/auth/oidc/callback`. Issuer and callback URLs require HTTPS except for
+explicit loopback development.
+
+Guard uses the OAuth 2.0 authorization code flow with provider discovery,
+signed ID-token verification, a transaction-specific nonce, one-time state,
+and S256 PKCE. State, nonce, and the PKCE verifier are carried only in a
+short-lived AEAD-encrypted, HttpOnly, SameSite=Lax transaction cookie. The
+callback redirects only to the fixed configured application origin. Provider
+errors become one generic browser message and are not reflected into the
+redirect. Access tokens, refresh tokens, authorization codes, ID tokens, and
+provider errors are never persisted or returned to the React application.
+
+The first local administrator must be created before external sign-in is
+available. A verified ID token is keyed by its exact issuer and subject. Guard
+creates a passwordless external account on first login, refreshes display name
+and email metadata on later logins, and uses a stable derived username rather
+than mutable profile claims as identity. `STEWARDMESH_OIDC_REQUIRE_VERIFIED_EMAIL`
+defaults to `true`; an operator may disable that check only when the trusted
+provider does not emit `email_verified` and email is not used as an
+authorization key.
+
+Administrator mapping is opt-in. Set
+`STEWARDMESH_OIDC_ADMINISTRATOR_CLAIM` (default `groups`) and a comma-separated
+`STEWARDMESH_OIDC_ADMINISTRATOR_VALUES`. Any exact string match maps the
+provider-managed organization Administrator assignment. The configured claim
+must be emitted in the signed ID token. Matching is case-sensitive and never
+uses substrings. If the claim later stops matching, Guard removes only that
+provider-managed assignment and preserves independent local assignments.
+
 ## Roles, policy bundles, and scopes
 
 The initial Administrator role directly contains `guard.manage` and attaches the **Core administration** policy bundle. That bundle groups:
@@ -76,13 +111,15 @@ Role assignments carry an explicit organization, site, department, or resource s
 - `GET /api/v1/auth/bootstrap`
 - `POST /api/v1/auth/bootstrap`
 - `POST /api/v1/auth/login`
+- `GET /api/v1/auth/oidc/start`
+- `GET /api/v1/auth/oidc/callback`
 - `GET /api/v1/auth/session`
 - `POST /api/v1/auth/logout`
 - OpenAPI: `api/openapi/openapi.yaml`
 - gRPC contract: `api/proto/stewardmesh.proto`
-- PostgreSQL migration: `internal/repository/postgres/migrations/0004_guard_local_auth.sql`
+- PostgreSQL migrations: `internal/repository/postgres/migrations/0004_guard_local_auth.sql` and `0007_guard_oidc.sql`
 
-The `guard.Store` interface is provider-neutral. PostgreSQL and the in-memory evaluation adapter pass the same contract tests; DynamoDB must implement that contract. The existing `identity.Authenticator` boundary is reserved for local, OIDC/OAuth, and SAML providers.
+The `guard.Store` interface is provider-neutral. PostgreSQL and the in-memory evaluation adapter pass the same local and external-account contract tests; DynamoDB must implement that contract. `identity.OIDCAuthenticator` isolates discovery, code exchange, PKCE, and ID-token verification from Guard's JIT account and session behavior.
 
 ## Accessibility and guided help
 
@@ -98,6 +135,8 @@ The application links to this page from every Guard setup state and provides the
 - `guard.login.failed`
 - `guard.login.rate_limited`
 - `guard.login.protection_unavailable`
+- `guard.oidc.login.succeeded`
+- `guard.oidc.login.failed`
 - `guard.logout.succeeded`
 - `guard.authorization.denied`
 
@@ -111,6 +150,7 @@ Audit events contain stable account or resource IDs, correlation IDs, actions, t
 - distributed rate-limit, cache outage, TTL, and organization-isolation tests
 - memory and PostgreSQL provider contract tests
 - session hashing, CSRF rotation, expiration, and revocation tests
+- state, nonce, S256 PKCE, encrypted transaction, exact claim mapping, JIT refresh, and provider-mapping removal tests
 - server-side permission, origin, CORS, JSON-boundary, and header tests
 - React setup, login fallback, keyboard-focus, and safe-link tests
 - automated axe accessibility analysis
@@ -118,6 +158,9 @@ Audit events contain stable account or resource IDs, correlation IDs, actions, t
 
 ## Security references
 
+- [OpenID Connect Core 1.0](https://openid.net/specs/openid-connect-core-1_0.html)
+- [RFC 9700 — OAuth 2.0 Security Best Current Practice](https://www.rfc-editor.org/rfc/rfc9700.html)
+- [RFC 7636 — Proof Key for Code Exchange](https://www.rfc-editor.org/rfc/rfc7636.html)
 - [NIST SP 800-63B password authenticators](https://pages.nist.gov/800-63-4/sp800-63b/authenticators/)
 - [OWASP Password Storage Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html)
 - [OWASP Session Management Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html)

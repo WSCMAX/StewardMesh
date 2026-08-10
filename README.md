@@ -30,9 +30,10 @@ provider-contract behavior.
 On the first web launch, Guard prompts for the one-time local administrator.
 Local passwords use Argon2id and are never stored in plaintext. Sessions use an
 opaque HttpOnly cookie, while CSRF material stays only in application memory.
-See [Guard](docs/features/guard.md) for secure local setup, shared-server
-requirements, permissions, audit behavior, and the planned external identity
-provider boundary.
+OpenID Connect is opt-in and uses authorization code flow with state, nonce,
+S256 PKCE, signed ID-token verification, and JIT Guard accounts. Provider
+tokens are not stored. See [Guard](docs/features/guard.md) for secure local
+setup, provider configuration, claim mapping, permissions, and audit behavior.
 
 The cache driver defaults to `none`, which preserves Guard's bounded local
 login limiter. Shared deployments set `STEWARDMESH_CACHE_DRIVER=valkey`, provide

@@ -10,6 +10,7 @@ import (
 	"mime"
 	"net"
 	"net/http"
+	"net/url"
 	"regexp"
 	"sort"
 	"strconv"
@@ -21,15 +22,18 @@ import (
 	"github.com/maxlemke/stewardmesh/internal/domain"
 	"github.com/maxlemke/stewardmesh/internal/foundation"
 	"github.com/maxlemke/stewardmesh/internal/guard"
+	"github.com/maxlemke/stewardmesh/internal/identity"
 	"github.com/maxlemke/stewardmesh/internal/people"
 	"github.com/maxlemke/stewardmesh/internal/repository"
 	"github.com/maxlemke/stewardmesh/internal/storage"
 )
 
 const (
-	csrfHeader        = "X-CSRF-Token"
-	localSessionName  = "stewardmesh_session"
-	secureSessionName = "__Host-stewardmesh_session"
+	csrfHeader                = "X-CSRF-Token"
+	localSessionName          = "stewardmesh_session"
+	secureSessionName         = "__Host-stewardmesh_session"
+	localOIDCTransactionName  = "stewardmesh_oidc_transaction"
+	secureOIDCTransactionName = "__Host-stewardmesh_oidc_transaction"
 )
 
 var correlationIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
@@ -41,6 +45,7 @@ type Dependencies struct {
 	Goals               repository.GoalRepository
 	Blobs               storage.BlobStore
 	Guard               *guard.Service
+	OIDC                *identity.OIDCFlow
 	Graph               directoryexpansion.GraphStore
 	SessionCookieSecure bool
 }
@@ -51,6 +56,7 @@ type Server struct {
 	tagsRepo            repository.TagRepository
 	goalsRepo           repository.GoalRepository
 	guard               *guard.Service
+	oidc                *identity.OIDCFlow
 	graph               directoryexpansion.GraphStore
 	allowedOrigin       string
 	organization        bootstrap.Organization
@@ -70,6 +76,7 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 		tagsRepo:            deps.Tags,
 		goalsRepo:           deps.Goals,
 		guard:               deps.Guard,
+		oidc:                deps.OIDC,
 		graph:               deps.Graph,
 		allowedOrigin:       allowedOrigin,
 		organization:        organization,
@@ -80,6 +87,8 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 	mux.HandleFunc("GET /api/v1/auth/bootstrap", server.bootstrapStatus)
 	mux.HandleFunc("POST /api/v1/auth/bootstrap", server.bootstrapAdministrator)
 	mux.HandleFunc("POST /api/v1/auth/login", server.login)
+	mux.HandleFunc("GET /api/v1/auth/oidc/start", server.oidcStart)
+	mux.HandleFunc("GET /api/v1/auth/oidc/callback", server.oidcCallback)
 	mux.Handle("GET /api/v1/auth/session", server.protected("", false, server.getSession))
 	mux.Handle("POST /api/v1/auth/logout", server.protected("", true, server.logout))
 	mux.Handle("GET /api/v1/organization", server.protected(guard.PermissionOrganizationRead, false, server.getOrganization))
@@ -150,6 +159,7 @@ func (s *Server) bootstrapStatus(w http.ResponseWriter, r *http.Request) {
 		"required":                  required,
 		"tokenRequired":             tokenRequired,
 		"minimumPasswordCharacters": guard.MinimumPasswordCharacters,
+		"oidcEnabled":               s.oidc != nil,
 	})
 }
 
@@ -233,6 +243,92 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.writeAuthenticatedSession(w, http.StatusOK, credentials)
+}
+
+func (s *Server) oidcStart(w http.ResponseWriter, r *http.Request) {
+	s.noStore(w)
+	if s.guard == nil || s.oidc == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "oidc_unavailable", "OpenID Connect sign-in is unavailable")
+		return
+	}
+	if !s.trustedOIDCStart(r) {
+		writeError(w, r, http.StatusForbidden, "origin_denied", "request origin is not allowed")
+		return
+	}
+	required, _, err := s.guard.BootstrapStatus(r.Context())
+	if err != nil {
+		writeError(w, r, http.StatusInternalServerError, "authentication_error", "unable to read administrator setup status")
+		return
+	}
+	if required {
+		writeError(w, r, http.StatusConflict, "bootstrap_required", "create the first administrator before using OpenID Connect")
+		return
+	}
+	authorizationURL, transactionValue, expiresAt, err := s.oidc.Start()
+	if err != nil {
+		s.guard.RecordOIDCFailure(r.Context())
+		writeError(w, r, http.StatusServiceUnavailable, "oidc_unavailable", "OpenID Connect sign-in is unavailable")
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     s.oidcTransactionCookieName(),
+		Value:    transactionValue,
+		Path:     "/",
+		Expires:  expiresAt,
+		MaxAge:   max(1, int(time.Until(expiresAt).Seconds())),
+		HttpOnly: true,
+		Secure:   s.sessionCookieSecure,
+		SameSite: http.SameSiteLaxMode,
+	})
+	http.Redirect(w, r, authorizationURL, http.StatusSeeOther)
+}
+
+func (s *Server) oidcCallback(w http.ResponseWriter, r *http.Request) {
+	s.noStore(w)
+	if s.guard == nil || s.oidc == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "oidc_unavailable", "OpenID Connect sign-in is unavailable")
+		return
+	}
+	cookie, cookieErr := r.Cookie(s.oidcTransactionCookieName())
+	s.clearOIDCTransactionCookie(w)
+	state := r.URL.Query().Get("state")
+	if cookieErr != nil || cookie.Value == "" {
+		s.oidcFailure(w, r)
+		return
+	}
+	if r.URL.Query().Get("error") != "" {
+		if err := s.oidc.Validate(cookie.Value, state); err != nil {
+			s.oidcFailure(w, r)
+			return
+		}
+		s.oidcFailure(w, r)
+		return
+	}
+	principal, err := s.oidc.Complete(r.Context(), cookie.Value, state, r.URL.Query().Get("code"))
+	if err != nil {
+		s.oidcFailure(w, r)
+		return
+	}
+	credentials, err := s.guard.LoginOIDC(r.Context(), principal)
+	if err != nil {
+		s.oidcFailureRedirect(w, r)
+		return
+	}
+	s.setSessionCookie(w, credentials)
+	http.Redirect(w, r, s.allowedOrigin, http.StatusSeeOther)
+}
+
+func (s *Server) oidcFailure(w http.ResponseWriter, r *http.Request) {
+	s.guard.RecordOIDCFailure(r.Context())
+	s.oidcFailureRedirect(w, r)
+}
+
+func (s *Server) oidcFailureRedirect(w http.ResponseWriter, r *http.Request) {
+	if s.allowedOrigin == "" {
+		writeError(w, r, http.StatusUnauthorized, "oidc_failed", "OpenID Connect sign-in could not be completed")
+		return
+	}
+	http.Redirect(w, r, s.allowedOrigin+"?auth=oidc_error", http.StatusSeeOther)
 }
 
 func (s *Server) getSession(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
@@ -753,6 +849,11 @@ func (s *Server) protected(permission guard.Permission, requireCSRF bool, next a
 }
 
 func (s *Server) writeAuthenticatedSession(w http.ResponseWriter, status int, credentials guard.SessionCredentials) {
+	s.setSessionCookie(w, credentials)
+	writeJSON(w, status, sessionResponse(credentials.Authentication, credentials.CSRFToken))
+}
+
+func (s *Server) setSessionCookie(w http.ResponseWriter, credentials guard.SessionCredentials) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     s.sessionCookieName(),
 		Value:    credentials.Token,
@@ -763,7 +864,6 @@ func (s *Server) writeAuthenticatedSession(w http.ResponseWriter, status int, cr
 		Secure:   s.sessionCookieSecure,
 		SameSite: http.SameSiteLaxMode,
 	})
-	writeJSON(w, status, sessionResponse(credentials.Authentication, credentials.CSRFToken))
 }
 
 func sessionResponse(authentication guard.Authentication, csrfToken string) map[string]any {
@@ -808,6 +908,40 @@ func (s *Server) sessionCookieName() string {
 		return secureSessionName
 	}
 	return localSessionName
+}
+
+func (s *Server) oidcTransactionCookieName() string {
+	if s.sessionCookieSecure {
+		return secureOIDCTransactionName
+	}
+	return localOIDCTransactionName
+}
+
+func (s *Server) clearOIDCTransactionCookie(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     s.oidcTransactionCookieName(),
+		Value:    "",
+		Path:     "/",
+		Expires:  time.Unix(1, 0).UTC(),
+		MaxAge:   -1,
+		HttpOnly: true,
+		Secure:   s.sessionCookieSecure,
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
+func (s *Server) trustedOIDCStart(r *http.Request) bool {
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	if origin != "" {
+		return s.allowedOrigin != "" && origin == s.allowedOrigin
+	}
+	switch strings.ToLower(strings.TrimSpace(r.Header.Get("Sec-Fetch-Site"))) {
+	case "same-origin", "none":
+		return true
+	case "same-site", "cross-site":
+		return false
+	}
+	return isLoopbackOrigin(s.allowedOrigin) && isLoopbackRemote(r.RemoteAddr)
 }
 
 func (s *Server) trustedBrowserRequest(r *http.Request) bool {
@@ -912,6 +1046,19 @@ func remoteHost(remoteAddress string) string {
 
 func isLoopbackRemote(remoteAddress string) bool {
 	host := remoteHost(remoteAddress)
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+func isLoopbackOrigin(rawOrigin string) bool {
+	origin, err := url.Parse(rawOrigin)
+	if err != nil {
+		return false
+	}
+	host := origin.Hostname()
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
 }

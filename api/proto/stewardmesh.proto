@@ -11,8 +11,9 @@ service FoundationService {
   rpc GetOrganization(GetOrganizationRequest) returns (Organization);
 }
 
-// Guard local authentication contract. OIDC/OAuth providers will implement
-// the same principal boundary in a later SEC-GUARD-001 delivery slice.
+// Guard authentication contract. OpenID Connect authorization-code redirects
+// remain browser HTTP endpoints; their JIT accounts use this same principal
+// and session boundary after callback verification.
 // Secure transport and metadata behavior: SEC-HTTP-001.
 service GuardService {
   rpc GetBootstrapStatus(GetBootstrapStatusRequest) returns (BootstrapStatus);
@@ -67,6 +68,7 @@ message BootstrapStatus {
   bool required = 1;
   bool token_required = 2;
   uint32 minimum_password_characters = 3;
+  bool oidc_enabled = 4;
 }
 
 message BootstrapAdministratorRequest {

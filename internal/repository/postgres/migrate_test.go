@@ -11,8 +11,8 @@ func TestEmbeddedMigrationsAreOrderedAndChecksummed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(migrations) != 6 {
-		t.Fatalf("expected 6 platform migrations, got %d", len(migrations))
+	if len(migrations) != 7 {
+		t.Fatalf("expected 7 platform migrations, got %d", len(migrations))
 	}
 	for index, migration := range migrations {
 		expectedVersion := int64(index + 1)
@@ -21,6 +21,29 @@ func TestEmbeddedMigrationsAreOrderedAndChecksummed(t *testing.T) {
 		}
 		if len(migration.checksum) != 64 {
 			t.Fatalf("expected SHA-256 checksum for migration %d", migration.version)
+		}
+	}
+}
+
+func TestGuardOIDCMigrationSeparatesExternalIdentityFromLocalCredentials(t *testing.T) {
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(migrations) < 7 {
+		t.Fatal("Guard OpenID Connect migration is missing")
+	}
+	contents := migrations[6].contents
+	for _, expected := range []string{
+		"ALTER COLUMN password_hash DROP NOT NULL",
+		"password_hash IS NULL",
+		"ADD COLUMN source TEXT NOT NULL DEFAULT 'local'",
+		"CREATE TABLE guard_external_identities",
+		"PRIMARY KEY (organization_id, issuer, subject)",
+		"REFERENCES guard_accounts (organization_id, id)",
+	} {
+		if !strings.Contains(contents, expected) {
+			t.Fatalf("Guard OpenID Connect migration is missing %q", expected)
 		}
 	}
 }

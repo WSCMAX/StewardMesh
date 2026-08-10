@@ -1,9 +1,10 @@
 import axe from 'axe-core'
+import { StrictMode } from 'react'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, expect, test, vi } from 'vitest'
 import App, { resolvePublicUrl } from './App'
 
-// Requirements: A11Y-001, SEC-GUARD-001.
+// Requirements: A11Y-001, SEC-GUARD-001, SEC-HTTP-001.
 
 const session = {
   principal: {
@@ -30,7 +31,7 @@ function installAuthenticatedFetch() {
   const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
     const path = String(input)
     if (path === '/healthz') return jsonResponse({ status: 'ok' })
-    if (path === '/api/v1/auth/bootstrap') return jsonResponse({ required: false, tokenRequired: false, minimumPasswordCharacters: 15 })
+    if (path === '/api/v1/auth/bootstrap') return jsonResponse({ required: false, tokenRequired: false, minimumPasswordCharacters: 15, oidcEnabled: false })
     if (path === '/api/v1/auth/session') return jsonResponse(session)
     if (path === '/api/v1/organization') return jsonResponse({ id: 'example-org', name: 'Example Organization' })
     if (path === '/api/v1/assets') return jsonResponse({ items: [] })
@@ -44,6 +45,7 @@ function installAuthenticatedFetch() {
 beforeEach(() => {
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
+  window.history.replaceState(null, '', '/')
 })
 
 test('restores a server-managed session and renders StewardMesh modules', async () => {
@@ -61,7 +63,7 @@ test('renders an accessible one-time administrator setup and submits without bro
     const path = String(input)
     if (path === '/healthz') return jsonResponse({ status: 'ok' })
     if (path === '/api/v1/auth/bootstrap' && !init?.method) {
-      return jsonResponse({ required: true, tokenRequired: true, minimumPasswordCharacters: 15 })
+      return jsonResponse({ required: true, tokenRequired: true, minimumPasswordCharacters: 15, oidcEnabled: false })
     }
     if (path === '/api/v1/auth/bootstrap' && init?.method === 'POST') return jsonResponse(session, 201)
     if (path === '/api/v1/organization') return jsonResponse({ id: 'example-org', name: 'Example Organization' })
@@ -95,7 +97,7 @@ test('omits the bootstrap token when the deployment does not require one', async
     const path = String(input)
     if (path === '/healthz') return jsonResponse({ status: 'ok' })
     if (path === '/api/v1/auth/bootstrap' && !init?.method) {
-      return jsonResponse({ required: true, tokenRequired: false, minimumPasswordCharacters: 15 })
+      return jsonResponse({ required: true, tokenRequired: false, minimumPasswordCharacters: 15, oidcEnabled: false })
     }
     if (path === '/api/v1/auth/bootstrap' && init?.method === 'POST') return jsonResponse(session, 201)
     if (path === '/api/v1/organization') return jsonResponse({ id: 'example-org', name: 'Example Organization' })
@@ -124,7 +126,7 @@ test('falls back to login when no authenticated session exists', async () => {
   const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
     const path = String(input)
     if (path === '/healthz') return jsonResponse({ status: 'ok' })
-    if (path === '/api/v1/auth/bootstrap') return jsonResponse({ required: false, tokenRequired: false, minimumPasswordCharacters: 15 })
+    if (path === '/api/v1/auth/bootstrap') return jsonResponse({ required: false, tokenRequired: false, minimumPasswordCharacters: 15, oidcEnabled: false })
     if (path === '/api/v1/auth/session') return jsonResponse({ error: { message: 'sign in is required' } }, 401)
     throw new Error(`unexpected request: ${path}`)
   })
@@ -135,11 +137,33 @@ test('falls back to login when no authenticated session exists', async () => {
   expect(screen.getByLabelText('Password')).toHaveAttribute('autocomplete', 'current-password')
 })
 
+test('offers organization sign-in and announces a safe callback failure', async () => {
+  window.history.replaceState(null, '', '/?auth=oidc_error')
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    const path = String(input)
+    if (path === '/healthz') return jsonResponse({ status: 'ok' })
+    if (path === '/api/v1/auth/bootstrap') return jsonResponse({
+      required: false, tokenRequired: false, minimumPasswordCharacters: 15, oidcEnabled: true,
+    })
+    if (path === '/api/v1/auth/session') return jsonResponse({ error: { message: 'sign in is required' } }, 401)
+    throw new Error(`unexpected request: ${path}`)
+  }))
+  const { container } = render(<StrictMode><App /></StrictMode>)
+  const providerLink = await screen.findByRole('link', { name: 'Continue with organization sign-in' })
+  expect(providerLink).toHaveAttribute('href', '/api/v1/auth/oidc/start')
+  const alert = await screen.findByRole('alert')
+  expect(alert).toHaveTextContent('Organization sign-in could not be completed')
+  await waitFor(() => expect(alert).toHaveFocus())
+  expect(window.location.search).toBe('')
+  const results = await axe.run(container)
+  expect(results.violations).toEqual([])
+})
+
 test('Guard administrator setup has no automated WCAG violations', async () => {
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
     const path = String(input)
     if (path === '/healthz') return jsonResponse({ status: 'ok' })
-    if (path === '/api/v1/auth/bootstrap') return jsonResponse({ required: true, tokenRequired: false, minimumPasswordCharacters: 15 })
+    if (path === '/api/v1/auth/bootstrap') return jsonResponse({ required: true, tokenRequired: false, minimumPasswordCharacters: 15, oidcEnabled: false })
     throw new Error(`unexpected request: ${path}`)
   }))
   const { container } = render(<App />)
@@ -158,7 +182,7 @@ test('password mismatch is announced and receives keyboard focus', async () => {
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
     const path = String(input)
     if (path === '/healthz') return jsonResponse({ status: 'ok' })
-    if (path === '/api/v1/auth/bootstrap') return jsonResponse({ required: true, tokenRequired: false, minimumPasswordCharacters: 15 })
+    if (path === '/api/v1/auth/bootstrap') return jsonResponse({ required: true, tokenRequired: false, minimumPasswordCharacters: 15, oidcEnabled: false })
     throw new Error(`unexpected request: ${path}`)
   }))
   render(<App />)

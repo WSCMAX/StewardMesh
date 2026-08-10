@@ -55,27 +55,33 @@
           "api/proto/stewardmesh.proto"
         ],
         "code": [
+          "internal/application/application.go",
           "internal/config/config.go",
           "internal/guard/contracts.go",
           "internal/guard/password.go",
           "internal/guard/rate_limiter.go",
           "internal/guard/service.go",
           "internal/httpapi/server.go",
+          "internal/identity/oidc.go",
           "internal/repository/memory_guard.go",
           "internal/repository/postgres/guard.go"
         ],
         "schema": [
-          "internal/repository/postgres/migrations/0004_guard_local_auth.sql"
+          "internal/repository/postgres/migrations/0004_guard_local_auth.sql",
+          "internal/repository/postgres/migrations/0007_guard_oidc.sql"
         ],
         "tests": [
+          "internal/application/application_test.go",
           "internal/config/config_test.go",
           "internal/guard/password_test.go",
           "internal/guard/rate_limiter_test.go",
           "internal/guard/service_test.go",
           "internal/httpapi/server_test.go",
+          "internal/identity/oidc_test.go",
           "internal/repository/contracttest/guard.go",
           "internal/repository/memory_guard_test.go",
-          "internal/repository/postgres/postgres_integration_test.go"
+          "internal/repository/postgres/postgres_integration_test.go",
+          "web/src/App.test.tsx"
         ],
         "ui": [
           "web/src/App.tsx"
@@ -99,14 +105,18 @@
           "internal/config/config.go",
           "internal/guard/contracts.go",
           "internal/guard/service.go",
-          "internal/httpapi/server.go"
+          "internal/httpapi/server.go",
+          "internal/identity/oidc.go"
         ],
         "schema": [
-          "internal/repository/postgres/migrations/0004_guard_local_auth.sql"
+          "internal/repository/postgres/migrations/0004_guard_local_auth.sql",
+          "internal/repository/postgres/migrations/0007_guard_oidc.sql"
         ],
         "tests": [
           "internal/config/config_test.go",
-          "internal/httpapi/server_test.go"
+          "internal/httpapi/server_test.go",
+          "internal/identity/oidc_test.go",
+          "web/src/App.test.tsx"
         ],
         "ui": [
           "web/src/App.tsx"

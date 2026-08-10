@@ -177,6 +177,9 @@ func TestStoresValidateInputsAndContext(t *testing.T) {
 		if err := store.Set(context.Background(), "key", nil, 0); !errors.Is(err, ErrInvalidTTL) {
 			t.Fatalf("expected invalid TTL error from %T, got %v", store, err)
 		}
+		if err := store.Set(context.Background(), "key", nil, time.Nanosecond); !errors.Is(err, ErrInvalidTTL) {
+			t.Fatalf("expected sub-millisecond TTL error from %T, got %v", store, err)
+		}
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 		if err := store.Ping(ctx); !errors.Is(err, context.Canceled) {

@@ -6,6 +6,9 @@ toolchain go1.26.5
 
 require (
 	github.com/jackc/pgx/v5 v5.10.0
+	github.com/valkey-io/valkey-go v1.0.76
+	github.com/valkey-io/valkey-go/mock v1.0.76
+	go.uber.org/mock v0.6.0
 	golang.org/x/crypto v0.54.0
 )
 

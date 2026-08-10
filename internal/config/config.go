@@ -1,5 +1,5 @@
 // Package config loads and validates provider-neutral StewardMesh settings.
-// Requirements: REQ-FOUNDATION-001, SEC-GUARD-001, SEC-HTTP-001.
+// Requirements: REQ-FOUNDATION-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
 package config
 
 import (
@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/maxlemke/stewardmesh/internal/cache"
 )
 
 type RepositoryDriver string
@@ -20,12 +22,22 @@ const (
 	RepositoryDriverMemory   RepositoryDriver = "memory"
 )
 
+type CacheDriver string
+
+const (
+	CacheDriverNone   CacheDriver = "none"
+	CacheDriverMemory CacheDriver = "memory"
+	CacheDriverValkey CacheDriver = "valkey"
+)
+
 type Config struct {
 	Addr                string
 	DataDir             string
 	BlobDir             string
 	DatabaseURL         string
 	RepositoryDriver    RepositoryDriver
+	CacheDriver         CacheDriver
+	CacheURL            string
 	AllowedOrigin       string
 	OrganizationID      string
 	OrganizationName    string
@@ -57,6 +69,8 @@ func FromEnv() Config {
 		BlobDir:             envOr("STEWARDMESH_BLOB_DIR", "./storage"),
 		DatabaseURL:         envOr("STEWARDMESH_DATABASE_URL", ""),
 		RepositoryDriver:    RepositoryDriver(envOr("STEWARDMESH_REPOSITORY_DRIVER", string(RepositoryDriverPostgres))),
+		CacheDriver:         CacheDriver(envOr("STEWARDMESH_CACHE_DRIVER", string(CacheDriverNone))),
+		CacheURL:            os.Getenv("STEWARDMESH_CACHE_URL"),
 		AllowedOrigin:       allowedOrigin,
 		OrganizationID:      envOr("STEWARDMESH_ORGANIZATION_ID", "local-organization"),
 		OrganizationName:    envOr("STEWARDMESH_ORGANIZATION_NAME", "StewardMesh Local Organization"),
@@ -97,6 +111,18 @@ func (c Config) Validate() error {
 	case RepositoryDriverMemory:
 	default:
 		return fmt.Errorf("unsupported STEWARDMESH_REPOSITORY_DRIVER %q", c.RepositoryDriver)
+	}
+	switch c.CacheDriver {
+	case CacheDriverNone, CacheDriverMemory:
+		if c.CacheURL != "" {
+			return errors.New("STEWARDMESH_CACHE_URL must be empty unless STEWARDMESH_CACHE_DRIVER is valkey")
+		}
+	case CacheDriverValkey:
+		if err := cache.ValidateValkeyURL(c.CacheURL); err != nil {
+			return fmt.Errorf("STEWARDMESH_CACHE_URL: %w", err)
+		}
+	default:
+		return fmt.Errorf("unsupported STEWARDMESH_CACHE_DRIVER %q", c.CacheDriver)
 	}
 	var origin *url.URL
 	if c.AllowedOrigin != "" {

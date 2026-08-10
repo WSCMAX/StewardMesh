@@ -5,8 +5,9 @@
 - **Roadmap issue:** [#41](https://github.com/WSCMAX/StewardMesh/issues/41)
 
 **Traceability status:** the provider-neutral contract, disabled mode, bounded
-in-memory adapter, namespaced key builder, and their tests are implemented in
-`internal/cache`. The Valkey adapter and Guard integration remain tracked by
+in-memory adapter, official Valkey Go client adapter, validated connection URL,
+namespaced key builder, and their tests are implemented in `internal/cache`.
+Guard integration and the optional self-hosted Compose service remain tracked by
 issue #41.
 
 ## Decision
@@ -36,9 +37,15 @@ networks and `rediss://` for TLS deployments such as AWS ElastiCache Serverless
 Valkey. Secrets must be injected by the deployment environment and must never
 be logged.
 
-The container deployment includes an optional health-checked Valkey service.
+The Valkey adapter uses the official `github.com/valkey-io/valkey-go` client,
+supports standalone, cluster, and sentinel URL options, disables the client's
+separate in-process response cache, and uses Valkey-first names in application
+code. URL validation rejects unsupported schemes and reports errors without
+including credentials. TLS URLs cannot disable certificate verification.
+
+The container deployment will include an optional health-checked Valkey service.
 The application defaults to `none`, so existing local development does not
-require the service. A deployment enables the shared backend explicitly.
+require the service. A deployment will enable the shared backend explicitly.
 
 ## Boundaries and keys
 

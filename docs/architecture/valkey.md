@@ -8,8 +8,10 @@
 in-memory adapter, official Valkey Go client adapter, validated connection URL,
 namespaced key builder, distributed Guard login limiter, runtime configuration,
 optional self-hosted Compose service, and their validation are implemented.
-AWS ElastiCache and Lambda deployment guidance is also documented. Reusable
-application construction remains tracked by issue #41.
+AWS ElastiCache and Lambda deployment guidance and reusable application
+construction are also implemented. A Lambda transport adapter, IAM
+authentication, S3-compatible blob adapter, and infrastructure as code remain
+outside the current runtime.
 
 ## Decision
 
@@ -113,6 +115,21 @@ limitations are defined in
 [AWS Valkey and Lambda deployment guidance](../deployment/aws-valkey-lambda.md).
 AWS infrastructure as code is intentionally not selected until the repository
 adopts a provisioning framework.
+
+## Application construction
+
+`internal/application.New` validates runtime configuration and constructs the
+repositories, services, shared login limiter, and transport-neutral
+`http.Handler` once. Its explicit `RunMigrations` option keeps the current
+long-running server behavior while allowing a future Lambda adapter to leave
+migrations to a deployment job. The returned application also exposes durable
+organization metadata and idempotent cleanup for tests and long-running
+processes.
+
+`cmd/stewardmesh` is now only the process transport: it owns OS signals, the TCP
+listener, HTTP timeouts, logging, and graceful shutdown. A future Lambda entry
+point can reuse the same constructor and handler, but it must still satisfy the
+remaining deployment boundaries in the AWS guide before production use.
 
 ## Observability and validation
 

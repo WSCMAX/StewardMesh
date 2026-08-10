@@ -18,6 +18,13 @@ Set `STEWARDMESH_ORGANIZATION_ID`, `STEWARDMESH_ORGANIZATION_NAME`, `STEWARDMESH
 
 The default listener binds to loopback. A shared or container deployment must opt into a non-loopback address and provide deployment-specific authentication, TLS termination, and non-development database credentials.
 
+`internal/application.New` is the reusable construction boundary for the HTTP
+application. It validates configuration, initializes shared dependencies once,
+and returns a transport-neutral handler plus idempotent cleanup. The server
+command owns listener and process lifecycle concerns. Database migrations are
+an explicit construction option so request-oriented transports can keep them in
+deployment jobs.
+
 The development stack is pinned to PostgreSQL 18.4. PostgreSQL 18+ stores its Docker data beneath `/var/lib/postgresql`; do not attach an older major-version volume without completing the appropriate PostgreSQL upgrade process. The example database URL disables TLS only for loopback development.
 
 ## APIs and schemas
@@ -49,7 +56,7 @@ Audit records carry organization, actor, correlation, action, resource, timestam
 ## Validation
 
 - Configuration validation tests
-- Clean-install memory bootstrap test
+- Reusable memory and PostgreSQL application construction tests
 - Idempotent bootstrap service tests
 - Repository and migration tests
 - PostgreSQL integration test in CI

@@ -324,6 +324,60 @@ func TestGuardAccessAPIManagesScopedAssignmentsAndProtectsLastAdministrator(t *t
 	}
 }
 
+func TestGuardResourceOwnershipAPIBlocksWritesUntilClaimed(t *testing.T) {
+	handler := newGuardServer(t)
+	session := bootstrapAdministrator(t, handler)
+	assetPayload, _ := json.Marshal(map[string]string{"id": "imported-asset", "name": "Imported server", "kind": "server"})
+	assetRequest := authenticatedRequest(http.MethodPost, "/api/v1/assets", bytes.NewReader(assetPayload), session)
+	assetResponse := httptest.NewRecorder()
+	handler.ServeHTTP(assetResponse, assetRequest)
+	if assetResponse.Code != http.StatusCreated {
+		t.Fatalf("expected asset creation, got %d: %s", assetResponse.Code, assetResponse.Body.String())
+	}
+	identity := createPeopleRecord[people.Identity](t, handler, session, "/api/v1/identities", map[string]any{
+		"kind": "person", "displayName": "Imported Asset User", "email": "asset-user@example.test", "status": "active",
+	})
+	ownershipPayload, _ := json.Marshal(map[string]string{
+		"resourceType": "asset", "resourceId": "imported-asset",
+		"sourceSystemId": "inventory-source", "sourceRecordId": "upstream-record-one",
+	})
+	registerRequest := authenticatedRequest(http.MethodPost, "/api/v1/guard/resource-ownership", bytes.NewReader(ownershipPayload), session)
+	registerResponse := httptest.NewRecorder()
+	handler.ServeHTTP(registerResponse, registerRequest)
+	if registerResponse.Code != http.StatusCreated || !strings.Contains(registerResponse.Body.String(), `"writeLocked":true`) {
+		t.Fatalf("expected ownership write lock creation, got %d: %s", registerResponse.Code, registerResponse.Body.String())
+	}
+	listRequest := authenticatedRequest(http.MethodGet, "/api/v1/guard/resource-ownership", nil, session)
+	listResponse := httptest.NewRecorder()
+	handler.ServeHTTP(listResponse, listRequest)
+	if listResponse.Code != http.StatusOK || !strings.Contains(listResponse.Body.String(), "upstream-record-one") {
+		t.Fatalf("expected ownership listing, got %d: %s", listResponse.Code, listResponse.Body.String())
+	}
+	assignmentPayload, _ := json.Marshal(map[string]string{
+		"assigneeKind": "identity", "assigneeId": identity.ID, "role": "primary",
+	})
+	lockedRequest := authenticatedRequest(http.MethodPost, "/api/v1/assets/imported-asset/assignments", bytes.NewReader(assignmentPayload), session)
+	lockedResponse := httptest.NewRecorder()
+	handler.ServeHTTP(lockedResponse, lockedRequest)
+	if lockedResponse.Code != http.StatusLocked || !strings.Contains(lockedResponse.Body.String(), "ownership_locked") {
+		t.Fatalf("expected imported resource write lock, got %d: %s", lockedResponse.Code, lockedResponse.Body.String())
+	}
+	claimRequest := authenticatedRequest(
+		http.MethodPost, "/api/v1/guard/resource-ownership/asset/imported-asset/claim", nil, session,
+	)
+	claimResponse := httptest.NewRecorder()
+	handler.ServeHTTP(claimResponse, claimRequest)
+	if claimResponse.Code != http.StatusOK || !strings.Contains(claimResponse.Body.String(), `"writeLocked":false`) {
+		t.Fatalf("expected ownership claim, got %d: %s", claimResponse.Code, claimResponse.Body.String())
+	}
+	allowedRequest := authenticatedRequest(http.MethodPost, "/api/v1/assets/imported-asset/assignments", bytes.NewReader(assignmentPayload), session)
+	allowedResponse := httptest.NewRecorder()
+	handler.ServeHTTP(allowedResponse, allowedRequest)
+	if allowedResponse.Code != http.StatusCreated {
+		t.Fatalf("expected claimed resource mutation, got %d: %s", allowedResponse.Code, allowedResponse.Body.String())
+	}
+}
+
 func TestInvalidCorrelationIDIsReplacedAndReturnedWithErrors(t *testing.T) {
 	handler := newGuardServer(t)
 	session := bootstrapAdministrator(t, handler)

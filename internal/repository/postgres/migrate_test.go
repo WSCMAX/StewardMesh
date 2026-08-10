@@ -11,8 +11,8 @@ func TestEmbeddedMigrationsAreOrderedAndChecksummed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(migrations) != 7 {
-		t.Fatalf("expected 7 platform migrations, got %d", len(migrations))
+	if len(migrations) != 8 {
+		t.Fatalf("expected 8 platform migrations, got %d", len(migrations))
 	}
 	for index, migration := range migrations {
 		expectedVersion := int64(index + 1)
@@ -21,6 +21,28 @@ func TestEmbeddedMigrationsAreOrderedAndChecksummed(t *testing.T) {
 		}
 		if len(migration.checksum) != 64 {
 			t.Fatalf("expected SHA-256 checksum for migration %d", migration.version)
+		}
+	}
+}
+
+func TestGuardResourceOwnershipMigrationEnforcesWriteLockState(t *testing.T) {
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(migrations) < 8 {
+		t.Fatal("Guard resource ownership migration is missing")
+	}
+	contents := migrations[7].contents
+	for _, expected := range []string{
+		"CREATE TABLE guard_resource_ownership",
+		"write_locked BOOLEAN NOT NULL DEFAULT TRUE",
+		"guard_resource_ownership_claim_check",
+		"NOT write_locked AND claimed_by IS NOT NULL",
+		"CREATE UNIQUE INDEX guard_resource_ownership_source_idx",
+	} {
+		if !strings.Contains(contents, expected) {
+			t.Fatalf("Guard resource ownership migration is missing %q", expected)
 		}
 	}
 }

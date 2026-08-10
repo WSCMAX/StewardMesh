@@ -24,6 +24,9 @@ service GuardService {
   rpc ListGuardAccess(ListGuardAccessRequest) returns (ListGuardAccessResponse);
   rpc CreateRoleAssignment(CreateRoleAssignmentRequest) returns (GuardRoleAssignment);
   rpc DeleteRoleAssignment(DeleteRoleAssignmentRequest) returns (DeleteRoleAssignmentResponse);
+  rpc ListResourceOwnership(ListResourceOwnershipRequest) returns (ListResourceOwnershipResponse);
+  rpc RegisterResourceOwnership(RegisterResourceOwnershipRequest) returns (GuardResourceOwnership);
+  rpc ClaimResourceOwnership(ClaimResourceOwnershipRequest) returns (GuardResourceOwnership);
 }
 
 // Authenticated Guard RPCs carry the opaque session bearer in gRPC
@@ -170,6 +173,37 @@ message DeleteRoleAssignmentRequest {
 }
 
 message DeleteRoleAssignmentResponse {}
+
+message ListResourceOwnershipRequest {}
+
+message ListResourceOwnershipResponse {
+  repeated GuardResourceOwnership items = 1;
+}
+
+message GuardResourceOwnership {
+  string resource_type = 1;
+  string resource_id = 2;
+  string source_system_id = 3;
+  string source_record_id = 4;
+  bool write_locked = 5;
+  google.protobuf.Timestamp registered_at = 6;
+  string claimed_by = 7;
+  google.protobuf.Timestamp claimed_at = 8;
+}
+
+message RegisterResourceOwnershipRequest {
+  string resource_type = 1;
+  string resource_id = 2;
+  string source_system_id = 3;
+  string source_record_id = 4;
+  string csrf_token = 5;
+}
+
+message ClaimResourceOwnershipRequest {
+  string resource_type = 1;
+  string resource_id = 2;
+  string csrf_token = 3;
+}
 
 message ListAssetsRequest {}
 

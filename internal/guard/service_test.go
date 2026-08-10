@@ -43,6 +43,17 @@ func (a *recordingAuditor) Record(_ context.Context, event foundation.AuditEvent
 	return nil
 }
 
+type actionFailingAuditor struct {
+	action string
+}
+
+func (a actionFailingAuditor) Record(_ context.Context, event foundation.AuditEvent) error {
+	if event.Action == a.action {
+		return errors.New("controlled audit failure")
+	}
+	return nil
+}
+
 type disabledSessionStore struct {
 	Store
 }
@@ -227,6 +238,135 @@ func TestServiceManagesScopedRoleAssignmentsWithoutAllowingAdministratorLockout(
 	}
 	if !foundCreated || !foundRevoked {
 		t.Fatalf("expected role assignment audit events, got %#v", auditor.events)
+	}
+}
+
+func TestServiceRegistersEnforcesAndClaimsResourceOwnership(t *testing.T) {
+	store := repository.NewMemoryGuardStore()
+	auditor := &recordingAuditor{}
+	now := time.Now().UTC().Truncate(time.Second)
+	service, err := NewService(store, fastTestHasher{}, auditor, nil, ServiceConfig{
+		OrganizationID: "ownership-organization",
+		SessionTTL:     time.Hour,
+		Now:            func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	credentials, err := service.Bootstrap(context.Background(), BootstrapInput{
+		Username: "administrator", Email: "administrator@example.test", DisplayName: "Administrator",
+		Password: "correct horse battery staple",
+	}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := ResourceOwnershipInput{
+		ResourceType: "asset", ResourceID: "imported-asset-one",
+		SourceSystemID: "inventory-source", SourceRecordID: "sensitive-upstream-key",
+	}
+	registered, created, err := service.RegisterResourceOwnership(context.Background(), credentials.Authentication, input)
+	if err != nil || !created || !registered.WriteLocked {
+		t.Fatalf("unexpected ownership registration %#v created=%t err=%v", registered, created, err)
+	}
+	registeredAgain, created, err := service.RegisterResourceOwnership(context.Background(), credentials.Authentication, input)
+	if err != nil || created || registeredAgain.ResourceID != registered.ResourceID {
+		t.Fatalf("expected idempotent ownership registration %#v created=%t err=%v", registeredAgain, created, err)
+	}
+	if err := service.CheckResourceWrite(context.Background(), credentials.Authentication, "asset", input.ResourceID); !errors.Is(err, ErrResourceWriteLocked) {
+		t.Fatalf("expected imported resource write lock, got %v", err)
+	}
+	listed, err := service.ListResourceOwnership(context.Background(), credentials.Authentication)
+	if err != nil || len(listed) != 1 || listed[0].ResourceID != registered.ResourceID {
+		t.Fatalf("unexpected ownership list %#v err=%v", listed, err)
+	}
+	unauthorized := credentials.Authentication
+	unauthorized.Grants = nil
+	if _, err := service.ListResourceOwnership(context.Background(), unauthorized); !errors.Is(err, ErrPermissionDenied) {
+		t.Fatalf("expected ownership listing to require Guard management, got %v", err)
+	}
+	now = now.Add(time.Minute)
+	claimed, err := service.ClaimResourceOwnership(context.Background(), credentials.Authentication, "asset", input.ResourceID)
+	if err != nil || claimed.WriteLocked || claimed.ClaimedAt == nil || claimed.ClaimedBy != credentials.Authentication.Principal.Subject {
+		t.Fatalf("unexpected ownership claim %#v err=%v", claimed, err)
+	}
+	if err := service.CheckResourceWrite(context.Background(), credentials.Authentication, "asset", input.ResourceID); err != nil {
+		t.Fatalf("expected claimed resource write to be allowed, got %v", err)
+	}
+	if _, err := service.ClaimResourceOwnership(context.Background(), credentials.Authentication, "asset", input.ResourceID); !errors.Is(err, ErrConflict) {
+		t.Fatalf("expected repeated ownership claim conflict, got %v", err)
+	}
+	foundLocked, foundDenied, foundClaimed := false, false, false
+	for _, event := range auditor.events {
+		foundLocked = foundLocked || event.Action == "guard.ownership.locked" && event.ResourceID == input.ResourceID
+		foundDenied = foundDenied || event.Action == "guard.ownership.write_denied" && event.ResourceID == input.ResourceID
+		foundClaimed = foundClaimed || event.Action == "guard.ownership.claimed" && event.ResourceID == input.ResourceID
+		for _, value := range event.Metadata {
+			if value == input.SourceRecordID {
+				t.Fatal("audit metadata exposed the upstream source record id")
+			}
+		}
+	}
+	if !foundLocked || !foundDenied || !foundClaimed {
+		t.Fatalf("expected complete ownership audit events, got %#v", auditor.events)
+	}
+}
+
+func TestServiceRollsBackOwnershipChangesWhenAuditFails(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	registrationStore := repository.NewMemoryGuardStore()
+	registrationService, err := NewService(registrationStore, fastTestHasher{}, actionFailingAuditor{action: "guard.ownership.locked"}, nil, ServiceConfig{
+		OrganizationID: "registration-audit-organization", SessionTTL: time.Hour, Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	registrationCredentials, err := registrationService.Bootstrap(context.Background(), BootstrapInput{
+		Username: "administrator", Email: "administrator@example.test", DisplayName: "Administrator",
+		Password: "correct horse battery staple",
+	}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := ResourceOwnershipInput{
+		ResourceType: "asset", ResourceID: "audit-rollback-asset",
+		SourceSystemID: "inventory-source", SourceRecordID: "upstream-record",
+	}
+	if _, _, err := registrationService.RegisterResourceOwnership(context.Background(), registrationCredentials.Authentication, input); err == nil {
+		t.Fatal("expected ownership registration audit failure")
+	}
+	if _, err := registrationStore.GetResourceOwnership(context.Background(), "registration-audit-organization", input.ResourceType, input.ResourceID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected failed registration audit to remove the write lock, got %v", err)
+	}
+
+	claimStore := repository.NewMemoryGuardStore()
+	claimService, err := NewService(claimStore, fastTestHasher{}, foundation.NopAuditor{}, nil, ServiceConfig{
+		OrganizationID: "claim-audit-organization", SessionTTL: time.Hour, Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimCredentials, err := claimService.Bootstrap(context.Background(), BootstrapInput{
+		Username: "administrator", Email: "administrator@example.test", DisplayName: "Administrator",
+		Password: "correct horse battery staple",
+	}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := claimService.RegisterResourceOwnership(context.Background(), claimCredentials.Authentication, input); err != nil {
+		t.Fatal(err)
+	}
+	failingClaimService, err := NewService(claimStore, fastTestHasher{}, actionFailingAuditor{action: "guard.ownership.claimed"}, nil, ServiceConfig{
+		OrganizationID: "claim-audit-organization", SessionTTL: time.Hour, Now: func() time.Time { return now.Add(time.Minute) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := failingClaimService.ClaimResourceOwnership(context.Background(), claimCredentials.Authentication, input.ResourceType, input.ResourceID); err == nil {
+		t.Fatal("expected ownership claim audit failure")
+	}
+	stored, err := claimStore.GetResourceOwnership(context.Background(), "claim-audit-organization", input.ResourceType, input.ResourceID)
+	if err != nil || !stored.WriteLocked || stored.ClaimedAt != nil || stored.ClaimedBy != "" {
+		t.Fatalf("expected failed claim audit to restore the write lock, ownership=%#v err=%v", stored, err)
 	}
 }
 

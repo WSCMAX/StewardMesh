@@ -21,8 +21,8 @@ var (
 	ErrCapacity = errors.New("cache store capacity reached")
 	// ErrInvalidKey reports an empty, oversized, or unsafe cache key.
 	ErrInvalidKey = errors.New("cache key is invalid")
-	// ErrInvalidTTL reports an attempt to create non-expiring cache state.
-	ErrInvalidTTL = errors.New("cache TTL must be positive")
+	// ErrInvalidTTL reports a TTL below the shared millisecond resolution.
+	ErrInvalidTTL = errors.New("cache TTL must be at least 1ms")
 	// ErrInvalidCounter reports a non-integer or overflowing counter value.
 	ErrInvalidCounter = errors.New("cache value is not an incrementable integer")
 )
@@ -47,7 +47,7 @@ func validateKey(key string) error {
 }
 
 func validateTTL(ttl time.Duration) error {
-	if ttl <= 0 {
+	if ttl < time.Millisecond {
 		return ErrInvalidTTL
 	}
 	return nil

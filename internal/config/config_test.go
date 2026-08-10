@@ -1,6 +1,6 @@
 package config
 
-// Requirements: SEC-GUARD-001, SEC-HTTP-001.
+// Requirements: REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
 
 import (
 	"strings"
@@ -27,6 +27,62 @@ func TestValidateRejectsUnknownRepositoryDriver(t *testing.T) {
 	configuration.RepositoryDriver = "sqlite"
 	if err := configuration.Validate(); err == nil || !strings.Contains(err.Error(), "unsupported") {
 		t.Fatal("expected unsupported driver to fail validation")
+	}
+}
+
+func TestLoadSupportsDisabledMemoryAndValkeyCacheDrivers(t *testing.T) {
+	tests := []struct {
+		name   string
+		driver CacheDriver
+		url    string
+	}{
+		{name: "disabled", driver: CacheDriverNone},
+		{name: "memory", driver: CacheDriverMemory},
+		{name: "Valkey", driver: CacheDriverValkey, url: "redis://localhost:6379/0"},
+		{name: "Valkey TLS", driver: CacheDriverValkey, url: "rediss://cache.example.test:6379/0"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("STEWARDMESH_REPOSITORY_DRIVER", "memory")
+			t.Setenv("STEWARDMESH_CACHE_DRIVER", string(test.driver))
+			t.Setenv("STEWARDMESH_CACHE_URL", test.url)
+			configuration, err := Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if configuration.CacheDriver != test.driver || configuration.CacheURL != test.url {
+				t.Fatalf("unexpected cache configuration %#v", configuration)
+			}
+		})
+	}
+}
+
+func TestValidateRejectsUnsafeCacheConfigurationWithoutLeakingCredentials(t *testing.T) {
+	tests := []struct {
+		name   string
+		driver CacheDriver
+		url    string
+	}{
+		{name: "unknown driver", driver: "redis"},
+		{name: "missing Valkey URL", driver: CacheDriverValkey},
+		{name: "unsupported scheme", driver: CacheDriverValkey, url: "http://cache.example.test"},
+		{name: "ignored secret", driver: CacheDriverNone, url: "redis://user:super-secret@localhost:6379"},
+		{name: "malformed secret", driver: CacheDriverValkey, url: "redis://user:super-secret@"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			configuration := FromEnv()
+			configuration.RepositoryDriver = RepositoryDriverMemory
+			configuration.CacheDriver = test.driver
+			configuration.CacheURL = test.url
+			err := configuration.Validate()
+			if err == nil {
+				t.Fatal("expected invalid cache configuration")
+			}
+			if strings.Contains(err.Error(), "super-secret") {
+				t.Fatal("expected cache configuration error to redact credentials")
+			}
+		})
 	}
 }
 

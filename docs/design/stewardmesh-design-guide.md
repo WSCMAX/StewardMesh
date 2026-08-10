@@ -5,9 +5,10 @@ StewardMesh is a calm, capable workspace for understanding relationships and pla
 ## Project assets
 
 - Primary vector mark: [`web/public/brand/stewardmesh-s-mark.svg`](../../web/public/brand/stewardmesh-s-mark.svg)
+- Browser favicon: [`web/public/brand/stewardmesh-s-mark-favicon-arrow-face.svg`](../../web/public/brand/stewardmesh-s-mark-favicon-arrow-face.svg)
 - PNG export: [`web/public/brand/stewardmesh-logo.png`](../../web/public/brand/stewardmesh-logo.png)
 
-Use the SVG in the interface and as the favicon so the mark remains crisp at any size. Keep the PNG as the portable raster export for integrations that do not accept SVG.
+Use the primary SVG in the interface. Use the filled-face favicon asset in browser chrome, where the stronger shapes remain legible at small sizes. Keep the PNG as the portable raster export for integrations that do not accept SVG.
 
 ## Brand palette
 

@@ -114,10 +114,10 @@ func (s *GuardStore) BootstrapAdministrator(ctx context.Context, bootstrap guard
 	assignment := bootstrap.Assignment
 	if _, err := transaction.ExecContext(ctx, `
 		INSERT INTO guard_role_assignments (
-			id, organization_id, account_id, role_id, scope_kind, scope_id, created_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7)
+			id, organization_id, account_id, role_id, scope_kind, scope_id, created_at, source
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 	`, assignment.ID, assignment.OrganizationID, assignment.AccountID, assignment.RoleID,
-		string(assignment.Scope.Kind), assignment.Scope.ResourceID, assignment.CreatedAt); err != nil {
+		string(assignment.Scope.Kind), assignment.Scope.ResourceID, assignment.CreatedAt, assignment.Source); err != nil {
 		return guard.Account{}, fmt.Errorf("assign administrator role: %w", err)
 	}
 	if err := transaction.Commit(); err != nil {
@@ -157,6 +157,9 @@ func (s *GuardStore) ProvisionExternalAccount(ctx context.Context, provisioning 
 	lockKey := fmt.Sprintf("%x", lockDigest[:])
 	if _, err := transaction.ExecContext(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", lockKey); err != nil {
 		return guard.Account{}, false, fmt.Errorf("lock external account provisioning: %w", err)
+	}
+	if _, err := transaction.ExecContext(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", identity.OrganizationID); err != nil {
+		return guard.Account{}, false, fmt.Errorf("lock organization role assignments: %w", err)
 	}
 	var administratorRoleID string
 	if provisioning.Administrator {
@@ -364,6 +367,241 @@ func (s *GuardStore) AccessForAccount(ctx context.Context, organizationID, accou
 	return access, nil
 }
 
+func (s *GuardStore) ListAuthorization(ctx context.Context, organizationID string) (guard.AuthorizationDirectory, error) {
+	if organizationID == "" {
+		return guard.AuthorizationDirectory{}, errors.New("organization id is required")
+	}
+	directory := guard.AuthorizationDirectory{}
+	accountRows, err := s.database.QueryContext(ctx, `
+		SELECT id, organization_id, username, normalized_username, email,
+		       display_name, ''::TEXT, status, created_at, updated_at
+		FROM guard_accounts
+		WHERE organization_id = $1
+		ORDER BY display_name, id
+	`, organizationID)
+	if err != nil {
+		return guard.AuthorizationDirectory{}, fmt.Errorf("list guard accounts: %w", err)
+	}
+	for accountRows.Next() {
+		account, scanErr := scanGuardAccount(accountRows)
+		if scanErr != nil {
+			accountRows.Close()
+			return guard.AuthorizationDirectory{}, fmt.Errorf("scan guard account: %w", scanErr)
+		}
+		directory.Accounts = append(directory.Accounts, account)
+	}
+	if err := accountRows.Err(); err != nil {
+		accountRows.Close()
+		return guard.AuthorizationDirectory{}, fmt.Errorf("iterate guard accounts: %w", err)
+	}
+	accountRows.Close()
+
+	roleRows, err := s.database.QueryContext(ctx, `
+		SELECT r.id, r.organization_id, r.name, r.description,
+		       rp.permission, rb.bundle_id
+		FROM guard_roles r
+		LEFT JOIN guard_role_permissions rp
+		  ON rp.organization_id = r.organization_id AND rp.role_id = r.id
+		LEFT JOIN guard_role_policy_bundles rb
+		  ON rb.organization_id = r.organization_id AND rb.role_id = r.id
+		WHERE r.organization_id = $1
+		ORDER BY r.name, r.id, rp.permission, rb.bundle_id
+	`, organizationID)
+	if err != nil {
+		return guard.AuthorizationDirectory{}, fmt.Errorf("list guard roles: %w", err)
+	}
+	roleIndexes := make(map[string]int)
+	for roleRows.Next() {
+		var role guard.Role
+		var permission, bundleID sql.NullString
+		if err := roleRows.Scan(&role.ID, &role.OrganizationID, &role.Name, &role.Description, &permission, &bundleID); err != nil {
+			roleRows.Close()
+			return guard.AuthorizationDirectory{}, fmt.Errorf("scan guard role: %w", err)
+		}
+		index, exists := roleIndexes[role.ID]
+		if !exists {
+			index = len(directory.Roles)
+			roleIndexes[role.ID] = index
+			directory.Roles = append(directory.Roles, role)
+		}
+		if permission.Valid {
+			directory.Roles[index].Permissions = appendUniquePermission(directory.Roles[index].Permissions, guard.Permission(permission.String))
+		}
+		if bundleID.Valid {
+			directory.Roles[index].PolicyBundleIDs = appendUniqueString(directory.Roles[index].PolicyBundleIDs, bundleID.String)
+		}
+	}
+	if err := roleRows.Err(); err != nil {
+		roleRows.Close()
+		return guard.AuthorizationDirectory{}, fmt.Errorf("iterate guard roles: %w", err)
+	}
+	roleRows.Close()
+
+	assignmentRows, err := s.database.QueryContext(ctx, `
+		SELECT id, organization_id, account_id, role_id, scope_kind, scope_id, source, created_at
+		FROM guard_role_assignments
+		WHERE organization_id = $1
+		ORDER BY created_at, id
+	`, organizationID)
+	if err != nil {
+		return guard.AuthorizationDirectory{}, fmt.Errorf("list guard role assignments: %w", err)
+	}
+	defer assignmentRows.Close()
+	for assignmentRows.Next() {
+		var assignment guard.RoleAssignment
+		var scopeKind string
+		if err := assignmentRows.Scan(&assignment.ID, &assignment.OrganizationID, &assignment.AccountID,
+			&assignment.RoleID, &scopeKind, &assignment.Scope.ResourceID, &assignment.Source, &assignment.CreatedAt); err != nil {
+			return guard.AuthorizationDirectory{}, fmt.Errorf("scan guard role assignment: %w", err)
+		}
+		assignment.Scope.Kind = guard.ScopeKind(scopeKind)
+		assignment.Scope.OrganizationID = assignment.OrganizationID
+		directory.Assignments = append(directory.Assignments, assignment)
+	}
+	if err := assignmentRows.Err(); err != nil {
+		return guard.AuthorizationDirectory{}, fmt.Errorf("iterate guard role assignments: %w", err)
+	}
+	return directory, nil
+}
+
+func (s *GuardStore) CreateRoleAssignment(ctx context.Context, assignment guard.RoleAssignment) error {
+	if err := assignment.Validate(); err != nil {
+		return err
+	}
+	if assignment.Source != guard.LocalAssignmentSource {
+		return guard.ErrManagedAssignment
+	}
+	transaction, err := s.database.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin role assignment creation: %w", err)
+	}
+	defer transaction.Rollback()
+	if _, err := transaction.ExecContext(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", assignment.OrganizationID); err != nil {
+		return fmt.Errorf("lock organization role assignments: %w", err)
+	}
+	var referencesExist bool
+	if err := transaction.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM guard_accounts a, guard_roles r
+			WHERE a.organization_id = $1 AND a.id = $2
+			  AND r.organization_id = $1 AND r.id = $3
+		)
+	`, assignment.OrganizationID, assignment.AccountID, assignment.RoleID).Scan(&referencesExist); err != nil {
+		return fmt.Errorf("verify role assignment references: %w", err)
+	}
+	if !referencesExist {
+		return guard.ErrNotFound
+	}
+	result, err := transaction.ExecContext(ctx, `
+		INSERT INTO guard_role_assignments (
+			id, organization_id, account_id, role_id, scope_kind, scope_id, created_at, source
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		ON CONFLICT DO NOTHING
+	`, assignment.ID, assignment.OrganizationID, assignment.AccountID, assignment.RoleID,
+		string(assignment.Scope.Kind), assignment.Scope.ResourceID, assignment.CreatedAt, assignment.Source)
+	if err != nil {
+		return fmt.Errorf("create role assignment: %w", err)
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read created role assignment: %w", err)
+	}
+	if count == 0 {
+		return guard.ErrConflict
+	}
+	if err := transaction.Commit(); err != nil {
+		return fmt.Errorf("commit role assignment creation: %w", err)
+	}
+	return nil
+}
+
+func (s *GuardStore) DeleteRoleAssignment(ctx context.Context, organizationID, assignmentID string) (guard.RoleAssignment, error) {
+	if organizationID == "" || assignmentID == "" {
+		return guard.RoleAssignment{}, errors.New("organization id and assignment id are required")
+	}
+	transaction, err := s.database.BeginTx(ctx, nil)
+	if err != nil {
+		return guard.RoleAssignment{}, fmt.Errorf("begin role assignment deletion: %w", err)
+	}
+	defer transaction.Rollback()
+	if _, err := transaction.ExecContext(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", organizationID); err != nil {
+		return guard.RoleAssignment{}, fmt.Errorf("lock organization role assignments: %w", err)
+	}
+	var assignment guard.RoleAssignment
+	var scopeKind string
+	err = transaction.QueryRowContext(ctx, `
+		SELECT id, organization_id, account_id, role_id, scope_kind, scope_id, source, created_at
+		FROM guard_role_assignments
+		WHERE organization_id = $1 AND id = $2
+		FOR UPDATE
+	`, organizationID, assignmentID).Scan(&assignment.ID, &assignment.OrganizationID, &assignment.AccountID,
+		&assignment.RoleID, &scopeKind, &assignment.Scope.ResourceID, &assignment.Source, &assignment.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return guard.RoleAssignment{}, guard.ErrNotFound
+	}
+	if err != nil {
+		return guard.RoleAssignment{}, fmt.Errorf("load role assignment for deletion: %w", err)
+	}
+	assignment.Scope = guard.Scope{Kind: guard.ScopeKind(scopeKind), OrganizationID: organizationID, ResourceID: assignment.Scope.ResourceID}
+	if assignment.Source != guard.LocalAssignmentSource {
+		return guard.RoleAssignment{}, guard.ErrManagedAssignment
+	}
+	if assignment.Scope.Kind == guard.ScopeOrganization && assignment.Scope.ResourceID == organizationID {
+		var grantsManagement bool
+		if err := transaction.QueryRowContext(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM guard_role_permissions
+				WHERE organization_id = $1 AND role_id = $2 AND permission = $3
+				UNION ALL
+				SELECT 1
+				FROM guard_role_policy_bundles rb
+				JOIN guard_policy_bundle_permissions bp
+				  ON bp.organization_id = rb.organization_id AND bp.bundle_id = rb.bundle_id
+				WHERE rb.organization_id = $1 AND rb.role_id = $2 AND bp.permission = $3
+			)
+		`, organizationID, assignment.RoleID, string(guard.PermissionGuardManage)).Scan(&grantsManagement); err != nil {
+			return guard.RoleAssignment{}, fmt.Errorf("inspect role assignment permissions: %w", err)
+		}
+		if grantsManagement {
+			var remainingManagers int
+			if err := transaction.QueryRowContext(ctx, `
+				SELECT COUNT(*)
+				FROM guard_role_assignments a
+				JOIN guard_accounts account
+				  ON account.organization_id = a.organization_id AND account.id = a.account_id
+				WHERE a.organization_id = $1 AND a.id <> $2
+				  AND a.scope_kind = 'organization' AND a.scope_id = $1
+				  AND account.status = 'active'
+				  AND EXISTS (
+					SELECT 1 FROM guard_role_permissions rp
+					WHERE rp.organization_id = a.organization_id AND rp.role_id = a.role_id AND rp.permission = $3
+					UNION ALL
+					SELECT 1
+					FROM guard_role_policy_bundles rb
+					JOIN guard_policy_bundle_permissions bp
+					  ON bp.organization_id = rb.organization_id AND bp.bundle_id = rb.bundle_id
+					WHERE rb.organization_id = a.organization_id AND rb.role_id = a.role_id AND bp.permission = $3
+				  )
+			`, organizationID, assignment.ID, string(guard.PermissionGuardManage)).Scan(&remainingManagers); err != nil {
+				return guard.RoleAssignment{}, fmt.Errorf("count organization administrators: %w", err)
+			}
+			if remainingManagers == 0 {
+				return guard.RoleAssignment{}, guard.ErrLastAdministrator
+			}
+		}
+	}
+	if _, err := transaction.ExecContext(ctx, `
+		DELETE FROM guard_role_assignments WHERE organization_id = $1 AND id = $2
+	`, organizationID, assignment.ID); err != nil {
+		return guard.RoleAssignment{}, fmt.Errorf("delete role assignment: %w", err)
+	}
+	if err := transaction.Commit(); err != nil {
+		return guard.RoleAssignment{}, fmt.Errorf("commit role assignment deletion: %w", err)
+	}
+	return assignment, nil
+}
+
 func (s *GuardStore) CreateSession(ctx context.Context, session guard.Session) error {
 	if len(session.TokenHash) != 32 || len(session.CSRFHash) != 32 {
 		return errors.New("session hashes must contain 32 bytes")
@@ -466,6 +704,15 @@ func requireAffected(result sql.Result) error {
 }
 
 func appendUniquePermission(values []guard.Permission, value guard.Permission) []guard.Permission {
+	for _, existing := range values {
+		if existing == value {
+			return values
+		}
+	}
+	return append(values, value)
+}
+
+func appendUniqueString(values []string, value string) []string {
 	for _, existing := range values {
 		if existing == value {
 			return values

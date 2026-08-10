@@ -260,6 +260,70 @@ func TestBootstrapSessionAndOrganizationCorrelation(t *testing.T) {
 	}
 }
 
+func TestGuardAccessAPIManagesScopedAssignmentsAndProtectsLastAdministrator(t *testing.T) {
+	handler := newGuardServer(t)
+	session := bootstrapAdministrator(t, handler)
+	listRequest := authenticatedRequest(http.MethodGet, "/api/v1/guard/access", nil, session)
+	listResponse := httptest.NewRecorder()
+	handler.ServeHTTP(listResponse, listRequest)
+	if listResponse.Code != http.StatusOK || listResponse.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("expected non-cacheable Guard access response, got %d: %s", listResponse.Code, listResponse.Body.String())
+	}
+	var directory struct {
+		Accounts    []guardAccountResponse        `json:"accounts"`
+		Roles       []guardRoleResponse           `json:"roles"`
+		Assignments []guardRoleAssignmentResponse `json:"assignments"`
+	}
+	if err := json.Unmarshal(listResponse.Body.Bytes(), &directory); err != nil {
+		t.Fatal(err)
+	}
+	if len(directory.Accounts) != 1 || len(directory.Roles) != 1 || len(directory.Assignments) != 1 {
+		t.Fatalf("unexpected Guard access directory %#v", directory)
+	}
+	lastAdministratorRequest := authenticatedRequest(http.MethodDelete,
+		"/api/v1/guard/role-assignments/"+directory.Assignments[0].ID, nil, session)
+	lastAdministratorResponse := httptest.NewRecorder()
+	handler.ServeHTTP(lastAdministratorResponse, lastAdministratorRequest)
+	if lastAdministratorResponse.Code != http.StatusConflict || !strings.Contains(lastAdministratorResponse.Body.String(), "last_administrator") {
+		t.Fatalf("expected last-administrator conflict, got %d: %s", lastAdministratorResponse.Code, lastAdministratorResponse.Body.String())
+	}
+	payload, err := json.Marshal(map[string]any{
+		"accountId": directory.Accounts[0].ID,
+		"roleId":    directory.Roles[0].ID,
+		"scope": map[string]string{
+			"kind": "site", "resourceId": "site-one",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	createRequest := authenticatedRequest(http.MethodPost, "/api/v1/guard/role-assignments", bytes.NewReader(payload), session)
+	createResponse := httptest.NewRecorder()
+	handler.ServeHTTP(createResponse, createRequest)
+	if createResponse.Code != http.StatusCreated {
+		t.Fatalf("expected scoped role assignment creation, got %d: %s", createResponse.Code, createResponse.Body.String())
+	}
+	var created guardRoleAssignmentResponse
+	if err := json.Unmarshal(createResponse.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	if created.Scope.Kind != guard.ScopeSite || created.Scope.ResourceID != "site-one" || created.Managed || created.Source != guard.LocalAssignmentSource {
+		t.Fatalf("unexpected created assignment %#v", created)
+	}
+	duplicateRequest := authenticatedRequest(http.MethodPost, "/api/v1/guard/role-assignments", bytes.NewReader(payload), session)
+	duplicateResponse := httptest.NewRecorder()
+	handler.ServeHTTP(duplicateResponse, duplicateRequest)
+	if duplicateResponse.Code != http.StatusConflict {
+		t.Fatalf("expected duplicate assignment conflict, got %d: %s", duplicateResponse.Code, duplicateResponse.Body.String())
+	}
+	deleteRequest := authenticatedRequest(http.MethodDelete, "/api/v1/guard/role-assignments/"+created.ID, nil, session)
+	deleteResponse := httptest.NewRecorder()
+	handler.ServeHTTP(deleteResponse, deleteRequest)
+	if deleteResponse.Code != http.StatusNoContent {
+		t.Fatalf("expected role assignment deletion, got %d: %s", deleteResponse.Code, deleteResponse.Body.String())
+	}
+}
+
 func TestInvalidCorrelationIDIsReplacedAndReturnedWithErrors(t *testing.T) {
 	handler := newGuardServer(t)
 	session := bootstrapAdministrator(t, handler)

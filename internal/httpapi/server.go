@@ -65,6 +65,37 @@ type Server struct {
 
 type authenticatedHandler func(http.ResponseWriter, *http.Request, guard.Authentication)
 
+type guardAccountResponse struct {
+	ID          string `json:"id"`
+	Username    string `json:"username"`
+	Email       string `json:"email"`
+	DisplayName string `json:"displayName"`
+	Status      string `json:"status"`
+}
+
+type guardRoleResponse struct {
+	ID              string             `json:"id"`
+	Name            string             `json:"name"`
+	Description     string             `json:"description"`
+	Permissions     []guard.Permission `json:"permissions"`
+	PolicyBundleIDs []string           `json:"policyBundleIds"`
+}
+
+type guardScopeResponse struct {
+	Kind       guard.ScopeKind `json:"kind"`
+	ResourceID string          `json:"resourceId"`
+}
+
+type guardRoleAssignmentResponse struct {
+	ID        string             `json:"id"`
+	AccountID string             `json:"accountId"`
+	RoleID    string             `json:"roleId"`
+	Scope     guardScopeResponse `json:"scope"`
+	Source    string             `json:"source"`
+	Managed   bool               `json:"managed"`
+	CreatedAt time.Time          `json:"createdAt"`
+}
+
 func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstrap.Organization) http.Handler {
 	organization := bootstrap.Organization{ID: "local-organization", Name: "StewardMesh Local Organization"}
 	if len(organizations) > 0 {
@@ -91,6 +122,9 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 	mux.HandleFunc("GET /api/v1/auth/oidc/callback", server.oidcCallback)
 	mux.Handle("GET /api/v1/auth/session", server.protected("", false, server.getSession))
 	mux.Handle("POST /api/v1/auth/logout", server.protected("", true, server.logout))
+	mux.Handle("GET /api/v1/guard/access", server.protected(guard.PermissionGuardManage, false, server.listGuardAccess))
+	mux.Handle("POST /api/v1/guard/role-assignments", server.protected(guard.PermissionGuardManage, true, server.createGuardRoleAssignment))
+	mux.Handle("DELETE /api/v1/guard/role-assignments/{assignmentID}", server.protected(guard.PermissionGuardManage, true, server.deleteGuardRoleAssignment))
 	mux.Handle("GET /api/v1/organization", server.protected(guard.PermissionOrganizationRead, false, server.getOrganization))
 	mux.Handle("GET /api/v1/assets", server.protected(guard.PermissionAssetsRead, false, server.listAssets))
 	mux.Handle("POST /api/v1/assets", server.protected(guard.PermissionAssetsWrite, true, server.createAsset))
@@ -349,6 +383,98 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request, authentication g
 	}
 	s.clearSessionCookie(w)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) listGuardAccess(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
+	s.noStore(w)
+	directory, err := s.guard.ListAuthorization(r.Context(), authentication)
+	if err != nil {
+		s.writeGuardManagementError(w, r, err)
+		return
+	}
+	accounts := make([]guardAccountResponse, 0, len(directory.Accounts))
+	for _, account := range directory.Accounts {
+		accounts = append(accounts, guardAccountResponse{
+			ID: account.ID, Username: account.Username, Email: account.Email,
+			DisplayName: account.DisplayName, Status: account.Status,
+		})
+	}
+	roles := make([]guardRoleResponse, 0, len(directory.Roles))
+	for _, role := range directory.Roles {
+		roles = append(roles, guardRoleResponse{
+			ID: role.ID, Name: role.Name, Description: role.Description,
+			Permissions:     append([]guard.Permission(nil), role.Permissions...),
+			PolicyBundleIDs: append([]string(nil), role.PolicyBundleIDs...),
+		})
+	}
+	assignments := make([]guardRoleAssignmentResponse, 0, len(directory.Assignments))
+	for _, assignment := range directory.Assignments {
+		assignments = append(assignments, guardAssignmentResponse(assignment))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"accounts": accounts, "roles": roles, "assignments": assignments,
+	})
+}
+
+func (s *Server) createGuardRoleAssignment(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
+	s.noStore(w)
+	var input struct {
+		AccountID string `json:"accountId"`
+		RoleID    string `json:"roleId"`
+		Scope     struct {
+			Kind       string `json:"kind"`
+			ResourceID string `json:"resourceId"`
+		} `json:"scope"`
+	}
+	if err := decodeJSON(w, r, 16<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid role assignment payload")
+		return
+	}
+	assignment, err := s.guard.AssignRole(r.Context(), authentication, guard.RoleAssignmentInput{
+		AccountID: input.AccountID, RoleID: input.RoleID,
+		ScopeKind: guard.ScopeKind(input.Scope.Kind), ResourceID: input.Scope.ResourceID,
+	})
+	if err != nil {
+		s.writeGuardManagementError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, guardAssignmentResponse(assignment))
+}
+
+func (s *Server) deleteGuardRoleAssignment(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
+	s.noStore(w)
+	if _, err := s.guard.RevokeRoleAssignment(r.Context(), authentication, r.PathValue("assignmentID")); err != nil {
+		s.writeGuardManagementError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func guardAssignmentResponse(assignment guard.RoleAssignment) guardRoleAssignmentResponse {
+	return guardRoleAssignmentResponse{
+		ID: assignment.ID, AccountID: assignment.AccountID, RoleID: assignment.RoleID,
+		Scope:  guardScopeResponse{Kind: assignment.Scope.Kind, ResourceID: assignment.Scope.ResourceID},
+		Source: assignment.Source, Managed: assignment.Source != guard.LocalAssignmentSource, CreatedAt: assignment.CreatedAt,
+	}
+}
+
+func (s *Server) writeGuardManagementError(w http.ResponseWriter, r *http.Request, err error) {
+	switch {
+	case errors.Is(err, guard.ErrInvalidInput):
+		writeError(w, r, http.StatusBadRequest, "validation_failed", "role assignment details are invalid")
+	case errors.Is(err, guard.ErrNotFound):
+		writeError(w, r, http.StatusNotFound, "not_found", "the requested Guard account, role, or assignment was not found")
+	case errors.Is(err, guard.ErrManagedAssignment):
+		writeError(w, r, http.StatusConflict, "managed_assignment", "this role assignment is managed by the identity provider")
+	case errors.Is(err, guard.ErrLastAdministrator):
+		writeError(w, r, http.StatusConflict, "last_administrator", "Assign another organization administrator before removing this assignment")
+	case errors.Is(err, guard.ErrConflict):
+		writeError(w, r, http.StatusConflict, "conflict", "this scoped role assignment already exists")
+	case errors.Is(err, guard.ErrPermissionDenied):
+		writeError(w, r, http.StatusForbidden, "permission_denied", "organization-level Guard management permission is required")
+	default:
+		writeError(w, r, http.StatusInternalServerError, "guard_error", "the Guard role assignment operation could not be completed")
+	}
 }
 
 func (s *Server) getOrganization(w http.ResponseWriter, _ *http.Request, _ guard.Authentication) {

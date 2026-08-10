@@ -27,6 +27,9 @@ var (
 	ErrInvalidSession             = errors.New("invalid or expired session")
 	ErrInvalidCSRF                = errors.New("invalid csrf token")
 	ErrPermissionDenied           = errors.New("permission denied")
+	ErrConflict                   = errors.New("guard record conflicts with existing data")
+	ErrManagedAssignment          = errors.New("provider-managed role assignment cannot be changed locally")
+	ErrLastAdministrator          = errors.New("the last organization administrator cannot be removed")
 )
 
 const MinimumPasswordCharacters = 15
@@ -124,7 +127,40 @@ type RoleAssignment struct {
 	AccountID      string
 	RoleID         string
 	Scope          Scope
+	Source         string
 	CreatedAt      time.Time
+}
+
+const LocalAssignmentSource = "local"
+
+func (a RoleAssignment) Validate() error {
+	if strings.TrimSpace(a.ID) == "" || strings.TrimSpace(a.OrganizationID) == "" ||
+		strings.TrimSpace(a.AccountID) == "" || strings.TrimSpace(a.RoleID) == "" || a.CreatedAt.IsZero() {
+		return errors.New("complete role assignment identity and creation time are required")
+	}
+	if a.Scope.OrganizationID != a.OrganizationID {
+		return errors.New("role assignment scope must match the organization")
+	}
+	if err := a.Scope.Validate(); err != nil {
+		return err
+	}
+	if a.Source != LocalAssignmentSource && !strings.HasPrefix(a.Source, "oidc:") {
+		return errors.New("valid role assignment source is required")
+	}
+	return nil
+}
+
+type AuthorizationDirectory struct {
+	Accounts    []Account
+	Roles       []Role
+	Assignments []RoleAssignment
+}
+
+type RoleAssignmentInput struct {
+	AccountID  string
+	RoleID     string
+	ScopeKind  ScopeKind
+	ResourceID string
 }
 
 type ExternalIdentity struct {
@@ -189,8 +225,8 @@ func (b AdministratorBootstrap) Validate() error {
 		return errors.New("administrator role is required")
 	}
 	assignment := b.Assignment
-	if assignment.ID == "" || assignment.OrganizationID != account.OrganizationID || assignment.AccountID != account.ID ||
-		assignment.RoleID != b.Role.ID || assignment.CreatedAt.IsZero() || assignment.Scope.Validate() != nil {
+	if assignment.OrganizationID != account.OrganizationID || assignment.AccountID != account.ID ||
+		assignment.RoleID != b.Role.ID || assignment.Source != LocalAssignmentSource || assignment.Validate() != nil {
 		return errors.New("administrator role assignment is required")
 	}
 	return nil
@@ -263,6 +299,9 @@ type Store interface {
 	UpdatePasswordHash(ctx context.Context, accountID, passwordHash string, updatedAt time.Time) error
 	ProvisionExternalAccount(ctx context.Context, provisioning ExternalAccountProvisioning) (account Account, created bool, err error)
 	AccessForAccount(ctx context.Context, organizationID, accountID string) (Access, error)
+	ListAuthorization(ctx context.Context, organizationID string) (AuthorizationDirectory, error)
+	CreateRoleAssignment(ctx context.Context, assignment RoleAssignment) error
+	DeleteRoleAssignment(ctx context.Context, organizationID, assignmentID string) (RoleAssignment, error)
 	CreateSession(ctx context.Context, session Session) error
 	FindSessionByTokenHash(ctx context.Context, organizationID string, tokenHash []byte, now time.Time) (Session, Access, error)
 	UpdateSessionCSRF(ctx context.Context, sessionID string, csrfHash []byte) error

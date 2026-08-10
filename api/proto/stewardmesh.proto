@@ -21,6 +21,9 @@ service GuardService {
   rpc AuthenticateLocal(AuthenticateLocalRequest) returns (AuthenticationSession);
   rpc GetSession(GetSessionRequest) returns (AuthenticationSession);
   rpc Logout(LogoutRequest) returns (LogoutResponse);
+  rpc ListGuardAccess(ListGuardAccessRequest) returns (ListGuardAccessResponse);
+  rpc CreateRoleAssignment(CreateRoleAssignmentRequest) returns (GuardRoleAssignment);
+  rpc DeleteRoleAssignment(DeleteRoleAssignmentRequest) returns (DeleteRoleAssignmentResponse);
 }
 
 // Authenticated Guard RPCs carry the opaque session bearer in gRPC
@@ -119,6 +122,54 @@ message PermissionGrant {
   string permission = 1;
   AuthorizationScope scope = 2;
 }
+
+message ListGuardAccessRequest {}
+
+message ListGuardAccessResponse {
+  repeated GuardAccount accounts = 1;
+  repeated GuardRole roles = 2;
+  repeated GuardRoleAssignment assignments = 3;
+}
+
+message GuardAccount {
+  string id = 1;
+  string username = 2;
+  string email = 3;
+  string display_name = 4;
+  string status = 5;
+}
+
+message GuardRole {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  repeated string permissions = 4;
+  repeated string policy_bundle_ids = 5;
+}
+
+message GuardRoleAssignment {
+  string id = 1;
+  string account_id = 2;
+  string role_id = 3;
+  AuthorizationScope scope = 4;
+  string source = 5;
+  bool managed = 6;
+  google.protobuf.Timestamp created_at = 7;
+}
+
+message CreateRoleAssignmentRequest {
+  string account_id = 1;
+  string role_id = 2;
+  AuthorizationScope scope = 3;
+  string csrf_token = 4;
+}
+
+message DeleteRoleAssignmentRequest {
+  string assignment_id = 1;
+  string csrf_token = 2;
+}
+
+message DeleteRoleAssignmentResponse {}
 
 message ListAssetsRequest {}
 

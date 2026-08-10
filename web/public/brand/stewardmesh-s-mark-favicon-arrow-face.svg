@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">StewardMesh favicon with filled bridge face</title>
+  <desc id="desc">A light rounded favicon where each mesh cell is filled, including the left bridge triangle.</desc>
+  <rect x="16" y="16" width="480" height="480" rx="112" fill="#f7fafc" stroke="#dce6ef" stroke-width="4"/>
+  <g transform="translate(94 53) scale(1.1)">
+    <!-- Filled cells. The green-to-teal bridge is 44,78 / 98,113 / 44,158. -->
+    <path fill="#173d29" d="M147 25 44 78 98 113 147 80 250 78Z"/>
+    <path id="sm-face-green-teal-left" fill="#176147" d="M44 78 98 113 44 158Z"/>
+    <path id="sm-face-arrow-target" fill="#167665" d="M44 158 98 113 107 147Z"/>
+    <path fill="#12534a" d="M98 113 151 142 107 147Z"/>
+    <path fill="#0a3435" d="M44 158 107 147 143 223Z"/>
+    <path fill="#0e514b" d="M107 147 151 142 143 223Z"/>
+    <path fill="#0b3e3b" d="M151 142 143 223 194 213 249 202Z"/>
+    <path fill="#0a3435" d="M143 223 194 213 210 266Z"/>
+    <path fill="#10434c" d="M194 213 249 202 250 289 210 266Z"/>
+    <path fill="#142e5f" d="M44 280 145 280 250 289 145 344Z"/>
+    <path fill="#183a77" d="M145 280 210 266 250 289Z"/>
+
+    <g fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="5">
+      <g stroke="#66e06e">
+        <line x1="147" y1="25" x2="44" y2="78"/><line x1="147" y1="25" x2="250" y2="78"/>
+        <line x1="44" y1="78" x2="98" y2="113"/><line x1="98" y1="113" x2="147" y2="80"/>
+        <line x1="147" y1="80" x2="250" y2="78"/><line x1="44" y1="78" x2="44" y2="158"/>
+      </g>
+      <g stroke="#35d2bc">
+        <line x1="44" y1="158" x2="98" y2="113"/><line x1="44" y1="158" x2="107" y2="147"/>
+        <line x1="98" y1="113" x2="107" y2="147"/><line x1="44" y1="158" x2="143" y2="223"/>
+        <line x1="98" y1="113" x2="151" y2="142"/><line x1="107" y1="147" x2="151" y2="142"/>
+        <line x1="107" y1="147" x2="143" y2="223"/><line x1="151" y1="142" x2="143" y2="223"/>
+        <line x1="151" y1="142" x2="249" y2="202"/><line x1="143" y1="223" x2="194" y2="213"/>
+        <line x1="143" y1="223" x2="210" y2="266"/><line x1="194" y1="213" x2="249" y2="202"/>
+        <line x1="194" y1="213" x2="210" y2="266"/><line x1="249" y1="202" x2="250" y2="289"/>
+      </g>
+      <g stroke="#4d8cff">
+        <line x1="44" y1="280" x2="145" y2="280"/><line x1="145" y1="280" x2="250" y2="289"/>
+        <line x1="44" y1="280" x2="145" y2="344"/><line x1="145" y1="344" x2="250" y2="289"/>
+        <line x1="145" y1="280" x2="210" y2="266"/><line x1="210" y1="266" x2="250" y2="289"/>
+      </g>
+    </g>
+    <g fill="#66e06e"><circle cx="147" cy="25" r="16"/><circle cx="44" cy="78" r="16"/><circle cx="147" cy="80" r="15"/><circle cx="250" cy="78" r="16"/><circle cx="98" cy="113" r="13"/></g>
+    <g fill="#35d2bc"><circle cx="44" cy="158" r="16"/><circle cx="107" cy="147" r="11"/><circle cx="151" cy="142" r="16"/><circle cx="143" cy="223" r="16"/><circle cx="194" cy="213" r="12"/><circle cx="249" cy="202" r="16"/></g>
+    <g fill="#4d8cff"><circle cx="44" cy="280" r="16"/><circle cx="145" cy="280" r="13"/><circle cx="210" cy="266" r="10"/><circle cx="250" cy="289" r="14"/><circle cx="145" cy="344" r="16"/></g>
+  </g>
+</svg>

@@ -1,8 +1,9 @@
 package guard
 
-// Requirement: SEC-GUARD-001.
+// Requirements: REQ-PLATFORM-VALKEY-001, SEC-GUARD-001.
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -15,9 +16,9 @@ import (
 const maximumTrackedAttemptKeys = 10_000
 
 type AttemptLimiter interface {
-	Allow(key string, now time.Time) bool
-	Failure(key string, now time.Time)
-	Reset(key string)
+	Allow(ctx context.Context, key string, now time.Time) (bool, error)
+	Failure(ctx context.Context, key string, now time.Time) error
+	Reset(ctx context.Context, key string) error
 }
 
 type MemoryAttemptLimiter struct {
@@ -45,11 +46,17 @@ func NewMemoryAttemptLimiter(maxFailures int, window time.Duration) (*MemoryAtte
 	}, nil
 }
 
-func (l *MemoryAttemptLimiter) Allow(key string, now time.Time) bool {
+func (l *MemoryAttemptLimiter) Allow(ctx context.Context, key string, now time.Time) (bool, error) {
+	if err := limiterContextError(ctx); err != nil {
+		return false, err
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	if now.Before(l.saturatedTo) {
-		return false
+		return false, nil
 	}
 	if !l.saturatedTo.IsZero() {
 		l.pruneExpired(now)
@@ -59,17 +66,23 @@ func (l *MemoryAttemptLimiter) Allow(key string, now time.Time) bool {
 	entries := activeFailures(l.failures[digest], now.Add(-l.window))
 	if len(entries) == 0 {
 		delete(l.failures, digest)
-		return true
+		return true, nil
 	}
 	l.failures[digest] = entries
-	return len(entries) < l.maxFailures
+	return len(entries) < l.maxFailures, nil
 }
 
-func (l *MemoryAttemptLimiter) Failure(key string, now time.Time) {
+func (l *MemoryAttemptLimiter) Failure(ctx context.Context, key string, now time.Time) error {
+	if err := limiterContextError(ctx); err != nil {
+		return err
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if now.Before(l.saturatedTo) {
-		return
+		return nil
 	}
 	if !l.saturatedTo.IsZero() {
 		l.pruneExpired(now)
@@ -85,17 +98,25 @@ func (l *MemoryAttemptLimiter) Failure(key string, now time.Time) {
 				// Fail closed for one window instead of allowing a key-flood to
 				// make brute-force protection consume unbounded memory.
 				l.saturatedTo = now.Add(l.window)
-				return
+				return nil
 			}
 		}
 	}
 	l.failures[digest] = append(entries, now)
+	return nil
 }
 
-func (l *MemoryAttemptLimiter) Reset(key string) {
+func (l *MemoryAttemptLimiter) Reset(ctx context.Context, key string) error {
+	if err := limiterContextError(ctx); err != nil {
+		return err
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	delete(l.failures, l.digest(key))
+	return nil
 }
 
 func (l *MemoryAttemptLimiter) digest(value string) string {
@@ -122,4 +143,11 @@ func activeFailures(entries []time.Time, cutoff time.Time) []time.Time {
 		first++
 	}
 	return append([]time.Time(nil), entries[first:]...)
+}
+
+func limiterContextError(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("rate limiter context is required")
+	}
+	return ctx.Err()
 }

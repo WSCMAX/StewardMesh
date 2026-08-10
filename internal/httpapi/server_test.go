@@ -1,10 +1,11 @@
 package httpapi
 
 // Requirements: REQ-FOUNDATION-001, REQ-PEOPLE-001,
-// REQ-DIRECTORY-EXPANSION-001, SEC-GUARD-001, SEC-HTTP-001.
+// REQ-DIRECTORY-EXPANSION-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
@@ -12,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -39,6 +41,20 @@ func (httpTestHasher) Verify(password, encodedHash string) (bool, bool, error) {
 type testSession struct {
 	cookie    *http.Cookie
 	csrfToken string
+}
+
+type unavailableHTTPAttemptLimiter struct{}
+
+func (unavailableHTTPAttemptLimiter) Allow(context.Context, string, time.Time) (bool, error) {
+	return false, io.ErrUnexpectedEOF
+}
+
+func (unavailableHTTPAttemptLimiter) Failure(context.Context, string, time.Time) error {
+	return io.ErrUnexpectedEOF
+}
+
+func (unavailableHTTPAttemptLimiter) Reset(context.Context, string) error {
+	return io.ErrUnexpectedEOF
 }
 
 func TestHealthIsPublicAndHardened(t *testing.T) {
@@ -327,6 +343,26 @@ func TestLoginUsesUniformErrorsAndStrictJSON(t *testing.T) {
 	}
 }
 
+func TestLoginReturnsSafeServiceUnavailableWhenSharedProtectionFails(t *testing.T) {
+	handler := newGuardServerWithLimiter(t, unavailableHTTPAttemptLimiter{})
+	payload, _ := json.Marshal(map[string]string{
+		"username": "administrator",
+		"password": "correct horse battery staple",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Origin", testOrigin)
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d: %s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "authentication_unavailable") ||
+		strings.Contains(res.Body.String(), "unexpected EOF") {
+		t.Fatalf("expected safe unavailable response, got %s", res.Body.String())
+	}
+}
+
 func TestCORSAllowsOnlyConfiguredCredentialedOrigin(t *testing.T) {
 	handler := newGuardServer(t)
 	allowed := httptest.NewRequest(http.MethodOptions, "/api/v1/auth/login", nil)
@@ -350,13 +386,17 @@ func TestCORSAllowsOnlyConfiguredCredentialedOrigin(t *testing.T) {
 }
 
 func newGuardServer(t *testing.T) http.Handler {
+	return newGuardServerWithLimiter(t, nil)
+}
+
+func newGuardServerWithLimiter(t *testing.T, limiter guard.AttemptLimiter) http.Handler {
 	t.Helper()
 	organization, err := bootstrap.NewOrganization("example-org", "Example Organization")
 	if err != nil {
 		t.Fatal(err)
 	}
 	store := repository.NewMemoryGuardStore()
-	service, err := guard.NewService(store, httpTestHasher{}, foundation.NopAuditor{}, nil, guard.ServiceConfig{
+	service, err := guard.NewService(store, httpTestHasher{}, foundation.NopAuditor{}, limiter, guard.ServiceConfig{
 		OrganizationID: organization.ID,
 		SessionTTL:     time.Hour,
 	})

@@ -97,6 +97,7 @@ The application links to this page from every Guard setup state and provides the
 - `guard.login.succeeded`
 - `guard.login.failed`
 - `guard.login.rate_limited`
+- `guard.login.protection_unavailable`
 - `guard.logout.succeeded`
 - `guard.authorization.denied`
 
@@ -107,7 +108,7 @@ Audit events contain stable account or resource IDs, correlation IDs, actions, t
 - Argon2id format, verification, malformed-parameter, and fuzz tests
 - minimum password and bootstrap-token tests
 - login-rate-limit and uniform-error tests
-- distributed rate-limit, cache outage, TTL, and isolation tests when the Valkey adapter is enabled
+- distributed rate-limit, cache outage, TTL, and organization-isolation tests
 - memory and PostgreSQL provider contract tests
 - session hashing, CSRF rotation, expiration, and revocation tests
 - server-side permission, origin, CORS, JSON-boundary, and header tests

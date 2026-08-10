@@ -6,9 +6,9 @@
 
 **Traceability status:** the provider-neutral contract, disabled mode, bounded
 in-memory adapter, official Valkey Go client adapter, validated connection URL,
-namespaced key builder, and their tests are implemented in `internal/cache`.
-Guard integration and the optional self-hosted Compose service remain tracked by
-issue #41.
+namespaced key builder, distributed Guard login limiter, runtime configuration,
+and their tests are implemented. The optional self-hosted Compose service
+remains tracked by issue #41.
 
 ## Decision
 
@@ -28,14 +28,21 @@ copy of an auditable or authoritative record.
 
 - `none`: no shared cache; local rate limiting remains available for local
   development.
-- `memory`: deterministic bounded in-memory behavior for tests and isolated
-  evaluation.
+- `memory`: the cache-backed limiter over deterministic bounded in-memory
+  storage for tests and isolated evaluation.
 - `valkey`: shared Valkey or Redis-compatible service.
 
 `STEWARDMESH_CACHE_URL` accepts `redis://` for local or plaintext private
 networks and `rediss://` for TLS deployments such as AWS ElastiCache Serverless
 Valkey. Secrets must be injected by the deployment environment and must never
 be logged.
+
+`STEWARDMESH_CACHE_KEY_SECRET` is required in `valkey` mode and must contain at
+least 32 bytes from a deployment secret manager. It is independent from the
+cache password and HMAC-protects low-entropy account and direct-client
+dimensions before namespaced key construction. It is intentionally absent in
+`none` and `memory` modes; the memory runtime generates an ephemeral process
+secret.
 
 The Valkey adapter uses the official `github.com/valkey-io/valkey-go` client,
 supports standalone, cluster, and sentinel URL options, disables the client's
@@ -70,14 +77,16 @@ Short TTLs and jitter are a recovery backstop, not a consistency guarantee.
 
 ## Guard rate limiting
 
-The first active Valkey use is distributed login rate limiting. Client and
-normalized-account counters are updated atomically with TTLs, so replicas share
-the same five-failure window. Successful login clears both counters.
+The first active Valkey use is distributed login rate limiting. Each direct
+client and normalized-account counter is incremented atomically with a fixed
+first-failure TTL, so replicas share the same five-failure, fifteen-minute
+window. Successful login clears both counters.
 
 When caching is disabled, Guard uses the bounded local limiter. When Valkey is
-explicitly enabled but unavailable, login protection fails closed with a safe
-service-unavailable response. Sessions, CSRF hashes, account status, grants,
-permission decisions, and authenticated HTTP responses remain uncached.
+explicitly enabled, startup verifies connectivity. A later cache outage causes
+login protection to fail closed with a safe service-unavailable response.
+Sessions, CSRF hashes, account status, grants, permission decisions, and
+authenticated HTTP responses remain uncached.
 
 ## Deployment guidance
 

@@ -1,6 +1,6 @@
 package guard_test
 
-// Requirement: SEC-GUARD-001.
+// Requirements: REQ-PLATFORM-VALKEY-001, SEC-GUARD-001.
 
 import (
 	"context"
@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/maxlemke/stewardmesh/internal/cache"
 	"github.com/maxlemke/stewardmesh/internal/foundation"
 	. "github.com/maxlemke/stewardmesh/internal/guard"
 	"github.com/maxlemke/stewardmesh/internal/repository"
@@ -43,6 +44,24 @@ func (a *recordingAuditor) Record(_ context.Context, event foundation.AuditEvent
 
 type disabledSessionStore struct {
 	Store
+}
+
+type controlledAttemptLimiter struct {
+	allowErr   error
+	failureErr error
+	resetErr   error
+}
+
+func (l controlledAttemptLimiter) Allow(context.Context, string, time.Time) (bool, error) {
+	return l.allowErr == nil, l.allowErr
+}
+
+func (l controlledAttemptLimiter) Failure(context.Context, string, time.Time) error {
+	return l.failureErr
+}
+
+func (l controlledAttemptLimiter) Reset(context.Context, string) error {
+	return l.resetErr
 }
 
 func (s disabledSessionStore) FindSessionByTokenHash(ctx context.Context, organizationID string, tokenHash []byte, now time.Time) (Session, Access, error) {
@@ -303,6 +322,110 @@ func TestServiceRateLimitsAccountAcrossDirectClients(t *testing.T) {
 	})
 	if !errors.Is(err, ErrRateLimited) {
 		t.Fatalf("expected account rate limit, got %v", err)
+	}
+}
+
+func TestGuardServicesShareCacheBackedLoginFailuresAcrossReplicas(t *testing.T) {
+	guardStore := repository.NewMemoryGuardStore()
+	sharedCache := cache.NewDefaultMemoryStore()
+	namespace, err := cache.NewNamespace("stewardmesh", "v1", "replica-organization")
+	if err != nil {
+		t.Fatal(err)
+	}
+	secret := []byte(strings.Repeat("s", 32))
+	firstLimiter, err := NewCacheAttemptLimiter(sharedCache, namespace, secret, 2, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondLimiter, err := NewCacheAttemptLimiter(sharedCache, namespace, secret, 2, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newReplica := func(limiter AttemptLimiter) *Service {
+		service, err := NewService(guardStore, fastTestHasher{}, foundation.NopAuditor{}, limiter, ServiceConfig{
+			OrganizationID: "replica-organization",
+			SessionTTL:     time.Hour,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return service
+	}
+	first := newReplica(firstLimiter)
+	second := newReplica(secondLimiter)
+	_, err = first.Bootstrap(context.Background(), BootstrapInput{
+		Username:    "administrator",
+		Email:       "administrator@example.test",
+		DisplayName: "Administrator",
+		Password:    "correct horse battery staple",
+	}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := LoginInput{
+		Username: "administrator",
+		Password: "wrong password value",
+		RateKey:  "shared-client",
+	}
+	for _, service := range []*Service{first, second} {
+		if _, err := service.Login(context.Background(), input); !errors.Is(err, ErrInvalidCredential) {
+			t.Fatalf("expected invalid credential from replica, got %v", err)
+		}
+	}
+	if _, err := first.Login(context.Background(), input); !errors.Is(err, ErrRateLimited) {
+		t.Fatalf("expected shared rate limit across replicas, got %v", err)
+	}
+}
+
+func TestServiceFailsClosedWhenConfiguredLoginProtectionIsUnavailable(t *testing.T) {
+	unavailable := errors.New("shared cache unavailable")
+	tests := []struct {
+		name     string
+		limiter  controlledAttemptLimiter
+		password string
+	}{
+		{name: "check", limiter: controlledAttemptLimiter{allowErr: unavailable}, password: "correct horse battery staple"},
+		{name: "record failure", limiter: controlledAttemptLimiter{failureErr: unavailable}, password: "wrong password value"},
+		{name: "reset success", limiter: controlledAttemptLimiter{resetErr: unavailable}, password: "correct horse battery staple"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := repository.NewMemoryGuardStore()
+			auditor := &recordingAuditor{}
+			service, err := NewService(store, fastTestHasher{}, auditor, test.limiter, ServiceConfig{
+				OrganizationID: "outage-organization",
+				SessionTTL:     time.Hour,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = service.Bootstrap(context.Background(), BootstrapInput{
+				Username:    "administrator",
+				Email:       "administrator@example.test",
+				DisplayName: "Administrator",
+				Password:    "correct horse battery staple",
+			}, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = service.Login(context.Background(), LoginInput{
+				Username: "administrator",
+				Password: test.password,
+				RateKey:  "127.0.0.1",
+			})
+			if !errors.Is(err, ErrLoginProtectionUnavailable) {
+				t.Fatalf("expected login protection outage, got %v", err)
+			}
+			foundUnavailableEvent := false
+			for _, event := range auditor.events {
+				if event.Action == "guard.login.protection_unavailable" {
+					foundUnavailableEvent = true
+				}
+			}
+			if !foundUnavailableEvent {
+				t.Fatal("expected login protection outage audit event")
+			}
+		})
 	}
 }
 

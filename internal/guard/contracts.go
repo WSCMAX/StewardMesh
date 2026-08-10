@@ -1,5 +1,5 @@
 // Package guard implements StewardMesh authentication and authorization.
-// Requirements: SEC-GUARD-001, SEC-HTTP-001.
+// Requirements: REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
 package guard
 
 import (
@@ -16,15 +16,16 @@ const (
 )
 
 var (
-	ErrNotFound          = errors.New("guard record not found")
-	ErrBootstrapComplete = errors.New("administrator bootstrap is already complete")
-	ErrBootstrapDenied   = errors.New("administrator bootstrap is not authorized")
-	ErrInvalidCredential = errors.New("invalid username or password")
-	ErrInvalidInput      = errors.New("invalid guard input")
-	ErrRateLimited       = errors.New("authentication attempt rate limited")
-	ErrInvalidSession    = errors.New("invalid or expired session")
-	ErrInvalidCSRF       = errors.New("invalid csrf token")
-	ErrPermissionDenied  = errors.New("permission denied")
+	ErrNotFound                   = errors.New("guard record not found")
+	ErrBootstrapComplete          = errors.New("administrator bootstrap is already complete")
+	ErrBootstrapDenied            = errors.New("administrator bootstrap is not authorized")
+	ErrInvalidCredential          = errors.New("invalid username or password")
+	ErrInvalidInput               = errors.New("invalid guard input")
+	ErrRateLimited                = errors.New("authentication attempt rate limited")
+	ErrLoginProtectionUnavailable = errors.New("login protection is unavailable")
+	ErrInvalidSession             = errors.New("invalid or expired session")
+	ErrInvalidCSRF                = errors.New("invalid csrf token")
+	ErrPermissionDenied           = errors.New("permission denied")
 )
 
 const MinimumPasswordCharacters = 15

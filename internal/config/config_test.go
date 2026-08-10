@@ -32,25 +32,28 @@ func TestValidateRejectsUnknownRepositoryDriver(t *testing.T) {
 
 func TestLoadSupportsDisabledMemoryAndValkeyCacheDrivers(t *testing.T) {
 	tests := []struct {
-		name   string
-		driver CacheDriver
-		url    string
+		name      string
+		driver    CacheDriver
+		url       string
+		keySecret string
 	}{
 		{name: "disabled", driver: CacheDriverNone},
 		{name: "memory", driver: CacheDriverMemory},
-		{name: "Valkey", driver: CacheDriverValkey, url: "redis://localhost:6379/0"},
-		{name: "Valkey TLS", driver: CacheDriverValkey, url: "rediss://cache.example.test:6379/0"},
+		{name: "Valkey", driver: CacheDriverValkey, url: "redis://localhost:6379/0", keySecret: strings.Repeat("s", 32)},
+		{name: "Valkey TLS", driver: CacheDriverValkey, url: "rediss://cache.example.test:6379/0", keySecret: strings.Repeat("s", 32)},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Setenv("STEWARDMESH_REPOSITORY_DRIVER", "memory")
 			t.Setenv("STEWARDMESH_CACHE_DRIVER", string(test.driver))
 			t.Setenv("STEWARDMESH_CACHE_URL", test.url)
+			t.Setenv("STEWARDMESH_CACHE_KEY_SECRET", test.keySecret)
 			configuration, err := Load()
 			if err != nil {
 				t.Fatal(err)
 			}
-			if configuration.CacheDriver != test.driver || configuration.CacheURL != test.url {
+			if configuration.CacheDriver != test.driver || configuration.CacheURL != test.url ||
+				configuration.CacheKeySecret != test.keySecret {
 				t.Fatalf("unexpected cache configuration %#v", configuration)
 			}
 		})
@@ -59,15 +62,18 @@ func TestLoadSupportsDisabledMemoryAndValkeyCacheDrivers(t *testing.T) {
 
 func TestValidateRejectsUnsafeCacheConfigurationWithoutLeakingCredentials(t *testing.T) {
 	tests := []struct {
-		name   string
-		driver CacheDriver
-		url    string
+		name      string
+		driver    CacheDriver
+		url       string
+		keySecret string
 	}{
 		{name: "unknown driver", driver: "redis"},
 		{name: "missing Valkey URL", driver: CacheDriverValkey},
-		{name: "unsupported scheme", driver: CacheDriverValkey, url: "http://cache.example.test"},
+		{name: "unsupported scheme", driver: CacheDriverValkey, url: "http://cache.example.test", keySecret: strings.Repeat("s", 32)},
+		{name: "short key secret", driver: CacheDriverValkey, url: "redis://cache.example.test:6379", keySecret: "super-secret"},
 		{name: "ignored secret", driver: CacheDriverNone, url: "redis://user:super-secret@localhost:6379"},
-		{name: "malformed secret", driver: CacheDriverValkey, url: "redis://user:super-secret@"},
+		{name: "ignored key secret", driver: CacheDriverNone, keySecret: "super-secret"},
+		{name: "malformed secret", driver: CacheDriverValkey, url: "redis://user:super-secret@", keySecret: strings.Repeat("s", 32)},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -75,6 +81,7 @@ func TestValidateRejectsUnsafeCacheConfigurationWithoutLeakingCredentials(t *tes
 			configuration.RepositoryDriver = RepositoryDriverMemory
 			configuration.CacheDriver = test.driver
 			configuration.CacheURL = test.url
+			configuration.CacheKeySecret = test.keySecret
 			err := configuration.Validate()
 			if err == nil {
 				t.Fatal("expected invalid cache configuration")

@@ -34,6 +34,13 @@ See [Guard](docs/features/guard.md) for secure local setup, shared-server
 requirements, permissions, audit behavior, and the planned external identity
 provider boundary.
 
+The cache driver defaults to `none`, which preserves Guard's bounded local
+login limiter. Shared deployments set `STEWARDMESH_CACHE_DRIVER=valkey`, provide
+a `redis://` or `rediss://` URL, and inject a separate
+`STEWARDMESH_CACHE_KEY_SECRET` containing at least 32 bytes. The key secret
+HMAC-protects account and client dimensions and must come from the deployment's
+secret manager rather than source control.
+
 People now provides sites, departments, person/shared/public/lab identities,
 structured site addresses, buildings and rooms, scoped directory search, and
 effective-dated multi-user asset assignments.

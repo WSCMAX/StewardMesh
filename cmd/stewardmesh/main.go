@@ -1,7 +1,10 @@
 package main
 
+// Requirements: REQ-FOUNDATION-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001.
+
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -11,6 +14,7 @@ import (
 	"time"
 
 	"github.com/maxlemke/stewardmesh/internal/bootstrap"
+	"github.com/maxlemke/stewardmesh/internal/cache"
 	"github.com/maxlemke/stewardmesh/internal/config"
 	"github.com/maxlemke/stewardmesh/internal/domain"
 	"github.com/maxlemke/stewardmesh/internal/foundation"
@@ -42,12 +46,22 @@ func main() {
 	defer stop()
 	setupContext, cancelSetup := context.WithTimeout(ctx, 20*time.Second)
 	runtime, err := initializeFoundation(setupContext, cfg)
-	cancelSetup()
 	if err != nil {
+		cancelSetup()
 		logger.Error("initialize foundation", "error", err)
 		os.Exit(1)
 	}
+	attemptLimiter, closeCache, err := initializeAttemptLimiter(setupContext, cfg)
+	cancelSetup()
+	if err != nil {
+		runtime.close()
+		logger.Error("initialize login protection", "error", err)
+		os.Exit(1)
+	}
 	defer runtime.close()
+	defer closeCache()
+	cfg.CacheURL = ""
+	cfg.CacheKeySecret = ""
 
 	assets := repository.NewMemoryAssetRepository()
 	catalog := repository.NewMemoryCatalog()
@@ -60,7 +74,7 @@ func main() {
 		runtime.guardStore,
 		guard.NewArgon2idHasher(),
 		runtime.auditor,
-		nil,
+		attemptLimiter,
 		guard.ServiceConfig{
 			OrganizationID: cfg.OrganizationID,
 			BootstrapToken: cfg.BootstrapToken,
@@ -105,6 +119,7 @@ func main() {
 			"addr", cfg.Addr,
 			"organization_id", runtime.organization.ID,
 			"repository_driver", cfg.RepositoryDriver,
+			"cache_driver", cfg.CacheDriver,
 		)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Error("server stopped", "error", err)
@@ -118,6 +133,53 @@ func main() {
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		logger.Error("server shutdown", "error", err)
 	}
+}
+
+func initializeAttemptLimiter(ctx context.Context, cfg config.Config) (guard.AttemptLimiter, func() error, error) {
+	closeNothing := func() error { return nil }
+	if ctx == nil {
+		return nil, closeNothing, fmt.Errorf("initialize login protection: context is required")
+	}
+	var (
+		store     cache.Store
+		keySecret []byte
+		err       error
+	)
+	switch cfg.CacheDriver {
+	case config.CacheDriverNone:
+		return nil, closeNothing, nil
+	case config.CacheDriverMemory:
+		store = cache.NewDefaultMemoryStore()
+		keySecret = make([]byte, 32)
+		if _, err := rand.Read(keySecret); err != nil {
+			return nil, closeNothing, fmt.Errorf("initialize memory cache key protection: %w", err)
+		}
+	case config.CacheDriverValkey:
+		store, err = cache.NewValkeyStore(cfg.CacheURL)
+		if err != nil {
+			return nil, closeNothing, fmt.Errorf("initialize configured Valkey cache: %w", err)
+		}
+		keySecret = []byte(cfg.CacheKeySecret)
+	default:
+		return nil, closeNothing, fmt.Errorf("unsupported cache driver %q", cfg.CacheDriver)
+	}
+	defer clear(keySecret)
+	closeStore := store.Close
+	if err := store.Ping(ctx); err != nil {
+		closeStore()
+		return nil, closeNothing, fmt.Errorf("verify configured cache: %w", err)
+	}
+	namespace, err := cache.NewNamespace("stewardmesh", "v1", cfg.OrganizationID)
+	if err != nil {
+		closeStore()
+		return nil, closeNothing, fmt.Errorf("initialize Guard cache namespace: %w", err)
+	}
+	limiter, err := guard.NewDefaultCacheAttemptLimiter(store, namespace, keySecret)
+	if err != nil {
+		closeStore()
+		return nil, closeNothing, fmt.Errorf("initialize shared login protection: %w", err)
+	}
+	return limiter, closeStore, nil
 }
 
 func initializeFoundation(ctx context.Context, cfg config.Config) (foundationRuntime, error) {

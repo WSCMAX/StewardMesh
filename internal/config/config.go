@@ -38,6 +38,7 @@ type Config struct {
 	RepositoryDriver    RepositoryDriver
 	CacheDriver         CacheDriver
 	CacheURL            string
+	CacheKeySecret      string
 	AllowedOrigin       string
 	OrganizationID      string
 	OrganizationName    string
@@ -71,6 +72,7 @@ func FromEnv() Config {
 		RepositoryDriver:    RepositoryDriver(envOr("STEWARDMESH_REPOSITORY_DRIVER", string(RepositoryDriverPostgres))),
 		CacheDriver:         CacheDriver(envOr("STEWARDMESH_CACHE_DRIVER", string(CacheDriverNone))),
 		CacheURL:            os.Getenv("STEWARDMESH_CACHE_URL"),
+		CacheKeySecret:      os.Getenv("STEWARDMESH_CACHE_KEY_SECRET"),
 		AllowedOrigin:       allowedOrigin,
 		OrganizationID:      envOr("STEWARDMESH_ORGANIZATION_ID", "local-organization"),
 		OrganizationName:    envOr("STEWARDMESH_ORGANIZATION_NAME", "StewardMesh Local Organization"),
@@ -117,9 +119,15 @@ func (c Config) Validate() error {
 		if c.CacheURL != "" {
 			return errors.New("STEWARDMESH_CACHE_URL must be empty unless STEWARDMESH_CACHE_DRIVER is valkey")
 		}
+		if c.CacheKeySecret != "" {
+			return errors.New("STEWARDMESH_CACHE_KEY_SECRET must be empty unless STEWARDMESH_CACHE_DRIVER is valkey")
+		}
 	case CacheDriverValkey:
 		if err := cache.ValidateValkeyURL(c.CacheURL); err != nil {
 			return fmt.Errorf("STEWARDMESH_CACHE_URL: %w", err)
+		}
+		if len(c.CacheKeySecret) < 32 {
+			return errors.New("STEWARDMESH_CACHE_KEY_SECRET must contain at least 32 bytes for the valkey cache driver")
 		}
 	default:
 		return fmt.Errorf("unsupported STEWARDMESH_CACHE_DRIVER %q", c.CacheDriver)

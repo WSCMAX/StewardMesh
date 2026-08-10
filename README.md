@@ -55,7 +55,10 @@ go run ./cmd/stewardmesh
 The Compose port is bound to loopback and has no authentication or TLS, so it
 is for local development only. Shared environments must use private networking,
 TLS, authentication, and secret-manager injection as described in
-[Valkey cache and distributed runtime](docs/architecture/valkey.md).
+[Valkey cache and distributed runtime](docs/architecture/valkey.md). AWS
+operators should also follow the
+[ElastiCache and Lambda deployment guidance](docs/deployment/aws-valkey-lambda.md),
+including its current Lambda and IAM-authentication readiness boundaries.
 
 People now provides sites, departments, person/shared/public/lab identities,
 structured site addresses, buildings and rooms, scoped directory search, and

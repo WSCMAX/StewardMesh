@@ -191,6 +191,7 @@
       "artifacts": {
         "documentation": [
           "docs/architecture/valkey.md",
+          "docs/deployment/aws-valkey-lambda.md",
           "docs/features/guard.md",
           "docs/requirements/initial.md"
         ],

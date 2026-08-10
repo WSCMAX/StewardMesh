@@ -8,8 +8,8 @@
 in-memory adapter, official Valkey Go client adapter, validated connection URL,
 namespaced key builder, distributed Guard login limiter, runtime configuration,
 optional self-hosted Compose service, and their validation are implemented.
-AWS deployment guidance and reusable application construction remain tracked by
-issue #41.
+AWS ElastiCache and Lambda deployment guidance is also documented. Reusable
+application construction remains tracked by issue #41.
 
 ## Decision
 
@@ -104,13 +104,15 @@ For containers, use PostgreSQL as the source of truth, Valkey for shared
 ephemeral state, and an S3-compatible store for blobs before running multiple
 API replicas. Configure TLS and secret injection for shared environments.
 
-For AWS-managed Valkey, use `rediss://`, private VPC networking, security
-groups, and a secret manager supplied by the deployment platform. Lambda
-deployments must treat process memory as disposable, initialize clients outside
-the invocation path when safe, use a small database pool with RDS Proxy, and
-keep migrations outside cold-start initialization. AWS infrastructure-as-code
-is intentionally not selected until the repository adopts an AWS provisioning
-framework.
+For AWS-managed Valkey, use `rediss://`, private VPC networking, dedicated
+security groups and RBAC, and Secrets Manager injection. Lambda deployments must
+treat process memory as disposable, initialize clients outside the invocation
+path, use a bounded database pool with RDS Proxy, and keep migrations outside
+cold-start initialization. The operational requirements and current adapter
+limitations are defined in
+[AWS Valkey and Lambda deployment guidance](../deployment/aws-valkey-lambda.md).
+AWS infrastructure as code is intentionally not selected until the repository
+adopts a provisioning framework.
 
 ## Observability and validation
 

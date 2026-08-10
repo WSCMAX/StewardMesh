@@ -81,6 +81,22 @@ func TestParseValkeyURLPreservesExplicitClientNameAndSentinelMaster(t *testing.T
 	}
 }
 
+func TestParseValkeyURLDecodesTLSCredentialsForManagedCaches(t *testing.T) {
+	option, err := parseValkeyURL("rediss://stewardmesh:p%40ss%3Aword@cache.example.test:6379/0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if option.Username != "stewardmesh" || option.Password != "p@ss:word" {
+		t.Fatal("expected percent-encoded managed-cache credentials to be decoded")
+	}
+	if option.TLSConfig == nil || option.TLSConfig.InsecureSkipVerify {
+		t.Fatal("expected managed-cache credentials to preserve verified TLS")
+	}
+	if option.SelectDB != 0 {
+		t.Fatalf("expected managed cache database 0, got %d", option.SelectDB)
+	}
+}
+
 func TestValkeyStoreImplementsCacheCommands(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	client := valkeymock.NewClient(ctrl)

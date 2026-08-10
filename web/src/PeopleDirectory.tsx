@@ -111,10 +111,10 @@ type PeopleDirectoryProps = {
 
 const peopleHelpUrl = 'https://github.com/WSCMAX/StewardMesh/blob/main/docs/features/people.md'
 const emptyFilters: Filters = { search: '', kind: '', status: '', departmentId: '', siteId: '' }
-const inputClass = 'mt-2 w-full rounded-xl border border-slate-600 bg-slate-950 px-3 py-2.5 text-slate-100 hover:border-slate-500 disabled:cursor-not-allowed disabled:opacity-60'
-const labelClass = 'block text-sm font-semibold text-slate-200'
-const buttonClass = 'rounded-xl bg-cyan-300 px-4 py-2.5 font-semibold text-slate-950 hover:bg-cyan-200 disabled:cursor-wait disabled:opacity-60'
-const secondaryButtonClass = 'rounded-xl border border-slate-600 px-4 py-2.5 font-semibold text-slate-100 hover:border-cyan-300 hover:text-cyan-200 disabled:cursor-wait disabled:opacity-60'
+const inputClass = 'mt-2 min-h-11 w-full rounded-lg border border-steward-ink-800 bg-steward-ink-950 px-3 py-2.5 text-steward-mist transition hover:border-steward-blue disabled:cursor-not-allowed disabled:opacity-60'
+const labelClass = 'block text-sm font-semibold text-steward-mist-muted'
+const buttonClass = 'min-h-11 rounded-lg bg-steward-teal px-4 py-2.5 font-semibold text-steward-ink-950 shadow-sm transition hover:bg-[#29cfb9] disabled:cursor-wait disabled:opacity-60'
+const secondaryButtonClass = 'min-h-11 rounded-lg border border-steward-ink-800 bg-steward-ink-900 px-4 py-2.5 font-semibold text-steward-mist transition hover:border-steward-blue hover:bg-steward-ink-800 disabled:cursor-wait disabled:opacity-60'
 
 const kindLabels: Record<IdentityKind, string> = {
   person: 'Person',
@@ -592,25 +592,25 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
   }
 
   return (
-    <section aria-labelledby="people-heading" className="space-y-6 rounded-2xl border border-slate-800 bg-slate-900 p-6" data-feature="identity.directory" data-requirement="REQ-PEOPLE-001 REQ-DIRECTORY-EXPANSION-001">
+    <section aria-labelledby="people-heading" className="space-y-6 rounded-xl border border-steward-ink-800 bg-steward-ink-900 p-6" data-feature="identity.directory" data-requirement="REQ-PEOPLE-001 REQ-DIRECTORY-EXPANSION-001">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="max-w-3xl">
-          <p className="text-sm font-semibold text-cyan-300">People — Users, locations, departments, and assignments</p>
+          <p className="text-sm font-semibold text-steward-teal">People — Users, locations, departments, and assignments</p>
           <h2 id="people-heading" className="mt-2 text-2xl font-semibold">Know who uses and stewards each asset</h2>
-          <p className="mt-2 leading-7 text-slate-300">Organize people and shared-use identities by department, site, building, and room. Assign one primary steward, multiple users, and a responsible department while retaining prior assignments.</p>
+          <p className="mt-2 leading-7 text-steward-mist-muted">Organize people and shared-use identities by department, site, building, and room. Assign one primary steward, multiple users, and a responsible department while retaining prior assignments.</p>
         </div>
         <div className="flex gap-4 text-sm">
-          <a className="text-cyan-300 underline underline-offset-4 hover:text-cyan-200" href={peopleHelpUrl}>People help</a>
-          <a className="text-cyan-300 underline underline-offset-4 hover:text-cyan-200" href={issuesUrl}>Report a People issue</a>
+          <a className="text-steward-teal underline underline-offset-4 hover:text-[#58d9c7]" href={peopleHelpUrl}>People help</a>
+          <a className="text-steward-teal underline underline-offset-4 hover:text-[#58d9c7]" href={issuesUrl}>Report a People issue</a>
         </div>
       </div>
 
-      {error && <div ref={errorRef} className="rounded-xl border border-red-400/50 bg-red-950/50 p-4 text-red-100" role="alert" tabIndex={-1}>{error}</div>}
+      {error && <div ref={errorRef} className="rounded-xl border border-steward-danger/50 bg-steward-danger/15 p-4 text-[#ffccd1]" role="alert" tabIndex={-1}>{error}</div>}
       <p className="sr-only" aria-live="polite" role="status">{status}</p>
 
-      <aside aria-labelledby="people-guide-heading" className="rounded-xl border border-cyan-400/20 bg-cyan-950/20 p-4">
-        <h3 id="people-guide-heading" className="font-semibold text-cyan-100">Quick guide</h3>
-        <ol className="mt-2 list-decimal space-y-1 pl-5 text-sm leading-6 text-slate-300">
+      <aside aria-labelledby="people-guide-heading" className="rounded-xl border border-steward-teal/20 bg-steward-ink-950/20 p-4">
+        <h3 id="people-guide-heading" className="font-semibold text-steward-mist">Quick guide</h3>
+        <ol className="mt-2 list-decimal space-y-1 pl-5 text-sm leading-6 text-steward-mist-muted">
           <li>Create a site, then add its buildings and rooms.</li>
           <li>Create departments that optionally belong to a site.</li>
           <li>Add a person, shared identity, public-users group, or computer-lab group.</li>
@@ -618,7 +618,7 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
         </ol>
       </aside>
 
-      <form aria-label="Filter People directory" className="rounded-xl border border-slate-700 bg-slate-950/40 p-4" onSubmit={handleSearch} role="search">
+      <form aria-label="Filter People directory" className="rounded-xl border border-steward-ink-800 bg-steward-ink-950/40 p-4" onSubmit={handleSearch} role="search">
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
           <div className="lg:col-span-2">
             <label className={labelClass} htmlFor="people-search">Search name or email</label>
@@ -656,83 +656,83 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
             <h3 id="people-results-heading" className="text-lg font-semibold">Directory results</h3>
-            <p className="mt-1 text-sm text-slate-400">{loading ? 'Loading scoped records…' : `${identities.length} ${identities.length === 1 ? 'identity' : 'identities'} visible with your current access and filters.`}</p>
+            <p className="mt-1 text-sm text-steward-mist-muted">{loading ? 'Loading scoped records…' : `${identities.length} ${identities.length === 1 ? 'identity' : 'identities'} visible with your current access and filters.`}</p>
           </div>
-          <p className="text-sm text-slate-400">{departments.length} departments · {sites.length} sites</p>
+          <p className="text-sm text-steward-mist-muted">{departments.length} departments · {sites.length} sites</p>
         </div>
         {identities.length === 0 && !loading ? (
-          <p className="mt-4 rounded-xl border border-dashed border-slate-700 p-5 text-sm text-slate-400">No directory identities match these filters.</p>
+          <p className="mt-4 rounded-xl border border-dashed border-steward-ink-800 p-5 text-sm text-steward-mist-muted">No directory identities match these filters.</p>
         ) : (
           <ul className="mt-4 grid gap-3 md:grid-cols-2" aria-label="People directory identities">
             {identities.map((identity) => (
-              <li className="rounded-xl border border-slate-700 bg-slate-950/50 p-4" key={identity.id}>
+              <li className="rounded-xl border border-steward-ink-800 bg-steward-ink-950/50 p-4" key={identity.id}>
                 <div className="flex flex-wrap items-start justify-between gap-2">
-                  <div><p className="font-semibold text-slate-100">{identity.displayName}</p><p className="mt-1 text-sm text-slate-400">{kindLabels[identity.kind]} · {identity.status === 'active' ? 'Active' : 'Inactive'}</p></div>
-                  <span className="rounded-full border border-slate-600 px-2 py-1 text-xs text-slate-300">Revision {identity.revision}</span>
+                  <div><p className="font-semibold text-steward-mist">{identity.displayName}</p><p className="mt-1 text-sm text-steward-mist-muted">{kindLabels[identity.kind]} · {identity.status === 'active' ? 'Active' : 'Inactive'}</p></div>
+                  <span className="rounded-full border border-steward-ink-800 px-2 py-1 text-xs text-steward-mist-muted">Revision {identity.revision}</span>
                 </div>
-                {identity.email && <p className="mt-3 break-all text-sm text-slate-300">{identity.email}</p>}
-                <p className="mt-2 text-sm text-slate-400">Department: {identity.departmentId ? departmentNames.get(identity.departmentId) ?? 'Not visible' : 'Not assigned'}</p>
-                <p className="mt-1 text-sm text-slate-400">Site: {identity.siteId ? siteNames.get(identity.siteId) ?? 'Not visible' : 'Not assigned'}</p>
+                {identity.email && <p className="mt-3 break-all text-sm text-steward-mist-muted">{identity.email}</p>}
+                <p className="mt-2 text-sm text-steward-mist-muted">Department: {identity.departmentId ? departmentNames.get(identity.departmentId) ?? 'Not visible' : 'Not assigned'}</p>
+                <p className="mt-1 text-sm text-steward-mist-muted">Site: {identity.siteId ? siteNames.get(identity.siteId) ?? 'Not visible' : 'Not assigned'}</p>
               </li>
             ))}
           </ul>
         )}
       </div>
 
-      <section aria-busy={loading} aria-labelledby="locations-heading" className="border-t border-slate-700 pt-6" data-requirement="REQ-DIRECTORY-EXPANSION-001">
+      <section aria-busy={loading} aria-labelledby="locations-heading" className="border-t border-steward-ink-800 pt-6" data-requirement="REQ-DIRECTORY-EXPANSION-001">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
             <h3 id="locations-heading" className="text-lg font-semibold">Locations in your scope</h3>
-            <p className="mt-1 text-sm text-slate-400">Buildings and rooms are grouped beneath the sites you are allowed to see.</p>
+            <p className="mt-1 text-sm text-steward-mist-muted">Buildings and rooms are grouped beneath the sites you are allowed to see.</p>
           </div>
-          <p className="text-sm text-slate-400">{sites.length} sites · {buildings.length} buildings · {rooms.length} rooms</p>
+          <p className="text-sm text-steward-mist-muted">{sites.length} sites · {buildings.length} buildings · {rooms.length} rooms</p>
         </div>
         {loading ? (
-          <p className="mt-4 text-sm text-slate-400">Loading scoped locations…</p>
+          <p className="mt-4 text-sm text-steward-mist-muted">Loading scoped locations…</p>
         ) : sites.length === 0 ? (
-          <p className="mt-4 rounded-xl border border-dashed border-slate-700 p-5 text-sm text-slate-400">No sites are visible in your directory scope.</p>
+          <p className="mt-4 rounded-xl border border-dashed border-steward-ink-800 p-5 text-sm text-steward-mist-muted">No sites are visible in your directory scope.</p>
         ) : (
           <ul aria-label="Visible directory locations" className="mt-4 grid gap-4 lg:grid-cols-2">
             {sites.map((site) => {
               const addressLines = formatSiteAddress(site.address)
               const siteBuildings = buildings.filter((building) => building.siteId === site.id)
               return (
-                <li className="min-w-0 rounded-xl border border-slate-700 bg-slate-950/40 p-4" key={site.id}>
+                <li className="min-w-0 rounded-xl border border-steward-ink-800 bg-steward-ink-950/40 p-4" key={site.id}>
                   <div className="flex flex-wrap items-start justify-between gap-2">
                     <div>
-                      <h4 className="font-semibold text-slate-100">{site.name}</h4>
-                      <p className="mt-1 text-sm text-slate-400">Site · {site.status === 'active' ? 'Active' : 'Inactive'}</p>
+                      <h4 className="font-semibold text-steward-mist">{site.name}</h4>
+                      <p className="mt-1 text-sm text-steward-mist-muted">Site · {site.status === 'active' ? 'Active' : 'Inactive'}</p>
                     </div>
-                    <span className="rounded-full border border-slate-600 px-2 py-1 text-xs text-slate-300">Revision {site.revision}</span>
+                    <span className="rounded-full border border-steward-ink-800 px-2 py-1 text-xs text-steward-mist-muted">Revision {site.revision}</span>
                   </div>
                   {addressLines.length > 0 ? (
-                    <address aria-label={`${site.name} address`} className="mt-3 text-sm not-italic leading-6 text-slate-300">
+                    <address aria-label={`${site.name} address`} className="mt-3 text-sm not-italic leading-6 text-steward-mist-muted">
                       {addressLines.map((line, index) => <span className="block" key={`${line}-${index}`}>{line}</span>)}
                     </address>
-                  ) : <p className="mt-3 text-sm text-slate-400">No address recorded.</p>}
+                  ) : <p className="mt-3 text-sm text-steward-mist-muted">No address recorded.</p>}
                   {siteBuildings.length === 0 ? (
-                    <p className="mt-4 rounded-lg border border-dashed border-slate-700 p-3 text-sm text-slate-400">No buildings recorded for this site.</p>
+                    <p className="mt-4 rounded-lg border border-dashed border-steward-ink-800 p-3 text-sm text-steward-mist-muted">No buildings recorded for this site.</p>
                   ) : (
                     <ul aria-label={`Buildings at ${site.name}`} className="mt-4 space-y-3">
                       {siteBuildings.map((building) => {
                         const buildingRooms = rooms.filter((room) => room.siteId === site.id && room.buildingId === building.id)
                         return (
-                          <li className="rounded-lg border border-slate-700 bg-slate-900/70 p-3" key={building.id}>
+                          <li className="rounded-lg border border-steward-ink-800 bg-steward-ink-900/70 p-3" key={building.id}>
                             <div className="flex flex-wrap items-start justify-between gap-2">
                               <div>
-                                <h5 className="font-semibold text-slate-200">{building.name}</h5>
-                                <p className="mt-1 text-xs text-slate-400">Building · {building.status === 'active' ? 'Active' : 'Inactive'}</p>
+                                <h5 className="font-semibold text-steward-mist-muted">{building.name}</h5>
+                                <p className="mt-1 text-xs text-steward-mist-muted">Building · {building.status === 'active' ? 'Active' : 'Inactive'}</p>
                               </div>
-                              <span className="text-xs text-slate-400">{buildingRooms.length} {buildingRooms.length === 1 ? 'room' : 'rooms'}</span>
+                              <span className="text-xs text-steward-mist-muted">{buildingRooms.length} {buildingRooms.length === 1 ? 'room' : 'rooms'}</span>
                             </div>
                             {buildingRooms.length === 0 ? (
-                              <p className="mt-3 text-sm text-slate-400">No rooms recorded.</p>
+                              <p className="mt-3 text-sm text-steward-mist-muted">No rooms recorded.</p>
                             ) : (
                               <ul aria-label={`Rooms in ${building.name}`} className="mt-3 grid gap-2 sm:grid-cols-2">
                                 {buildingRooms.map((room) => (
-                                  <li className="min-w-0 rounded-lg bg-slate-950/70 px-3 py-2 text-sm" key={room.id}>
-                                    <p className="break-words font-medium text-slate-200">Room {room.number}{room.name ? ` · ${room.name}` : ''}</p>
-                                    <p className="mt-1 text-xs text-slate-400">{room.status === 'active' ? 'Active' : 'Inactive'}</p>
+                                  <li className="min-w-0 rounded-lg bg-steward-ink-950/70 px-3 py-2 text-sm" key={room.id}>
+                                    <p className="break-words font-medium text-steward-mist-muted">Room {room.number}{room.name ? ` · ${room.name}` : ''}</p>
+                                    <p className="mt-1 text-xs text-steward-mist-muted">{room.status === 'active' ? 'Active' : 'Inactive'}</p>
                                   </li>
                                 ))}
                               </ul>
@@ -753,19 +753,19 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
         <div className="space-y-6">
           <section aria-labelledby="create-locations-heading" data-requirement="REQ-DIRECTORY-EXPANSION-001">
             <h3 className="text-lg font-semibold" id="create-locations-heading">Create location records</h3>
-            <p className="mt-1 text-sm text-slate-400">Create each level in order so rooms always inherit the correct site from their building.</p>
+            <p className="mt-1 text-sm text-steward-mist-muted">Create each level in order so rooms always inherit the correct site from their building.</p>
             <div className="mt-4 grid gap-4 xl:grid-cols-3">
-              <details className="min-w-0 rounded-xl border border-slate-700 bg-slate-950/40 p-4">
-                <summary className="cursor-pointer font-semibold text-cyan-200">Add a site</summary>
+              <details className="min-w-0 rounded-xl border border-steward-ink-800 bg-steward-ink-950/40 p-4">
+                <summary className="cursor-pointer font-semibold text-[#58d9c7]">Add a site</summary>
                 <form className="mt-4 space-y-4" onSubmit={handleCreateSite}>
                   <div>
                     <label className={labelClass} htmlFor="site-name">Site name</label>
-                    <p className="mt-1 text-sm text-slate-400" id="site-name-help">Use a recognizable campus, office, data center, or region name.</p>
+                    <p className="mt-1 text-sm text-steward-mist-muted" id="site-name-help">Use a recognizable campus, office, data center, or region name.</p>
                     <input aria-describedby="site-name-help" className={inputClass} id="site-name" maxLength={200} name="siteName" required />
                   </div>
-                  <fieldset aria-describedby="site-address-help" className="rounded-lg border border-slate-700 p-3">
-                    <legend className="px-1 text-sm font-semibold text-slate-200">Address (optional)</legend>
-                    <p className="text-sm text-slate-400" id="site-address-help">If you add an address, line 1, city, and a two-letter country code are required.</p>
+                  <fieldset aria-describedby="site-address-help" className="rounded-lg border border-steward-ink-800 p-3">
+                    <legend className="px-1 text-sm font-semibold text-steward-mist-muted">Address (optional)</legend>
+                    <p className="text-sm text-steward-mist-muted" id="site-address-help">If you add an address, line 1, city, and a two-letter country code are required.</p>
                     <div className="mt-3 grid gap-3 sm:grid-cols-2">
                       <div className="sm:col-span-2"><label className={labelClass} htmlFor="site-address-line-1">Address line 1</label><input className={inputClass} id="site-address-line-1" maxLength={200} name="siteAddressLine1" /></div>
                       <div className="sm:col-span-2"><label className={labelClass} htmlFor="site-address-line-2">Address line 2 (optional)</label><input className={inputClass} id="site-address-line-2" maxLength={200} name="siteAddressLine2" /></div>
@@ -779,8 +779,8 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
                 </form>
               </details>
 
-              <details className="min-w-0 rounded-xl border border-slate-700 bg-slate-950/40 p-4">
-                <summary className="cursor-pointer font-semibold text-cyan-200">Add a building</summary>
+              <details className="min-w-0 rounded-xl border border-steward-ink-800 bg-steward-ink-950/40 p-4">
+                <summary className="cursor-pointer font-semibold text-[#58d9c7]">Add a building</summary>
                 <form className="mt-4 space-y-4" onSubmit={handleCreateBuilding}>
                   <div>
                     <label className={labelClass} htmlFor="building-site">Building site</label>
@@ -794,8 +794,8 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
                 </form>
               </details>
 
-              <details className="min-w-0 rounded-xl border border-slate-700 bg-slate-950/40 p-4">
-                <summary className="cursor-pointer font-semibold text-cyan-200">Add a room</summary>
+              <details className="min-w-0 rounded-xl border border-steward-ink-800 bg-steward-ink-950/40 p-4">
+                <summary className="cursor-pointer font-semibold text-[#58d9c7]">Add a room</summary>
                 <form className="mt-4 space-y-4" onSubmit={handleCreateRoom}>
                   <div>
                     <label className={labelClass} htmlFor="room-building">Room building</label>
@@ -815,8 +815,8 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
           <section aria-labelledby="create-people-heading">
             <h3 className="text-lg font-semibold" id="create-people-heading">Create People records</h3>
             <div className="mt-4 grid gap-4 lg:grid-cols-2">
-              <details className="rounded-xl border border-slate-700 bg-slate-950/40 p-4">
-                <summary className="cursor-pointer font-semibold text-cyan-200">Add a department</summary>
+              <details className="rounded-xl border border-steward-ink-800 bg-steward-ink-950/40 p-4">
+                <summary className="cursor-pointer font-semibold text-[#58d9c7]">Add a department</summary>
                 <form className="mt-4 space-y-4" onSubmit={handleCreateDepartment}>
                   <div><label className={labelClass} htmlFor="department-name">Department name</label><input className={inputClass} id="department-name" maxLength={200} name="departmentName" required /></div>
                   <div>
@@ -827,8 +827,8 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
                 </form>
               </details>
 
-              <details className="rounded-xl border border-slate-700 bg-slate-950/40 p-4">
-                <summary className="cursor-pointer font-semibold text-cyan-200">Add a directory identity</summary>
+              <details className="rounded-xl border border-steward-ink-800 bg-steward-ink-950/40 p-4">
+                <summary className="cursor-pointer font-semibold text-[#58d9c7]">Add a directory identity</summary>
                 <form className="mt-4 space-y-4" onSubmit={handleCreateIdentity}>
                   <div>
                     <label className={labelClass} htmlFor="identity-kind">Identity type</label>
@@ -842,7 +842,7 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
                   <div><label className={labelClass} htmlFor="identity-department">Department (optional)</label><select className={inputClass} id="identity-department" name="identityDepartmentId"><option value="">No department</option>{departments.map((department) => <option key={department.id} value={department.id}>{department.name}</option>)}</select></div>
                   <div>
                     <label className={labelClass} htmlFor="identity-site">Site (optional)</label>
-                    <p className="mt-1 text-sm text-slate-400" id="identity-site-help">Leave blank to inherit the selected department&apos;s site.</p>
+                    <p className="mt-1 text-sm text-steward-mist-muted" id="identity-site-help">Leave blank to inherit the selected department&apos;s site.</p>
                     <select aria-describedby="identity-site-help" className={inputClass} id="identity-site" name="identitySiteId"><option value="">Inherit or no site</option>{sites.map((site) => <option key={site.id} value={site.id}>{site.name}</option>)}</select>
                   </div>
                   <button className={`${buttonClass} w-full`} disabled={busy !== ''} type="submit">{busy === 'identity' ? 'Creating identity…' : 'Create identity'}</button>
@@ -851,13 +851,13 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
             </div>
           </section>
         </div>
-      ) : <p className="rounded-xl border border-slate-700 p-4 text-sm text-slate-300">Your role can read this scoped directory and its locations but cannot create records.</p>}
+      ) : <p className="rounded-xl border border-steward-ink-800 p-4 text-sm text-steward-mist-muted">Your role can read this scoped directory and its locations but cannot create records.</p>}
 
-      <div className="border-t border-slate-700 pt-6">
+      <div className="border-t border-steward-ink-800 pt-6">
         <h3 className="text-lg font-semibold" id="assignment-history-heading">Asset assignment history</h3>
-        <p className="mt-1 text-sm text-slate-400">Multiple users can remain active together. Adding a new primary assignee or responsible department automatically closes the previous matching role at the new effective date.</p>
+        <p className="mt-1 text-sm text-steward-mist-muted">Multiple users can remain active together. Adding a new primary assignee or responsible department automatically closes the previous matching role at the new effective date.</p>
         {assets.length === 0 ? (
-          <p className="mt-4 rounded-xl border border-dashed border-slate-700 p-5 text-sm text-slate-400">Add an Atlas asset before creating People assignments.</p>
+          <p className="mt-4 rounded-xl border border-dashed border-steward-ink-800 p-5 text-sm text-steward-mist-muted">Add an Atlas asset before creating People assignments.</p>
         ) : (
           <>
             <div className="mt-4 max-w-xl">
@@ -866,7 +866,7 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
             </div>
 
             {canAssignAssets && (
-              <form aria-label="Create asset assignment" className="mt-4 grid gap-4 rounded-xl border border-slate-700 bg-slate-950/40 p-4 md:grid-cols-2 lg:grid-cols-4" onSubmit={handleCreateAssignment}>
+              <form aria-label="Create asset assignment" className="mt-4 grid gap-4 rounded-xl border border-steward-ink-800 bg-steward-ink-950/40 p-4 md:grid-cols-2 lg:grid-cols-4" onSubmit={handleCreateAssignment}>
                 <div>
                   <label className={labelClass} htmlFor="assignment-kind">Assignee type</label>
                   <select className={inputClass} id="assignment-kind" onChange={(event) => { const value = event.target.value as AssigneeKind; setAssigneeKind(value); setAssignmentRole(value === 'department' ? 'department' : 'user') }} value={assigneeKind}><option value="identity">Directory identity</option><option value="department">Department</option></select>
@@ -891,14 +891,14 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
             )}
 
             <div aria-busy={assignmentsLoading} aria-labelledby="assignment-history-heading" className="mt-4">
-              {assignmentsLoading ? <p className="text-sm text-slate-400">Loading assignment history…</p> : assignments.length === 0 ? <p className="rounded-xl border border-dashed border-slate-700 p-5 text-sm text-slate-400">No assignments recorded for this asset.</p> : (
+              {assignmentsLoading ? <p className="text-sm text-steward-mist-muted">Loading assignment history…</p> : assignments.length === 0 ? <p className="rounded-xl border border-dashed border-steward-ink-800 p-5 text-sm text-steward-mist-muted">No assignments recorded for this asset.</p> : (
                 <ol className="space-y-3">
                   {assignments.map((assignment) => (
-                    <li className="flex flex-wrap items-start justify-between gap-4 rounded-xl border border-slate-700 p-4" key={assignment.id}>
+                    <li className="flex flex-wrap items-start justify-between gap-4 rounded-xl border border-steward-ink-800 p-4" key={assignment.id}>
                       <div>
                         <p className="font-semibold">{assignmentName(assignment)}</p>
-                        <p className="mt-1 text-sm text-slate-400">{roleLabels[assignment.role]} · {assignment.effectiveTo ? 'Ended' : 'Active'}</p>
-                        <p className="mt-1 text-sm text-slate-400">From {formatDate(assignment.effectiveFrom)}{assignment.effectiveTo ? ` to ${formatDate(assignment.effectiveTo)}` : ''}</p>
+                        <p className="mt-1 text-sm text-steward-mist-muted">{roleLabels[assignment.role]} · {assignment.effectiveTo ? 'Ended' : 'Active'}</p>
+                        <p className="mt-1 text-sm text-steward-mist-muted">From {formatDate(assignment.effectiveFrom)}{assignment.effectiveTo ? ` to ${formatDate(assignment.effectiveTo)}` : ''}</p>
                       </div>
                       {!assignment.effectiveTo && canAssignAssets && <button className={secondaryButtonClass} disabled={busy !== ''} onClick={() => handleEndAssignment(assignment.id)} type="button">{busy === `end-${assignment.id}` ? 'Ending…' : 'End assignment'}</button>}
                     </li>

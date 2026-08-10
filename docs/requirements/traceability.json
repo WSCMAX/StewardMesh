@@ -184,6 +184,33 @@
           "web/src/PeopleDirectory.tsx"
         ]
       }
+    },
+    {
+      "requirementId": "REQ-PLATFORM-VALKEY-001",
+      "featureId": "platform.runtime",
+      "artifacts": {
+        "documentation": [
+          "docs/architecture/valkey.md",
+          "docs/features/guard.md",
+          "docs/requirements/initial.md"
+        ],
+        "api": [
+          "docs/architecture/valkey.md"
+        ],
+        "code": [
+          "internal/cache/cache.go"
+        ],
+        "schema": [
+          "docs/architecture/valkey.md"
+        ],
+        "tests": [
+          "internal/cache/cache_test.go",
+          "internal/cache/namespace_test.go"
+        ],
+        "ui": [
+          "docs/architecture/valkey.md"
+        ]
+      }
     }
   ]
 }

@@ -5,6 +5,7 @@ The display format is **branded name — plain-language descriptor**. Canonical 
 | Name | Canonical ID | Descriptor | Phase |
 |---|---|---|---|
 | Foundation | `platform.foundation` | Organization bootstrap and shared platform boundaries | v1 |
+| Platform | `platform.runtime` | Valkey cache and distributed runtime readiness | v1 |
 | Atlas | `inventory.assets` | Asset inventory | v1 |
 | Horizon | `lifecycle.planning` | Lifecycle planning and forecasting | v1 |
 | Ledger | `procurement.finance` | Procurement, budgets, and costs | v1 |

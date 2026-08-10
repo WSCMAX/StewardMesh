@@ -64,6 +64,7 @@ func GuardStore(t *testing.T, store guard.Store, organizationID string) {
 				OrganizationID: organizationID,
 				ResourceID:     organizationID,
 			},
+			Source:    guard.LocalAssignmentSource,
 			CreatedAt: now,
 		},
 	}
@@ -114,6 +115,43 @@ func GuardStore(t *testing.T, store guard.Store, organizationID string) {
 	}
 	assertGrant(t, access.Grants, guard.PermissionGuardManage)
 	assertGrant(t, access.Grants, guard.PermissionAssetsWrite)
+	directory, err := store.ListAuthorization(ctx, organizationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(directory.Accounts) != 1 || directory.Accounts[0].PasswordHash != "" ||
+		len(directory.Roles) != 1 || len(directory.Assignments) != 1 ||
+		directory.Assignments[0].Source != guard.LocalAssignmentSource {
+		t.Fatalf("unexpected authorization directory %#v", directory)
+	}
+	if _, err := store.DeleteRoleAssignment(ctx, organizationID, assignmentID); !errors.Is(err, guard.ErrLastAdministrator) {
+		t.Fatalf("expected the only organization administrator to be protected, got %v", err)
+	}
+	siteAssignment := guard.RoleAssignment{
+		ID:             randomID(t),
+		OrganizationID: organizationID,
+		AccountID:      accountID,
+		RoleID:         roleID,
+		Scope: guard.Scope{
+			Kind:           guard.ScopeSite,
+			OrganizationID: organizationID,
+			ResourceID:     "site-one",
+		},
+		Source:    guard.LocalAssignmentSource,
+		CreatedAt: now.Add(time.Second),
+	}
+	if err := store.CreateRoleAssignment(ctx, siteAssignment); err != nil {
+		t.Fatal(err)
+	}
+	duplicate := siteAssignment
+	duplicate.ID = randomID(t)
+	if err := store.CreateRoleAssignment(ctx, duplicate); !errors.Is(err, guard.ErrConflict) {
+		t.Fatalf("expected duplicate scoped assignment conflict, got %v", err)
+	}
+	deletedSite, err := store.DeleteRoleAssignment(ctx, organizationID, siteAssignment.ID)
+	if err != nil || deletedSite.ID != siteAssignment.ID {
+		t.Fatalf("unexpected scoped assignment deletion %#v err=%v", deletedSite, err)
+	}
 
 	externalAccountID := randomID(t)
 	externalAssignmentID := randomID(t)
@@ -150,6 +188,22 @@ func GuardStore(t *testing.T, store guard.Store, organizationID string) {
 		t.Fatal(err)
 	}
 	assertGrant(t, externalAccess.Grants, guard.PermissionGuardManage)
+	directory, err = store.ListAuthorization(ctx, organizationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundManagedAssignment := false
+	for _, assignment := range directory.Assignments {
+		if assignment.ID == externalAssignmentID && assignment.Source == externalProvisioning.AssignmentSource {
+			foundManagedAssignment = true
+		}
+	}
+	if !foundManagedAssignment {
+		t.Fatalf("expected provider-managed assignment in directory %#v", directory.Assignments)
+	}
+	if _, err := store.DeleteRoleAssignment(ctx, organizationID, externalAssignmentID); !errors.Is(err, guard.ErrManagedAssignment) {
+		t.Fatalf("expected provider-managed assignment deletion to fail, got %v", err)
+	}
 	externalProvisioning.Account.ID = randomID(t)
 	externalProvisioning.Account.Email = "refreshed@example.test"
 	externalProvisioning.Account.DisplayName = "Refreshed Person"
@@ -168,6 +222,34 @@ func GuardStore(t *testing.T, store guard.Store, organizationID string) {
 	}
 	if len(externalAccess.Grants) != 0 || len(externalAccess.Roles) != 0 {
 		t.Fatalf("expected claim removal to remove only the external administrator mapping, access=%#v", externalAccess)
+	}
+	localExternalAssignment := guard.RoleAssignment{
+		ID:             randomID(t),
+		OrganizationID: organizationID,
+		AccountID:      externalAccountID,
+		RoleID:         roleID,
+		Scope: guard.Scope{
+			Kind:           guard.ScopeOrganization,
+			OrganizationID: organizationID,
+			ResourceID:     organizationID,
+		},
+		Source:    guard.LocalAssignmentSource,
+		CreatedAt: now.Add(2 * time.Minute),
+	}
+	if err := store.CreateRoleAssignment(ctx, localExternalAssignment); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DeleteRoleAssignment(ctx, organizationID, assignmentID); err != nil {
+		t.Fatalf("expected a manager assignment to be removable when another remains: %v", err)
+	}
+	if _, err := store.DeleteRoleAssignment(ctx, organizationID, localExternalAssignment.ID); !errors.Is(err, guard.ErrLastAdministrator) {
+		t.Fatalf("expected replacement organization administrator to be protected, got %v", err)
+	}
+	if err := store.CreateRoleAssignment(ctx, bootstrap.Assignment); err != nil {
+		t.Fatalf("restore bootstrap administrator assignment: %v", err)
+	}
+	if _, err := store.DeleteRoleAssignment(ctx, organizationID, localExternalAssignment.ID); err != nil {
+		t.Fatalf("remove replacement administrator assignment: %v", err)
 	}
 
 	sessionID := randomID(t)

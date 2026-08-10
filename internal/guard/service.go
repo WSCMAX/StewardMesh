@@ -27,6 +27,8 @@ const (
 )
 
 var usernamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{2,63}$`)
+var guardIDPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
+var guardResourceIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
 
 type ServiceConfig struct {
 	OrganizationID string
@@ -183,6 +185,7 @@ func (s *Service) Bootstrap(ctx context.Context, input BootstrapInput, trustedRe
 				OrganizationID: s.organizationID,
 				ResourceID:     s.organizationID,
 			},
+			Source:    LocalAssignmentSource,
 			CreatedAt: now,
 		},
 	})
@@ -417,6 +420,96 @@ func (s *Service) CheckPermission(ctx context.Context, authentication Authentica
 		map[string]string{"permission": string(permission)},
 	)
 	return ErrPermissionDenied
+}
+
+func (s *Service) ListAuthorization(ctx context.Context, authentication Authentication) (AuthorizationDirectory, error) {
+	if err := s.requireOrganizationManager(ctx, authentication); err != nil {
+		return AuthorizationDirectory{}, err
+	}
+	directory, err := s.store.ListAuthorization(ctx, s.organizationID)
+	if err != nil {
+		return AuthorizationDirectory{}, fmt.Errorf("list Guard authorization: %w", err)
+	}
+	return directory, nil
+}
+
+func (s *Service) AssignRole(ctx context.Context, authentication Authentication, input RoleAssignmentInput) (RoleAssignment, error) {
+	if err := s.requireOrganizationManager(ctx, authentication); err != nil {
+		return RoleAssignment{}, err
+	}
+	accountID := strings.TrimSpace(input.AccountID)
+	roleID := strings.TrimSpace(input.RoleID)
+	resourceID := strings.TrimSpace(input.ResourceID)
+	if !guardIDPattern.MatchString(accountID) || !guardIDPattern.MatchString(roleID) {
+		return RoleAssignment{}, fmt.Errorf("%w: valid account and role ids are required", ErrInvalidInput)
+	}
+	scope := Scope{Kind: input.ScopeKind, OrganizationID: s.organizationID, ResourceID: resourceID}
+	if scope.Kind == ScopeOrganization {
+		scope.ResourceID = s.organizationID
+	}
+	if (scope.Kind != ScopeOrganization && !guardResourceIDPattern.MatchString(scope.ResourceID)) || scope.Validate() != nil {
+		return RoleAssignment{}, fmt.Errorf("%w: valid organization, site, department, or resource scope is required", ErrInvalidInput)
+	}
+	assignmentID, err := newID()
+	if err != nil {
+		return RoleAssignment{}, err
+	}
+	assignment := RoleAssignment{
+		ID:             assignmentID,
+		OrganizationID: s.organizationID,
+		AccountID:      accountID,
+		RoleID:         roleID,
+		Scope:          scope,
+		Source:         LocalAssignmentSource,
+		CreatedAt:      s.now(),
+	}
+	if err := s.store.CreateRoleAssignment(ctx, assignment); err != nil {
+		return RoleAssignment{}, fmt.Errorf("create role assignment: %w", err)
+	}
+	metadata := map[string]string{
+		"accountId": accountID,
+		"roleId":    roleID,
+		"scopeKind": string(scope.Kind),
+		"scopeId":   scope.ResourceID,
+	}
+	if err := s.audit(ctx, authentication.Principal.Subject, "guard.role_assignment.created", "role_assignment", assignment.ID, metadata); err != nil {
+		_, rollbackErr := s.store.DeleteRoleAssignment(ctx, s.organizationID, assignment.ID)
+		return RoleAssignment{}, fmt.Errorf("audit role assignment creation: %w", errors.Join(err, rollbackErr))
+	}
+	return assignment, nil
+}
+
+func (s *Service) RevokeRoleAssignment(ctx context.Context, authentication Authentication, assignmentID string) (RoleAssignment, error) {
+	if err := s.requireOrganizationManager(ctx, authentication); err != nil {
+		return RoleAssignment{}, err
+	}
+	assignmentID = strings.TrimSpace(assignmentID)
+	if !guardIDPattern.MatchString(assignmentID) {
+		return RoleAssignment{}, fmt.Errorf("%w: valid role assignment id is required", ErrInvalidInput)
+	}
+	assignment, err := s.store.DeleteRoleAssignment(ctx, s.organizationID, assignmentID)
+	if err != nil {
+		return RoleAssignment{}, fmt.Errorf("delete role assignment: %w", err)
+	}
+	metadata := map[string]string{
+		"accountId": assignment.AccountID,
+		"roleId":    assignment.RoleID,
+		"scopeKind": string(assignment.Scope.Kind),
+		"scopeId":   assignment.Scope.ResourceID,
+	}
+	if err := s.audit(ctx, authentication.Principal.Subject, "guard.role_assignment.revoked", "role_assignment", assignment.ID, metadata); err != nil {
+		rollbackErr := s.store.CreateRoleAssignment(ctx, assignment)
+		return RoleAssignment{}, fmt.Errorf("audit role assignment revocation: %w", errors.Join(err, rollbackErr))
+	}
+	return assignment, nil
+}
+
+func (s *Service) requireOrganizationManager(ctx context.Context, authentication Authentication) error {
+	return s.CheckPermission(ctx, authentication, PermissionGuardManage, Scope{
+		Kind:           ScopeOrganization,
+		OrganizationID: s.organizationID,
+		ResourceID:     s.organizationID,
+	})
 }
 
 func (s *Service) BootstrapTokenRequired() bool {

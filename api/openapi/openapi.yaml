@@ -190,6 +190,80 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
+  /api/v1/guard/access:
+    get:
+      summary: List Guard accounts, roles, and scoped assignments
+      operationId: listGuardAccess
+      tags: [Guard]
+      x-requirement: SEC-GUARD-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200':
+          description: Organization authorization directory for Guard administrators
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/GuardAccessDirectory'}
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/v1/guard/role-assignments:
+    post:
+      summary: Create a local scoped role assignment
+      operationId: createGuardRoleAssignment
+      tags: [Guard]
+      x-requirement: SEC-GUARD-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateGuardRoleAssignmentRequest'}
+      responses:
+        '201':
+          description: Scoped role assignment created
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/GuardRoleAssignment'}
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /api/v1/guard/role-assignments/{assignmentId}:
+    delete:
+      summary: Remove a local scoped role assignment
+      operationId: deleteGuardRoleAssignment
+      tags: [Guard]
+      x-requirement: SEC-GUARD-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - in: path
+          name: assignmentId
+          required: true
+          schema: {type: string, pattern: '^[a-f0-9]{32}$'}
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        '204':
+          description: Local role assignment removed
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: The assignment is provider-managed or is the last active organization administrator
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
   /api/v1/organization:
     get:
       summary: Get the configured organization
@@ -726,6 +800,83 @@ components:
         roles:
           type: array
           items: {type: string}
+    GuardAccount:
+      type: object
+      required: [id, username, email, displayName, status]
+      properties:
+        id: {type: string, pattern: '^[a-f0-9]{32}$'}
+        username: {type: string, minLength: 1, maxLength: 64}
+        email: {type: string, format: email, maxLength: 320}
+        displayName: {type: string, minLength: 1, maxLength: 200}
+        status: {type: string, enum: [active, disabled]}
+    GuardRole:
+      type: object
+      required: [id, name, description, permissions, policyBundleIds]
+      properties:
+        id: {type: string, pattern: '^[a-f0-9]{32}$'}
+        name: {type: string, minLength: 1, maxLength: 200}
+        description: {type: string, maxLength: 1000}
+        permissions:
+          type: array
+          items: {type: string, pattern: '^[a-z][a-z0-9._-]{2,127}$'}
+          uniqueItems: true
+        policyBundleIds:
+          type: array
+          items: {type: string, pattern: '^[a-f0-9]{32}$'}
+          uniqueItems: true
+    GuardAssignmentScope:
+      type: object
+      additionalProperties: false
+      required: [kind, resourceId]
+      properties:
+        kind: {type: string, enum: [organization, site, department, resource]}
+        resourceId: {type: string, minLength: 1, maxLength: 128}
+    GuardAssignmentRequestScope:
+      type: object
+      additionalProperties: false
+      required: [kind]
+      properties:
+        kind: {type: string, enum: [organization, site, department, resource]}
+        resourceId:
+          type: string
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+          maxLength: 128
+          description: Required for site, department, and resource scopes; ignored for organization scope.
+    GuardRoleAssignment:
+      type: object
+      required: [id, accountId, roleId, scope, source, managed, createdAt]
+      properties:
+        id: {type: string, pattern: '^[a-f0-9]{32}$'}
+        accountId: {type: string, pattern: '^[a-f0-9]{32}$'}
+        roleId: {type: string, pattern: '^[a-f0-9]{32}$'}
+        scope: {$ref: '#/components/schemas/GuardAssignmentScope'}
+        source:
+          type: string
+          pattern: '^(local|oidc:[a-f0-9]{32})$'
+          description: Local assignments are editable; OIDC assignments are synchronized from the identity provider.
+        managed: {type: boolean}
+        createdAt: {type: string, format: date-time}
+    GuardAccessDirectory:
+      type: object
+      required: [accounts, roles, assignments]
+      properties:
+        accounts:
+          type: array
+          items: {$ref: '#/components/schemas/GuardAccount'}
+        roles:
+          type: array
+          items: {$ref: '#/components/schemas/GuardRole'}
+        assignments:
+          type: array
+          items: {$ref: '#/components/schemas/GuardRoleAssignment'}
+    CreateGuardRoleAssignmentRequest:
+      type: object
+      additionalProperties: false
+      required: [accountId, roleId, scope]
+      properties:
+        accountId: {type: string, pattern: '^[a-f0-9]{32}$'}
+        roleId: {type: string, pattern: '^[a-f0-9]{32}$'}
+        scope: {$ref: '#/components/schemas/GuardAssignmentRequestScope'}
     Organization:
       type: object
       required: [id, name, createdAt, updatedAt]

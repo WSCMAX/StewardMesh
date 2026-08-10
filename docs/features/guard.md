@@ -6,9 +6,9 @@
 
 ## Purpose
 
-Guard protects organization and resource operations. The implemented boundary provides one-time local administrator bootstrap, local password authentication, OpenID Connect authorization-code login, just-in-time external accounts, opaque server-side sessions, synchronized CSRF protection, organization-scoped roles, reusable policy bundles, permission enforcement, rate limiting, and security audit events.
+Guard protects organization and resource operations. The implemented boundary provides one-time local administrator bootstrap, local password authentication, OpenID Connect authorization-code login, just-in-time external accounts, opaque server-side sessions, synchronized CSRF protection, administrator-managed scoped role assignments, reusable policy bundles, permission enforcement, rate limiting, and security audit events.
 
-SAML, custom role and scoped-assignment management, ownership locks, and the role-building interface remain planned Guard slices. Issue #13 stays open until those acceptance criteria are delivered.
+SAML, custom role creation, ownership locks, and the role-building interface remain planned Guard slices. Issue #13 stays open until those acceptance criteria are delivered.
 
 ## One-time administrator setup
 
@@ -93,6 +93,10 @@ The initial Administrator role directly contains `guard.manage` and attaches the
 
 Role assignments carry an explicit organization, site, department, or resource scope. Organization-scoped grants cover resources in that organization; narrower grants require an exact scope match. Every protected API enforces permissions on the server, and a disabled account is rejected even if one of its sessions has not expired. Frontend role display is user guidance, never the security boundary.
 
+An organization administrator can list Guard accounts, roles, and assignments in the **Guard · Access administration** panel, then assign an existing role to the whole organization or to one exact site, department, or resource ID. The organization boundary comes from the authenticated server configuration and is never accepted from request data. Mutations require synchronized CSRF validation and `guard.manage` at organization scope in both the HTTP and service layers.
+
+Local assignments can be removed through StewardMesh. Assignments synchronized from an OpenID Connect administrator claim are marked read-only and must be changed at the identity provider. The storage adapters serialize assignment changes and reject removal of the final active organization-scoped assignment that grants `guard.manage`, preventing administrator lockout. Assignment changes take effect when Guard resolves access on the next authenticated request.
+
 ## Secure HTTP behavior
 
 - Authentication, bootstrap, session, and every authenticated API response use `Cache-Control: no-store`.
@@ -115,6 +119,9 @@ Role assignments carry an explicit organization, site, department, or resource s
 - `GET /api/v1/auth/oidc/callback`
 - `GET /api/v1/auth/session`
 - `POST /api/v1/auth/logout`
+- `GET /api/v1/guard/access`
+- `POST /api/v1/guard/role-assignments`
+- `DELETE /api/v1/guard/role-assignments/{assignmentID}`
 - OpenAPI: `api/openapi/openapi.yaml`
 - gRPC contract: `api/proto/stewardmesh.proto`
 - PostgreSQL migrations: `internal/repository/postgres/migrations/0004_guard_local_auth.sql` and `0007_guard_oidc.sql`
@@ -138,6 +145,8 @@ The application links to this page from every Guard setup state and provides the
 - `guard.oidc.login.succeeded`
 - `guard.oidc.login.failed`
 - `guard.logout.succeeded`
+- `guard.role_assignment.created`
+- `guard.role_assignment.revoked`
 - `guard.authorization.denied`
 
 Audit events contain stable account or resource IDs, correlation IDs, actions, timestamps, and requirement metadata. Passwords, raw tokens, usernames used in failed attempts, and credential-bearing configuration are excluded.
@@ -149,10 +158,11 @@ Audit events contain stable account or resource IDs, correlation IDs, actions, t
 - login-rate-limit and uniform-error tests
 - distributed rate-limit, cache outage, TTL, and organization-isolation tests
 - memory and PostgreSQL provider contract tests
+- local and provider-managed assignment contract tests, duplicate detection, and final-administrator protection
 - session hashing, CSRF rotation, expiration, and revocation tests
 - state, nonce, S256 PKCE, encrypted transaction, exact claim mapping, JIT refresh, and provider-mapping removal tests
 - server-side permission, origin, CORS, JSON-boundary, and header tests
-- React setup, login fallback, keyboard-focus, and safe-link tests
+- React setup, login fallback, scoped-assignment management, keyboard-focus, and safe-link tests
 - automated axe accessibility analysis
 - race detection, `go vet`, `govulncheck`, dependency audit, and filesystem security scanning in CI
 

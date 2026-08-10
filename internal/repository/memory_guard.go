@@ -177,6 +177,7 @@ func (s *MemoryGuardStore) ProvisionExternalAccount(_ context.Context, provision
 					OrganizationID: account.OrganizationID,
 					ResourceID:     account.OrganizationID,
 				},
+				Source:    provisioning.AssignmentSource,
 				CreatedAt: provisioning.Account.UpdatedAt,
 			}
 			s.externalAssignments[assignmentKey] = provisioning.AdministratorAssignmentID
@@ -230,6 +231,135 @@ func (s *MemoryGuardStore) AccessForAccount(_ context.Context, organizationID, a
 		return access.Grants[i].Permission < access.Grants[j].Permission
 	})
 	return access, nil
+}
+
+func (s *MemoryGuardStore) ListAuthorization(_ context.Context, organizationID string) (guard.AuthorizationDirectory, error) {
+	if organizationID == "" {
+		return guard.AuthorizationDirectory{}, errors.New("organization id is required")
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	directory := guard.AuthorizationDirectory{}
+	for _, account := range s.accounts {
+		if account.OrganizationID != organizationID {
+			continue
+		}
+		account = cloneGuardAccount(account)
+		account.PasswordHash = ""
+		directory.Accounts = append(directory.Accounts, account)
+	}
+	for _, role := range s.roles {
+		if role.OrganizationID == organizationID {
+			directory.Roles = append(directory.Roles, cloneGuardRole(role))
+		}
+	}
+	for _, assignment := range s.assignments {
+		if assignment.OrganizationID == organizationID {
+			directory.Assignments = append(directory.Assignments, assignment)
+		}
+	}
+	sort.Slice(directory.Accounts, func(i, j int) bool {
+		if directory.Accounts[i].DisplayName == directory.Accounts[j].DisplayName {
+			return directory.Accounts[i].ID < directory.Accounts[j].ID
+		}
+		return directory.Accounts[i].DisplayName < directory.Accounts[j].DisplayName
+	})
+	sort.Slice(directory.Roles, func(i, j int) bool {
+		if directory.Roles[i].Name == directory.Roles[j].Name {
+			return directory.Roles[i].ID < directory.Roles[j].ID
+		}
+		return directory.Roles[i].Name < directory.Roles[j].Name
+	})
+	sort.Slice(directory.Assignments, func(i, j int) bool {
+		if directory.Assignments[i].CreatedAt.Equal(directory.Assignments[j].CreatedAt) {
+			return directory.Assignments[i].ID < directory.Assignments[j].ID
+		}
+		return directory.Assignments[i].CreatedAt.Before(directory.Assignments[j].CreatedAt)
+	})
+	return directory, nil
+}
+
+func (s *MemoryGuardStore) CreateRoleAssignment(_ context.Context, assignment guard.RoleAssignment) error {
+	if err := assignment.Validate(); err != nil {
+		return err
+	}
+	if assignment.Source != guard.LocalAssignmentSource {
+		return guard.ErrManagedAssignment
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	account, accountExists := s.accounts[assignment.AccountID]
+	role, roleExists := s.roles[assignment.RoleID]
+	if !accountExists || account.OrganizationID != assignment.OrganizationID ||
+		!roleExists || role.OrganizationID != assignment.OrganizationID {
+		return guard.ErrNotFound
+	}
+	if _, exists := s.assignments[assignment.ID]; exists {
+		return guard.ErrConflict
+	}
+	for _, existing := range s.assignments {
+		if existing.OrganizationID == assignment.OrganizationID && existing.AccountID == assignment.AccountID &&
+			existing.RoleID == assignment.RoleID && existing.Scope.Kind == assignment.Scope.Kind &&
+			existing.Scope.ResourceID == assignment.Scope.ResourceID {
+			return guard.ErrConflict
+		}
+	}
+	s.assignments[assignment.ID] = assignment
+	return nil
+}
+
+func (s *MemoryGuardStore) DeleteRoleAssignment(_ context.Context, organizationID, assignmentID string) (guard.RoleAssignment, error) {
+	if organizationID == "" || assignmentID == "" {
+		return guard.RoleAssignment{}, errors.New("organization id and assignment id are required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	assignment, exists := s.assignments[assignmentID]
+	if !exists || assignment.OrganizationID != organizationID {
+		return guard.RoleAssignment{}, guard.ErrNotFound
+	}
+	if assignment.Source != guard.LocalAssignmentSource {
+		return guard.RoleAssignment{}, guard.ErrManagedAssignment
+	}
+	if assignment.Scope.Kind == guard.ScopeOrganization && assignment.Scope.ResourceID == organizationID &&
+		s.roleGrantsPermission(assignment.RoleID, guard.PermissionGuardManage) {
+		remainingManagers := 0
+		for _, candidate := range s.assignments {
+			if candidate.ID == assignment.ID || candidate.OrganizationID != organizationID ||
+				candidate.Scope.Kind != guard.ScopeOrganization || candidate.Scope.ResourceID != organizationID ||
+				!s.roleGrantsPermission(candidate.RoleID, guard.PermissionGuardManage) {
+				continue
+			}
+			if account, ok := s.accounts[candidate.AccountID]; ok && account.OrganizationID == organizationID && account.Status == "active" {
+				remainingManagers++
+			}
+		}
+		if remainingManagers == 0 {
+			return guard.RoleAssignment{}, guard.ErrLastAdministrator
+		}
+	}
+	delete(s.assignments, assignmentID)
+	return assignment, nil
+}
+
+func (s *MemoryGuardStore) roleGrantsPermission(roleID string, permission guard.Permission) bool {
+	role, exists := s.roles[roleID]
+	if !exists {
+		return false
+	}
+	for _, candidate := range role.Permissions {
+		if candidate == permission {
+			return true
+		}
+	}
+	for _, bundleID := range role.PolicyBundleIDs {
+		for _, candidate := range s.bundles[bundleID].Permissions {
+			if candidate == permission {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (s *MemoryGuardStore) CreateSession(_ context.Context, session guard.Session) error {

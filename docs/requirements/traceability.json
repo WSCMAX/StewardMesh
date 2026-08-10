@@ -81,10 +81,12 @@
           "internal/repository/contracttest/guard.go",
           "internal/repository/memory_guard_test.go",
           "internal/repository/postgres/postgres_integration_test.go",
-          "web/src/App.test.tsx"
+          "web/src/App.test.tsx",
+          "web/src/GuardAccessManager.test.tsx"
         ],
         "ui": [
-          "web/src/App.tsx"
+          "web/src/App.tsx",
+          "web/src/GuardAccessManager.tsx"
         ]
       }
     },
@@ -116,10 +118,12 @@
           "internal/config/config_test.go",
           "internal/httpapi/server_test.go",
           "internal/identity/oidc_test.go",
-          "web/src/App.test.tsx"
+          "web/src/App.test.tsx",
+          "web/src/GuardAccessManager.test.tsx"
         ],
         "ui": [
-          "web/src/App.tsx"
+          "web/src/App.tsx",
+          "web/src/GuardAccessManager.tsx"
         ]
       }
     },

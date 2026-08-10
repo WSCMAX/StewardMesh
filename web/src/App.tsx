@@ -1,5 +1,6 @@
 import { type FormEvent, useEffect, useRef, useState } from 'react'
 import { ApiRequestError, requestJSON } from './api'
+import GuardAccessManager from './GuardAccessManager'
 import PeopleDirectory from './PeopleDirectory'
 
 type Module = readonly [name: string, description: string]
@@ -345,7 +346,7 @@ export default function App() {
             <form className="mt-6 space-y-5" onSubmit={handleBootstrap}>
               <Field id="displayName" label="Display name" autoComplete="name" required />
               <Field id="email" label="Email address" autoComplete="email" type="email" required />
-              <Field id="username" label="Username" autoComplete="username" pattern="[A-Za-z0-9][A-Za-z0-9._-]{2,63}" help="Use 3 to 64 letters, numbers, periods, underscores, or hyphens." required />
+              <Field id="username" label="Username" autoComplete="username" pattern="[A-Za-z0-9][A-Za-z0-9._\-]{2,63}" help="Use 3 to 64 letters, numbers, periods, underscores, or hyphens." required />
               <Field id="password" label="Password" autoComplete="new-password" type="password" minLength={minimumPasswordCharacters} help={`Use at least ${minimumPasswordCharacters} characters. StewardMesh does not require arbitrary symbol or capitalization rules.`} required />
               <Field id="confirmPassword" label="Confirm password" autoComplete="new-password" type="password" minLength={minimumPasswordCharacters} required />
               {tokenRequired && <Field id="bootstrapToken" label="Deployment bootstrap token" autoComplete="off" type="password" help="Enter the token configured by your server administrator. It is sent only to the local StewardMesh API." required />}
@@ -395,6 +396,8 @@ export default function App() {
               <p className="mt-1 text-sm text-steward-mist-muted">Asset records are protected by Guard permissions and the organization ownership boundary.</p>
               {assets.length === 0 ? <p className="mt-6 rounded-xl border border-dashed border-steward-ink-800 p-5 text-sm text-steward-mist-muted">No assets yet. Add your first server or device through the API to begin.</p> : <ul className="mt-6 divide-y divide-steward-ink-800">{assets.map((asset) => <li className="flex flex-wrap justify-between gap-2 py-4" key={asset.id}><span>{asset.name}</span><span className="text-sm text-steward-mist-muted">{asset.kind} · {asset.status}</span></li>)}</ul>}
             </section>
+
+            {permissions.includes('guard.manage') && <GuardAccessManager csrfToken={csrfToken} />}
 
             <PeopleDirectory assets={assets} csrfToken={csrfToken} issuesUrl={issuesUrl} permissions={permissions} />
           </>

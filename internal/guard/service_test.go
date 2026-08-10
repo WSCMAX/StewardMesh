@@ -161,6 +161,75 @@ func TestServiceBootstrapLoginAuthorizeAndRevoke(t *testing.T) {
 	}
 }
 
+func TestServiceManagesScopedRoleAssignmentsWithoutAllowingAdministratorLockout(t *testing.T) {
+	store := repository.NewMemoryGuardStore()
+	auditor := &recordingAuditor{}
+	now := time.Now().UTC().Truncate(time.Second)
+	service, err := NewService(store, fastTestHasher{}, auditor, nil, ServiceConfig{
+		OrganizationID: "assignment-organization",
+		SessionTTL:     time.Hour,
+		Now:            func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	credentials, err := service.Bootstrap(context.Background(), BootstrapInput{
+		Username: "administrator", Email: "administrator@example.test", DisplayName: "Administrator",
+		Password: "correct horse battery staple",
+	}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory, err := service.ListAuthorization(context.Background(), credentials.Authentication)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(directory.Accounts) != 1 || len(directory.Roles) != 1 || len(directory.Assignments) != 1 {
+		t.Fatalf("unexpected initial authorization directory %#v", directory)
+	}
+	bootstrapAssignmentID := directory.Assignments[0].ID
+	if _, err := service.RevokeRoleAssignment(context.Background(), credentials.Authentication, bootstrapAssignmentID); !errors.Is(err, ErrLastAdministrator) {
+		t.Fatalf("expected last organization administrator protection, got %v", err)
+	}
+	now = now.Add(time.Minute)
+	assignment, err := service.AssignRole(context.Background(), credentials.Authentication, RoleAssignmentInput{
+		AccountID:  directory.Accounts[0].ID,
+		RoleID:     directory.Roles[0].ID,
+		ScopeKind:  ScopeSite,
+		ResourceID: "site-one",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if assignment.Scope.Kind != ScopeSite || assignment.Scope.ResourceID != "site-one" || assignment.Source != LocalAssignmentSource {
+		t.Fatalf("unexpected scoped assignment %#v", assignment)
+	}
+	if _, err := service.AssignRole(context.Background(), credentials.Authentication, RoleAssignmentInput{
+		AccountID:  directory.Accounts[0].ID,
+		RoleID:     directory.Roles[0].ID,
+		ScopeKind:  ScopeSite,
+		ResourceID: "site-one",
+	}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("expected duplicate assignment conflict, got %v", err)
+	}
+	if _, err := service.RevokeRoleAssignment(context.Background(), credentials.Authentication, assignment.ID); err != nil {
+		t.Fatal(err)
+	}
+	unauthorized := credentials.Authentication
+	unauthorized.Grants = nil
+	if _, err := service.ListAuthorization(context.Background(), unauthorized); !errors.Is(err, ErrPermissionDenied) {
+		t.Fatalf("expected organization-level management permission, got %v", err)
+	}
+	foundCreated, foundRevoked := false, false
+	for _, event := range auditor.events {
+		foundCreated = foundCreated || event.Action == "guard.role_assignment.created" && event.ResourceID == assignment.ID
+		foundRevoked = foundRevoked || event.Action == "guard.role_assignment.revoked" && event.ResourceID == assignment.ID
+	}
+	if !foundCreated || !foundRevoked {
+		t.Fatalf("expected role assignment audit events, got %#v", auditor.events)
+	}
+}
+
 func TestServiceJITProvisionsOIDCAccountAndSynchronizesAdministratorMapping(t *testing.T) {
 	store := repository.NewMemoryGuardStore()
 	auditor := &recordingAuditor{}

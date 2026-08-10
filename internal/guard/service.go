@@ -1,6 +1,6 @@
 package guard
 
-// Requirements: SEC-GUARD-001, SEC-HTTP-001.
+// Requirements: REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
 
 import (
 	"context"
@@ -204,7 +204,13 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (SessionCredentia
 	clientRateKey := "client|" + strings.TrimSpace(input.RateKey)
 	accountRateKey := "account|" + normalizedUsername
 	now := s.now()
-	if !s.limiter.Allow(clientRateKey, now) || !s.limiter.Allow(accountRateKey, now) {
+	clientAllowed, clientLimitErr := s.limiter.Allow(ctx, clientRateKey, now)
+	accountAllowed, accountLimitErr := s.limiter.Allow(ctx, accountRateKey, now)
+	if limitErr := errors.Join(clientLimitErr, accountLimitErr); limitErr != nil {
+		s.recordSecurityEvent(ctx, "anonymous", "guard.login.protection_unavailable", "account", "unknown", nil)
+		return SessionCredentials{}, fmt.Errorf("%w: check failure counters: %w", ErrLoginProtectionUnavailable, limitErr)
+	}
+	if !clientAllowed || !accountAllowed {
 		s.recordSecurityEvent(ctx, "anonymous", "guard.login.rate_limited", "account", "unknown", nil)
 		return SessionCredentials{}, ErrRateLimited
 	}
@@ -221,13 +227,19 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (SessionCredentia
 		return SessionCredentials{}, fmt.Errorf("verify stored credential: %w", verifyErr)
 	}
 	if err != nil || !matches || account.Status != "active" || !usernamePattern.MatchString(normalizedUsername) {
-		s.limiter.Failure(clientRateKey, now)
-		s.limiter.Failure(accountRateKey, now)
+		failureErr := errors.Join(
+			s.limiter.Failure(ctx, clientRateKey, now),
+			s.limiter.Failure(ctx, accountRateKey, now),
+		)
 		resourceID := "unknown"
 		if account.ID != "" {
 			resourceID = account.ID
 		}
 		s.recordSecurityEvent(ctx, "anonymous", "guard.login.failed", "account", resourceID, nil)
+		if failureErr != nil {
+			s.recordSecurityEvent(ctx, "anonymous", "guard.login.protection_unavailable", "account", "unknown", nil)
+			return SessionCredentials{}, fmt.Errorf("%w: record failure counters: %w", ErrLoginProtectionUnavailable, failureErr)
+		}
 		return SessionCredentials{}, ErrInvalidCredential
 	}
 	if needsRehash {
@@ -239,8 +251,13 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (SessionCredentia
 			return SessionCredentials{}, fmt.Errorf("store refreshed password hash: %w", updateErr)
 		}
 	}
-	s.limiter.Reset(clientRateKey)
-	s.limiter.Reset(accountRateKey)
+	if resetErr := errors.Join(
+		s.limiter.Reset(ctx, clientRateKey),
+		s.limiter.Reset(ctx, accountRateKey),
+	); resetErr != nil {
+		s.recordSecurityEvent(ctx, "anonymous", "guard.login.protection_unavailable", "account", account.ID, nil)
+		return SessionCredentials{}, fmt.Errorf("%w: reset failure counters: %w", ErrLoginProtectionUnavailable, resetErr)
+	}
 	credentials, err := s.issueSession(ctx, account.ID)
 	if err != nil {
 		return SessionCredentials{}, err

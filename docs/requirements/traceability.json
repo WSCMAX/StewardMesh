@@ -195,12 +195,17 @@
           "docs/requirements/initial.md"
         ],
         "api": [
+          "api/openapi/openapi.yaml",
           "docs/architecture/valkey.md"
         ],
         "code": [
+          "cmd/stewardmesh/main.go",
           "internal/cache/cache.go",
           "internal/cache/valkey.go",
-          "internal/config/config.go"
+          "internal/config/config.go",
+          "internal/guard/cache_rate_limiter.go",
+          "internal/guard/service.go",
+          "internal/httpapi/server.go"
         ],
         "schema": [
           "docs/architecture/valkey.md"
@@ -209,7 +214,10 @@
           "internal/cache/cache_test.go",
           "internal/cache/namespace_test.go",
           "internal/cache/valkey_test.go",
-          "internal/config/config_test.go"
+          "internal/config/config_test.go",
+          "internal/guard/cache_rate_limiter_test.go",
+          "internal/guard/service_test.go",
+          "internal/httpapi/server_test.go"
         ],
         "ui": [
           "docs/architecture/valkey.md"

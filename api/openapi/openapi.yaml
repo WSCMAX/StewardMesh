@@ -1,4 +1,4 @@
-# Requirements: REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, SEC-GUARD-001, SEC-HTTP-001.
+# Requirements: REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
 openapi: 3.1.0
 info:
   title: StewardMesh API
@@ -91,6 +91,11 @@ paths:
           headers:
             Retry-After:
               schema: {type: integer}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '503':
+          description: Configured shared login protection is temporarily unavailable
           content:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}

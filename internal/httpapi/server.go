@@ -1,7 +1,7 @@
 package httpapi
 
 // Requirements: REQ-FOUNDATION-001, REQ-PEOPLE-001,
-// REQ-DIRECTORY-EXPANSION-001, SEC-GUARD-001, SEC-HTTP-001.
+// REQ-DIRECTORY-EXPANSION-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
 
 import (
 	"encoding/json"
@@ -218,6 +218,9 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		RateKey:  remoteHost(r.RemoteAddr),
 	})
 	switch {
+	case errors.Is(err, guard.ErrLoginProtectionUnavailable):
+		writeError(w, r, http.StatusServiceUnavailable, "authentication_unavailable", "login protection is temporarily unavailable")
+		return
 	case errors.Is(err, guard.ErrRateLimited):
 		w.Header().Set("Retry-After", "900")
 		writeError(w, r, http.StatusTooManyRequests, "rate_limited", "too many login attempts; try again later")

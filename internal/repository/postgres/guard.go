@@ -4,6 +4,7 @@ package postgres
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -128,7 +129,7 @@ func (s *GuardStore) BootstrapAdministrator(ctx context.Context, bootstrap guard
 func (s *GuardStore) FindAccountByUsername(ctx context.Context, organizationID, normalizedUsername string) (guard.Account, error) {
 	row := s.database.QueryRowContext(ctx, `
 		SELECT id, organization_id, username, normalized_username, email,
-		       display_name, password_hash, status, created_at, updated_at
+		       display_name, COALESCE(password_hash, ''), status, created_at, updated_at
 		FROM guard_accounts
 		WHERE organization_id = $1 AND normalized_username = $2
 	`, organizationID, normalizedUsername)
@@ -140,6 +141,118 @@ func (s *GuardStore) FindAccountByUsername(ctx context.Context, organizationID, 
 		return guard.Account{}, fmt.Errorf("find guard account: %w", err)
 	}
 	return account, nil
+}
+
+func (s *GuardStore) ProvisionExternalAccount(ctx context.Context, provisioning guard.ExternalAccountProvisioning) (guard.Account, bool, error) {
+	if err := provisioning.Validate(); err != nil {
+		return guard.Account{}, false, err
+	}
+	transaction, err := s.database.BeginTx(ctx, nil)
+	if err != nil {
+		return guard.Account{}, false, fmt.Errorf("begin external account provisioning: %w", err)
+	}
+	defer transaction.Rollback()
+	identity := provisioning.Identity
+	lockDigest := sha256.Sum256([]byte(identity.OrganizationID + "\x00" + identity.Issuer + "\x00" + identity.Subject))
+	lockKey := fmt.Sprintf("%x", lockDigest[:])
+	if _, err := transaction.ExecContext(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", lockKey); err != nil {
+		return guard.Account{}, false, fmt.Errorf("lock external account provisioning: %w", err)
+	}
+	var administratorRoleID string
+	if provisioning.Administrator {
+		err := transaction.QueryRowContext(ctx, `
+			SELECT id FROM guard_roles WHERE organization_id = $1 AND name = 'Administrator'
+		`, identity.OrganizationID).Scan(&administratorRoleID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return guard.Account{}, false, guard.ErrNotFound
+		}
+		if err != nil {
+			return guard.Account{}, false, fmt.Errorf("load administrator role: %w", err)
+		}
+	}
+	row := transaction.QueryRowContext(ctx, `
+		SELECT a.id, a.organization_id, a.username, a.normalized_username, a.email,
+		       a.display_name, COALESCE(a.password_hash, ''), a.status, a.created_at, a.updated_at
+		FROM guard_external_identities i
+		JOIN guard_accounts a
+		  ON a.organization_id = i.organization_id AND a.id = i.account_id
+		WHERE i.organization_id = $1 AND i.issuer = $2 AND i.subject = $3
+	`, identity.OrganizationID, identity.Issuer, identity.Subject)
+	account, err := scanGuardAccount(row)
+	created := false
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		account = provisioning.Account
+		if _, err := transaction.ExecContext(ctx, `
+			INSERT INTO guard_accounts (
+				id, organization_id, username, normalized_username, email,
+				display_name, password_hash, status, created_at, updated_at
+			) VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, $8, $9)
+		`, account.ID, account.OrganizationID, account.Username, account.NormalizedUsername, account.Email,
+			account.DisplayName, account.Status, account.CreatedAt, account.UpdatedAt); err != nil {
+			return guard.Account{}, false, fmt.Errorf("create external account: %w", err)
+		}
+		if _, err := transaction.ExecContext(ctx, `
+			INSERT INTO guard_external_identities (
+				organization_id, issuer, subject, account_id, created_at, updated_at
+			) VALUES ($1, $2, $3, $4, $5, $6)
+		`, identity.OrganizationID, identity.Issuer, identity.Subject, account.ID, identity.CreatedAt, identity.UpdatedAt); err != nil {
+			return guard.Account{}, false, fmt.Errorf("bind external identity: %w", err)
+		}
+		created = true
+	case err != nil:
+		return guard.Account{}, false, fmt.Errorf("find external account: %w", err)
+	default:
+		account.Email = provisioning.Account.Email
+		account.DisplayName = provisioning.Account.DisplayName
+		account.UpdatedAt = provisioning.Account.UpdatedAt
+		if _, err := transaction.ExecContext(ctx, `
+			UPDATE guard_accounts
+			SET email = $2, display_name = $3, updated_at = $4
+			WHERE id = $1
+		`, account.ID, account.Email, account.DisplayName, account.UpdatedAt); err != nil {
+			return guard.Account{}, false, fmt.Errorf("refresh external account: %w", err)
+		}
+		if _, err := transaction.ExecContext(ctx, `
+			UPDATE guard_external_identities SET updated_at = $4
+			WHERE organization_id = $1 AND issuer = $2 AND subject = $3
+		`, identity.OrganizationID, identity.Issuer, identity.Subject, identity.UpdatedAt); err != nil {
+			return guard.Account{}, false, fmt.Errorf("refresh external identity: %w", err)
+		}
+	}
+	if provisioning.Administrator {
+		var assignmentExists bool
+		if err := transaction.QueryRowContext(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM guard_role_assignments
+				WHERE organization_id = $1 AND account_id = $2 AND role_id = $3
+				  AND scope_kind = 'organization' AND scope_id = $1
+			)
+		`, account.OrganizationID, account.ID, administratorRoleID).Scan(&assignmentExists); err != nil {
+			return guard.Account{}, false, fmt.Errorf("read external administrator mapping: %w", err)
+		}
+		if !assignmentExists {
+			if _, err := transaction.ExecContext(ctx, `
+				INSERT INTO guard_role_assignments (
+					id, organization_id, account_id, role_id, scope_kind, scope_id, created_at, source
+				) VALUES ($1, $2, $3, $4, 'organization', $2, $5, $6)
+			`, provisioning.AdministratorAssignmentID, account.OrganizationID, account.ID, administratorRoleID,
+				provisioning.Account.UpdatedAt, provisioning.AssignmentSource); err != nil {
+				return guard.Account{}, false, fmt.Errorf("map external administrator: %w", err)
+			}
+		}
+	} else {
+		if _, err := transaction.ExecContext(ctx, `
+			DELETE FROM guard_role_assignments
+			WHERE organization_id = $1 AND account_id = $2 AND source = $3
+		`, account.OrganizationID, account.ID, provisioning.AssignmentSource); err != nil {
+			return guard.Account{}, false, fmt.Errorf("remove external administrator mapping: %w", err)
+		}
+	}
+	if err := transaction.Commit(); err != nil {
+		return guard.Account{}, false, fmt.Errorf("commit external account provisioning: %w", err)
+	}
+	return account, created, nil
 }
 
 func (s *GuardStore) UpdatePasswordHash(ctx context.Context, accountID, passwordHash string, updatedAt time.Time) error {
@@ -155,7 +268,7 @@ func (s *GuardStore) UpdatePasswordHash(ctx context.Context, accountID, password
 func (s *GuardStore) AccessForAccount(ctx context.Context, organizationID, accountID string) (guard.Access, error) {
 	row := s.database.QueryRowContext(ctx, `
 		SELECT id, organization_id, username, normalized_username, email,
-		       display_name, password_hash, status, created_at, updated_at
+		       display_name, COALESCE(password_hash, ''), status, created_at, updated_at
 		FROM guard_accounts
 		WHERE organization_id = $1 AND id = $2
 	`, organizationID, accountID)

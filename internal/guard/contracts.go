@@ -4,6 +4,7 @@ package guard
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"strings"
 	"time"
@@ -126,6 +127,46 @@ type RoleAssignment struct {
 	CreatedAt      time.Time
 }
 
+type ExternalIdentity struct {
+	OrganizationID string
+	Issuer         string
+	Subject        string
+	AccountID      string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
+type ExternalAccountProvisioning struct {
+	Account                   Account
+	Identity                  ExternalIdentity
+	Administrator             bool
+	AdministratorAssignmentID string
+	AssignmentSource          string
+}
+
+func (p ExternalAccountProvisioning) Validate() error {
+	account := p.Account
+	identity := p.Identity
+	if account.ID == "" || account.OrganizationID == "" || account.Username == "" ||
+		account.NormalizedUsername == "" || account.Email == "" || account.DisplayName == "" ||
+		account.PasswordHash != "" || account.Status != "active" || account.CreatedAt.IsZero() || account.UpdatedAt.IsZero() {
+		return errors.New("complete external account is required")
+	}
+	if identity.OrganizationID != account.OrganizationID || identity.Issuer == "" || identity.Subject == "" ||
+		identity.AccountID != account.ID || identity.CreatedAt.IsZero() || identity.UpdatedAt.IsZero() {
+		return errors.New("complete external identity is required")
+	}
+	encodedSource := strings.TrimPrefix(p.AssignmentSource, "oidc:")
+	decodedSource, sourceErr := hex.DecodeString(encodedSource)
+	if !strings.HasPrefix(p.AssignmentSource, "oidc:") || sourceErr != nil || len(decodedSource) != 16 {
+		return errors.New("valid external assignment source is required")
+	}
+	if p.Administrator && p.AdministratorAssignmentID == "" {
+		return errors.New("administrator mapping identity is required")
+	}
+	return nil
+}
+
 type AdministratorBootstrap struct {
 	Account    Account
 	Bundle     PolicyBundle
@@ -220,6 +261,7 @@ type Store interface {
 	BootstrapAdministrator(ctx context.Context, bootstrap AdministratorBootstrap) (Account, error)
 	FindAccountByUsername(ctx context.Context, organizationID, normalizedUsername string) (Account, error)
 	UpdatePasswordHash(ctx context.Context, accountID, passwordHash string, updatedAt time.Time) error
+	ProvisionExternalAccount(ctx context.Context, provisioning ExternalAccountProvisioning) (account Account, created bool, err error)
 	AccessForAccount(ctx context.Context, organizationID, accountID string) (Access, error)
 	CreateSession(ctx context.Context, session Session) error
 	FindSessionByTokenHash(ctx context.Context, organizationID string, tokenHash []byte, now time.Time) (Session, Access, error)

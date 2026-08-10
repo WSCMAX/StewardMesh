@@ -15,27 +15,31 @@ import (
 )
 
 type MemoryGuardStore struct {
-	mu                 sync.RWMutex
-	accounts           map[string]guard.Account
-	accountByUsername  map[string]string
-	bundles            map[string]guard.PolicyBundle
-	roles              map[string]guard.Role
-	assignments        map[string]guard.RoleAssignment
-	sessions           map[string]guard.Session
-	sessionByTokenHash map[string]string
+	mu                  sync.RWMutex
+	accounts            map[string]guard.Account
+	accountByUsername   map[string]string
+	bundles             map[string]guard.PolicyBundle
+	roles               map[string]guard.Role
+	assignments         map[string]guard.RoleAssignment
+	externalIdentities  map[string]guard.ExternalIdentity
+	externalAssignments map[string]string
+	sessions            map[string]guard.Session
+	sessionByTokenHash  map[string]string
 }
 
 var _ guard.Store = (*MemoryGuardStore)(nil)
 
 func NewMemoryGuardStore() *MemoryGuardStore {
 	return &MemoryGuardStore{
-		accounts:           make(map[string]guard.Account),
-		accountByUsername:  make(map[string]string),
-		bundles:            make(map[string]guard.PolicyBundle),
-		roles:              make(map[string]guard.Role),
-		assignments:        make(map[string]guard.RoleAssignment),
-		sessions:           make(map[string]guard.Session),
-		sessionByTokenHash: make(map[string]string),
+		accounts:            make(map[string]guard.Account),
+		accountByUsername:   make(map[string]string),
+		bundles:             make(map[string]guard.PolicyBundle),
+		roles:               make(map[string]guard.Role),
+		assignments:         make(map[string]guard.RoleAssignment),
+		externalIdentities:  make(map[string]guard.ExternalIdentity),
+		externalAssignments: make(map[string]string),
+		sessions:            make(map[string]guard.Session),
+		sessionByTokenHash:  make(map[string]string),
 	}
 }
 
@@ -100,6 +104,89 @@ func (s *MemoryGuardStore) UpdatePasswordHash(_ context.Context, accountID, pass
 	account.UpdatedAt = updatedAt
 	s.accounts[accountID] = account
 	return nil
+}
+
+func (s *MemoryGuardStore) ProvisionExternalAccount(_ context.Context, provisioning guard.ExternalAccountProvisioning) (guard.Account, bool, error) {
+	if err := provisioning.Validate(); err != nil {
+		return guard.Account{}, false, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var administratorRoleID string
+	if provisioning.Administrator {
+		for _, role := range s.roles {
+			if role.OrganizationID == provisioning.Account.OrganizationID && role.Name == "Administrator" {
+				administratorRoleID = role.ID
+				break
+			}
+		}
+		if administratorRoleID == "" {
+			return guard.Account{}, false, guard.ErrNotFound
+		}
+	}
+	identityKey := guardExternalIdentityKey(
+		provisioning.Identity.OrganizationID,
+		provisioning.Identity.Issuer,
+		provisioning.Identity.Subject,
+	)
+	externalIdentity, exists := s.externalIdentities[identityKey]
+	created := !exists
+	account := provisioning.Account
+	if exists {
+		stored, ok := s.accounts[externalIdentity.AccountID]
+		if !ok || stored.OrganizationID != provisioning.Account.OrganizationID {
+			return guard.Account{}, false, guard.ErrNotFound
+		}
+		stored.Email = provisioning.Account.Email
+		stored.DisplayName = provisioning.Account.DisplayName
+		stored.UpdatedAt = provisioning.Account.UpdatedAt
+		account = stored
+		externalIdentity.UpdatedAt = provisioning.Identity.UpdatedAt
+		s.externalIdentities[identityKey] = externalIdentity
+	} else {
+		usernameKey := guardUsernameKey(account.OrganizationID, account.NormalizedUsername)
+		if _, duplicate := s.accounts[account.ID]; duplicate {
+			return guard.Account{}, false, errors.New("external account already exists")
+		}
+		if _, duplicate := s.accountByUsername[usernameKey]; duplicate {
+			return guard.Account{}, false, errors.New("external account username already exists")
+		}
+		s.accounts[account.ID] = cloneGuardAccount(account)
+		s.accountByUsername[usernameKey] = account.ID
+		s.externalIdentities[identityKey] = provisioning.Identity
+	}
+	assignmentKey := guardExternalAssignmentKey(account.OrganizationID, account.ID, provisioning.AssignmentSource)
+	if provisioning.Administrator {
+		hasAdministratorAssignment := false
+		for _, assignment := range s.assignments {
+			if assignment.OrganizationID == account.OrganizationID && assignment.AccountID == account.ID &&
+				assignment.RoleID == administratorRoleID && assignment.Scope.Kind == guard.ScopeOrganization &&
+				assignment.Scope.ResourceID == account.OrganizationID {
+				hasAdministratorAssignment = true
+				break
+			}
+		}
+		if !hasAdministratorAssignment {
+			s.assignments[provisioning.AdministratorAssignmentID] = guard.RoleAssignment{
+				ID:             provisioning.AdministratorAssignmentID,
+				OrganizationID: account.OrganizationID,
+				AccountID:      account.ID,
+				RoleID:         administratorRoleID,
+				Scope: guard.Scope{
+					Kind:           guard.ScopeOrganization,
+					OrganizationID: account.OrganizationID,
+					ResourceID:     account.OrganizationID,
+				},
+				CreatedAt: provisioning.Account.UpdatedAt,
+			}
+			s.externalAssignments[assignmentKey] = provisioning.AdministratorAssignmentID
+		}
+	} else if assignmentID := s.externalAssignments[assignmentKey]; assignmentID != "" {
+		delete(s.assignments, assignmentID)
+		delete(s.externalAssignments, assignmentKey)
+	}
+	s.accounts[account.ID] = cloneGuardAccount(account)
+	return cloneGuardAccount(account), created, nil
 }
 
 func (s *MemoryGuardStore) AccessForAccount(_ context.Context, organizationID, accountID string) (guard.Access, error) {
@@ -219,6 +306,14 @@ func (s *MemoryGuardStore) RevokeSession(_ context.Context, sessionID string, re
 
 func guardUsernameKey(organizationID, normalizedUsername string) string {
 	return organizationID + "\x00" + normalizedUsername
+}
+
+func guardExternalIdentityKey(organizationID, issuer, subject string) string {
+	return organizationID + "\x00" + issuer + "\x00" + subject
+}
+
+func guardExternalAssignmentKey(organizationID, accountID, source string) string {
+	return organizationID + "\x00" + accountID + "\x00" + source
 }
 
 func cloneGuardAccount(account guard.Account) guard.Account {

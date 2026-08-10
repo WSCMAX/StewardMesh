@@ -18,6 +18,7 @@ import (
 	"github.com/maxlemke/stewardmesh/internal/foundation"
 	"github.com/maxlemke/stewardmesh/internal/guard"
 	"github.com/maxlemke/stewardmesh/internal/httpapi"
+	"github.com/maxlemke/stewardmesh/internal/identity"
 	"github.com/maxlemke/stewardmesh/internal/people"
 	"github.com/maxlemke/stewardmesh/internal/repository"
 	postgresrepository "github.com/maxlemke/stewardmesh/internal/repository/postgres"
@@ -54,6 +55,27 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("construct application: %w", err)
+	}
+	var oidcFlow *identity.OIDCFlow
+	if cfg.OIDCEnabled() {
+		oidcClient, err := identity.NewOIDCClient(ctx, identity.OIDCConfig{
+			IssuerURL:            cfg.OIDCIssuerURL,
+			ClientID:             cfg.OIDCClientID,
+			ClientSecret:         cfg.OIDCClientSecret,
+			RedirectURL:          cfg.OIDCRedirectURL,
+			AdministratorClaim:   cfg.OIDCAdministratorClaim,
+			AdministratorValues:  cfg.OIDCAdministratorValues,
+			RequireVerifiedEmail: cfg.OIDCRequireVerifiedEmail,
+		})
+		cfg.OIDCClientSecret = ""
+		if err != nil {
+			return nil, err
+		}
+		oidcFlow, err = identity.NewOIDCFlow(oidcClient, cfg.OIDCTransactionSecret, nil)
+		cfg.OIDCTransactionSecret = ""
+		if err != nil {
+			return nil, fmt.Errorf("initialize OpenID Connect flow: %w", err)
+		}
 	}
 
 	runtime, err := initializeFoundation(ctx, cfg, options.RunMigrations)
@@ -112,6 +134,7 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 		Goals:               catalog,
 		Blobs:               blobStore,
 		Guard:               guardService,
+		OIDC:                oidcFlow,
 		SessionCookieSecure: cfg.SessionCookieSecure,
 	}, cfg.AllowedOrigin, runtime.organization)
 	return application, nil

@@ -31,22 +31,30 @@ const (
 )
 
 type Config struct {
-	Addr                string
-	DataDir             string
-	BlobDir             string
-	DatabaseURL         string
-	RepositoryDriver    RepositoryDriver
-	CacheDriver         CacheDriver
-	CacheURL            string
-	CacheKeySecret      string
-	AllowedOrigin       string
-	OrganizationID      string
-	OrganizationName    string
-	BootstrapToken      string
-	SessionCookieSecure bool
-	SessionTTL          time.Duration
-	SeedSynthetic       bool
-	validationError     error
+	Addr                     string
+	DataDir                  string
+	BlobDir                  string
+	DatabaseURL              string
+	RepositoryDriver         RepositoryDriver
+	CacheDriver              CacheDriver
+	CacheURL                 string
+	CacheKeySecret           string
+	OIDCIssuerURL            string
+	OIDCClientID             string
+	OIDCClientSecret         string
+	OIDCRedirectURL          string
+	OIDCTransactionSecret    string
+	OIDCAdministratorClaim   string
+	OIDCAdministratorValues  []string
+	OIDCRequireVerifiedEmail bool
+	AllowedOrigin            string
+	OrganizationID           string
+	OrganizationName         string
+	BootstrapToken           string
+	SessionCookieSecure      bool
+	SessionTTL               time.Duration
+	SeedSynthetic            bool
+	validationError          error
 }
 
 func Load() (Config, error) {
@@ -64,23 +72,32 @@ func FromEnv() Config {
 		strings.HasPrefix(allowedOrigin, "https://"),
 	)
 	sessionTTL, ttlErr := envDuration("STEWARDMESH_SESSION_TTL", 12*time.Hour)
+	oidcRequireVerifiedEmail, oidcVerifiedEmailErr := envBool("STEWARDMESH_OIDC_REQUIRE_VERIFIED_EMAIL", true)
 	return Config{
-		Addr:                envOr("STEWARDMESH_ADDR", "127.0.0.1:8080"),
-		DataDir:             envOr("STEWARDMESH_DATA_DIR", "./data"),
-		BlobDir:             envOr("STEWARDMESH_BLOB_DIR", "./storage"),
-		DatabaseURL:         envOr("STEWARDMESH_DATABASE_URL", ""),
-		RepositoryDriver:    RepositoryDriver(envOr("STEWARDMESH_REPOSITORY_DRIVER", string(RepositoryDriverPostgres))),
-		CacheDriver:         CacheDriver(envOr("STEWARDMESH_CACHE_DRIVER", string(CacheDriverNone))),
-		CacheURL:            os.Getenv("STEWARDMESH_CACHE_URL"),
-		CacheKeySecret:      os.Getenv("STEWARDMESH_CACHE_KEY_SECRET"),
-		AllowedOrigin:       allowedOrigin,
-		OrganizationID:      envOr("STEWARDMESH_ORGANIZATION_ID", "local-organization"),
-		OrganizationName:    envOr("STEWARDMESH_ORGANIZATION_NAME", "StewardMesh Local Organization"),
-		BootstrapToken:      os.Getenv("STEWARDMESH_BOOTSTRAP_TOKEN"),
-		SessionCookieSecure: sessionCookieSecure,
-		SessionTTL:          sessionTTL,
-		SeedSynthetic:       envBoolDefault("STEWARDMESH_SEED_SYNTHETIC"),
-		validationError:     errors.Join(secureErr, ttlErr),
+		Addr:                     envOr("STEWARDMESH_ADDR", "127.0.0.1:8080"),
+		DataDir:                  envOr("STEWARDMESH_DATA_DIR", "./data"),
+		BlobDir:                  envOr("STEWARDMESH_BLOB_DIR", "./storage"),
+		DatabaseURL:              envOr("STEWARDMESH_DATABASE_URL", ""),
+		RepositoryDriver:         RepositoryDriver(envOr("STEWARDMESH_REPOSITORY_DRIVER", string(RepositoryDriverPostgres))),
+		CacheDriver:              CacheDriver(envOr("STEWARDMESH_CACHE_DRIVER", string(CacheDriverNone))),
+		CacheURL:                 os.Getenv("STEWARDMESH_CACHE_URL"),
+		CacheKeySecret:           os.Getenv("STEWARDMESH_CACHE_KEY_SECRET"),
+		OIDCIssuerURL:            os.Getenv("STEWARDMESH_OIDC_ISSUER_URL"),
+		OIDCClientID:             os.Getenv("STEWARDMESH_OIDC_CLIENT_ID"),
+		OIDCClientSecret:         os.Getenv("STEWARDMESH_OIDC_CLIENT_SECRET"),
+		OIDCRedirectURL:          os.Getenv("STEWARDMESH_OIDC_REDIRECT_URL"),
+		OIDCTransactionSecret:    os.Getenv("STEWARDMESH_OIDC_TRANSACTION_SECRET"),
+		OIDCAdministratorClaim:   os.Getenv("STEWARDMESH_OIDC_ADMINISTRATOR_CLAIM"),
+		OIDCAdministratorValues:  envCSV("STEWARDMESH_OIDC_ADMINISTRATOR_VALUES"),
+		OIDCRequireVerifiedEmail: oidcRequireVerifiedEmail,
+		AllowedOrigin:            allowedOrigin,
+		OrganizationID:           envOr("STEWARDMESH_ORGANIZATION_ID", "local-organization"),
+		OrganizationName:         envOr("STEWARDMESH_ORGANIZATION_NAME", "StewardMesh Local Organization"),
+		BootstrapToken:           os.Getenv("STEWARDMESH_BOOTSTRAP_TOKEN"),
+		SessionCookieSecure:      sessionCookieSecure,
+		SessionTTL:               sessionTTL,
+		SeedSynthetic:            envBoolDefault("STEWARDMESH_SEED_SYNTHETIC"),
+		validationError:          errors.Join(secureErr, ttlErr, oidcVerifiedEmailErr),
 	}
 }
 
@@ -132,6 +149,9 @@ func (c Config) Validate() error {
 	default:
 		return fmt.Errorf("unsupported STEWARDMESH_CACHE_DRIVER %q", c.CacheDriver)
 	}
+	if err := c.validateOIDC(); err != nil {
+		return err
+	}
 	var origin *url.URL
 	if c.AllowedOrigin != "" {
 		origin, err = url.Parse(c.AllowedOrigin)
@@ -166,11 +186,94 @@ func (c Config) Validate() error {
 	return nil
 }
 
+func (c Config) OIDCEnabled() bool {
+	return strings.TrimSpace(c.OIDCIssuerURL) != ""
+}
+
+func (c Config) validateOIDC() error {
+	if !c.OIDCEnabled() {
+		if c.OIDCClientID != "" || c.OIDCClientSecret != "" || c.OIDCRedirectURL != "" ||
+			c.OIDCTransactionSecret != "" || c.OIDCAdministratorClaim != "" || len(c.OIDCAdministratorValues) > 0 {
+			return errors.New("STEWARDMESH_OIDC_ISSUER_URL is required when OpenID Connect settings are configured")
+		}
+		return nil
+	}
+	if _, err := validateOIDCURL(c.OIDCIssuerURL, false); err != nil {
+		return fmt.Errorf("STEWARDMESH_OIDC_ISSUER_URL: %w", err)
+	}
+	if strings.TrimSpace(c.OIDCClientID) == "" || c.OIDCClientSecret == "" {
+		return errors.New("STEWARDMESH_OIDC_CLIENT_ID and STEWARDMESH_OIDC_CLIENT_SECRET are required")
+	}
+	if len(c.OIDCTransactionSecret) < 32 {
+		return errors.New("STEWARDMESH_OIDC_TRANSACTION_SECRET must contain at least 32 bytes")
+	}
+	redirect, err := validateOIDCURL(c.OIDCRedirectURL, true)
+	if err != nil {
+		return fmt.Errorf("STEWARDMESH_OIDC_REDIRECT_URL: %w", err)
+	}
+	if redirect.Path != "/api/v1/auth/oidc/callback" {
+		return errors.New("STEWARDMESH_OIDC_REDIRECT_URL must use /api/v1/auth/oidc/callback")
+	}
+	allowedOrigin, err := url.Parse(c.AllowedOrigin)
+	if err != nil || redirect.Scheme != allowedOrigin.Scheme || redirect.Host != allowedOrigin.Host {
+		return errors.New("STEWARDMESH_OIDC_REDIRECT_URL must use the configured allowed origin")
+	}
+	claim := strings.TrimSpace(c.OIDCAdministratorClaim)
+	if claim != "" && (len(claim) > 128 || strings.ContainsAny(claim, " \t\r\n")) {
+		return errors.New("STEWARDMESH_OIDC_ADMINISTRATOR_CLAIM must be a single claim name of at most 128 characters")
+	}
+	for _, value := range c.OIDCAdministratorValues {
+		if value == "" || len(value) > 512 {
+			return errors.New("STEWARDMESH_OIDC_ADMINISTRATOR_VALUES contains an invalid value")
+		}
+	}
+	return nil
+}
+
+func validateOIDCURL(raw string, redirect bool) (*url.URL, error) {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return nil, errors.New("must be an absolute URL without credentials, query, or fragment")
+	}
+	if parsed.Scheme != "https" {
+		host := parsed.Hostname()
+		address := net.ParseIP(host)
+		if parsed.Scheme != "http" || !(strings.EqualFold(host, "localhost") || address != nil && address.IsLoopback()) {
+			return nil, errors.New("must use HTTPS except for loopback development")
+		}
+	}
+	if redirect && parsed.Path == "" {
+		return nil, errors.New("must include a callback path")
+	}
+	return parsed, nil
+}
+
 func envOr(key, fallback string) string {
 	if value := os.Getenv(key); value != "" {
 		return value
 	}
 	return fallback
+}
+
+func envCSV(key string) []string {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return nil
+	}
+	seen := make(map[string]struct{})
+	values := make([]string, 0)
+	for _, item := range strings.Split(value, ",") {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		if _, exists := seen[item]; exists {
+			continue
+		}
+		seen[item] = struct{}{}
+		values = append(values, item)
+	}
+	return values
 }
 
 func envBool(key string, fallback bool) (bool, error) {

@@ -148,3 +148,72 @@ func TestLoadRejectsInvalidGuardSecurityConfiguration(t *testing.T) {
 		t.Fatalf("expected invalid secure-cookie setting to fail, got %v", err)
 	}
 }
+
+func TestLoadSupportsOIDCWithExactAdministratorClaimValues(t *testing.T) {
+	t.Setenv("STEWARDMESH_REPOSITORY_DRIVER", "memory")
+	t.Setenv("STEWARDMESH_OIDC_ISSUER_URL", "https://identity.example.test/tenant")
+	t.Setenv("STEWARDMESH_OIDC_CLIENT_ID", "stewardmesh-web")
+	t.Setenv("STEWARDMESH_OIDC_CLIENT_SECRET", strings.Repeat("c", 32))
+	t.Setenv("STEWARDMESH_OIDC_REDIRECT_URL", "http://localhost:5173/api/v1/auth/oidc/callback")
+	t.Setenv("STEWARDMESH_OIDC_TRANSACTION_SECRET", strings.Repeat("t", 32))
+	t.Setenv("STEWARDMESH_OIDC_ADMINISTRATOR_CLAIM", "groups")
+	t.Setenv("STEWARDMESH_OIDC_ADMINISTRATOR_VALUES", "stewardmesh-admins, platform-admins, stewardmesh-admins")
+	configuration, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !configuration.OIDCEnabled() || !configuration.OIDCRequireVerifiedEmail ||
+		configuration.OIDCAdministratorClaim != "groups" ||
+		len(configuration.OIDCAdministratorValues) != 2 || configuration.OIDCAdministratorValues[0] != "stewardmesh-admins" {
+		t.Fatalf("unexpected OpenID Connect configuration %#v", configuration)
+	}
+}
+
+func TestValidateRejectsPartialOrUnsafeOIDCConfigurationWithoutLeakingSecrets(t *testing.T) {
+	valid := FromEnv()
+	valid.RepositoryDriver = RepositoryDriverMemory
+	valid.OIDCIssuerURL = "https://identity.example.test/tenant"
+	valid.OIDCClientID = "stewardmesh-web"
+	valid.OIDCClientSecret = "super-secret-client-value"
+	valid.OIDCRedirectURL = "http://localhost:5173/api/v1/auth/oidc/callback"
+	valid.OIDCTransactionSecret = strings.Repeat("t", 32)
+	tests := []struct {
+		name   string
+		mutate func(*Config)
+	}{
+		{name: "ignored client secret", mutate: func(configuration *Config) {
+			configuration.OIDCIssuerURL = ""
+		}},
+		{name: "plaintext remote issuer", mutate: func(configuration *Config) {
+			configuration.OIDCIssuerURL = "http://identity.example.test/tenant"
+		}},
+		{name: "credentialed issuer", mutate: func(configuration *Config) {
+			configuration.OIDCIssuerURL = "https://user:super-secret@identity.example.test/tenant"
+		}},
+		{name: "redirect origin mismatch", mutate: func(configuration *Config) {
+			configuration.OIDCRedirectURL = "https://other.example.test/api/v1/auth/oidc/callback"
+		}},
+		{name: "redirect path mismatch", mutate: func(configuration *Config) {
+			configuration.OIDCRedirectURL = "http://localhost:5173/callback"
+		}},
+		{name: "short transaction secret", mutate: func(configuration *Config) {
+			configuration.OIDCTransactionSecret = "short"
+		}},
+		{name: "invalid administrator claim", mutate: func(configuration *Config) {
+			configuration.OIDCAdministratorClaim = "groups claim"
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			configuration := valid
+			test.mutate(&configuration)
+			err := configuration.Validate()
+			if err == nil {
+				t.Fatal("expected invalid OpenID Connect configuration")
+			}
+			if strings.Contains(err.Error(), "super-secret") {
+				t.Fatal("configuration error leaked an OpenID Connect secret")
+			}
+		})
+	}
+}

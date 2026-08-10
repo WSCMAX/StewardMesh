@@ -2,7 +2,7 @@
 openapi: 3.1.0
 info:
   title: StewardMesh API
-  version: 0.4.0
+  version: 0.5.0
   description: Requirements-driven inventory, lifecycle, and secure organization management API.
   license:
     name: Apache License 2.0
@@ -101,7 +101,7 @@ paths:
               schema: {$ref: '#/components/schemas/Error'}
   /api/v1/auth/session:
     get:
-      summary: Get the current local session
+      summary: Get the current Guard session
       operationId: getLocalSession
       tags: [Guard]
       x-requirement: SEC-GUARD-001
@@ -130,6 +130,66 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+  /api/v1/auth/oidc/start:
+    get:
+      summary: Start organization OpenID Connect sign-in
+      operationId: startOpenIDConnectLogin
+      tags: [Guard]
+      x-requirement: SEC-GUARD-001
+      responses:
+        '303':
+          description: Redirect to the configured provider authorization endpoint with state, nonce, and S256 PKCE
+          headers:
+            Location:
+              schema: {type: string, format: uri}
+            Set-Cookie:
+              description: Short-lived encrypted HttpOnly, SameSite=Lax transaction cookie
+              schema: {type: string}
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: The one-time local administrator bootstrap must be complete first
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '503':
+          description: OpenID Connect is disabled or provider initialization is unavailable
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+  /api/v1/auth/oidc/callback:
+    get:
+      summary: Complete organization OpenID Connect sign-in
+      operationId: completeOpenIDConnectLogin
+      tags: [Guard]
+      x-requirement: SEC-GUARD-001
+      parameters:
+        - in: query
+          name: state
+          required: true
+          schema: {type: string, minLength: 32, maxLength: 128}
+        - in: query
+          name: code
+          required: false
+          schema: {type: string, minLength: 1, maxLength: 4096}
+        - in: query
+          name: error
+          required: false
+          schema: {type: string, minLength: 1, maxLength: 128}
+      responses:
+        '303':
+          description: Redirect to the fixed configured application origin after establishing a Guard session or reporting a generic failure
+          headers:
+            Location:
+              schema: {type: string, format: uri}
+            Set-Cookie:
+              description: Opaque Guard session cookie on success and an expired OIDC transaction cookie on every callback
+              schema: {type: string}
+        '503':
+          description: OpenID Connect is disabled
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
   /api/v1/organization:
     get:
       summary: Get the configured organization
@@ -619,11 +679,12 @@ components:
   schemas:
     BootstrapStatus:
       type: object
-      required: [required, tokenRequired, minimumPasswordCharacters]
+      required: [required, tokenRequired, minimumPasswordCharacters, oidcEnabled]
       properties:
         required: {type: boolean}
         tokenRequired: {type: boolean}
         minimumPasswordCharacters: {type: integer, minimum: 15}
+        oidcEnabled: {type: boolean}
     BootstrapAdministratorRequest:
       type: object
       additionalProperties: false

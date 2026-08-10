@@ -173,6 +173,13 @@ func memoryConfiguration(t *testing.T) config.Config {
 	cfg.CacheDriver = config.CacheDriverNone
 	cfg.CacheURL = ""
 	cfg.CacheKeySecret = ""
+	cfg.OIDCIssuerURL = ""
+	cfg.OIDCClientID = ""
+	cfg.OIDCClientSecret = ""
+	cfg.OIDCRedirectURL = ""
+	cfg.OIDCTransactionSecret = ""
+	cfg.OIDCAdministratorClaim = ""
+	cfg.OIDCAdministratorValues = nil
 	cfg.BlobDir = t.TempDir()
 	cfg.AllowedOrigin = "http://localhost:5173"
 	cfg.SessionCookieSecure = false

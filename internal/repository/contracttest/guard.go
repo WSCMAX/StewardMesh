@@ -115,6 +115,61 @@ func GuardStore(t *testing.T, store guard.Store, organizationID string) {
 	assertGrant(t, access.Grants, guard.PermissionGuardManage)
 	assertGrant(t, access.Grants, guard.PermissionAssetsWrite)
 
+	externalAccountID := randomID(t)
+	externalAssignmentID := randomID(t)
+	externalProvisioning := guard.ExternalAccountProvisioning{
+		Account: guard.Account{
+			ID:                 externalAccountID,
+			OrganizationID:     organizationID,
+			Username:           "oidc-" + externalAccountID[:12],
+			NormalizedUsername: "oidc-" + externalAccountID[:12],
+			Email:              "external@example.test",
+			DisplayName:        "External Administrator",
+			Status:             "active",
+			CreatedAt:          now,
+			UpdatedAt:          now,
+		},
+		Identity: guard.ExternalIdentity{
+			OrganizationID: organizationID,
+			Issuer:         "https://identity.example.test/tenant",
+			Subject:        "external-subject",
+			AccountID:      externalAccountID,
+			CreatedAt:      now,
+			UpdatedAt:      now,
+		},
+		Administrator:             true,
+		AdministratorAssignmentID: externalAssignmentID,
+		AssignmentSource:          "oidc:0123456789abcdef0123456789abcdef",
+	}
+	externalAccount, externalCreated, err := store.ProvisionExternalAccount(ctx, externalProvisioning)
+	if err != nil || !externalCreated || externalAccount.ID != externalAccountID || externalAccount.PasswordHash != "" {
+		t.Fatalf("unexpected external account %#v created=%t err=%v", externalAccount, externalCreated, err)
+	}
+	externalAccess, err := store.AccessForAccount(ctx, organizationID, externalAccount.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertGrant(t, externalAccess.Grants, guard.PermissionGuardManage)
+	externalProvisioning.Account.ID = randomID(t)
+	externalProvisioning.Account.Email = "refreshed@example.test"
+	externalProvisioning.Account.DisplayName = "Refreshed Person"
+	externalProvisioning.Account.UpdatedAt = now.Add(time.Minute)
+	externalProvisioning.Identity.AccountID = externalProvisioning.Account.ID
+	externalProvisioning.Identity.UpdatedAt = now.Add(time.Minute)
+	externalProvisioning.Administrator = false
+	externalProvisioning.AdministratorAssignmentID = ""
+	externalAccount, externalCreated, err = store.ProvisionExternalAccount(ctx, externalProvisioning)
+	if err != nil || externalCreated || externalAccount.ID != externalAccountID || externalAccount.Email != "refreshed@example.test" {
+		t.Fatalf("unexpected refreshed external account %#v created=%t err=%v", externalAccount, externalCreated, err)
+	}
+	externalAccess, err = store.AccessForAccount(ctx, organizationID, externalAccount.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(externalAccess.Grants) != 0 || len(externalAccess.Roles) != 0 {
+		t.Fatalf("expected claim removal to remove only the external administrator mapping, access=%#v", externalAccess)
+	}
+
 	sessionID := randomID(t)
 	tokenHash := sha256.Sum256([]byte("session-token-" + sessionID))
 	csrfHash := sha256.Sum256([]byte("csrf-token-" + sessionID))

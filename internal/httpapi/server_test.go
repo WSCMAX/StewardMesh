@@ -13,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -20,6 +21,7 @@ import (
 	"github.com/maxlemke/stewardmesh/internal/bootstrap"
 	"github.com/maxlemke/stewardmesh/internal/foundation"
 	"github.com/maxlemke/stewardmesh/internal/guard"
+	"github.com/maxlemke/stewardmesh/internal/identity"
 	"github.com/maxlemke/stewardmesh/internal/people"
 	"github.com/maxlemke/stewardmesh/internal/repository"
 )
@@ -44,6 +46,29 @@ type testSession struct {
 }
 
 type unavailableHTTPAttemptLimiter struct{}
+
+type fakeHTTPOIDCAuthenticator struct {
+	state         string
+	nonce         string
+	verifier      string
+	authenticates int
+}
+
+func (f *fakeHTTPOIDCAuthenticator) AuthorizationURL(state, nonce, verifier string) (string, error) {
+	f.state, f.nonce, f.verifier = state, nonce, verifier
+	return "https://identity.example.test/authorize?state=" + url.QueryEscape(state), nil
+}
+
+func (f *fakeHTTPOIDCAuthenticator) Authenticate(_ context.Context, code, verifier, nonce string) (identity.OIDCPrincipal, error) {
+	f.authenticates++
+	if code != "authorization-code" || verifier != f.verifier || nonce != f.nonce {
+		return identity.OIDCPrincipal{}, identity.ErrOIDCAuthentication
+	}
+	return identity.OIDCPrincipal{
+		Issuer: "https://identity.example.test/tenant", Subject: "external-subject",
+		Email: "external@example.test", EmailVerified: true, DisplayName: "External Administrator", Administrator: true,
+	}, nil
+}
 
 func (unavailableHTTPAttemptLimiter) Allow(context.Context, string, time.Time) (bool, error) {
 	return false, io.ErrUnexpectedEOF
@@ -80,6 +105,112 @@ func TestProtectedRoutesRequireAuthentication(t *testing.T) {
 	}
 }
 
+func TestOIDCAuthorizationCodeFlowCreatesJITSession(t *testing.T) {
+	authenticator := &fakeHTTPOIDCAuthenticator{}
+	flow, err := identity.NewOIDCFlow(authenticator, strings.Repeat("t", 32), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := newGuardServerWithDependencies(t, nil, flow)
+	statusReq := httptest.NewRequest(http.MethodGet, "/api/v1/auth/bootstrap", nil)
+	statusRes := httptest.NewRecorder()
+	handler.ServeHTTP(statusRes, statusReq)
+	var status struct {
+		OIDCEnabled bool `json:"oidcEnabled"`
+	}
+	if err := json.Unmarshal(statusRes.Body.Bytes(), &status); err != nil || !status.OIDCEnabled {
+		t.Fatalf("expected bootstrap status to advertise OpenID Connect, status=%#v err=%v", status, err)
+	}
+	startBeforeBootstrap := httptest.NewRequest(http.MethodGet, "/api/v1/auth/oidc/start", nil)
+	startBeforeBootstrap.Header.Set("Sec-Fetch-Site", "same-origin")
+	startBeforeBootstrapRes := httptest.NewRecorder()
+	handler.ServeHTTP(startBeforeBootstrapRes, startBeforeBootstrap)
+	if startBeforeBootstrapRes.Code != http.StatusConflict {
+		t.Fatalf("expected local administrator bootstrap before OpenID Connect, got %d", startBeforeBootstrapRes.Code)
+	}
+	bootstrapAdministrator(t, handler)
+
+	start := httptest.NewRequest(http.MethodGet, "/api/v1/auth/oidc/start", nil)
+	start.Header.Set("Sec-Fetch-Site", "same-origin")
+	startRes := httptest.NewRecorder()
+	handler.ServeHTTP(startRes, start)
+	if startRes.Code != http.StatusSeeOther || !strings.HasPrefix(startRes.Header().Get("Location"), "https://identity.example.test/authorize?") {
+		t.Fatalf("unexpected OpenID Connect start response %d %#v", startRes.Code, startRes.Header())
+	}
+	transactionCookie := findCookie(t, startRes.Result().Cookies(), localOIDCTransactionName)
+	if !transactionCookie.HttpOnly || transactionCookie.Secure || transactionCookie.SameSite != http.SameSiteLaxMode || transactionCookie.Value == "" {
+		t.Fatalf("unexpected OpenID Connect transaction cookie %#v", transactionCookie)
+	}
+	callback := httptest.NewRequest(http.MethodGet, "/api/v1/auth/oidc/callback?code=authorization-code&state="+url.QueryEscape(authenticator.state), nil)
+	callback.AddCookie(transactionCookie)
+	callbackRes := httptest.NewRecorder()
+	handler.ServeHTTP(callbackRes, callback)
+	if callbackRes.Code != http.StatusSeeOther || callbackRes.Header().Get("Location") != testOrigin || authenticator.authenticates != 1 {
+		t.Fatalf("unexpected OpenID Connect callback %d location=%q authentications=%d body=%s",
+			callbackRes.Code, callbackRes.Header().Get("Location"), authenticator.authenticates, callbackRes.Body.String())
+	}
+	sessionCookie := findCookie(t, callbackRes.Result().Cookies(), localSessionName)
+	sessionRequest := httptest.NewRequest(http.MethodGet, "/api/v1/auth/session", nil)
+	sessionRequest.AddCookie(sessionCookie)
+	sessionResponse := httptest.NewRecorder()
+	handler.ServeHTTP(sessionResponse, sessionRequest)
+	if sessionResponse.Code != http.StatusOK || !strings.Contains(sessionResponse.Body.String(), "external@example.test") ||
+		!strings.Contains(sessionResponse.Body.String(), "Administrator") {
+		t.Fatalf("expected JIT administrator session, got %d: %s", sessionResponse.Code, sessionResponse.Body.String())
+	}
+}
+
+func TestOIDCCallbackRejectsMismatchedStateAndClearsTransaction(t *testing.T) {
+	authenticator := &fakeHTTPOIDCAuthenticator{}
+	flow, err := identity.NewOIDCFlow(authenticator, strings.Repeat("t", 32), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := newGuardServerWithDependencies(t, nil, flow)
+	bootstrapAdministrator(t, handler)
+	start := httptest.NewRequest(http.MethodGet, "/api/v1/auth/oidc/start", nil)
+	start.Header.Set("Sec-Fetch-Site", "same-origin")
+	startRes := httptest.NewRecorder()
+	handler.ServeHTTP(startRes, start)
+	transactionCookie := findCookie(t, startRes.Result().Cookies(), localOIDCTransactionName)
+	callback := httptest.NewRequest(http.MethodGet, "/api/v1/auth/oidc/callback?code=authorization-code&state=wrong-state", nil)
+	callback.AddCookie(transactionCookie)
+	callbackRes := httptest.NewRecorder()
+	handler.ServeHTTP(callbackRes, callback)
+	if callbackRes.Code != http.StatusSeeOther || callbackRes.Header().Get("Location") != testOrigin+"?auth=oidc_error" ||
+		authenticator.authenticates != 0 {
+		t.Fatalf("expected state mismatch to fail before exchange, got %d location=%q authentications=%d",
+			callbackRes.Code, callbackRes.Header().Get("Location"), authenticator.authenticates)
+	}
+	cleared := findCookie(t, callbackRes.Result().Cookies(), localOIDCTransactionName)
+	if cleared.MaxAge != -1 || cleared.Value != "" {
+		t.Fatalf("expected transaction cookie to be cleared, got %#v", cleared)
+	}
+}
+
+func TestOIDCStartTrustsConfiguredOriginAndLimitsLoopbackFallbackToDevelopment(t *testing.T) {
+	production := &Server{allowedOrigin: "https://stewardmesh.example.test"}
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/auth/oidc/start", nil)
+	request.RemoteAddr = "127.0.0.1:1234"
+	if production.trustedOIDCStart(request) {
+		t.Fatal("a production reverse proxy must not make a headerless OIDC start request trusted")
+	}
+	request.Header.Set("Origin", "https://stewardmesh.example.test")
+	if !production.trustedOIDCStart(request) {
+		t.Fatal("the exact configured origin should be trusted")
+	}
+	request.Header.Del("Origin")
+	request.Header.Set("Sec-Fetch-Site", "cross-site")
+	development := &Server{allowedOrigin: testOrigin}
+	if development.trustedOIDCStart(request) {
+		t.Fatal("cross-site OIDC initiation must be rejected even on loopback")
+	}
+	request.Header.Del("Sec-Fetch-Site")
+	if !development.trustedOIDCStart(request) {
+		t.Fatal("headerless loopback development should remain available")
+	}
+}
+
 func TestBootstrapSessionAndOrganizationCorrelation(t *testing.T) {
 	handler := newGuardServer(t)
 	statusReq := httptest.NewRequest(http.MethodGet, "/api/v1/auth/bootstrap", nil)
@@ -92,11 +223,12 @@ func TestBootstrapSessionAndOrganizationCorrelation(t *testing.T) {
 		Required                  bool `json:"required"`
 		TokenRequired             bool `json:"tokenRequired"`
 		MinimumPasswordCharacters int  `json:"minimumPasswordCharacters"`
+		OIDCEnabled               bool `json:"oidcEnabled"`
 	}
 	if err := json.Unmarshal(statusRes.Body.Bytes(), &status); err != nil {
 		t.Fatal(err)
 	}
-	if !status.Required || status.TokenRequired || status.MinimumPasswordCharacters != guard.MinimumPasswordCharacters {
+	if !status.Required || status.TokenRequired || status.OIDCEnabled || status.MinimumPasswordCharacters != guard.MinimumPasswordCharacters {
 		t.Fatalf("unexpected bootstrap status %#v", status)
 	}
 	session := bootstrapAdministrator(t, handler)
@@ -390,6 +522,10 @@ func newGuardServer(t *testing.T) http.Handler {
 }
 
 func newGuardServerWithLimiter(t *testing.T, limiter guard.AttemptLimiter) http.Handler {
+	return newGuardServerWithDependencies(t, limiter, nil)
+}
+
+func newGuardServerWithDependencies(t *testing.T, limiter guard.AttemptLimiter, oidcFlow *identity.OIDCFlow) http.Handler {
 	t.Helper()
 	organization, err := bootstrap.NewOrganization("example-org", "Example Organization")
 	if err != nil {
@@ -417,7 +553,19 @@ func newGuardServerWithLimiter(t *testing.T, limiter guard.AttemptLimiter) http.
 		Tags:   catalog,
 		Goals:  catalog,
 		Guard:  service,
+		OIDC:   oidcFlow,
 	}, testOrigin, organization)
+}
+
+func findCookie(t *testing.T, cookies []*http.Cookie, name string) *http.Cookie {
+	t.Helper()
+	for _, cookie := range cookies {
+		if cookie.Name == name {
+			return cookie
+		}
+	}
+	t.Fatalf("cookie %q not found in %#v", name, cookies)
+	return nil
 }
 
 func createPeopleRecord[T any](t *testing.T, handler http.Handler, session testSession, path string, payload any) T {

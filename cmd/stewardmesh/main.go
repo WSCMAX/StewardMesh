@@ -31,6 +31,8 @@ func main() {
 	cfg.DatabaseURL = ""
 	cfg.CacheURL = ""
 	cfg.CacheKeySecret = ""
+	cfg.OIDCClientSecret = ""
+	cfg.OIDCTransactionSecret = ""
 	cfg.BootstrapToken = ""
 	if err != nil {
 		logger.Error("initialize application", "error", err)

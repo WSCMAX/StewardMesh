@@ -200,6 +200,7 @@
         ],
         "code": [
           "cmd/stewardmesh/main.go",
+          "deploy/docker-compose.yml",
           "internal/cache/cache.go",
           "internal/cache/valkey.go",
           "internal/config/config.go",

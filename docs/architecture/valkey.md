@@ -7,8 +7,9 @@
 **Traceability status:** the provider-neutral contract, disabled mode, bounded
 in-memory adapter, official Valkey Go client adapter, validated connection URL,
 namespaced key builder, distributed Guard login limiter, runtime configuration,
-and their tests are implemented. The optional self-hosted Compose service
-remains tracked by issue #41.
+optional self-hosted Compose service, and their validation are implemented.
+AWS deployment guidance and reusable application construction remain tracked by
+issue #41.
 
 ## Decision
 
@@ -50,9 +51,10 @@ separate in-process response cache, and uses Valkey-first names in application
 code. URL validation rejects unsupported schemes and reports errors without
 including credentials. TLS URLs cannot disable certificate verification.
 
-The container deployment will include an optional health-checked Valkey service.
-The application defaults to `none`, so existing local development does not
-require the service. A deployment will enable the shared backend explicitly.
+The container deployment includes an optional health-checked Valkey service in
+the `cache` and `demo` Compose profiles. The application defaults to `none`, so
+existing local development does not require the service. A deployment enables
+the shared backend explicitly.
 
 ## Boundaries and keys
 
@@ -89,6 +91,14 @@ Sessions, CSRF hashes, account status, grants, permission decisions, and
 authenticated HTTP responses remain uncached.
 
 ## Deployment guidance
+
+For local evaluation, the Compose `cache` profile publishes Valkey only on
+`127.0.0.1:6379` and uses `redis://127.0.0.1:6379/0`. It disables snapshot and
+append-only persistence because the cache is reconstructible, limits memory to
+128 MB, and uses `noeviction`. Reaching the limit therefore returns an error;
+Guard's cache-backed limiter fails closed instead of silently losing counters.
+The local service has no authentication or TLS and must not be exposed to a
+shared network.
 
 For containers, use PostgreSQL as the source of truth, Valkey for shared
 ephemeral state, and an S3-compatible store for blobs before running multiple

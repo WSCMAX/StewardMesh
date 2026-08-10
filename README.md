@@ -41,6 +41,22 @@ a `redis://` or `rediss://` URL, and inject a separate
 HMAC-protects account and client dimensions and must come from the deployment's
 secret manager rather than source control.
 
+For local Valkey evaluation, start the optional health-checked `cache` profile
+and enable it in the current shell:
+
+```sh
+docker compose -f deploy/docker-compose.yml --profile cache up -d --wait postgres valkey
+export STEWARDMESH_CACHE_DRIVER=valkey
+export STEWARDMESH_CACHE_URL=redis://127.0.0.1:6379/0
+export STEWARDMESH_CACHE_KEY_SECRET="$(openssl rand -hex 32)"
+go run ./cmd/stewardmesh
+```
+
+The Compose port is bound to loopback and has no authentication or TLS, so it
+is for local development only. Shared environments must use private networking,
+TLS, authentication, and secret-manager injection as described in
+[Valkey cache and distributed runtime](docs/architecture/valkey.md).
+
 People now provides sites, departments, person/shared/public/lab identities,
 structured site addresses, buildings and rooms, scoped directory search, and
 effective-dated multi-user asset assignments.

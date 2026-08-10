@@ -11,6 +11,7 @@ StewardMesh standardizes on the newest stable versions validated for the reposit
 | Tailwind CSS | 4.3.3 | `web/package.json` |
 | Vite | 8.2.1 | `web/package.json` |
 | PostgreSQL | 18.4 | `deploy/docker-compose.yml` and CI |
+| Valkey | 9.1.1 | `deploy/docker-compose.yml` |
 | pgx | 5.10.0 | `go.mod` |
 | govulncheck | 1.6.0 | `go.mod` |
 

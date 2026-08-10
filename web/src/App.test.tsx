@@ -50,6 +50,7 @@ test('restores a server-managed session and renders StewardMesh modules', async 
   installAuthenticatedFetch()
   render(<App />)
   expect(screen.getByRole('heading', { name: 'StewardMesh' })).toBeInTheDocument()
+  expect(document.querySelector('img[src="/brand/stewardmesh-s-mark.svg"]')).toBeInTheDocument()
   expect(await screen.findByText('Atlas — Asset inventory')).toBeInTheDocument()
   expect(screen.getByText('Signed in as', { exact: false })).toHaveTextContent('Example Administrator')
   expect(screen.getByText('Guard role:', { exact: false })).toHaveTextContent('Administrator')

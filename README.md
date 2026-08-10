@@ -92,6 +92,10 @@ The API is available at `http://localhost:8080`; the web application is availabl
 
 See the [feature dictionary](docs/features/dictionary.md) and [requirements](docs/requirements/README.md).
 
+## Brand and interface design
+
+The [StewardMesh design guide](docs/design/stewardmesh-design-guide.md) defines the logo assets, color tokens, typography, component styling, and accessibility baseline used by the web application.
+
 ## Project documentation
 
 - [Contributing](CONTRIBUTING.md)

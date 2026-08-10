@@ -602,6 +602,175 @@ func (s *GuardStore) DeleteRoleAssignment(ctx context.Context, organizationID, a
 	return assignment, nil
 }
 
+func (s *GuardStore) RegisterResourceOwnership(ctx context.Context, ownership guard.ResourceOwnership) (guard.ResourceOwnership, bool, error) {
+	if err := ownership.Validate(); err != nil {
+		return guard.ResourceOwnership{}, false, err
+	}
+	if !ownership.WriteLocked {
+		return guard.ResourceOwnership{}, false, errors.New("new resource ownership must be write-locked")
+	}
+	transaction, err := s.database.BeginTx(ctx, nil)
+	if err != nil {
+		return guard.ResourceOwnership{}, false, fmt.Errorf("begin resource ownership registration: %w", err)
+	}
+	defer transaction.Rollback()
+	if _, err := transaction.ExecContext(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", ownership.OrganizationID); err != nil {
+		return guard.ResourceOwnership{}, false, fmt.Errorf("lock organization resource ownership: %w", err)
+	}
+	existing, err := scanResourceOwnership(transaction.QueryRowContext(ctx, `
+		SELECT organization_id, resource_type, resource_id, source_system_id, source_record_id,
+		       write_locked, registered_at, claimed_by, claimed_at
+		FROM guard_resource_ownership
+		WHERE organization_id = $1 AND resource_type = $2 AND resource_id = $3
+	`, ownership.OrganizationID, ownership.ResourceType, ownership.ResourceID))
+	if err == nil {
+		if existing.SourceSystemID != ownership.SourceSystemID || existing.SourceRecordID != ownership.SourceRecordID {
+			return guard.ResourceOwnership{}, false, guard.ErrConflict
+		}
+		return existing, false, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return guard.ResourceOwnership{}, false, fmt.Errorf("read existing resource ownership: %w", err)
+	}
+	result, err := transaction.ExecContext(ctx, `
+		INSERT INTO guard_resource_ownership (
+			organization_id, resource_type, resource_id, source_system_id, source_record_id,
+			write_locked, registered_at
+		) VALUES ($1, $2, $3, $4, $5, TRUE, $6)
+		ON CONFLICT DO NOTHING
+	`, ownership.OrganizationID, ownership.ResourceType, ownership.ResourceID,
+		ownership.SourceSystemID, ownership.SourceRecordID, ownership.RegisteredAt)
+	if err != nil {
+		return guard.ResourceOwnership{}, false, fmt.Errorf("register resource ownership: %w", err)
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return guard.ResourceOwnership{}, false, fmt.Errorf("read registered resource ownership: %w", err)
+	}
+	if count == 0 {
+		return guard.ResourceOwnership{}, false, guard.ErrConflict
+	}
+	if err := transaction.Commit(); err != nil {
+		return guard.ResourceOwnership{}, false, fmt.Errorf("commit resource ownership registration: %w", err)
+	}
+	return ownership, true, nil
+}
+
+func (s *GuardStore) ListResourceOwnership(ctx context.Context, organizationID string) ([]guard.ResourceOwnership, error) {
+	if organizationID == "" {
+		return nil, errors.New("organization id is required")
+	}
+	rows, err := s.database.QueryContext(ctx, `
+		SELECT organization_id, resource_type, resource_id, source_system_id, source_record_id,
+		       write_locked, registered_at, claimed_by, claimed_at
+		FROM guard_resource_ownership
+		WHERE organization_id = $1
+		ORDER BY registered_at, resource_type, resource_id
+	`, organizationID)
+	if err != nil {
+		return nil, fmt.Errorf("list resource ownership: %w", err)
+	}
+	defer rows.Close()
+	result := make([]guard.ResourceOwnership, 0)
+	for rows.Next() {
+		ownership, err := scanResourceOwnership(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan resource ownership: %w", err)
+		}
+		result = append(result, ownership)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate resource ownership: %w", err)
+	}
+	return result, nil
+}
+
+func (s *GuardStore) GetResourceOwnership(ctx context.Context, organizationID, resourceType, resourceID string) (guard.ResourceOwnership, error) {
+	if organizationID == "" || resourceType == "" || resourceID == "" {
+		return guard.ResourceOwnership{}, errors.New("organization, resource type, and resource id are required")
+	}
+	ownership, err := scanResourceOwnership(s.database.QueryRowContext(ctx, `
+		SELECT organization_id, resource_type, resource_id, source_system_id, source_record_id,
+		       write_locked, registered_at, claimed_by, claimed_at
+		FROM guard_resource_ownership
+		WHERE organization_id = $1 AND resource_type = $2 AND resource_id = $3
+	`, organizationID, resourceType, resourceID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return guard.ResourceOwnership{}, guard.ErrNotFound
+	}
+	if err != nil {
+		return guard.ResourceOwnership{}, fmt.Errorf("get resource ownership: %w", err)
+	}
+	return ownership, nil
+}
+
+func (s *GuardStore) ClaimResourceOwnership(ctx context.Context, organizationID, resourceType, resourceID, claimedBy string, claimedAt time.Time) (guard.ResourceOwnership, error) {
+	if organizationID == "" || resourceType == "" || resourceID == "" || claimedBy == "" || claimedAt.IsZero() {
+		return guard.ResourceOwnership{}, errors.New("complete ownership claim is required")
+	}
+	ownership, err := scanResourceOwnership(s.database.QueryRowContext(ctx, `
+		UPDATE guard_resource_ownership ownership
+		SET write_locked = FALSE, claimed_by = $4, claimed_at = $5
+		WHERE ownership.organization_id = $1 AND ownership.resource_type = $2 AND ownership.resource_id = $3
+		  AND ownership.write_locked
+		  AND EXISTS (
+			SELECT 1 FROM guard_accounts account
+			WHERE account.organization_id = $1 AND account.id = $4 AND account.status = 'active'
+		  )
+		RETURNING organization_id, resource_type, resource_id, source_system_id, source_record_id,
+		          write_locked, registered_at, claimed_by, claimed_at
+	`, organizationID, resourceType, resourceID, claimedBy, claimedAt))
+	if err == nil {
+		return ownership, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return guard.ResourceOwnership{}, fmt.Errorf("claim resource ownership: %w", err)
+	}
+	existing, loadErr := s.GetResourceOwnership(ctx, organizationID, resourceType, resourceID)
+	if loadErr != nil {
+		return guard.ResourceOwnership{}, loadErr
+	}
+	if !existing.WriteLocked {
+		return guard.ResourceOwnership{}, guard.ErrConflict
+	}
+	return guard.ResourceOwnership{}, guard.ErrNotFound
+}
+
+func (s *GuardStore) DeleteResourceOwnership(ctx context.Context, ownership guard.ResourceOwnership) error {
+	if err := ownership.Validate(); err != nil || !ownership.WriteLocked {
+		return errors.New("valid write-locked ownership is required")
+	}
+	result, err := s.database.ExecContext(ctx, `
+		DELETE FROM guard_resource_ownership
+		WHERE organization_id = $1 AND resource_type = $2 AND resource_id = $3
+		  AND source_system_id = $4 AND source_record_id = $5
+		  AND write_locked AND claimed_by IS NULL AND claimed_at IS NULL
+	`, ownership.OrganizationID, ownership.ResourceType, ownership.ResourceID,
+		ownership.SourceSystemID, ownership.SourceRecordID)
+	if err != nil {
+		return fmt.Errorf("delete resource ownership: %w", err)
+	}
+	return requireAffected(result)
+}
+
+func (s *GuardStore) RestoreResourceOwnershipLock(ctx context.Context, claimed guard.ResourceOwnership) error {
+	if err := claimed.Validate(); err != nil || claimed.WriteLocked || claimed.ClaimedAt == nil {
+		return errors.New("valid claimed ownership is required")
+	}
+	result, err := s.database.ExecContext(ctx, `
+		UPDATE guard_resource_ownership
+		SET write_locked = TRUE, claimed_by = NULL, claimed_at = NULL
+		WHERE organization_id = $1 AND resource_type = $2 AND resource_id = $3
+		  AND source_system_id = $4 AND source_record_id = $5
+		  AND NOT write_locked AND claimed_by = $6 AND claimed_at = $7
+	`, claimed.OrganizationID, claimed.ResourceType, claimed.ResourceID,
+		claimed.SourceSystemID, claimed.SourceRecordID, claimed.ClaimedBy, *claimed.ClaimedAt)
+	if err != nil {
+		return fmt.Errorf("restore resource ownership lock: %w", err)
+	}
+	return requireAffected(result)
+}
+
 func (s *GuardStore) CreateSession(ctx context.Context, session guard.Session) error {
 	if len(session.TokenHash) != 32 || len(session.CSRFHash) != 32 {
 		return errors.New("session hashes must contain 32 bytes")
@@ -690,6 +859,34 @@ func scanGuardAccount(row rowScanner) (guard.Account, error) {
 		&account.UpdatedAt,
 	)
 	return account, err
+}
+
+func scanResourceOwnership(row rowScanner) (guard.ResourceOwnership, error) {
+	var ownership guard.ResourceOwnership
+	var claimedBy sql.NullString
+	var claimedAt sql.NullTime
+	err := row.Scan(
+		&ownership.OrganizationID,
+		&ownership.ResourceType,
+		&ownership.ResourceID,
+		&ownership.SourceSystemID,
+		&ownership.SourceRecordID,
+		&ownership.WriteLocked,
+		&ownership.RegisteredAt,
+		&claimedBy,
+		&claimedAt,
+	)
+	if err != nil {
+		return guard.ResourceOwnership{}, err
+	}
+	if claimedBy.Valid {
+		ownership.ClaimedBy = claimedBy.String
+	}
+	if claimedAt.Valid {
+		value := claimedAt.Time
+		ownership.ClaimedAt = &value
+	}
+	return ownership, nil
 }
 
 func requireAffected(result sql.Result) error {

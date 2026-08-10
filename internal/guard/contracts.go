@@ -30,6 +30,7 @@ var (
 	ErrConflict                   = errors.New("guard record conflicts with existing data")
 	ErrManagedAssignment          = errors.New("provider-managed role assignment cannot be changed locally")
 	ErrLastAdministrator          = errors.New("the last organization administrator cannot be removed")
+	ErrResourceWriteLocked        = errors.New("resource is write-locked until ownership is claimed")
 )
 
 const MinimumPasswordCharacters = 15
@@ -161,6 +162,46 @@ type RoleAssignmentInput struct {
 	RoleID     string
 	ScopeKind  ScopeKind
 	ResourceID string
+}
+
+// ResourceOwnership preserves the source identity of an externally managed
+// record. Imported records remain readable but write-locked until an
+// organization administrator explicitly claims local ownership.
+type ResourceOwnership struct {
+	OrganizationID string
+	ResourceType   string
+	ResourceID     string
+	SourceSystemID string
+	SourceRecordID string
+	WriteLocked    bool
+	RegisteredAt   time.Time
+	ClaimedBy      string
+	ClaimedAt      *time.Time
+}
+
+func (o ResourceOwnership) Validate() error {
+	if strings.TrimSpace(o.OrganizationID) == "" || strings.TrimSpace(o.ResourceType) == "" ||
+		strings.TrimSpace(o.ResourceID) == "" || strings.TrimSpace(o.SourceSystemID) == "" ||
+		strings.TrimSpace(o.SourceRecordID) == "" || o.RegisteredAt.IsZero() {
+		return errors.New("complete resource ownership identity, source, and registration time are required")
+	}
+	if o.WriteLocked {
+		if o.ClaimedBy != "" || o.ClaimedAt != nil {
+			return errors.New("write-locked ownership cannot be claimed")
+		}
+		return nil
+	}
+	if strings.TrimSpace(o.ClaimedBy) == "" || o.ClaimedAt == nil || o.ClaimedAt.IsZero() || o.ClaimedAt.Before(o.RegisteredAt) {
+		return errors.New("claimed ownership requires an actor and claim time")
+	}
+	return nil
+}
+
+type ResourceOwnershipInput struct {
+	ResourceType   string
+	ResourceID     string
+	SourceSystemID string
+	SourceRecordID string
 }
 
 type ExternalIdentity struct {
@@ -302,6 +343,12 @@ type Store interface {
 	ListAuthorization(ctx context.Context, organizationID string) (AuthorizationDirectory, error)
 	CreateRoleAssignment(ctx context.Context, assignment RoleAssignment) error
 	DeleteRoleAssignment(ctx context.Context, organizationID, assignmentID string) (RoleAssignment, error)
+	RegisterResourceOwnership(ctx context.Context, ownership ResourceOwnership) (ResourceOwnership, bool, error)
+	ListResourceOwnership(ctx context.Context, organizationID string) ([]ResourceOwnership, error)
+	GetResourceOwnership(ctx context.Context, organizationID, resourceType, resourceID string) (ResourceOwnership, error)
+	ClaimResourceOwnership(ctx context.Context, organizationID, resourceType, resourceID, claimedBy string, claimedAt time.Time) (ResourceOwnership, error)
+	DeleteResourceOwnership(ctx context.Context, ownership ResourceOwnership) error
+	RestoreResourceOwnershipLock(ctx context.Context, claimed ResourceOwnership) error
 	CreateSession(ctx context.Context, session Session) error
 	FindSessionByTokenHash(ctx context.Context, organizationID string, tokenHash []byte, now time.Time) (Session, Access, error)
 	UpdateSessionCSRF(ctx context.Context, sessionID string, csrfHash []byte) error

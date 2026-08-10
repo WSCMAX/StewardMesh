@@ -264,6 +264,78 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
+  /api/v1/guard/resource-ownership:
+    get:
+      summary: List imported resource ownership and write-lock state
+      operationId: listGuardResourceOwnership
+      tags: [Guard]
+      x-requirement: SEC-GUARD-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200':
+          description: Organization resource ownership registry for Guard administrators
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/GuardResourceOwnershipCollection'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+    post:
+      summary: Register an externally owned resource with a write lock
+      operationId: registerGuardResourceOwnership
+      tags: [Guard]
+      x-requirement: SEC-GUARD-001
+      description: Re-registering the same source identity is idempotent and never restores a lock after ownership has been claimed.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/RegisterGuardResourceOwnershipRequest'}
+      responses:
+        '200':
+          description: Existing matching ownership record returned without changing its claim state
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/GuardResourceOwnership'}
+        '201':
+          description: External ownership registered and write lock applied
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/GuardResourceOwnership'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/guard/resource-ownership/{resourceType}/{resourceId}/claim:
+    post:
+      summary: Claim local ownership and remove a resource write lock
+      operationId: claimGuardResourceOwnership
+      tags: [Guard]
+      x-requirement: SEC-GUARD-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - in: path
+          name: resourceType
+          required: true
+          schema: {type: string, pattern: '^[a-z][a-z0-9_.-]{0,63}$'}
+        - in: path
+          name: resourceId
+          required: true
+          schema: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        '200':
+          description: Local ownership claimed and write lock removed
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/GuardResourceOwnership'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
   /api/v1/organization:
     get:
       summary: Get the configured organization
@@ -628,6 +700,7 @@ paths:
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
+        '423': {$ref: '#/components/responses/Locked'}
   /api/v1/assets/{assetId}/assignments/{assignmentId}:
     parameters:
       - $ref: '#/components/parameters/AssetID'
@@ -660,6 +733,7 @@ paths:
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
+        '423': {$ref: '#/components/responses/Locked'}
   /api/v1/tags:
     get:
       summary: List tags
@@ -742,6 +816,11 @@ components:
           schema: {$ref: '#/components/schemas/Error'}
     Conflict:
       description: The requested change conflicts with existing or effective-dated data
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    Locked:
+      description: The imported resource is write-locked until local ownership is explicitly claimed
       content:
         application/json:
           schema: {$ref: '#/components/schemas/Error'}
@@ -877,6 +956,34 @@ components:
         accountId: {type: string, pattern: '^[a-f0-9]{32}$'}
         roleId: {type: string, pattern: '^[a-f0-9]{32}$'}
         scope: {$ref: '#/components/schemas/GuardAssignmentRequestScope'}
+    GuardResourceOwnership:
+      type: object
+      required: [resourceType, resourceId, sourceSystemId, sourceRecordId, writeLocked, registeredAt]
+      properties:
+        resourceType: {type: string, pattern: '^[a-z][a-z0-9_.-]{0,63}$'}
+        resourceId: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        sourceSystemId: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        sourceRecordId: {type: string, minLength: 1, maxLength: 256}
+        writeLocked: {type: boolean}
+        registeredAt: {type: string, format: date-time}
+        claimedBy: {type: string, pattern: '^[a-f0-9]{32}$'}
+        claimedAt: {type: string, format: date-time}
+    GuardResourceOwnershipCollection:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/GuardResourceOwnership'}
+    RegisterGuardResourceOwnershipRequest:
+      type: object
+      additionalProperties: false
+      required: [resourceType, resourceId, sourceSystemId, sourceRecordId]
+      properties:
+        resourceType: {type: string, pattern: '^[a-z][a-z0-9_.-]{0,63}$'}
+        resourceId: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        sourceSystemId: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        sourceRecordId: {type: string, minLength: 1, maxLength: 256}
     Organization:
       type: object
       required: [id, name, createdAt, updatedAt]

@@ -252,6 +252,75 @@ func GuardStore(t *testing.T, store guard.Store, organizationID string) {
 		t.Fatalf("remove replacement administrator assignment: %v", err)
 	}
 
+	registeredAt := now.Add(3 * time.Minute)
+	ownership := guard.ResourceOwnership{
+		OrganizationID: organizationID,
+		ResourceType:   "asset",
+		ResourceID:     "asset-imported-one",
+		SourceSystemID: "source-system-one",
+		SourceRecordID: "external-record-one",
+		WriteLocked:    true,
+		RegisteredAt:   registeredAt,
+	}
+	registered, ownershipCreated, err := store.RegisterResourceOwnership(ctx, ownership)
+	if err != nil || !ownershipCreated || registered.ResourceID != ownership.ResourceID || !registered.WriteLocked {
+		t.Fatalf("unexpected resource ownership registration %#v created=%t err=%v", registered, ownershipCreated, err)
+	}
+	registered, ownershipCreated, err = store.RegisterResourceOwnership(ctx, ownership)
+	if err != nil || ownershipCreated || registered.ResourceID != ownership.ResourceID {
+		t.Fatalf("expected idempotent ownership registration %#v created=%t err=%v", registered, ownershipCreated, err)
+	}
+	conflictingOwnership := ownership
+	conflictingOwnership.ResourceID = "asset-imported-two"
+	if _, _, err := store.RegisterResourceOwnership(ctx, conflictingOwnership); !errors.Is(err, guard.ErrConflict) {
+		t.Fatalf("expected duplicate source ownership conflict, got %v", err)
+	}
+	listedOwnership, err := store.ListResourceOwnership(ctx, organizationID)
+	if err != nil || len(listedOwnership) != 1 || listedOwnership[0].ResourceID != ownership.ResourceID {
+		t.Fatalf("unexpected resource ownership list %#v err=%v", listedOwnership, err)
+	}
+	loadedOwnership, err := store.GetResourceOwnership(ctx, organizationID, ownership.ResourceType, ownership.ResourceID)
+	if err != nil || !loadedOwnership.WriteLocked {
+		t.Fatalf("unexpected loaded resource ownership %#v err=%v", loadedOwnership, err)
+	}
+	claimedAt := registeredAt.Add(time.Minute)
+	claimed, err := store.ClaimResourceOwnership(ctx, organizationID, ownership.ResourceType, ownership.ResourceID, accountID, claimedAt)
+	if err != nil || claimed.WriteLocked || claimed.ClaimedBy != accountID || claimed.ClaimedAt == nil || !claimed.ClaimedAt.Equal(claimedAt) {
+		t.Fatalf("unexpected ownership claim %#v err=%v", claimed, err)
+	}
+	if err := store.RestoreResourceOwnershipLock(ctx, claimed); err != nil {
+		t.Fatalf("restore resource ownership lock: %v", err)
+	}
+	restored, err := store.GetResourceOwnership(ctx, organizationID, ownership.ResourceType, ownership.ResourceID)
+	if err != nil || !restored.WriteLocked || restored.ClaimedAt != nil || restored.ClaimedBy != "" {
+		t.Fatalf("unexpected restored ownership lock %#v err=%v", restored, err)
+	}
+	claimed, err = store.ClaimResourceOwnership(ctx, organizationID, ownership.ResourceType, ownership.ResourceID, accountID, claimedAt)
+	if err != nil || claimed.WriteLocked {
+		t.Fatalf("unexpected ownership re-claim %#v err=%v", claimed, err)
+	}
+	if _, err := store.ClaimResourceOwnership(ctx, organizationID, ownership.ResourceType, ownership.ResourceID, accountID, claimedAt); !errors.Is(err, guard.ErrConflict) {
+		t.Fatalf("expected repeated ownership claim conflict, got %v", err)
+	}
+	deletable := guard.ResourceOwnership{
+		OrganizationID: organizationID,
+		ResourceType:   "asset",
+		ResourceID:     "asset-audit-rollback",
+		SourceSystemID: "source-system-one",
+		SourceRecordID: "external-record-audit-rollback",
+		WriteLocked:    true,
+		RegisteredAt:   registeredAt.Add(2 * time.Minute),
+	}
+	if _, created, err := store.RegisterResourceOwnership(ctx, deletable); err != nil || !created {
+		t.Fatalf("register deletable ownership created=%t err=%v", created, err)
+	}
+	if err := store.DeleteResourceOwnership(ctx, deletable); err != nil {
+		t.Fatalf("delete resource ownership: %v", err)
+	}
+	if _, err := store.GetResourceOwnership(ctx, organizationID, deletable.ResourceType, deletable.ResourceID); !errors.Is(err, guard.ErrNotFound) {
+		t.Fatalf("expected deleted ownership to be unavailable, got %v", err)
+	}
+
 	sessionID := randomID(t)
 	tokenHash := sha256.Sum256([]byte("session-token-" + sessionID))
 	csrfHash := sha256.Sum256([]byte("csrf-token-" + sessionID))

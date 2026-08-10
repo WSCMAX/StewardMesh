@@ -21,6 +21,7 @@ type MemoryGuardStore struct {
 	bundles             map[string]guard.PolicyBundle
 	roles               map[string]guard.Role
 	assignments         map[string]guard.RoleAssignment
+	resourceOwnership   map[string]guard.ResourceOwnership
 	externalIdentities  map[string]guard.ExternalIdentity
 	externalAssignments map[string]string
 	sessions            map[string]guard.Session
@@ -36,6 +37,7 @@ func NewMemoryGuardStore() *MemoryGuardStore {
 		bundles:             make(map[string]guard.PolicyBundle),
 		roles:               make(map[string]guard.Role),
 		assignments:         make(map[string]guard.RoleAssignment),
+		resourceOwnership:   make(map[string]guard.ResourceOwnership),
 		externalIdentities:  make(map[string]guard.ExternalIdentity),
 		externalAssignments: make(map[string]string),
 		sessions:            make(map[string]guard.Session),
@@ -362,6 +364,130 @@ func (s *MemoryGuardStore) roleGrantsPermission(roleID string, permission guard.
 	return false
 }
 
+func (s *MemoryGuardStore) RegisterResourceOwnership(_ context.Context, ownership guard.ResourceOwnership) (guard.ResourceOwnership, bool, error) {
+	if err := ownership.Validate(); err != nil {
+		return guard.ResourceOwnership{}, false, err
+	}
+	if !ownership.WriteLocked {
+		return guard.ResourceOwnership{}, false, errors.New("new resource ownership must be write-locked")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := guardResourceOwnershipKey(ownership.OrganizationID, ownership.ResourceType, ownership.ResourceID)
+	if existing, ok := s.resourceOwnership[key]; ok {
+		if existing.SourceSystemID != ownership.SourceSystemID || existing.SourceRecordID != ownership.SourceRecordID {
+			return guard.ResourceOwnership{}, false, guard.ErrConflict
+		}
+		return cloneResourceOwnership(existing), false, nil
+	}
+	for _, existing := range s.resourceOwnership {
+		if existing.OrganizationID == ownership.OrganizationID && existing.ResourceType == ownership.ResourceType &&
+			existing.SourceSystemID == ownership.SourceSystemID && existing.SourceRecordID == ownership.SourceRecordID {
+			return guard.ResourceOwnership{}, false, guard.ErrConflict
+		}
+	}
+	s.resourceOwnership[key] = cloneResourceOwnership(ownership)
+	return cloneResourceOwnership(ownership), true, nil
+}
+
+func (s *MemoryGuardStore) ListResourceOwnership(_ context.Context, organizationID string) ([]guard.ResourceOwnership, error) {
+	if organizationID == "" {
+		return nil, errors.New("organization id is required")
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	result := make([]guard.ResourceOwnership, 0, len(s.resourceOwnership))
+	for _, ownership := range s.resourceOwnership {
+		if ownership.OrganizationID == organizationID {
+			result = append(result, cloneResourceOwnership(ownership))
+		}
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].RegisteredAt.Equal(result[j].RegisteredAt) {
+			if result[i].ResourceType == result[j].ResourceType {
+				return result[i].ResourceID < result[j].ResourceID
+			}
+			return result[i].ResourceType < result[j].ResourceType
+		}
+		return result[i].RegisteredAt.Before(result[j].RegisteredAt)
+	})
+	return result, nil
+}
+
+func (s *MemoryGuardStore) GetResourceOwnership(_ context.Context, organizationID, resourceType, resourceID string) (guard.ResourceOwnership, error) {
+	if organizationID == "" || resourceType == "" || resourceID == "" {
+		return guard.ResourceOwnership{}, errors.New("organization, resource type, and resource id are required")
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	ownership, ok := s.resourceOwnership[guardResourceOwnershipKey(organizationID, resourceType, resourceID)]
+	if !ok {
+		return guard.ResourceOwnership{}, guard.ErrNotFound
+	}
+	return cloneResourceOwnership(ownership), nil
+}
+
+func (s *MemoryGuardStore) ClaimResourceOwnership(_ context.Context, organizationID, resourceType, resourceID, claimedBy string, claimedAt time.Time) (guard.ResourceOwnership, error) {
+	if organizationID == "" || resourceType == "" || resourceID == "" || claimedBy == "" || claimedAt.IsZero() {
+		return guard.ResourceOwnership{}, errors.New("complete ownership claim is required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := guardResourceOwnershipKey(organizationID, resourceType, resourceID)
+	ownership, ok := s.resourceOwnership[key]
+	if !ok {
+		return guard.ResourceOwnership{}, guard.ErrNotFound
+	}
+	if !ownership.WriteLocked {
+		return guard.ResourceOwnership{}, guard.ErrConflict
+	}
+	account, ok := s.accounts[claimedBy]
+	if !ok || account.OrganizationID != organizationID || account.Status != "active" {
+		return guard.ResourceOwnership{}, guard.ErrNotFound
+	}
+	ownership.WriteLocked = false
+	ownership.ClaimedBy = claimedBy
+	ownership.ClaimedAt = &claimedAt
+	s.resourceOwnership[key] = cloneResourceOwnership(ownership)
+	return cloneResourceOwnership(ownership), nil
+}
+
+func (s *MemoryGuardStore) DeleteResourceOwnership(_ context.Context, ownership guard.ResourceOwnership) error {
+	if err := ownership.Validate(); err != nil || !ownership.WriteLocked {
+		return errors.New("valid write-locked ownership is required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := guardResourceOwnershipKey(ownership.OrganizationID, ownership.ResourceType, ownership.ResourceID)
+	existing, ok := s.resourceOwnership[key]
+	if !ok || existing.SourceSystemID != ownership.SourceSystemID || existing.SourceRecordID != ownership.SourceRecordID ||
+		!existing.WriteLocked || !existing.RegisteredAt.Equal(ownership.RegisteredAt) {
+		return guard.ErrNotFound
+	}
+	delete(s.resourceOwnership, key)
+	return nil
+}
+
+func (s *MemoryGuardStore) RestoreResourceOwnershipLock(_ context.Context, claimed guard.ResourceOwnership) error {
+	if err := claimed.Validate(); err != nil || claimed.WriteLocked || claimed.ClaimedAt == nil {
+		return errors.New("valid claimed ownership is required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := guardResourceOwnershipKey(claimed.OrganizationID, claimed.ResourceType, claimed.ResourceID)
+	existing, ok := s.resourceOwnership[key]
+	if !ok || existing.WriteLocked || existing.SourceSystemID != claimed.SourceSystemID ||
+		existing.SourceRecordID != claimed.SourceRecordID || existing.ClaimedBy != claimed.ClaimedBy ||
+		existing.ClaimedAt == nil || !existing.ClaimedAt.Equal(*claimed.ClaimedAt) {
+		return guard.ErrNotFound
+	}
+	existing.WriteLocked = true
+	existing.ClaimedBy = ""
+	existing.ClaimedAt = nil
+	s.resourceOwnership[key] = existing
+	return nil
+}
+
 func (s *MemoryGuardStore) CreateSession(_ context.Context, session guard.Session) error {
 	if session.ID == "" || session.OrganizationID == "" || session.AccountID == "" ||
 		len(session.TokenHash) != 32 || len(session.CSRFHash) != 32 || session.CreatedAt.IsZero() ||
@@ -446,6 +572,10 @@ func guardExternalAssignmentKey(organizationID, accountID, source string) string
 	return organizationID + "\x00" + accountID + "\x00" + source
 }
 
+func guardResourceOwnershipKey(organizationID, resourceType, resourceID string) string {
+	return organizationID + "\x00" + resourceType + "\x00" + resourceID
+}
+
 func cloneGuardAccount(account guard.Account) guard.Account {
 	return account
 }
@@ -459,6 +589,14 @@ func cloneGuardRole(role guard.Role) guard.Role {
 	role.Permissions = append([]guard.Permission(nil), role.Permissions...)
 	role.PolicyBundleIDs = append([]string(nil), role.PolicyBundleIDs...)
 	return role
+}
+
+func cloneResourceOwnership(ownership guard.ResourceOwnership) guard.ResourceOwnership {
+	if ownership.ClaimedAt != nil {
+		claimedAt := *ownership.ClaimedAt
+		ownership.ClaimedAt = &claimedAt
+	}
+	return ownership
 }
 
 func cloneSession(session guard.Session) guard.Session {

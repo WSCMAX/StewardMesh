@@ -6,9 +6,9 @@
 
 ## Purpose
 
-Guard protects organization and resource operations. The implemented boundary provides one-time local administrator bootstrap, local password authentication, OpenID Connect authorization-code login, just-in-time external accounts, opaque server-side sessions, synchronized CSRF protection, administrator-managed scoped role assignments, reusable policy bundles, permission enforcement, rate limiting, and security audit events.
+Guard protects organization and resource operations. The implemented boundary provides one-time local administrator bootstrap, local password authentication, OpenID Connect authorization-code login, just-in-time external accounts, opaque server-side sessions, synchronized CSRF protection, administrator-managed scoped role assignments, reusable policy bundles, externally sourced resource ownership locks and claims, permission enforcement, rate limiting, and security audit events.
 
-SAML, custom role creation, ownership locks, and the role-building interface remain planned Guard slices. Issue #13 stays open until those acceptance criteria are delivered.
+SAML, custom role creation, and the role-building interface remain planned Guard slices. Issue #13 stays open until those acceptance criteria are delivered.
 
 ## One-time administrator setup
 
@@ -97,6 +97,14 @@ An organization administrator can list Guard accounts, roles, and assignments in
 
 Local assignments can be removed through StewardMesh. Assignments synchronized from an OpenID Connect administrator claim are marked read-only and must be changed at the identity provider. The storage adapters serialize assignment changes and reject removal of the final active organization-scoped assignment that grants `guard.manage`, preventing administrator lockout. Assignment changes take effect when Guard resolves access on the next authenticated request.
 
+## Resource ownership and write locks
+
+Guard keeps a provider-neutral ownership registry for records brought in from an external system. Each entry preserves the organization, resource type and ID, stable source-system ID, source-record ID, registration time, and current claim state. A newly registered external record is readable but write-locked. Re-registering the same resource and source identity is idempotent, and a later import cannot silently restore a lock after local ownership has been claimed. Conflicting resource or source identities fail closed.
+
+Only an active account with organization-scoped `guard.manage` can list ownership records, register imported provenance, or claim local ownership. A claim records the administrator and timestamp before the resource becomes writable. Asset relationship creation and ending now consult the owning asset's Guard state and return HTTP 423 while its lock is active. Other domain services must call the same `CheckResourceWrite` boundary before mutating an imported record.
+
+Source record IDs remain available to authorized administrators for reconciliation, but are excluded from audit metadata. Lock registration, explicit ownership claims, and blocked write attempts are all audited with stable resource and source-system IDs. If an ownership-change audit cannot be persisted, Guard restores the previous ownership state before returning an error.
+
 ## Secure HTTP behavior
 
 - Authentication, bootstrap, session, and every authenticated API response use `Cache-Control: no-store`.
@@ -122,9 +130,12 @@ Local assignments can be removed through StewardMesh. Assignments synchronized f
 - `GET /api/v1/guard/access`
 - `POST /api/v1/guard/role-assignments`
 - `DELETE /api/v1/guard/role-assignments/{assignmentID}`
+- `GET /api/v1/guard/resource-ownership`
+- `POST /api/v1/guard/resource-ownership`
+- `POST /api/v1/guard/resource-ownership/{resourceType}/{resourceID}/claim`
 - OpenAPI: `api/openapi/openapi.yaml`
 - gRPC contract: `api/proto/stewardmesh.proto`
-- PostgreSQL migrations: `internal/repository/postgres/migrations/0004_guard_local_auth.sql` and `0007_guard_oidc.sql`
+- PostgreSQL migrations: `internal/repository/postgres/migrations/0004_guard_local_auth.sql`, `0007_guard_oidc.sql`, and `0008_guard_resource_ownership.sql`
 
 The `guard.Store` interface is provider-neutral. PostgreSQL and the in-memory evaluation adapter pass the same local and external-account contract tests; DynamoDB must implement that contract. `identity.OIDCAuthenticator` isolates discovery, code exchange, PKCE, and ID-token verification from Guard's JIT account and session behavior.
 
@@ -147,6 +158,9 @@ The application links to this page from every Guard setup state and provides the
 - `guard.logout.succeeded`
 - `guard.role_assignment.created`
 - `guard.role_assignment.revoked`
+- `guard.ownership.locked`
+- `guard.ownership.claimed`
+- `guard.ownership.write_denied`
 - `guard.authorization.denied`
 
 Audit events contain stable account or resource IDs, correlation IDs, actions, timestamps, and requirement metadata. Passwords, raw tokens, usernames used in failed attempts, and credential-bearing configuration are excluded.
@@ -159,9 +173,10 @@ Audit events contain stable account or resource IDs, correlation IDs, actions, t
 - distributed rate-limit, cache outage, TTL, and organization-isolation tests
 - memory and PostgreSQL provider contract tests
 - local and provider-managed assignment contract tests, duplicate detection, and final-administrator protection
+- memory and PostgreSQL ownership registration, provenance conflict, idempotency, claim, and write-lock contract tests
 - session hashing, CSRF rotation, expiration, and revocation tests
 - state, nonce, S256 PKCE, encrypted transaction, exact claim mapping, JIT refresh, and provider-mapping removal tests
-- server-side permission, origin, CORS, JSON-boundary, and header tests
+- server-side permission, ownership lock, origin, CORS, JSON-boundary, and header tests
 - React setup, login fallback, scoped-assignment management, keyboard-focus, and safe-link tests
 - automated axe accessibility analysis
 - race detection, `go vet`, `govulncheck`, dependency audit, and filesystem security scanning in CI

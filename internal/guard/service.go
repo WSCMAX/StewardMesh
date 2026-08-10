@@ -29,6 +29,7 @@ const (
 var usernamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{2,63}$`)
 var guardIDPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
 var guardResourceIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
+var resourceTypePattern = regexp.MustCompile(`^[a-z][a-z0-9_.-]{0,63}$`)
 
 type ServiceConfig struct {
 	OrganizationID string
@@ -504,6 +505,113 @@ func (s *Service) RevokeRoleAssignment(ctx context.Context, authentication Authe
 	return assignment, nil
 }
 
+// RegisterResourceOwnership records externally sourced provenance and applies
+// a write lock. Re-registering the same source identity is idempotent and never
+// re-locks a resource after local ownership has been claimed.
+func (s *Service) RegisterResourceOwnership(ctx context.Context, authentication Authentication, input ResourceOwnershipInput) (ResourceOwnership, bool, error) {
+	if err := s.requireOrganizationManager(ctx, authentication); err != nil {
+		return ResourceOwnership{}, false, err
+	}
+	resourceType, resourceID, sourceSystemID, sourceRecordID, err := validateOwnershipInput(input)
+	if err != nil {
+		return ResourceOwnership{}, false, err
+	}
+	ownership := ResourceOwnership{
+		OrganizationID: s.organizationID,
+		ResourceType:   resourceType,
+		ResourceID:     resourceID,
+		SourceSystemID: sourceSystemID,
+		SourceRecordID: sourceRecordID,
+		WriteLocked:    true,
+		RegisteredAt:   s.now(),
+	}
+	registered, created, err := s.store.RegisterResourceOwnership(ctx, ownership)
+	if err != nil {
+		return ResourceOwnership{}, false, fmt.Errorf("register resource ownership: %w", err)
+	}
+	if !created {
+		return registered, false, nil
+	}
+	metadata := map[string]string{
+		"resourceType":   registered.ResourceType,
+		"sourceSystemId": registered.SourceSystemID,
+	}
+	if err := s.audit(ctx, authentication.Principal.Subject, "guard.ownership.locked", registered.ResourceType, registered.ResourceID, metadata); err != nil {
+		rollbackErr := s.store.DeleteResourceOwnership(ctx, registered)
+		return ResourceOwnership{}, false, fmt.Errorf("audit resource ownership registration: %w", errors.Join(err, rollbackErr))
+	}
+	return registered, true, nil
+}
+
+func (s *Service) ListResourceOwnership(ctx context.Context, authentication Authentication) ([]ResourceOwnership, error) {
+	if err := s.requireOrganizationManager(ctx, authentication); err != nil {
+		return nil, err
+	}
+	ownership, err := s.store.ListResourceOwnership(ctx, s.organizationID)
+	if err != nil {
+		return nil, fmt.Errorf("list resource ownership: %w", err)
+	}
+	return ownership, nil
+}
+
+func (s *Service) ClaimResourceOwnership(ctx context.Context, authentication Authentication, resourceType, resourceID string) (ResourceOwnership, error) {
+	if err := s.requireOrganizationManager(ctx, authentication); err != nil {
+		return ResourceOwnership{}, err
+	}
+	resourceType = strings.TrimSpace(resourceType)
+	resourceID = strings.TrimSpace(resourceID)
+	if !resourceTypePattern.MatchString(resourceType) || !guardResourceIDPattern.MatchString(resourceID) {
+		return ResourceOwnership{}, fmt.Errorf("%w: valid resource type and id are required", ErrInvalidInput)
+	}
+	claimed, err := s.store.ClaimResourceOwnership(
+		ctx, s.organizationID, resourceType, resourceID, authentication.Principal.Subject, s.now(),
+	)
+	if err != nil {
+		return ResourceOwnership{}, fmt.Errorf("claim resource ownership: %w", err)
+	}
+	metadata := map[string]string{
+		"resourceType":   claimed.ResourceType,
+		"sourceSystemId": claimed.SourceSystemID,
+	}
+	if err := s.audit(ctx, authentication.Principal.Subject, "guard.ownership.claimed", claimed.ResourceType, claimed.ResourceID, metadata); err != nil {
+		rollbackErr := s.store.RestoreResourceOwnershipLock(ctx, claimed)
+		return ResourceOwnership{}, fmt.Errorf("audit resource ownership claim: %w", errors.Join(err, rollbackErr))
+	}
+	return claimed, nil
+}
+
+// CheckResourceWrite allows locally owned and unknown records, but denies
+// mutation when Guard has an active external ownership lock for the resource.
+func (s *Service) CheckResourceWrite(ctx context.Context, authentication Authentication, resourceType, resourceID string) error {
+	resourceType = strings.TrimSpace(resourceType)
+	resourceID = strings.TrimSpace(resourceID)
+	if !resourceTypePattern.MatchString(resourceType) || !guardResourceIDPattern.MatchString(resourceID) {
+		return fmt.Errorf("%w: valid resource type and id are required", ErrInvalidInput)
+	}
+	ownership, err := s.store.GetResourceOwnership(ctx, s.organizationID, resourceType, resourceID)
+	if errors.Is(err, ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read resource ownership: %w", err)
+	}
+	if !ownership.WriteLocked {
+		return nil
+	}
+	auditErr := s.audit(
+		ctx,
+		authentication.Principal.Subject,
+		"guard.ownership.write_denied",
+		ownership.ResourceType,
+		ownership.ResourceID,
+		map[string]string{"sourceSystemId": ownership.SourceSystemID},
+	)
+	if auditErr != nil {
+		return fmt.Errorf("%w: audit write denial: %v", ErrResourceWriteLocked, auditErr)
+	}
+	return ErrResourceWriteLocked
+}
+
 func (s *Service) requireOrganizationManager(ctx context.Context, authentication Authentication) error {
 	return s.CheckPermission(ctx, authentication, PermissionGuardManage, Scope{
 		Kind:           ScopeOrganization,
@@ -609,6 +717,19 @@ func validatePassword(password string) error {
 		return fmt.Errorf("%w: password must contain at least %d characters and no more than %d bytes", ErrInvalidInput, MinimumPasswordCharacters, maximumPasswordBytes)
 	}
 	return nil
+}
+
+func validateOwnershipInput(input ResourceOwnershipInput) (resourceType, resourceID, sourceSystemID, sourceRecordID string, err error) {
+	resourceType = strings.TrimSpace(input.ResourceType)
+	resourceID = strings.TrimSpace(input.ResourceID)
+	sourceSystemID = strings.TrimSpace(input.SourceSystemID)
+	sourceRecordID = strings.TrimSpace(input.SourceRecordID)
+	if !resourceTypePattern.MatchString(resourceType) || !guardResourceIDPattern.MatchString(resourceID) ||
+		!guardResourceIDPattern.MatchString(sourceSystemID) || sourceRecordID == "" ||
+		!utf8.ValidString(sourceRecordID) || utf8.RuneCountInString(sourceRecordID) > 256 {
+		return "", "", "", "", fmt.Errorf("%w: valid resource and source identities are required", ErrInvalidInput)
+	}
+	return resourceType, resourceID, sourceSystemID, sourceRecordID, nil
 }
 
 func normalizeUsername(username string) string {

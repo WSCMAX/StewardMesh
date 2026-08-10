@@ -96,6 +96,17 @@ type guardRoleAssignmentResponse struct {
 	CreatedAt time.Time          `json:"createdAt"`
 }
 
+type guardResourceOwnershipResponse struct {
+	ResourceType   string     `json:"resourceType"`
+	ResourceID     string     `json:"resourceId"`
+	SourceSystemID string     `json:"sourceSystemId"`
+	SourceRecordID string     `json:"sourceRecordId"`
+	WriteLocked    bool       `json:"writeLocked"`
+	RegisteredAt   time.Time  `json:"registeredAt"`
+	ClaimedBy      string     `json:"claimedBy,omitempty"`
+	ClaimedAt      *time.Time `json:"claimedAt,omitempty"`
+}
+
 func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstrap.Organization) http.Handler {
 	organization := bootstrap.Organization{ID: "local-organization", Name: "StewardMesh Local Organization"}
 	if len(organizations) > 0 {
@@ -125,6 +136,9 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 	mux.Handle("GET /api/v1/guard/access", server.protected(guard.PermissionGuardManage, false, server.listGuardAccess))
 	mux.Handle("POST /api/v1/guard/role-assignments", server.protected(guard.PermissionGuardManage, true, server.createGuardRoleAssignment))
 	mux.Handle("DELETE /api/v1/guard/role-assignments/{assignmentID}", server.protected(guard.PermissionGuardManage, true, server.deleteGuardRoleAssignment))
+	mux.Handle("GET /api/v1/guard/resource-ownership", server.protected(guard.PermissionGuardManage, false, server.listGuardResourceOwnership))
+	mux.Handle("POST /api/v1/guard/resource-ownership", server.protected(guard.PermissionGuardManage, true, server.registerGuardResourceOwnership))
+	mux.Handle("POST /api/v1/guard/resource-ownership/{resourceType}/{resourceID}/claim", server.protected(guard.PermissionGuardManage, true, server.claimGuardResourceOwnership))
 	mux.Handle("GET /api/v1/organization", server.protected(guard.PermissionOrganizationRead, false, server.getOrganization))
 	mux.Handle("GET /api/v1/assets", server.protected(guard.PermissionAssetsRead, false, server.listAssets))
 	mux.Handle("POST /api/v1/assets", server.protected(guard.PermissionAssetsWrite, true, server.createAsset))
@@ -450,6 +464,59 @@ func (s *Server) deleteGuardRoleAssignment(w http.ResponseWriter, r *http.Reques
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (s *Server) listGuardResourceOwnership(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
+	s.noStore(w)
+	ownership, err := s.guard.ListResourceOwnership(r.Context(), authentication)
+	if err != nil {
+		s.writeGuardManagementError(w, r, err)
+		return
+	}
+	items := make([]guardResourceOwnershipResponse, 0, len(ownership))
+	for _, record := range ownership {
+		items = append(items, guardOwnershipResponse(record))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) registerGuardResourceOwnership(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
+	s.noStore(w)
+	var input struct {
+		ResourceType   string `json:"resourceType"`
+		ResourceID     string `json:"resourceId"`
+		SourceSystemID string `json:"sourceSystemId"`
+		SourceRecordID string `json:"sourceRecordId"`
+	}
+	if err := decodeJSON(w, r, 16<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid resource ownership payload")
+		return
+	}
+	ownership, created, err := s.guard.RegisterResourceOwnership(r.Context(), authentication, guard.ResourceOwnershipInput{
+		ResourceType: input.ResourceType, ResourceID: input.ResourceID,
+		SourceSystemID: input.SourceSystemID, SourceRecordID: input.SourceRecordID,
+	})
+	if err != nil {
+		s.writeGuardManagementError(w, r, err)
+		return
+	}
+	status := http.StatusOK
+	if created {
+		status = http.StatusCreated
+	}
+	writeJSON(w, status, guardOwnershipResponse(ownership))
+}
+
+func (s *Server) claimGuardResourceOwnership(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
+	s.noStore(w)
+	ownership, err := s.guard.ClaimResourceOwnership(
+		r.Context(), authentication, r.PathValue("resourceType"), r.PathValue("resourceID"),
+	)
+	if err != nil {
+		s.writeGuardManagementError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, guardOwnershipResponse(ownership))
+}
+
 func guardAssignmentResponse(assignment guard.RoleAssignment) guardRoleAssignmentResponse {
 	return guardRoleAssignmentResponse{
 		ID: assignment.ID, AccountID: assignment.AccountID, RoleID: assignment.RoleID,
@@ -458,22 +525,31 @@ func guardAssignmentResponse(assignment guard.RoleAssignment) guardRoleAssignmen
 	}
 }
 
+func guardOwnershipResponse(ownership guard.ResourceOwnership) guardResourceOwnershipResponse {
+	return guardResourceOwnershipResponse{
+		ResourceType: ownership.ResourceType, ResourceID: ownership.ResourceID,
+		SourceSystemID: ownership.SourceSystemID, SourceRecordID: ownership.SourceRecordID,
+		WriteLocked: ownership.WriteLocked, RegisteredAt: ownership.RegisteredAt,
+		ClaimedBy: ownership.ClaimedBy, ClaimedAt: ownership.ClaimedAt,
+	}
+}
+
 func (s *Server) writeGuardManagementError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, guard.ErrInvalidInput):
-		writeError(w, r, http.StatusBadRequest, "validation_failed", "role assignment details are invalid")
+		writeError(w, r, http.StatusBadRequest, "validation_failed", "Guard management details are invalid")
 	case errors.Is(err, guard.ErrNotFound):
-		writeError(w, r, http.StatusNotFound, "not_found", "the requested Guard account, role, or assignment was not found")
+		writeError(w, r, http.StatusNotFound, "not_found", "the requested Guard record was not found")
 	case errors.Is(err, guard.ErrManagedAssignment):
 		writeError(w, r, http.StatusConflict, "managed_assignment", "this role assignment is managed by the identity provider")
 	case errors.Is(err, guard.ErrLastAdministrator):
 		writeError(w, r, http.StatusConflict, "last_administrator", "Assign another organization administrator before removing this assignment")
 	case errors.Is(err, guard.ErrConflict):
-		writeError(w, r, http.StatusConflict, "conflict", "this scoped role assignment already exists")
+		writeError(w, r, http.StatusConflict, "conflict", "this Guard record conflicts with existing data")
 	case errors.Is(err, guard.ErrPermissionDenied):
 		writeError(w, r, http.StatusForbidden, "permission_denied", "organization-level Guard management permission is required")
 	default:
-		writeError(w, r, http.StatusInternalServerError, "guard_error", "the Guard role assignment operation could not be completed")
+		writeError(w, r, http.StatusInternalServerError, "guard_error", "the Guard management operation could not be completed")
 	}
 }
 
@@ -756,6 +832,9 @@ func (s *Server) createAssetAssignment(w http.ResponseWriter, r *http.Request, a
 	if !s.requireOrganizationPermission(w, r, authentication, guard.PermissionAssetsWrite) {
 		return
 	}
+	if !s.requireResourceWrite(w, r, authentication, "asset", r.PathValue("assetID")) {
+		return
+	}
 	var input struct {
 		AssigneeKind  people.AssigneeKind   `json:"assigneeKind"`
 		AssigneeID    string                `json:"assigneeId"`
@@ -787,6 +866,9 @@ func (s *Server) endAssetAssignment(w http.ResponseWriter, r *http.Request, auth
 		return
 	}
 	if !s.requireOrganizationPermission(w, r, authentication, guard.PermissionAssetsWrite) {
+		return
+	}
+	if !s.requireResourceWrite(w, r, authentication, "asset", r.PathValue("assetID")) {
 		return
 	}
 	var input struct {
@@ -925,6 +1007,21 @@ func (s *Server) requireOrganizationPermission(w http.ResponseWriter, r *http.Re
 		return false
 	}
 	return true
+}
+
+func (s *Server) requireResourceWrite(w http.ResponseWriter, r *http.Request, authentication guard.Authentication, resourceType, resourceID string) bool {
+	err := s.guard.CheckResourceWrite(r.Context(), authentication, resourceType, resourceID)
+	switch {
+	case err == nil:
+		return true
+	case errors.Is(err, guard.ErrInvalidInput):
+		writeError(w, r, http.StatusBadRequest, "validation_failed", "resource identity is invalid")
+	case errors.Is(err, guard.ErrResourceWriteLocked):
+		writeError(w, r, http.StatusLocked, "ownership_locked", "claim local ownership before changing this imported resource")
+	default:
+		writeError(w, r, http.StatusInternalServerError, "guard_error", "resource ownership could not be verified")
+	}
+	return false
 }
 
 func (s *Server) protected(permission guard.Permission, requireCSRF bool, next authenticatedHandler) http.Handler {

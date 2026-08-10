@@ -36,4 +36,4 @@ Or use a CSS class:
 
 For a plain file used via `<img>`, set the desired default by editing `--sm-fill` at the top of the SVG: `transparent`, `#fff`, or `#061827`.
 
-The checked-in StewardMesh asset uses `#061827` so the application header and browser tab icon retain the intended dark interior. The favicon URL is versioned in `web/index.html` when the asset changes so browsers refresh their cached icon.
+The checked-in detailed StewardMesh asset uses `#061827` so external image usage retains the intended dark interior. Browser tabs use the separate square `web/public/favicon.svg`, whose simpler, heavier geometry is designed for 16px rendering. The favicon URL is versioned in `web/index.html` when the asset changes so browsers refresh their cached icon.

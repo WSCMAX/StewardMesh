@@ -1,8 +1,9 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <rect width="64" height="64" rx="14" fill="#020617"/>
-  <path d="M17 20 32 12l15 8v24l-15 8-15-8Z" fill="none" stroke="#2dd4bf" stroke-width="4" stroke-linejoin="round"/>
-  <path d="m17 20 15 9 15-9M32 29v23" fill="none" stroke="#818cf8" stroke-width="4" stroke-linejoin="round"/>
-  <circle cx="17" cy="20" r="4" fill="#f8fafc"/>
-  <circle cx="47" cy="20" r="4" fill="#f8fafc"/>
-  <circle cx="32" cy="52" r="4" fill="#f8fafc"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <title>StewardMesh compact S mark</title>
+  <desc>A bold green, teal, and blue network S on a dark navy tile.</desc>
+  <rect x="2" y="2" width="60" height="60" rx="14" fill="#061827" stroke="#16bfa7" stroke-width="2"/>
+  <path d="M50 10H24C15 10 9 15 9 23c0 7 5 11 13 13l18 5c4 1 6 2 6 5 0 3-3 5-8 5H13v9h26c10 0 16-5 16-14 0-7-5-11-13-13l-18-5c-4-1-6-2-6-5 0-3 3-5 7-5h25z" fill="#16bfa7"/>
+  <circle cx="49" cy="14" r="5" fill="#46cf51"/>
+  <circle cx="47" cy="36" r="4" fill="#16bfa7"/>
+  <circle cx="15" cy="55" r="5" fill="#1768ef"/>
 </svg>

@@ -5,10 +5,11 @@ StewardMesh is a calm, capable workspace for understanding relationships and pla
 ## Project assets
 
 - Primary vector mark: [`web/public/brand/stewardmesh-s-mark.svg`](../../web/public/brand/stewardmesh-s-mark.svg)
+- Compact browser icon: [`web/public/favicon.svg`](../../web/public/favicon.svg)
 - PNG export: [`web/public/brand/stewardmesh-logo.png`](../../web/public/brand/stewardmesh-logo.png)
 - Implementation guidance: [Fillable S-mark usage](stewardmesh-s-mark-fillable-usage.md)
 
-Use the SVG in the interface and as the favicon so the mark remains crisp at any size. Its file-level default fills the interior with `ink-950`, which gives external `<img>` and favicon usage a stable dark ground. Inline consumers can override the shared or tier-specific CSS custom properties documented in the usage guide. Keep the PNG as the portable raster export for integrations that do not accept SVG.
+Use the detailed S-mesh SVG in the interface so the mark remains crisp at any size. Its file-level default fills the interior with `ink-950`, which gives external `<img>` usage a stable dark ground. Inline consumers can override the shared or tier-specific CSS custom properties documented in the usage guide. Use the dedicated square favicon at browser-tab sizes; its heavier geometry and full navy tile remain legible at 16px. Keep the PNG as the portable raster export for integrations that do not accept SVG.
 
 ## Brand palette
 

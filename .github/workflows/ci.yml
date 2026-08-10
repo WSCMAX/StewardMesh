@@ -66,6 +66,15 @@ jobs:
       - name: Verify requirement traceability
         run: go run ./cmd/tracecheck
 
+  deployment:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate default Compose configuration
+        run: docker compose -f deploy/docker-compose.yml config --quiet
+      - name: Validate cache Compose profile
+        run: docker compose -f deploy/docker-compose.yml --profile cache config --quiet
+
   security:
     runs-on: ubuntu-latest
     steps:

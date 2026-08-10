@@ -1,3 +1,4 @@
+# REQ-PLATFORM-VALKEY-001 / platform.runtime
 services:
   postgres:
     image: postgres:18.4-alpine
@@ -14,6 +15,30 @@ services:
       retries: 10
     volumes:
       - stewardmesh-postgres:/var/lib/postgresql
+  valkey:
+    profiles: ["cache", "demo"]
+    image: valkey/valkey:9.1.1-alpine
+    command:
+      - valkey-server
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+      - --maxmemory
+      - 128mb
+      - --maxmemory-policy
+      - noeviction
+      - --loglevel
+      - warning
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    stop_grace_period: 10s
   grouper:
     profiles: ["integrations", "demo"]
     image: i2incommon/grouper:latest

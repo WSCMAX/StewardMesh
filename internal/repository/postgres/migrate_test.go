@@ -6,14 +6,14 @@ import (
 )
 
 // Requirements: REQ-FOUNDATION-001, SEC-GUARD-001, REQ-PEOPLE-001,
-// REQ-DIRECTORY-EXPANSION-001, REQ-ATLAS-001, REQ-THREADS-001.
+// REQ-DIRECTORY-EXPANSION-001, REQ-ATLAS-001, REQ-THREADS-001, REQ-STORAGE-001.
 func TestEmbeddedMigrationsAreOrderedAndChecksummed(t *testing.T) {
 	migrations, err := loadMigrations()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(migrations) != 13 {
-		t.Fatalf("expected 13 platform migrations, got %d", len(migrations))
+	if len(migrations) != 15 {
+		t.Fatalf("expected 15 platform migrations, got %d", len(migrations))
 	}
 	for index, migration := range migrations {
 		expectedVersion := int64(index + 1)
@@ -22,6 +22,28 @@ func TestEmbeddedMigrationsAreOrderedAndChecksummed(t *testing.T) {
 		}
 		if len(migration.checksum) != 64 {
 			t.Fatalf("expected SHA-256 checksum for migration %d", migration.version)
+		}
+	}
+}
+
+func TestVaultMigrationsAddPrivateMetadataAndAdministratorPermissions(t *testing.T) {
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{
+		"REQ-STORAGE-001", "CREATE TABLE vault_blobs", "UNIQUE (organization_id, object_key)",
+		"sha256", "source_system_id", "resource_type",
+	} {
+		if !strings.Contains(migrations[13].contents, expected) {
+			t.Fatalf("Vault metadata migration is missing %q", expected)
+		}
+	}
+	for _, expected := range []string{
+		"REQ-STORAGE-001", "'storage.read'", "'storage.write'", "r.source = 'builtin'", "ON CONFLICT",
+	} {
+		if !strings.Contains(migrations[14].contents, expected) {
+			t.Fatalf("Vault administrator permission migration is missing %q", expected)
 		}
 	}
 }

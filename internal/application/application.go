@@ -1,6 +1,6 @@
 // Package application constructs StewardMesh's transport-neutral HTTP
 // application and owns the lifecycle of its shared runtime dependencies.
-// Requirements: REQ-FOUNDATION-001, REQ-ATLAS-001, REQ-THREADS-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001.
+// Requirements: REQ-FOUNDATION-001, REQ-ATLAS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001.
 package application
 
 import (
@@ -26,8 +26,6 @@ import (
 	"github.com/maxlemke/stewardmesh/internal/storage"
 	"github.com/maxlemke/stewardmesh/internal/threads"
 )
-
-const maximumLocalBlobBytes = 25 << 20
 
 // Options selects construction behavior that differs by deployment transport.
 // Long-running local servers currently run migrations at startup. Future
@@ -123,9 +121,19 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 	}
 	application.closeCache = closeCache
 
-	blobStore, err := storage.NewLocalBlobStore(cfg.BlobDir, maximumLocalBlobBytes)
+	blobStore, err := initializeBlobStore(ctx, cfg)
+	cfg.S3AccessKeyID = ""
+	cfg.S3SecretAccessKey = ""
+	cfg.S3SessionToken = ""
 	if err != nil {
 		return fail(fmt.Errorf("initialize blob store: %w", err))
+	}
+	vaultService, err := storage.NewService(runtime.storageStore, blobStore, runtime.auditor, storage.ServiceConfig{
+		OrganizationID: cfg.OrganizationID,
+		DownloadTTL:    cfg.BlobDownloadTTL,
+	})
+	if err != nil {
+		return fail(fmt.Errorf("initialize Vault: %w", err))
 	}
 	guardService, err := guard.NewService(
 		runtime.guardStore,
@@ -165,7 +173,7 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 		Atlas:               atlasService,
 		People:              peopleService,
 		Threads:             threadsService,
-		Blobs:               blobStore,
+		Vault:               vaultService,
 		Guard:               guardService,
 		OIDC:                oidcFlow,
 		SAML:                samlFlow,
@@ -213,6 +221,7 @@ type foundationRuntime struct {
 	organization bootstrap.Organization
 	assetStore   atlas.Store
 	threadsStore threads.Store
+	storageStore storage.MetadataStore
 	guardStore   guard.Store
 	peopleStore  people.Store
 	auditor      foundation.Auditor
@@ -274,6 +283,7 @@ func initializeFoundation(ctx context.Context, cfg config.Config, runMigrations 
 		organizations repository.OrganizationRepository
 		assetStore    atlas.Store
 		threadsStore  threads.Store
+		storageStore  storage.MetadataStore
 		guardStore    guard.Store
 		peopleStore   people.Store
 		auditor       foundation.Auditor = foundation.NopAuditor{}
@@ -286,6 +296,7 @@ func initializeFoundation(ctx context.Context, cfg config.Config, runMigrations 
 		peopleStore = repository.NewMemoryPeopleStore()
 		assetStore = repository.NewMemoryAtlasStore()
 		threadsStore = repository.NewMemoryThreadsStore()
+		storageStore = repository.NewMemoryStorageStore()
 	case config.RepositoryDriverPostgres:
 		database, err := postgresrepository.Open(ctx, cfg.DatabaseURL)
 		if err != nil {
@@ -324,6 +335,11 @@ func initializeFoundation(ctx context.Context, cfg config.Config, runMigrations 
 			return foundationRuntime{}, err
 		}
 		threadsStore, err = postgresrepository.NewThreadsStore(database)
+		if err != nil {
+			_ = database.Close()
+			return foundationRuntime{}, err
+		}
+		storageStore, err = postgresrepository.NewStorageStore(database)
 		if err != nil {
 			_ = database.Close()
 			return foundationRuntime{}, err
@@ -378,11 +394,23 @@ func initializeFoundation(ctx context.Context, cfg config.Config, runMigrations 
 		organization: organization,
 		assetStore:   assetStore,
 		threadsStore: threadsStore,
+		storageStore: storageStore,
 		guardStore:   guardStore,
 		peopleStore:  peopleStore,
 		auditor:      auditor,
 		close:        closeRuntime,
 	}, nil
+}
+
+func initializeBlobStore(ctx context.Context, cfg config.Config) (storage.ObjectStore, error) {
+	switch cfg.StorageDriver {
+	case config.StorageDriverLocal:
+		return storage.NewLocalBlobStore(cfg.BlobDir, cfg.BlobMaximumBytes)
+	case config.StorageDriverS3:
+		return storage.NewS3BlobStore(ctx, cfg.S3Config())
+	default:
+		return nil, fmt.Errorf("unsupported storage driver %q", cfg.StorageDriver)
+	}
 }
 
 type threadsTargetValidator struct {

@@ -82,6 +82,16 @@ service ThreadsService {
   rpc UnlinkGoal(UnlinkGoalRequest) returns (UnlinkGoalResponse);
 }
 
+// Private object storage with durable metadata and short-lived access.
+// Requirement: REQ-STORAGE-001. Feature: storage.blobs.
+service VaultService {
+  rpc ListBlobs(ListBlobsRequest) returns (ListBlobsResponse);
+  rpc GetBlob(GetBlobRequest) returns (VaultBlob);
+  rpc CreateBlob(CreateBlobRequest) returns (VaultBlob);
+  rpc DownloadBlob(DownloadBlobRequest) returns (VaultBlobContent);
+  rpc AuthorizeDownload(AuthorizeBlobDownloadRequest) returns (VaultDownloadAuthorization);
+}
+
 message GetOrganizationRequest {}
 
 message Organization {
@@ -692,3 +702,60 @@ message UnlinkGoalRequest {
 }
 
 message UnlinkGoalResponse {}
+
+message ListBlobsRequest {}
+
+message ListBlobsResponse {
+  repeated VaultBlob items = 1;
+  int64 maximum_upload_bytes = 2;
+}
+
+message GetBlobRequest {
+  string blob_id = 1;
+}
+
+message CreateBlobRequest {
+  string name = 1;
+  string media_type = 2;
+  bytes content = 3;
+  string source_system_id = 4;
+  string source_record_id = 5;
+  string resource_type = 6;
+  string resource_id = 7;
+}
+
+// Object keys, provider credentials, and temporary URLs are deliberately not
+// durable VaultBlob fields.
+message VaultBlob {
+  string id = 1;
+  string organization_id = 2;
+  string name = 3;
+  string media_type = 4;
+  int64 size_bytes = 5;
+  string sha256 = 6;
+  string provider = 7;
+  string source_system_id = 8;
+  string source_record_id = 9;
+  string resource_type = 10;
+  string resource_id = 11;
+  string created_by = 12;
+  google.protobuf.Timestamp created_at = 13;
+}
+
+message DownloadBlobRequest {
+  string blob_id = 1;
+}
+
+message VaultBlobContent {
+  VaultBlob blob = 1;
+  bytes content = 2;
+}
+
+message AuthorizeBlobDownloadRequest {
+  string blob_id = 1;
+}
+
+message VaultDownloadAuthorization {
+  string url = 1;
+  google.protobuf.Timestamp expires_at = 2;
+}

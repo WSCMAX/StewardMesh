@@ -1,5 +1,5 @@
 // Package config loads and validates provider-neutral StewardMesh settings.
-// Requirements: REQ-FOUNDATION-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
+// Requirements: REQ-FOUNDATION-001, REQ-STORAGE-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
 package config
 
 import (
@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/maxlemke/stewardmesh/internal/cache"
+	"github.com/maxlemke/stewardmesh/internal/storage"
 )
 
 type RepositoryDriver string
@@ -30,10 +31,30 @@ const (
 	CacheDriverValkey CacheDriver = "valkey"
 )
 
+type StorageDriver string
+
+const (
+	StorageDriverLocal StorageDriver = "local"
+	StorageDriverS3    StorageDriver = "s3"
+)
+
 type Config struct {
 	Addr                       string
 	DataDir                    string
 	BlobDir                    string
+	StorageDriver              StorageDriver
+	BlobMaximumBytes           int64
+	BlobDownloadTTL            time.Duration
+	S3Bucket                   string
+	S3Region                   string
+	S3EndpointURL              string
+	S3ForcePathStyle           bool
+	S3AccessKeyID              string
+	S3SecretAccessKey          string
+	S3SessionToken             string
+	S3RoleARN                  string
+	S3Encryption               string
+	S3KMSKeyID                 string
 	DatabaseURL                string
 	RepositoryDriver           RepositoryDriver
 	CacheDriver                CacheDriver
@@ -75,16 +96,37 @@ func Load() (Config, error) {
 
 func FromEnv() Config {
 	allowedOrigin := envOr("STEWARDMESH_ALLOWED_ORIGIN", "http://localhost:5173")
+	storageDriver := StorageDriver(envOr("STEWARDMESH_STORAGE_DRIVER", string(StorageDriverLocal)))
 	sessionCookieSecure, secureErr := envBool(
 		"STEWARDMESH_SESSION_COOKIE_SECURE",
 		strings.HasPrefix(allowedOrigin, "https://"),
 	)
 	sessionTTL, ttlErr := envDuration("STEWARDMESH_SESSION_TTL", 12*time.Hour)
+	blobDownloadTTL, blobTTLErr := envDuration("STEWARDMESH_BLOB_DOWNLOAD_TTL", 5*time.Minute)
+	blobMaximumBytes, blobSizeErr := envInt64("STEWARDMESH_BLOB_MAXIMUM_BYTES", 25<<20)
+	s3ForcePathStyle, s3PathStyleErr := envBool("STEWARDMESH_S3_FORCE_PATH_STYLE", false)
 	oidcRequireVerifiedEmail, oidcVerifiedEmailErr := envBool("STEWARDMESH_OIDC_REQUIRE_VERIFIED_EMAIL", true)
+	s3Encryption := os.Getenv("STEWARDMESH_S3_ENCRYPTION")
+	if storageDriver == StorageDriverS3 && s3Encryption == "" {
+		s3Encryption = "AES256"
+	}
 	return Config{
 		Addr:                       envOr("STEWARDMESH_ADDR", "127.0.0.1:8080"),
 		DataDir:                    envOr("STEWARDMESH_DATA_DIR", "./data"),
 		BlobDir:                    envOr("STEWARDMESH_BLOB_DIR", "./storage"),
+		StorageDriver:              storageDriver,
+		BlobMaximumBytes:           blobMaximumBytes,
+		BlobDownloadTTL:            blobDownloadTTL,
+		S3Bucket:                   os.Getenv("STEWARDMESH_S3_BUCKET"),
+		S3Region:                   os.Getenv("STEWARDMESH_S3_REGION"),
+		S3EndpointURL:              os.Getenv("STEWARDMESH_S3_ENDPOINT_URL"),
+		S3ForcePathStyle:           s3ForcePathStyle,
+		S3AccessKeyID:              os.Getenv("STEWARDMESH_S3_ACCESS_KEY_ID"),
+		S3SecretAccessKey:          os.Getenv("STEWARDMESH_S3_SECRET_ACCESS_KEY"),
+		S3SessionToken:             os.Getenv("STEWARDMESH_S3_SESSION_TOKEN"),
+		S3RoleARN:                  os.Getenv("STEWARDMESH_S3_ROLE_ARN"),
+		S3Encryption:               s3Encryption,
+		S3KMSKeyID:                 os.Getenv("STEWARDMESH_S3_KMS_KEY_ID"),
 		DatabaseURL:                envOr("STEWARDMESH_DATABASE_URL", ""),
 		RepositoryDriver:           RepositoryDriver(envOr("STEWARDMESH_REPOSITORY_DRIVER", string(RepositoryDriverPostgres))),
 		CacheDriver:                CacheDriver(envOr("STEWARDMESH_CACHE_DRIVER", string(CacheDriverNone))),
@@ -113,7 +155,7 @@ func FromEnv() Config {
 		SessionCookieSecure:        sessionCookieSecure,
 		SessionTTL:                 sessionTTL,
 		SeedSynthetic:              envBoolDefault("STEWARDMESH_SEED_SYNTHETIC"),
-		validationError:            errors.Join(secureErr, ttlErr, oidcVerifiedEmailErr),
+		validationError:            errors.Join(secureErr, ttlErr, blobTTLErr, blobSizeErr, s3PathStyleErr, oidcVerifiedEmailErr),
 	}
 }
 
@@ -165,6 +207,29 @@ func (c Config) Validate() error {
 	default:
 		return fmt.Errorf("unsupported STEWARDMESH_CACHE_DRIVER %q", c.CacheDriver)
 	}
+	if c.BlobMaximumBytes <= 0 || c.BlobMaximumBytes > 5<<30 {
+		return errors.New("STEWARDMESH_BLOB_MAXIMUM_BYTES must be between 1 byte and 5 GiB")
+	}
+	if c.BlobDownloadTTL < time.Minute || c.BlobDownloadTTL > 15*time.Minute {
+		return errors.New("STEWARDMESH_BLOB_DOWNLOAD_TTL must be between 1m and 15m")
+	}
+	switch c.StorageDriver {
+	case StorageDriverLocal:
+		if strings.TrimSpace(c.BlobDir) == "" {
+			return errors.New("STEWARDMESH_BLOB_DIR is required for local storage")
+		}
+		if c.S3Bucket != "" || c.S3Region != "" || c.S3EndpointURL != "" || c.S3ForcePathStyle ||
+			c.S3AccessKeyID != "" || c.S3SecretAccessKey != "" || c.S3SessionToken != "" ||
+			c.S3RoleARN != "" || c.S3Encryption != "" || c.S3KMSKeyID != "" {
+			return errors.New("S3 settings must be empty unless STEWARDMESH_STORAGE_DRIVER is s3")
+		}
+	case StorageDriverS3:
+		if err := storage.ValidateS3Config(c.S3Config()); err != nil {
+			return fmt.Errorf("invalid S3 storage configuration: %w", err)
+		}
+	default:
+		return fmt.Errorf("unsupported STEWARDMESH_STORAGE_DRIVER %q", c.StorageDriver)
+	}
 	if err := c.validateOIDC(); err != nil {
 		return err
 	}
@@ -207,6 +272,16 @@ func (c Config) Validate() error {
 
 func (c Config) OIDCEnabled() bool {
 	return strings.TrimSpace(c.OIDCIssuerURL) != ""
+}
+
+func (c Config) S3Config() storage.S3Config {
+	return storage.S3Config{
+		Bucket: c.S3Bucket, Region: c.S3Region, EndpointURL: c.S3EndpointURL,
+		ForcePathStyle: c.S3ForcePathStyle, AccessKeyID: c.S3AccessKeyID,
+		SecretAccessKey: c.S3SecretAccessKey, SessionToken: c.S3SessionToken,
+		RoleARN: c.S3RoleARN, Encryption: c.S3Encryption, KMSKeyID: c.S3KMSKeyID,
+		MaximumBytes: c.BlobMaximumBytes,
+	}
 }
 
 func (c Config) SAMLEnabled() bool {
@@ -377,6 +452,18 @@ func envDuration(key string, fallback time.Duration) (time.Duration, error) {
 	parsed, err := time.ParseDuration(value)
 	if err != nil {
 		return 0, fmt.Errorf("%s must be a valid duration", key)
+	}
+	return parsed, nil
+}
+
+func envInt64(key string, fallback int64) (int64, error) {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be an integer", key)
 	}
 	return parsed, nil
 }

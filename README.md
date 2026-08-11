@@ -79,6 +79,15 @@ provider-neutral relationship contract so future Ledger, Stack, and Exchange
 work can reuse it. See [Threads](docs/features/threads.md) for permissions,
 precedence rules, API behavior, audit events, and the accessible workflow.
 
+Vault provides private, checksummed file storage through the same service
+contract for a hardened local filesystem or S3-compatible object storage. Its
+metadata preserves ownership and provenance without persisting object keys,
+credentials, or temporary URLs. Shared deployments can use IAM/workload
+identity, STS assume-role, or secret-manager-injected provider credentials with
+mandatory server-side encryption and short-lived downloads. See
+[Vault](docs/features/vault.md) for configuration, permissions, threat
+boundaries, API behavior, and validation coverage.
+
 People now provides sites, departments, person/shared/public/lab identities,
 structured site addresses, buildings and rooms, scoped directory search, and
 effective-dated multi-user asset assignments.

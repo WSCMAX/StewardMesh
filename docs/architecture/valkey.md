@@ -8,9 +8,9 @@
 in-memory adapter, official Valkey Go client adapter, validated connection URL,
 namespaced key builder, distributed Guard login limiter, runtime configuration,
 optional self-hosted Compose service, and their validation are implemented.
-AWS ElastiCache and Lambda deployment guidance and reusable application
-construction are also implemented. A Lambda transport adapter, IAM
-authentication, S3-compatible blob adapter, and infrastructure as code remain
+AWS ElastiCache and Lambda deployment guidance, reusable application
+construction, and S3-compatible Vault storage are also implemented. A Lambda
+transport adapter, Valkey IAM authentication, and infrastructure as code remain
 outside the current runtime.
 
 ## Decision

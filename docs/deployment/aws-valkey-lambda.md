@@ -17,7 +17,7 @@ current server binary can be deployed unchanged.
 |---|---|---|
 | Long-running container with ElastiCache Serverless for Valkey | Configuration path implemented; validate against the target cache | Password-authenticated ElastiCache user supplied through `rediss://` |
 | Reusable application construction | Implemented | Load secrets before construction and keep migrations disabled in request runtimes |
-| Lambda HTTP handler | Not implemented | Add the transport adapter, secret loading, configurable database pool, and durable blob adapter before deployment |
+| Lambda HTTP handler | Not implemented | Add the transport adapter, secret loading, and configurable database pool before deployment; the S3-compatible Vault adapter is available |
 | ElastiCache IAM authentication | Not implemented | Add a SigV4 credential provider and token refresh before enabling it |
 
 The cache remains reconstructible and must not contain sessions, CSRF values,
@@ -166,9 +166,9 @@ A future Lambda transport must apply these remaining runtime rules:
 7. Set reserved concurrency and database pool limits from tested downstream
    capacity. Do not use Lambda concurrency as a substitute for application rate
    limiting.
-8. Replace local blob storage with the S3-compatible adapter before horizontal
-   or Lambda deployment. The Lambda `/tmp` directory is temporary workspace,
-   not authoritative storage.
+8. Configure `STEWARDMESH_STORAGE_DRIVER=s3` and the Vault bucket, region,
+   encryption, and IAM role before horizontal or Lambda deployment. The Lambda
+   `/tmp` directory is temporary workspace, not authoritative storage.
 
 Do not depend on cleanup running when Lambda freezes or discards an execution
 environment. `Application.Close` exists for tests and long-running processes,

@@ -1,8 +1,8 @@
-# Requirements: REQ-ATLAS-001, REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, REQ-THREADS-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
+# Requirements: REQ-ATLAS-001, REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
 openapi: 3.1.0
 info:
   title: StewardMesh API
-  version: 0.8.0
+  version: 0.9.0
   description: Requirements-driven inventory, lifecycle, and secure organization management API.
   license:
     name: Apache License 2.0
@@ -1229,6 +1229,112 @@ paths:
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
         '423': {$ref: '#/components/responses/Locked'}
+  /api/v1/blobs:
+    get:
+      summary: List private Vault file metadata
+      operationId: listVaultBlobs
+      tags: [Vault]
+      x-requirement: REQ-STORAGE-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200':
+          description: Organization-scoped file metadata and configured upload limit
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/VaultBlobCollection'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+    post:
+      summary: Upload a private file to Vault
+      operationId: createVaultBlob
+      tags: [Vault]
+      x-requirement: REQ-STORAGE-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema: {$ref: '#/components/schemas/CreateVaultBlobRequest'}
+      responses:
+        '201':
+          description: File stored privately with verified metadata
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/VaultBlob'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '413': {$ref: '#/components/responses/PayloadTooLarge'}
+  /api/v1/blobs/{blobId}:
+    parameters:
+      - $ref: '#/components/parameters/BlobID'
+    get:
+      summary: Get private Vault file metadata
+      operationId: getVaultBlob
+      tags: [Vault]
+      x-requirement: REQ-STORAGE-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200':
+          description: File metadata without object keys, credentials, or access URLs
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/VaultBlob'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/blobs/{blobId}/content:
+    parameters:
+      - $ref: '#/components/parameters/BlobID'
+      - $ref: '#/components/parameters/VaultDownloadToken'
+    get:
+      summary: Download a Vault file through the authenticated application
+      operationId: downloadVaultBlob
+      tags: [Vault]
+      x-requirement: REQ-STORAGE-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200':
+          description: Verified private file content
+          headers:
+            ETag:
+              description: Quoted SHA-256 integrity identifier
+              schema: {type: string}
+            Content-Disposition:
+              schema: {type: string}
+          content:
+            application/octet-stream:
+              schema: {type: string, format: binary}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/blobs/{blobId}/download-authorization:
+    parameters:
+      - $ref: '#/components/parameters/BlobID'
+    post:
+      summary: Create a short-lived Vault download authorization
+      operationId: authorizeVaultBlobDownload
+      tags: [Vault]
+      x-requirement: REQ-STORAGE-001
+      description: Returns an expiring S3-compatible signed URL or the session-protected local content endpoint. The URL is never persisted.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        '201':
+          description: Short-lived download authorization
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/VaultDownloadAuthorization'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
 components:
   securitySchemes:
     localCookieAuth:
@@ -1257,6 +1363,17 @@ components:
       name: goalId
       required: true
       schema: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+    BlobID:
+      in: path
+      name: blobId
+      required: true
+      schema: {type: string, pattern: '^[a-f0-9]{32}$'}
+    VaultDownloadToken:
+      in: query
+      name: token
+      required: true
+      description: Short-lived HMAC grant returned for local Vault content. S3-compatible authorizations use their provider URL instead.
+      schema: {type: string, minLength: 40, maxLength: 160}
     ThreadTargetType:
       in: path
       name: targetType
@@ -1309,6 +1426,11 @@ components:
           schema: {$ref: '#/components/schemas/Error'}
     Locked:
       description: The imported resource is write-locked until local ownership is explicitly claimed
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    PayloadTooLarge:
+      description: The uploaded file exceeds the configured Vault size limit
       content:
         application/json:
           schema: {$ref: '#/components/schemas/Error'}
@@ -1823,6 +1945,56 @@ components:
       required: [items]
       properties:
         items: {type: array, items: {$ref: '#/components/schemas/AssetAssignment'}}
+    VaultBlob:
+      type: object
+      additionalProperties: false
+      required: [id, organizationId, name, mediaType, sizeBytes, sha256, provider, createdBy, createdAt]
+      description: Durable private file metadata. Object keys, credentials, and temporary download URLs are never record fields.
+      properties:
+        id: {type: string, pattern: '^[a-f0-9]{32}$'}
+        organizationId: {type: string, minLength: 1, maxLength: 128}
+        name: {type: string, minLength: 1, maxLength: 255}
+        mediaType: {type: string, minLength: 1, maxLength: 127}
+        sizeBytes: {type: integer, format: int64, minimum: 0}
+        sha256: {type: string, pattern: '^[a-f0-9]{64}$'}
+        provider: {type: string, enum: [local, s3]}
+        sourceSystemId: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        sourceRecordId: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        resourceType: {type: string, pattern: '^[a-z][a-z0-9._-]{0,63}$'}
+        resourceId: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        createdBy: {type: string, minLength: 1, maxLength: 128}
+        createdAt: {type: string, format: date-time}
+    VaultBlobCollection:
+      type: object
+      additionalProperties: false
+      required: [items, maximumUploadBytes]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/VaultBlob'}}
+        maximumUploadBytes: {type: integer, format: int64, minimum: 1, maximum: 5368709120}
+    CreateVaultBlobRequest:
+      type: object
+      additionalProperties: false
+      required: [file]
+      properties:
+        file: {type: string, format: binary}
+        sourceSystemId: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        sourceRecordId: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        resourceType: {type: string, pattern: '^[a-z][a-z0-9._-]{0,63}$'}
+        resourceId: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+      dependentRequired:
+        sourceSystemId: [sourceRecordId]
+        sourceRecordId: [sourceSystemId]
+        resourceType: [resourceId]
+        resourceId: [resourceType]
+    VaultDownloadAuthorization:
+      type: object
+      additionalProperties: false
+      required: [url, expiresAt]
+      properties:
+        url:
+          type: string
+          description: Ephemeral HTTPS provider URL or same-origin authenticated path. Never store this value.
+        expiresAt: {type: string, format: date-time}
     Tag:
       type: object
       additionalProperties: false

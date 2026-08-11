@@ -1,7 +1,7 @@
 package httpapi
 
 // Requirements: REQ-FOUNDATION-001, REQ-ATLAS-001, REQ-PEOPLE-001,
-// REQ-DIRECTORY-EXPANSION-001, REQ-THREADS-001, REQ-PLATFORM-VALKEY-001,
+// REQ-DIRECTORY-EXPANSION-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-PLATFORM-VALKEY-001,
 // SEC-GUARD-001, SEC-HTTP-001.
 
 import (
@@ -12,6 +12,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -27,6 +28,7 @@ import (
 	"github.com/maxlemke/stewardmesh/internal/identity"
 	"github.com/maxlemke/stewardmesh/internal/people"
 	"github.com/maxlemke/stewardmesh/internal/repository"
+	"github.com/maxlemke/stewardmesh/internal/storage"
 	"github.com/maxlemke/stewardmesh/internal/threads"
 )
 
@@ -135,6 +137,69 @@ func TestHealthIsPublicAndHardened(t *testing.T) {
 	}
 	if res.Header().Get("Content-Security-Policy") == "" || res.Header().Get("X-Content-Type-Options") != "nosniff" {
 		t.Fatal("expected centralized browser security headers")
+	}
+}
+
+func TestVaultUploadMetadataAuthorizationAndDownload(t *testing.T) {
+	handler := newGuardServer(t)
+	session := bootstrapAdministrator(t, handler)
+	var upload bytes.Buffer
+	writer := multipart.NewWriter(&upload)
+	file, err := writer.CreateFormFile("file", "evidence.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = file.Write([]byte("verified evidence"))
+	_ = writer.WriteField("sourceSystemId", "manual-import")
+	_ = writer.WriteField("sourceRecordId", "row-42")
+	_ = writer.WriteField("resourceType", "asset")
+	_ = writer.WriteField("resourceId", "asset-42")
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	req := authenticatedRequest(http.MethodPost, "/api/v1/blobs", &upload, session)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusCreated || strings.Contains(res.Body.String(), "objectKey") || strings.Contains(res.Body.String(), "signed") {
+		t.Fatalf("expected private Vault metadata, got %d: %s", res.Code, res.Body.String())
+	}
+	var blob storage.Blob
+	if err := json.Unmarshal(res.Body.Bytes(), &blob); err != nil {
+		t.Fatal(err)
+	}
+	if blob.ID == "" || blob.Name != "evidence.txt" || blob.SizeBytes != 17 || blob.SHA256 == "" || blob.SourceRecordID != "row-42" {
+		t.Fatalf("unexpected Vault blob %#v", blob)
+	}
+
+	list := authenticatedRequest(http.MethodGet, "/api/v1/blobs", nil, session)
+	listRes := httptest.NewRecorder()
+	handler.ServeHTTP(listRes, list)
+	if listRes.Code != http.StatusOK || !strings.Contains(listRes.Body.String(), blob.ID) || !strings.Contains(listRes.Body.String(), "maximumUploadBytes") {
+		t.Fatalf("unexpected Vault listing %d: %s", listRes.Code, listRes.Body.String())
+	}
+	authorize := authenticatedRequest(http.MethodPost, "/api/v1/blobs/"+blob.ID+"/download-authorization", nil, session)
+	authorizeRes := httptest.NewRecorder()
+	handler.ServeHTTP(authorizeRes, authorize)
+	if authorizeRes.Code != http.StatusCreated || !strings.Contains(authorizeRes.Body.String(), "/content") || !strings.Contains(authorizeRes.Body.String(), "expiresAt") {
+		t.Fatalf("unexpected Vault authorization %d: %s", authorizeRes.Code, authorizeRes.Body.String())
+	}
+	var authorization storage.DownloadAuthorization
+	if err := json.Unmarshal(authorizeRes.Body.Bytes(), &authorization); err != nil {
+		t.Fatal(err)
+	}
+	download := authenticatedRequest(http.MethodGet, authorization.URL, nil, session)
+	downloadRes := httptest.NewRecorder()
+	handler.ServeHTTP(downloadRes, download)
+	if downloadRes.Code != http.StatusOK || downloadRes.Body.String() != "verified evidence" || downloadRes.Header().Get("ETag") == "" ||
+		!strings.Contains(downloadRes.Header().Get("Content-Disposition"), "attachment") {
+		t.Fatalf("unexpected Vault download %d headers=%v body=%q", downloadRes.Code, downloadRes.Header(), downloadRes.Body.String())
+	}
+	unauthorizedDownload := authenticatedRequest(http.MethodGet, "/api/v1/blobs/"+blob.ID+"/content", nil, session)
+	unauthorizedDownloadRes := httptest.NewRecorder()
+	handler.ServeHTTP(unauthorizedDownloadRes, unauthorizedDownload)
+	if unauthorizedDownloadRes.Code != http.StatusBadRequest {
+		t.Fatalf("expected missing short-lived token to fail, got %d", unauthorizedDownloadRes.Code)
 	}
 }
 
@@ -950,10 +1015,19 @@ func newGuardServerWithIdentity(t *testing.T, limiter guard.AttemptLimiter, oidc
 	if err != nil {
 		t.Fatal(err)
 	}
+	objectStore, err := storage.NewLocalBlobStore(t.TempDir(), 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vaultService, err := storage.NewService(repository.NewMemoryStorageStore(), objectStore, foundation.NopAuditor{}, storage.ServiceConfig{OrganizationID: organization.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
 	return NewServer(Dependencies{
 		Atlas:   atlasService,
 		People:  peopleService,
 		Threads: threadsService,
+		Vault:   vaultService,
 		Guard:   service,
 		OIDC:    oidcFlow,
 		SAML:    samlFlow,

@@ -1,8 +1,8 @@
-# Requirements: REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
+# Requirements: REQ-ATLAS-001, REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
 openapi: 3.1.0
 info:
   title: StewardMesh API
-  version: 0.6.0
+  version: 0.7.0
   description: Requirements-driven inventory, lifecycle, and secure organization management API.
   license:
     name: Apache License 2.0
@@ -477,7 +477,16 @@ paths:
       summary: List assets
       operationId: listAssets
       tags: [Atlas]
+      x-requirement: REQ-ATLAS-001
       security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - {in: query, name: q, schema: {type: string, maxLength: 200}}
+        - {in: query, name: kind, schema: {$ref: '#/components/schemas/AssetKind'}}
+        - {in: query, name: status, schema: {$ref: '#/components/schemas/AssetStatus'}}
+        - {in: query, name: siteId, schema: {$ref: '#/components/schemas/DirectoryReferenceID'}}
+        - {in: query, name: departmentId, schema: {$ref: '#/components/schemas/DirectoryReferenceID'}}
+        - {in: query, name: userId, schema: {$ref: '#/components/schemas/DirectoryReferenceID'}}
+        - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 100, default: 50}}
       responses:
         '200':
           description: Asset collection
@@ -492,6 +501,7 @@ paths:
       summary: Create an asset
       operationId: createAsset
       tags: [Atlas]
+      x-requirement: REQ-ATLAS-001
       security: [{localCookieAuth: []}, {secureCookieAuth: []}]
       parameters:
         - $ref: '#/components/parameters/CSRFToken'
@@ -499,7 +509,7 @@ paths:
         required: true
         content:
           application/json:
-            schema: {$ref: '#/components/schemas/Asset'}
+            schema: {$ref: '#/components/schemas/CreateAssetRequest'}
       responses:
         '201':
           description: Asset created
@@ -512,6 +522,82 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /api/v1/assets/{assetId}:
+    parameters:
+      - $ref: '#/components/parameters/AssetID'
+    get:
+      summary: Get an asset
+      operationId: getAsset
+      tags: [Atlas]
+      x-requirement: REQ-ATLAS-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200':
+          description: Asset detail
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Asset'}
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    put:
+      summary: Update an asset
+      operationId: updateAsset
+      tags: [Atlas]
+      x-requirement: REQ-ATLAS-001
+      description: Replaces editable asset fields using the current revision for optimistic concurrency.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/UpdateAssetRequest'}
+      responses:
+        '200':
+          description: Asset updated
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Asset'}
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '423':
+          $ref: '#/components/responses/Locked'
+  /api/v1/assets/{assetId}/lifecycle:
+    parameters:
+      - $ref: '#/components/parameters/AssetID'
+    get:
+      summary: List an asset's lifecycle history
+      operationId: listAssetLifecycle
+      tags: [Atlas]
+      x-requirement: REQ-ATLAS-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200':
+          description: Effective asset status history
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AssetLifecycleCollection'}
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
   /api/v1/departments:
     get:
       summary: List departments
@@ -1155,16 +1241,79 @@ components:
             correlationId: {type: string}
     Asset:
       type: object
-      required: [id, name, kind]
+      required: [id, organizationId, name, kind, status, revision, createdAt, updatedAt]
       properties:
-        id: {type: string}
-        name: {type: string}
-        kind: {type: string}
-        serialNumber: {type: string}
-        departmentId: {type: string}
-        userId: {type: string}
-        status: {type: string}
+        id: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        organizationId: {type: string}
+        name: {type: string, minLength: 1, maxLength: 200}
+        kind: {$ref: '#/components/schemas/AssetKind'}
+        assetTag: {type: string, maxLength: 128}
+        serialNumber: {type: string, maxLength: 255}
+        hostname: {type: string, maxLength: 253}
+        siteId: {$ref: '#/components/schemas/DirectoryReferenceID'}
+        buildingId: {$ref: '#/components/schemas/DirectoryReferenceID'}
+        roomId: {$ref: '#/components/schemas/DirectoryReferenceID'}
+        departmentId: {$ref: '#/components/schemas/DirectoryReferenceID'}
+        userId: {$ref: '#/components/schemas/DirectoryReferenceID'}
+        status: {$ref: '#/components/schemas/AssetStatus'}
         purchaseDate: {type: string, format: date-time}
+        revision: {type: integer, format: int64, minimum: 1}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    CreateAssetRequest:
+      type: object
+      required: [name, kind]
+      properties:
+        id: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        name: {type: string, minLength: 1, maxLength: 200}
+        kind: {$ref: '#/components/schemas/AssetKind'}
+        assetTag: {type: string, maxLength: 128}
+        serialNumber: {type: string, maxLength: 255}
+        hostname: {type: string, maxLength: 253}
+        siteId: {$ref: '#/components/schemas/DirectoryReferenceID'}
+        buildingId: {$ref: '#/components/schemas/DirectoryReferenceID'}
+        roomId: {$ref: '#/components/schemas/DirectoryReferenceID'}
+        departmentId: {$ref: '#/components/schemas/DirectoryReferenceID'}
+        userId: {$ref: '#/components/schemas/DirectoryReferenceID'}
+        status: {$ref: '#/components/schemas/AssetStatus'}
+        purchaseDate: {type: string, format: date-time}
+    UpdateAssetRequest:
+      allOf:
+        - $ref: '#/components/schemas/CreateAssetRequest'
+        - type: object
+          required: [status, revision]
+          properties:
+            revision: {type: integer, format: int64, minimum: 1}
+            lifecycleNote: {type: string, maxLength: 1000}
+    AssetKind:
+      type: string
+      enum: [server, computer, desktop, laptop, tablet, phone, network, peripheral, virtual, other]
+    AssetStatus:
+      type: string
+      enum: [draft, active, inactive, retired, disposed]
+    DirectoryReferenceID:
+      type: string
+      pattern: '^[a-f0-9]{32}$'
+    AssetLifecycleEvent:
+      type: object
+      required: [id, organizationId, assetId, toStatus, revision, actorId, occurredAt]
+      properties:
+        id: {type: string, pattern: '^[a-f0-9]{32}$'}
+        organizationId: {type: string}
+        assetId: {type: string}
+        fromStatus: {$ref: '#/components/schemas/AssetStatus'}
+        toStatus: {$ref: '#/components/schemas/AssetStatus'}
+        note: {type: string, maxLength: 1000}
+        revision: {type: integer, format: int64, minimum: 1}
+        actorId: {type: string}
+        occurredAt: {type: string, format: date-time}
+    AssetLifecycleCollection:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/AssetLifecycleEvent'}
     AssetCollection:
       type: object
       required: [items]

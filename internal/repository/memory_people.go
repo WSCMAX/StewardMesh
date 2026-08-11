@@ -196,6 +196,16 @@ func (s *MemoryPeopleStore) CreateRoom(_ context.Context, room people.Room) (peo
 	return room, nil
 }
 
+func (s *MemoryPeopleStore) GetRoom(_ context.Context, organizationID, id string) (people.Room, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	room, exists := s.rooms[id]
+	if !exists || room.OrganizationID != organizationID {
+		return people.Room{}, people.ErrNotFound
+	}
+	return room, nil
+}
+
 func (s *MemoryPeopleStore) ListRooms(_ context.Context, organizationID, siteID, buildingID string, visibility people.Visibility) ([]people.Room, error) {
 	if organizationID == "" {
 		return nil, people.ErrInvalidInput

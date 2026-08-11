@@ -5,14 +5,15 @@ import (
 	"testing"
 )
 
-// Requirements: REQ-FOUNDATION-001, SEC-GUARD-001, REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001.
+// Requirements: REQ-FOUNDATION-001, SEC-GUARD-001, REQ-PEOPLE-001,
+// REQ-DIRECTORY-EXPANSION-001, REQ-ATLAS-001.
 func TestEmbeddedMigrationsAreOrderedAndChecksummed(t *testing.T) {
 	migrations, err := loadMigrations()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(migrations) != 10 {
-		t.Fatalf("expected 10 platform migrations, got %d", len(migrations))
+	if len(migrations) != 11 {
+		t.Fatalf("expected 11 platform migrations, got %d", len(migrations))
 	}
 	for index, migration := range migrations {
 		expectedVersion := int64(index + 1)
@@ -21,6 +22,26 @@ func TestEmbeddedMigrationsAreOrderedAndChecksummed(t *testing.T) {
 		}
 		if len(migration.checksum) != 64 {
 			t.Fatalf("expected SHA-256 checksum for migration %d", migration.version)
+		}
+	}
+}
+
+func TestAtlasMigrationAddsDurableScopedAssetsAndLifecycle(t *testing.T) {
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(migrations) < 11 {
+		t.Fatal("Atlas migration is missing")
+	}
+	contents := migrations[10].contents
+	for _, expected := range []string{
+		"REQ-ATLAS-001", "CREATE TABLE atlas_assets", "PRIMARY KEY (organization_id, id)",
+		"CREATE UNIQUE INDEX atlas_assets_asset_tag_idx", "CREATE TABLE atlas_asset_lifecycle_events",
+		"UNIQUE (organization_id, asset_id, revision)", "REFERENCES people_rooms",
+	} {
+		if !strings.Contains(contents, expected) {
+			t.Fatalf("Atlas migration is missing %q", expected)
 		}
 	}
 }

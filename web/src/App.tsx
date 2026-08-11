@@ -1,16 +1,10 @@
 import { type FormEvent, useEffect, useRef, useState } from 'react'
 import { ApiRequestError, requestJSON } from './api'
+import AtlasInventory, { isAsset, type Asset } from './AtlasInventory'
 import GuardAccessManager from './GuardAccessManager'
 import PeopleDirectory from './PeopleDirectory'
 
 type Module = readonly [name: string, description: string]
-
-export type Asset = {
-  id: string
-  name: string
-  kind: string
-  status: string
-}
 
 type AssetResponse = {
   items?: Asset[]
@@ -208,7 +202,7 @@ export default function App() {
       .then((body) => {
         if (typeof body !== 'object' || body === null) throw new Error('invalid asset response')
         const items = (body as AssetResponse).items
-        if (active) setAssets(Array.isArray(items) ? items : [])
+        if (active) setAssets(Array.isArray(items) ? items.filter(isAsset) : [])
       })
       .catch(() => {
         if (active) setAssets([])
@@ -400,11 +394,7 @@ export default function App() {
               </div>
             </section>
 
-            <section aria-labelledby="assets-heading" className="rounded-xl border border-steward-ink-800 bg-steward-ink-900 p-6">
-              <h2 id="assets-heading" className="text-xl font-semibold">Atlas — Asset inventory</h2>
-              <p className="mt-1 text-sm text-steward-mist-muted">Asset records are protected by Guard permissions and the organization ownership boundary.</p>
-              {assets.length === 0 ? <p className="mt-6 rounded-xl border border-dashed border-steward-ink-800 p-5 text-sm text-steward-mist-muted">No assets yet. Add your first server or device through the API to begin.</p> : <ul className="mt-6 divide-y divide-steward-ink-800">{assets.map((asset) => <li className="flex flex-wrap justify-between gap-2 py-4" key={asset.id}><span>{asset.name}</span><span className="text-sm text-steward-mist-muted">{asset.kind} · {asset.status}</span></li>)}</ul>}
-            </section>
+            <AtlasInventory assets={assets} csrfToken={csrfToken} onAssetsChange={setAssets} permissions={permissions} />
 
             {permissions.includes('guard.manage') && <GuardAccessManager csrfToken={csrfToken} />}
 

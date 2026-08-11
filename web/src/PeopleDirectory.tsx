@@ -1,5 +1,5 @@
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { Asset } from './App'
+import type { Asset } from './AtlasInventory'
 import { ApiRequestError, requestJSON } from './api'
 
 // Requirements: REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, A11Y-001, DOC-001, DOC-002.

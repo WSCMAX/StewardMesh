@@ -32,7 +32,10 @@ const assignment = {
   role: 'primary', effectiveFrom: timestamp, createdBy: 'account-1', createdAt: timestamp,
 }
 const permissions = ['assets.read', 'assets.write', 'directory.read', 'directory.write']
-const asset = { id: 'asset-1', name: 'Lab computer', kind: 'computer', status: 'active' }
+const asset = {
+  id: 'asset-1', organizationId: 'example-org', name: 'Lab computer', kind: 'computer', status: 'active',
+  revision: 1, createdAt: '2026-08-10T12:00:00Z', updatedAt: '2026-08-10T12:00:00Z',
+}
 
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })

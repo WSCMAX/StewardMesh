@@ -49,7 +49,7 @@ People records three relationship roles:
 
 Adding a new primary assignee or responsible department automatically closes the previous matching role at the new effective date. Additional users remain concurrent until ended individually. History records effective-from and effective-to timestamps, the creating actor, and the original assignee reference. A replacement cannot predate the active assignment it replaces.
 
-Atlas currently supplies the asset-existence check through a small `AssetReader` interface. The assignment schema deliberately does not create a database foreign key to the current in-memory Atlas placeholder. The durable Atlas adapter will satisfy the same reader and add provider-level asset integrity without changing People service or API contracts.
+Atlas supplies the asset-existence check through a small `AssetReader` interface backed by its organization-scoped service. The assignment schema deliberately does not retrofit a database foreign key because earlier deployments could contain assignment history created while Atlas was memory-backed. New assignments verify durable Atlas existence before persistence, preserving People service and API contracts while avoiding an unsafe upgrade migration.
 
 ## APIs and provider boundaries
 

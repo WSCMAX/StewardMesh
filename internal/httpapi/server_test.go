@@ -1,6 +1,6 @@
 package httpapi
 
-// Requirements: REQ-FOUNDATION-001, REQ-PEOPLE-001,
+// Requirements: REQ-FOUNDATION-001, REQ-ATLAS-001, REQ-PEOPLE-001,
 // REQ-DIRECTORY-EXPANSION-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
 
 import (
@@ -18,7 +18,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/maxlemke/stewardmesh/internal/atlas"
 	"github.com/maxlemke/stewardmesh/internal/bootstrap"
+	"github.com/maxlemke/stewardmesh/internal/domain"
 	"github.com/maxlemke/stewardmesh/internal/foundation"
 	"github.com/maxlemke/stewardmesh/internal/guard"
 	"github.com/maxlemke/stewardmesh/internal/identity"
@@ -46,6 +48,12 @@ type testSession struct {
 }
 
 type unavailableHTTPAttemptLimiter struct{}
+
+type allowHTTPAssetReferences struct{}
+
+func (allowHTTPAssetReferences) ValidateAssetReferences(context.Context, string, atlas.References) error {
+	return nil
+}
 
 type fakeHTTPOIDCAuthenticator struct {
 	state         string
@@ -541,18 +549,57 @@ func TestInvalidCorrelationIDIsReplacedAndReturnedWithErrors(t *testing.T) {
 func TestCreateAndListAssetRequiresPermissionAndCSRF(t *testing.T) {
 	handler := newGuardServer(t)
 	session := bootstrapAdministrator(t, handler)
-	payload, _ := json.Marshal(map[string]string{"id": "asset-1", "name": "Lab server", "kind": "server"})
+	payload, _ := json.Marshal(map[string]any{
+		"id": "asset-1", "name": "Lab server", "kind": "server", "assetTag": "LAB-001",
+		"serialNumber": "SERIAL-001", "hostname": "lab-server.example.test", "status": "active",
+	})
 	createReq := authenticatedRequest(http.MethodPost, "/api/v1/assets", bytes.NewReader(payload), session)
 	createRes := httptest.NewRecorder()
 	handler.ServeHTTP(createRes, createReq)
 	if createRes.Code != http.StatusCreated {
 		t.Fatalf("expected 201, got %d: %s", createRes.Code, createRes.Body.String())
 	}
-	listReq := authenticatedRequest(http.MethodGet, "/api/v1/assets", nil, session)
+	var created domain.Asset
+	if err := json.Unmarshal(createRes.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	if created.OrganizationID != "example-org" || created.Revision != 1 || created.Status != "active" {
+		t.Fatalf("unexpected created asset %#v", created)
+	}
+	listReq := authenticatedRequest(http.MethodGet, "/api/v1/assets?q=lab-001&kind=server&status=active", nil, session)
 	listRes := httptest.NewRecorder()
 	handler.ServeHTTP(listRes, listReq)
-	if listRes.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", listRes.Code)
+	if listRes.Code != http.StatusOK || !strings.Contains(listRes.Body.String(), "asset-1") {
+		t.Fatalf("expected filtered asset, got %d: %s", listRes.Code, listRes.Body.String())
+	}
+	getReq := authenticatedRequest(http.MethodGet, "/api/v1/assets/asset-1", nil, session)
+	getRes := httptest.NewRecorder()
+	handler.ServeHTTP(getRes, getReq)
+	if getRes.Code != http.StatusOK || !strings.Contains(getRes.Body.String(), "lab-server.example.test") {
+		t.Fatalf("expected asset detail, got %d: %s", getRes.Code, getRes.Body.String())
+	}
+	updatePayload, _ := json.Marshal(map[string]any{
+		"name": created.Name, "kind": created.Kind, "assetTag": created.AssetTag,
+		"serialNumber": created.SerialNumber, "hostname": created.Hostname, "status": "retired",
+		"revision": created.Revision, "lifecycleNote": "Replaced after lifecycle review",
+	})
+	updateReq := authenticatedRequest(http.MethodPut, "/api/v1/assets/asset-1", bytes.NewReader(updatePayload), session)
+	updateRes := httptest.NewRecorder()
+	handler.ServeHTTP(updateRes, updateReq)
+	if updateRes.Code != http.StatusOK || !strings.Contains(updateRes.Body.String(), `"revision":2`) {
+		t.Fatalf("expected asset update, got %d: %s", updateRes.Code, updateRes.Body.String())
+	}
+	lifecycleReq := authenticatedRequest(http.MethodGet, "/api/v1/assets/asset-1/lifecycle", nil, session)
+	lifecycleRes := httptest.NewRecorder()
+	handler.ServeHTTP(lifecycleRes, lifecycleReq)
+	if lifecycleRes.Code != http.StatusOK || !strings.Contains(lifecycleRes.Body.String(), "Replaced after lifecycle review") {
+		t.Fatalf("expected lifecycle history, got %d: %s", lifecycleRes.Code, lifecycleRes.Body.String())
+	}
+	staleReq := authenticatedRequest(http.MethodPut, "/api/v1/assets/asset-1", bytes.NewReader(updatePayload), session)
+	staleRes := httptest.NewRecorder()
+	handler.ServeHTTP(staleRes, staleReq)
+	if staleRes.Code != http.StatusConflict {
+		t.Fatalf("expected stale revision conflict, got %d: %s", staleRes.Code, staleRes.Body.String())
 	}
 	missingCSRF := authenticatedRequest(http.MethodPost, "/api/v1/assets", bytes.NewReader(payload), session)
 	missingCSRF.Header.Del(csrfHeader)
@@ -794,8 +841,14 @@ func newGuardServerWithIdentity(t *testing.T, limiter guard.AttemptLimiter, oidc
 	if err != nil {
 		t.Fatal(err)
 	}
-	assets := repository.NewMemoryAssetRepository()
-	peopleService, err := people.NewService(repository.NewMemoryPeopleStore(), assets, foundation.NopAuditor{}, people.ServiceConfig{
+	assetStore := repository.NewMemoryAtlasStore()
+	atlasService, err := atlas.NewService(assetStore, allowHTTPAssetReferences{}, foundation.NopAuditor{}, atlas.ServiceConfig{
+		OrganizationID: organization.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	peopleService, err := people.NewService(repository.NewMemoryPeopleStore(), atlasService, foundation.NopAuditor{}, people.ServiceConfig{
 		OrganizationID: organization.ID,
 	})
 	if err != nil {
@@ -803,7 +856,7 @@ func newGuardServerWithIdentity(t *testing.T, limiter guard.AttemptLimiter, oidc
 	}
 	catalog := repository.NewMemoryCatalog()
 	return NewServer(Dependencies{
-		Assets: assets,
+		Atlas:  atlasService,
 		People: peopleService,
 		Tags:   catalog,
 		Goals:  catalog,

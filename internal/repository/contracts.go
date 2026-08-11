@@ -6,12 +6,6 @@ import (
 	"github.com/maxlemke/stewardmesh/internal/domain"
 )
 
-type AssetRepository interface {
-	List(ctx context.Context) ([]domain.Asset, error)
-	Get(ctx context.Context, id string) (domain.Asset, error)
-	Create(ctx context.Context, asset domain.Asset) (domain.Asset, error)
-}
-
 // OrganizationRepository is the durable single-organization bootstrap seam.
 // PostgreSQL is the first adapter; DynamoDB must conform to this same contract.
 // Requirement: REQ-FOUNDATION-001.

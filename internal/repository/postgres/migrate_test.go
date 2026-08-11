@@ -11,8 +11,8 @@ func TestEmbeddedMigrationsAreOrderedAndChecksummed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(migrations) != 8 {
-		t.Fatalf("expected 8 platform migrations, got %d", len(migrations))
+	if len(migrations) != 9 {
+		t.Fatalf("expected 9 platform migrations, got %d", len(migrations))
 	}
 	for index, migration := range migrations {
 		expectedVersion := int64(index + 1)
@@ -21,6 +21,22 @@ func TestEmbeddedMigrationsAreOrderedAndChecksummed(t *testing.T) {
 		}
 		if len(migration.checksum) != 64 {
 			t.Fatalf("expected SHA-256 checksum for migration %d", migration.version)
+		}
+	}
+}
+
+func TestGuardCustomRoleMigration(t *testing.T) {
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(migrations) < 9 {
+		t.Fatal("Guard custom role migration is missing")
+	}
+	contents := migrations[8].contents
+	for _, expected := range []string{"SEC-GUARD-001", "ADD COLUMN source", "'builtin'", "'local'", "lower(btrim(name))"} {
+		if !strings.Contains(contents, expected) {
+			t.Fatalf("Guard custom role migration is missing %q", expected)
 		}
 	}
 }

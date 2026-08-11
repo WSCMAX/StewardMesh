@@ -241,6 +241,107 @@ func TestServiceManagesScopedRoleAssignmentsWithoutAllowingAdministratorLockout(
 	}
 }
 
+func TestServiceCreatesValidatedCustomRoles(t *testing.T) {
+	store := repository.NewMemoryGuardStore()
+	auditor := &recordingAuditor{}
+	service, err := NewService(store, fastTestHasher{}, auditor, nil, ServiceConfig{
+		OrganizationID: "custom-role-organization", SessionTTL: time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	credentials, err := service.Bootstrap(context.Background(), BootstrapInput{
+		Username: "administrator", Email: "administrator@example.test", DisplayName: "Administrator",
+		Password: "correct horse battery staple",
+	}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory, err := service.ListAuthorization(context.Background(), credentials.Authentication)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(directory.PolicyBundles) != 1 || len(directory.AvailablePermissions) != len(SupportedPermissions()) {
+		t.Fatalf("expected role-building catalog, got %#v", directory)
+	}
+	role, err := service.CreateRole(context.Background(), credentials.Authentication, CreateRoleInput{
+		Name: "  Asset steward  ", Description: "  Manages inventory records.  ",
+		Permissions:     []Permission{PermissionAssetsWrite, PermissionAssetsRead, PermissionAssetsWrite},
+		PolicyBundleIDs: []string{directory.PolicyBundles[0].ID, directory.PolicyBundles[0].ID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if role.Name != "Asset steward" || role.Description != "Manages inventory records." || role.Source != LocalRoleSource ||
+		len(role.Permissions) != 2 || role.Permissions[0] != PermissionAssetsRead || len(role.PolicyBundleIDs) != 1 {
+		t.Fatalf("unexpected custom role %#v", role)
+	}
+	if _, err := service.CreateRole(context.Background(), credentials.Authentication, CreateRoleInput{
+		Name: "Unsupported", Permissions: []Permission{"unknown.permission"},
+	}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected unsupported permission rejection, got %v", err)
+	}
+	if _, err := service.CreateRole(context.Background(), credentials.Authentication, CreateRoleInput{Name: "Empty"}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected empty role rejection, got %v", err)
+	}
+	unauthorized := credentials.Authentication
+	unauthorized.Grants = nil
+	if _, err := service.CreateRole(context.Background(), unauthorized, CreateRoleInput{
+		Name: "Denied", Permissions: []Permission{PermissionAssetsRead},
+	}); !errors.Is(err, ErrPermissionDenied) {
+		t.Fatalf("expected role creation authorization, got %v", err)
+	}
+	foundAudit := false
+	for _, event := range auditor.events {
+		if event.Action == "guard.role.created" && event.ResourceID == role.ID {
+			foundAudit = event.Metadata["permissionCount"] == "2" && event.Metadata["policyBundleCount"] == "1"
+			for _, value := range event.Metadata {
+				if strings.Contains(value, role.Name) {
+					t.Fatal("role audit metadata exposed the role name")
+				}
+			}
+		}
+	}
+	if !foundAudit {
+		t.Fatalf("expected role creation audit event, got %#v", auditor.events)
+	}
+}
+
+func TestServiceRollsBackCustomRoleWhenAuditFails(t *testing.T) {
+	store := repository.NewMemoryGuardStore()
+	service, err := NewService(store, fastTestHasher{}, foundation.NopAuditor{}, nil, ServiceConfig{
+		OrganizationID: "role-audit-organization", SessionTTL: time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	credentials, err := service.Bootstrap(context.Background(), BootstrapInput{
+		Username: "administrator", Email: "administrator@example.test", DisplayName: "Administrator",
+		Password: "correct horse battery staple",
+	}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failingService, err := NewService(store, fastTestHasher{}, actionFailingAuditor{action: "guard.role.created"}, nil, ServiceConfig{
+		OrganizationID: "role-audit-organization", SessionTTL: time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := failingService.CreateRole(context.Background(), credentials.Authentication, CreateRoleInput{
+		Name: "Rolled back", Permissions: []Permission{PermissionAssetsRead},
+	}); err == nil {
+		t.Fatal("expected role audit failure")
+	}
+	directory, err := service.ListAuthorization(context.Background(), credentials.Authentication)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(directory.Roles) != 1 || directory.Roles[0].Source != BuiltInRoleSource {
+		t.Fatalf("expected failed audit to remove custom role, got %#v", directory.Roles)
+	}
+}
+
 func TestServiceRegistersEnforcesAndClaimsResourceOwnership(t *testing.T) {
 	store := repository.NewMemoryGuardStore()
 	auditor := &recordingAuditor{}

@@ -270,15 +270,48 @@ func TestGuardAccessAPIManagesScopedAssignmentsAndProtectsLastAdministrator(t *t
 		t.Fatalf("expected non-cacheable Guard access response, got %d: %s", listResponse.Code, listResponse.Body.String())
 	}
 	var directory struct {
-		Accounts    []guardAccountResponse        `json:"accounts"`
-		Roles       []guardRoleResponse           `json:"roles"`
-		Assignments []guardRoleAssignmentResponse `json:"assignments"`
+		Accounts             []guardAccountResponse        `json:"accounts"`
+		Roles                []guardRoleResponse           `json:"roles"`
+		PolicyBundles        []guardPolicyBundleResponse   `json:"policyBundles"`
+		AvailablePermissions []guard.Permission            `json:"availablePermissions"`
+		Assignments          []guardRoleAssignmentResponse `json:"assignments"`
 	}
 	if err := json.Unmarshal(listResponse.Body.Bytes(), &directory); err != nil {
 		t.Fatal(err)
 	}
-	if len(directory.Accounts) != 1 || len(directory.Roles) != 1 || len(directory.Assignments) != 1 {
+	if len(directory.Accounts) != 1 || len(directory.Roles) != 1 || len(directory.PolicyBundles) != 1 ||
+		len(directory.AvailablePermissions) != len(guard.SupportedPermissions()) || len(directory.Assignments) != 1 ||
+		!directory.Roles[0].Managed || directory.Roles[0].Source != guard.BuiltInRoleSource {
 		t.Fatalf("unexpected Guard access directory %#v", directory)
+	}
+	rolePayload, err := json.Marshal(map[string]any{
+		"name": "Asset steward", "description": "Maintains inventory records.",
+		"permissions":     []string{"assets.read", "assets.write"},
+		"policyBundleIds": []string{directory.PolicyBundles[0].ID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	createRoleRequest := authenticatedRequest(http.MethodPost, "/api/v1/guard/roles", bytes.NewReader(rolePayload), session)
+	createRoleResponse := httptest.NewRecorder()
+	handler.ServeHTTP(createRoleResponse, createRoleRequest)
+	if createRoleResponse.Code != http.StatusCreated || createRoleResponse.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("expected custom role creation, got %d: %s", createRoleResponse.Code, createRoleResponse.Body.String())
+	}
+	var createdRole guardRoleResponse
+	if err := json.Unmarshal(createRoleResponse.Body.Bytes(), &createdRole); err != nil {
+		t.Fatal(err)
+	}
+	if createdRole.Name != "Asset steward" || createdRole.Source != guard.LocalRoleSource || createdRole.Managed ||
+		len(createdRole.Permissions) != 2 || len(createdRole.PolicyBundleIDs) != 1 {
+		t.Fatalf("unexpected custom role %#v", createdRole)
+	}
+	duplicateRolePayload := bytes.Replace(rolePayload, []byte("Asset steward"), []byte("ASSET STEWARD"), 1)
+	duplicateRoleRequest := authenticatedRequest(http.MethodPost, "/api/v1/guard/roles", bytes.NewReader(duplicateRolePayload), session)
+	duplicateRoleResponse := httptest.NewRecorder()
+	handler.ServeHTTP(duplicateRoleResponse, duplicateRoleRequest)
+	if duplicateRoleResponse.Code != http.StatusConflict {
+		t.Fatalf("expected duplicate role conflict, got %d: %s", duplicateRoleResponse.Code, duplicateRoleResponse.Body.String())
 	}
 	lastAdministratorRequest := authenticatedRequest(http.MethodDelete,
 		"/api/v1/guard/role-assignments/"+directory.Assignments[0].ID, nil, session)

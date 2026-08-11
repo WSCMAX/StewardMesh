@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -255,6 +256,11 @@ func (s *MemoryGuardStore) ListAuthorization(_ context.Context, organizationID s
 			directory.Roles = append(directory.Roles, cloneGuardRole(role))
 		}
 	}
+	for _, bundle := range s.bundles {
+		if bundle.OrganizationID == organizationID {
+			directory.PolicyBundles = append(directory.PolicyBundles, clonePolicyBundle(bundle))
+		}
+	}
 	for _, assignment := range s.assignments {
 		if assignment.OrganizationID == organizationID {
 			directory.Assignments = append(directory.Assignments, assignment)
@@ -272,6 +278,12 @@ func (s *MemoryGuardStore) ListAuthorization(_ context.Context, organizationID s
 		}
 		return directory.Roles[i].Name < directory.Roles[j].Name
 	})
+	sort.Slice(directory.PolicyBundles, func(i, j int) bool {
+		if directory.PolicyBundles[i].Name == directory.PolicyBundles[j].Name {
+			return directory.PolicyBundles[i].ID < directory.PolicyBundles[j].ID
+		}
+		return directory.PolicyBundles[i].Name < directory.PolicyBundles[j].Name
+	})
 	sort.Slice(directory.Assignments, func(i, j int) bool {
 		if directory.Assignments[i].CreatedAt.Equal(directory.Assignments[j].CreatedAt) {
 			return directory.Assignments[i].ID < directory.Assignments[j].ID
@@ -279,6 +291,56 @@ func (s *MemoryGuardStore) ListAuthorization(_ context.Context, organizationID s
 		return directory.Assignments[i].CreatedAt.Before(directory.Assignments[j].CreatedAt)
 	})
 	return directory, nil
+}
+
+func (s *MemoryGuardStore) CreateRole(_ context.Context, role guard.Role) error {
+	if err := role.Validate(); err != nil {
+		return err
+	}
+	if role.Source != guard.LocalRoleSource {
+		return guard.ErrBuiltInRole
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.roles[role.ID]; exists {
+		return guard.ErrConflict
+	}
+	normalizedName := strings.ToLower(strings.TrimSpace(role.Name))
+	for _, existing := range s.roles {
+		if existing.OrganizationID == role.OrganizationID && strings.ToLower(strings.TrimSpace(existing.Name)) == normalizedName {
+			return guard.ErrConflict
+		}
+	}
+	for _, bundleID := range role.PolicyBundleIDs {
+		bundle, exists := s.bundles[bundleID]
+		if !exists || bundle.OrganizationID != role.OrganizationID {
+			return guard.ErrNotFound
+		}
+	}
+	s.roles[role.ID] = cloneGuardRole(role)
+	return nil
+}
+
+func (s *MemoryGuardStore) DeleteRole(_ context.Context, organizationID, roleID string) error {
+	if organizationID == "" || roleID == "" {
+		return errors.New("organization id and role id are required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	role, exists := s.roles[roleID]
+	if !exists || role.OrganizationID != organizationID {
+		return guard.ErrNotFound
+	}
+	if role.Source != guard.LocalRoleSource {
+		return guard.ErrBuiltInRole
+	}
+	for _, assignment := range s.assignments {
+		if assignment.OrganizationID == organizationID && assignment.RoleID == roleID {
+			return guard.ErrConflict
+		}
+	}
+	delete(s.roles, roleID)
+	return nil
 }
 
 func (s *MemoryGuardStore) CreateRoleAssignment(_ context.Context, assignment guard.RoleAssignment) error {

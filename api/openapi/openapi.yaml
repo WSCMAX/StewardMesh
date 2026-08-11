@@ -207,6 +207,36 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+  /api/v1/guard/roles:
+    post:
+      summary: Create a local custom role
+      operationId: createGuardRole
+      tags: [Guard]
+      x-requirement: SEC-GUARD-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateGuardRoleRequest'}
+      responses:
+        '201':
+          description: Custom role created
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/GuardRole'}
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
   /api/v1/guard/role-assignments:
     post:
       summary: Create a local scoped role assignment
@@ -890,10 +920,10 @@ components:
         status: {type: string, enum: [active, disabled]}
     GuardRole:
       type: object
-      required: [id, name, description, permissions, policyBundleIds]
+      required: [id, name, description, permissions, policyBundleIds, source, managed]
       properties:
         id: {type: string, pattern: '^[a-f0-9]{32}$'}
-        name: {type: string, minLength: 1, maxLength: 200}
+        name: {type: string, minLength: 1, maxLength: 120}
         description: {type: string, maxLength: 1000}
         permissions:
           type: array
@@ -902,6 +932,21 @@ components:
         policyBundleIds:
           type: array
           items: {type: string, pattern: '^[a-f0-9]{32}$'}
+          uniqueItems: true
+        source: {type: string, enum: [builtin, local]}
+        managed:
+          type: boolean
+          description: Built-in roles are managed by StewardMesh and cannot be changed.
+    GuardPolicyBundle:
+      type: object
+      required: [id, name, description, permissions]
+      properties:
+        id: {type: string, pattern: '^[a-f0-9]{32}$'}
+        name: {type: string, minLength: 1, maxLength: 120}
+        description: {type: string, maxLength: 1000}
+        permissions:
+          type: array
+          items: {type: string, pattern: '^[a-z][a-z0-9._-]{2,127}$'}
           uniqueItems: true
     GuardAssignmentScope:
       type: object
@@ -937,7 +982,7 @@ components:
         createdAt: {type: string, format: date-time}
     GuardAccessDirectory:
       type: object
-      required: [accounts, roles, assignments]
+      required: [accounts, roles, policyBundles, availablePermissions, assignments]
       properties:
         accounts:
           type: array
@@ -945,9 +990,36 @@ components:
         roles:
           type: array
           items: {$ref: '#/components/schemas/GuardRole'}
+        policyBundles:
+          type: array
+          items: {$ref: '#/components/schemas/GuardPolicyBundle'}
+        availablePermissions:
+          type: array
+          items: {type: string, pattern: '^[a-z][a-z0-9._-]{2,127}$'}
+          uniqueItems: true
         assignments:
           type: array
           items: {$ref: '#/components/schemas/GuardRoleAssignment'}
+    CreateGuardRoleRequest:
+      type: object
+      additionalProperties: false
+      required: [name, permissions, policyBundleIds]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 120}
+        description: {type: string, maxLength: 1000}
+        permissions:
+          type: array
+          items: {type: string, pattern: '^[a-z][a-z0-9._-]{2,127}$'}
+          uniqueItems: true
+        policyBundleIds:
+          type: array
+          items: {type: string, pattern: '^[a-f0-9]{32}$'}
+          uniqueItems: true
+      anyOf:
+        - properties:
+            permissions: {minItems: 1}
+        - properties:
+            policyBundleIds: {minItems: 1}
     CreateGuardRoleAssignmentRequest:
       type: object
       additionalProperties: false

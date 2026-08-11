@@ -69,7 +69,8 @@
         "schema": [
           "internal/repository/postgres/migrations/0004_guard_local_auth.sql",
           "internal/repository/postgres/migrations/0007_guard_oidc.sql",
-          "internal/repository/postgres/migrations/0008_guard_resource_ownership.sql"
+          "internal/repository/postgres/migrations/0008_guard_resource_ownership.sql",
+          "internal/repository/postgres/migrations/0009_guard_custom_roles.sql"
         ],
         "tests": [
           "internal/application/application_test.go",

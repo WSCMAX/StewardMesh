@@ -175,6 +175,7 @@ func (s *Service) Bootstrap(ctx context.Context, input BootstrapInput, trustedRe
 			Description:     "Full organization administrator for the initial StewardMesh deployment.",
 			Permissions:     []Permission{PermissionGuardManage},
 			PolicyBundleIDs: []string{bundleID},
+			Source:          BuiltInRoleSource,
 		},
 		Assignment: RoleAssignment{
 			ID:             assignmentID,
@@ -431,7 +432,90 @@ func (s *Service) ListAuthorization(ctx context.Context, authentication Authenti
 	if err != nil {
 		return AuthorizationDirectory{}, fmt.Errorf("list Guard authorization: %w", err)
 	}
+	directory.AvailablePermissions = SupportedPermissions()
 	return directory, nil
+}
+
+func (s *Service) CreateRole(ctx context.Context, authentication Authentication, input CreateRoleInput) (Role, error) {
+	if err := s.requireOrganizationManager(ctx, authentication); err != nil {
+		return Role{}, err
+	}
+	name := strings.TrimSpace(input.Name)
+	description := strings.TrimSpace(input.Description)
+	if !utf8.ValidString(name) || utf8.RuneCountInString(name) < 1 || utf8.RuneCountInString(name) > 120 ||
+		!utf8.ValidString(description) || utf8.RuneCountInString(description) > 1000 {
+		return Role{}, fmt.Errorf("%w: role name must contain 1 to 120 characters and description at most 1000", ErrInvalidInput)
+	}
+	permissions, err := normalizeRolePermissions(input.Permissions)
+	if err != nil {
+		return Role{}, err
+	}
+	bundleIDs, err := normalizeRoleBundleIDs(input.PolicyBundleIDs)
+	if err != nil {
+		return Role{}, err
+	}
+	if len(permissions) == 0 && len(bundleIDs) == 0 {
+		return Role{}, fmt.Errorf("%w: select at least one permission or policy bundle", ErrInvalidInput)
+	}
+	roleID, err := newID()
+	if err != nil {
+		return Role{}, err
+	}
+	role := Role{
+		ID: roleID, OrganizationID: s.organizationID, Name: name, Description: description,
+		Permissions: permissions, PolicyBundleIDs: bundleIDs, Source: LocalRoleSource,
+	}
+	if err := s.store.CreateRole(ctx, role); err != nil {
+		return Role{}, fmt.Errorf("create role: %w", err)
+	}
+	metadata := map[string]string{
+		"source": string(LocalRoleSource), "permissionCount": fmt.Sprintf("%d", len(permissions)),
+		"policyBundleCount": fmt.Sprintf("%d", len(bundleIDs)),
+	}
+	if err := s.audit(ctx, authentication.Principal.Subject, "guard.role.created", "role", role.ID, metadata); err != nil {
+		rollbackErr := s.store.DeleteRole(ctx, s.organizationID, role.ID)
+		return Role{}, fmt.Errorf("audit role creation: %w", errors.Join(err, rollbackErr))
+	}
+	return role, nil
+}
+
+func normalizeRolePermissions(values []Permission) ([]Permission, error) {
+	supported := make(map[Permission]struct{})
+	for _, permission := range SupportedPermissions() {
+		supported[permission] = struct{}{}
+	}
+	seen := make(map[Permission]struct{})
+	result := make([]Permission, 0, len(values))
+	for _, permission := range values {
+		if _, ok := supported[permission]; !ok {
+			return nil, fmt.Errorf("%w: unsupported role permission", ErrInvalidInput)
+		}
+		if _, duplicate := seen[permission]; duplicate {
+			continue
+		}
+		seen[permission] = struct{}{}
+		result = append(result, permission)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i] < result[j] })
+	return result, nil
+}
+
+func normalizeRoleBundleIDs(values []string) ([]string, error) {
+	seen := make(map[string]struct{})
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if !guardIDPattern.MatchString(value) {
+			return nil, fmt.Errorf("%w: valid policy bundle ids are required", ErrInvalidInput)
+		}
+		if _, duplicate := seen[value]; duplicate {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	sort.Strings(result)
+	return result, nil
 }
 
 func (s *Service) AssignRole(ctx context.Context, authentication Authentication, input RoleAssignmentInput) (RoleAssignment, error) {

@@ -6,9 +6,7 @@
 
 ## Purpose
 
-Guard protects organization and resource operations. The implemented boundary provides one-time local administrator bootstrap, local password authentication, OpenID Connect authorization-code login, just-in-time external accounts, opaque server-side sessions, synchronized CSRF protection, administrator-built custom roles, scoped role assignments, reusable policy bundles, externally sourced resource ownership locks and claims, permission enforcement, rate limiting, and security audit events.
-
-SAML remains the planned Guard slice. Issue #13 stays open until that acceptance criterion is delivered.
+Guard protects organization and resource operations. The implemented boundary provides one-time local administrator bootstrap, local password authentication, OpenID Connect authorization-code login, SAML 2.0 SP-initiated login, just-in-time external accounts, opaque server-side sessions, synchronized CSRF protection, administrator-built custom roles, scoped role assignments, reusable policy bundles, externally sourced resource ownership locks and claims, permission enforcement, rate limiting, and security audit events.
 
 ## One-time administrator setup
 
@@ -80,6 +78,48 @@ must be emitted in the signed ID token. Matching is case-sensitive and never
 uses substrings. If the claim later stops matching, Guard removes only that
 provider-managed assignment and preserves independent local assignments.
 
+## SAML 2.0 and JIT provisioning
+
+SAML is disabled unless `STEWARDMESH_SAML_IDP_METADATA_URL` is configured. An
+enabled provider also requires `STEWARDMESH_SAML_SP_CERTIFICATE_FILE` and
+`STEWARDMESH_SAML_SP_PRIVATE_KEY_FILE`. StewardMesh loads the certificate and
+private key at startup, requires a currently valid RSA or ECDSA certificate,
+fetches IdP metadata once over HTTPS (loopback HTTP is development-only), and
+accepts at most one same-origin metadata redirect and 1 MiB of XML. The private
+key must be provisioned through the deployment secret mechanism and must never
+be committed.
+
+The default SP entity ID is the configured application origin plus
+`/api/v1/auth/saml/metadata`; set `STEWARDMESH_SAML_ENTITY_ID` only when the IdP
+registration requires another stable absolute URI. The assertion consumer
+service is always the configured origin plus `/api/v1/auth/saml/acs`.
+StewardMesh publishes SP metadata at the default entity-ID URL and signs
+HTTP-Redirect AuthnRequests with SHA-256. IdP-initiated SSO is rejected.
+
+Each SP-initiated request receives a 256-bit opaque RelayState below the SAML
+80-byte limit. Only its SHA-256 digest, the AuthnRequest ID, and a ten-minute
+expiry are stored. The record is atomically consumed before the POSTed response
+is checked, so it works across replicas and cannot be replayed. The verified
+response must match that request ID, issuer, destination, audience, timing, and
+IdP signing keys. POST bodies are type-checked and capped at 2 MiB. Raw
+assertions, XML, attribute payloads, and session indexes are never persisted or
+logged. Guard stores only the verified IdP entity ID and stable NameID value as
+the external identity key needed to recognize the account on later logins.
+
+The email attribute defaults to `urn:oid:0.9.2342.19200300.100.1.3` and the
+display-name attribute defaults to `urn:oid:2.16.840.1.113730.3.1.241`. Override
+them with `STEWARDMESH_SAML_EMAIL_ATTRIBUTE` and
+`STEWARDMESH_SAML_DISPLAY_NAME_ATTRIBUTE`. Email-address NameIDs are accepted
+as an email fallback; display name falls back to the verified email.
+
+Administrator mapping is opt-in through
+`STEWARDMESH_SAML_ADMINISTRATOR_ATTRIBUTE` and the comma-separated
+`STEWARDMESH_SAML_ADMINISTRATOR_VALUES`. Attribute Name and FriendlyName are
+matched exactly, and authorization values are exact and case-sensitive. The
+JIT lifecycle matches OIDC: Guard keys identities by the exact IdP entity ID
+and NameID, refreshes profile fields, and removes only the SAML-managed
+administrator assignment if a later assertion no longer maps it.
+
 ## Roles, policy bundles, and scopes
 
 The initial Administrator role directly contains `guard.manage` and attaches the **Core administration** policy bundle. That bundle groups:
@@ -99,7 +139,7 @@ The same panel provides an accessible role-building workflow. An administrator s
 
 Role creation is serialized per organization and recorded as `guard.role.created` with permission and bundle counts, never the role name or submitted description. If audit persistence fails, Guard removes the newly created role before returning an error. A newly created role is immediately available in the scoped-assignment workflow.
 
-Local assignments can be removed through StewardMesh. Assignments synchronized from an OpenID Connect administrator claim are marked read-only and must be changed at the identity provider. The storage adapters serialize assignment changes and reject removal of the final active organization-scoped assignment that grants `guard.manage`, preventing administrator lockout. Assignment changes take effect when Guard resolves access on the next authenticated request.
+Local assignments can be removed through StewardMesh. Assignments synchronized from an OpenID Connect claim or SAML assertion attribute are marked read-only and must be changed at the identity provider. The storage adapters serialize assignment changes and reject removal of the final active organization-scoped assignment that grants `guard.manage`, preventing administrator lockout. Assignment changes take effect when Guard resolves access on the next authenticated request.
 
 ## Resource ownership and write locks
 
@@ -129,6 +169,9 @@ Source record IDs remain available to authorized administrators for reconciliati
 - `POST /api/v1/auth/login`
 - `GET /api/v1/auth/oidc/start`
 - `GET /api/v1/auth/oidc/callback`
+- `GET /api/v1/auth/saml/metadata`
+- `GET /api/v1/auth/saml/start`
+- `POST /api/v1/auth/saml/acs`
 - `GET /api/v1/auth/session`
 - `POST /api/v1/auth/logout`
 - `GET /api/v1/guard/access`
@@ -140,9 +183,9 @@ Source record IDs remain available to authorized administrators for reconciliati
 - `POST /api/v1/guard/resource-ownership/{resourceType}/{resourceID}/claim`
 - OpenAPI: `api/openapi/openapi.yaml`
 - gRPC contract: `api/proto/stewardmesh.proto`
-- PostgreSQL migrations: `internal/repository/postgres/migrations/0004_guard_local_auth.sql`, `0007_guard_oidc.sql`, `0008_guard_resource_ownership.sql`, and `0009_guard_custom_roles.sql`
+- PostgreSQL migrations: `internal/repository/postgres/migrations/0004_guard_local_auth.sql`, `0007_guard_oidc.sql`, `0008_guard_resource_ownership.sql`, `0009_guard_custom_roles.sql`, and `0010_guard_saml.sql`
 
-The `guard.Store` interface is provider-neutral. PostgreSQL and the in-memory evaluation adapter pass the same local and external-account contract tests; DynamoDB must implement that contract. `identity.OIDCAuthenticator` isolates discovery, code exchange, PKCE, and ID-token verification from Guard's JIT account and session behavior.
+The `guard.Store` interface is provider-neutral. PostgreSQL and the in-memory evaluation adapter pass the same local, external-account, and one-time SAML-request contract tests; DynamoDB must implement that contract. `identity.OIDCAuthenticator` and `identity.SAMLAuthenticator` isolate protocol verification from Guard's JIT account and session behavior.
 
 ## Accessibility and guided help
 
@@ -160,6 +203,8 @@ The application links to this page from every Guard setup state and provides the
 - `guard.login.protection_unavailable`
 - `guard.oidc.login.succeeded`
 - `guard.oidc.login.failed`
+- `guard.saml.login.succeeded`
+- `guard.saml.login.failed`
 - `guard.logout.succeeded`
 - `guard.role.created`
 - `guard.role_assignment.created`
@@ -183,6 +228,7 @@ Audit events contain stable account or resource IDs, correlation IDs, actions, t
 - memory and PostgreSQL ownership registration, provenance conflict, idempotency, claim, and write-lock contract tests
 - session hashing, CSRF rotation, expiration, and revocation tests
 - state, nonce, S256 PKCE, encrypted transaction, exact claim mapping, JIT refresh, and provider-mapping removal tests
+- signed SAML request, metadata, exact attribute mapping, one-time request consumption, replay rejection, JIT refresh, and provider-mapping removal tests
 - server-side permission, ownership lock, origin, CORS, JSON-boundary, and header tests
 - React setup, login fallback, custom-role building, scoped-assignment management, keyboard-focus, and safe-link tests
 - automated axe accessibility analysis
@@ -193,6 +239,8 @@ Audit events contain stable account or resource IDs, correlation IDs, actions, t
 - [OpenID Connect Core 1.0](https://openid.net/specs/openid-connect-core-1_0.html)
 - [RFC 9700 — OAuth 2.0 Security Best Current Practice](https://www.rfc-editor.org/rfc/rfc9700.html)
 - [RFC 7636 — Proof Key for Code Exchange](https://www.rfc-editor.org/rfc/rfc7636.html)
+- [SAML 2.0 Core](https://docs.oasis-open.org/security/saml/v2.0/saml-core-2.0-os.pdf)
+- [SAML 2.0 Bindings](https://docs.oasis-open.org/security/saml/v2.0/saml-bindings-2.0-os.pdf)
 - [NIST SP 800-63B password authenticators](https://pages.nist.gov/800-63-4/sp800-63b/authenticators/)
 - [OWASP Password Storage Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html)
 - [OWASP Session Management Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html)

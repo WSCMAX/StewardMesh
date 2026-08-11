@@ -42,6 +42,7 @@ type BootstrapStatus = {
   tokenRequired: boolean
   minimumPasswordCharacters: number
   oidcEnabled: boolean
+  samlEnabled: boolean
 }
 
 type AuthPhase = 'loading' | 'bootstrap' | 'login' | 'authenticated' | 'unavailable'
@@ -85,6 +86,7 @@ function isBootstrapStatus(value: unknown): value is BootstrapStatus {
   return typeof candidate.required === 'boolean'
     && typeof candidate.tokenRequired === 'boolean'
     && typeof candidate.oidcEnabled === 'boolean'
+    && typeof candidate.samlEnabled === 'boolean'
     && typeof candidate.minimumPasswordCharacters === 'number'
     && candidate.minimumPasswordCharacters >= 8
     && candidate.minimumPasswordCharacters <= 1024
@@ -110,7 +112,7 @@ function isSessionResponse(value: unknown): value is SessionResponse {
 const issuesUrl = resolvePublicUrl(import.meta.env.VITE_ISSUES_URL)
 
 export default function App() {
-  const [oidcFailed] = useState(() => new URL(window.location.href).searchParams.get('auth') === 'oidc_error')
+  const [authFailure] = useState(() => new URL(window.location.href).searchParams.get('auth'))
   const [health, setHealth] = useState<ServiceHealth>('checking')
   const [assets, setAssets] = useState<Asset[]>([])
   const [organizationName, setOrganizationName] = useState('Your organization')
@@ -121,9 +123,12 @@ export default function App() {
   const [tokenRequired, setTokenRequired] = useState(false)
   const [minimumPasswordCharacters, setMinimumPasswordCharacters] = useState(15)
   const [oidcEnabled, setOIDCEnabled] = useState(false)
-  const [authError, setAuthError] = useState(() => oidcFailed
-    ? 'Organization sign-in could not be completed. Try again or use a local account.'
-    : '')
+  const [samlEnabled, setSAMLEnabled] = useState(false)
+  const [authError, setAuthError] = useState(() => {
+    if (authFailure === 'oidc_error') return 'OpenID Connect sign-in could not be completed. Try again or use a local account.'
+    if (authFailure === 'saml_error') return 'SAML sign-in could not be completed. Try again or use a local account.'
+    return ''
+  })
   const [busy, setBusy] = useState(false)
   const errorRef = useRef<HTMLDivElement>(null)
 
@@ -134,7 +139,7 @@ export default function App() {
   useEffect(() => {
     let active = true
     const currentURL = new URL(window.location.href)
-    if (oidcFailed) {
+    if (authFailure === 'oidc_error' || authFailure === 'saml_error') {
       currentURL.searchParams.delete('auth')
       window.history.replaceState(null, '', `${currentURL.pathname}${currentURL.search}${currentURL.hash}`)
     }
@@ -158,6 +163,7 @@ export default function App() {
         setTokenRequired(value.tokenRequired)
         setMinimumPasswordCharacters(value.minimumPasswordCharacters)
         setOIDCEnabled(value.oidcEnabled)
+        setSAMLEnabled(value.samlEnabled)
         if (value.required) {
           setAuthPhase('bootstrap')
           return
@@ -185,7 +191,7 @@ export default function App() {
     return () => {
       active = false
     }
-  }, [oidcFailed])
+  }, [authFailure])
 
   useEffect(() => {
     if (authPhase !== 'authenticated') return
@@ -360,9 +366,12 @@ export default function App() {
           <section aria-labelledby="login-heading" className="mx-auto max-w-xl rounded-xl border border-steward-ink-800 bg-steward-ink-900 p-6 shadow-sm">
             <p className="text-sm font-semibold text-steward-teal">Guard — Secure authentication</p>
             <h2 id="login-heading" className="mt-2 text-3xl font-semibold">Sign in to StewardMesh</h2>
-            <p className="mt-3 text-steward-mist-muted">Use your local organization account{oidcEnabled ? ' or your organization identity provider' : ''}.</p>
-            {oidcEnabled && <a className="mt-6 block min-h-11 w-full rounded-lg border border-steward-teal px-4 py-3 text-center font-semibold text-steward-teal transition hover:bg-steward-teal/10" href="/api/v1/auth/oidc/start">Continue with organization sign-in</a>}
-            {oidcEnabled && <div className="my-6 flex items-center gap-3 text-sm text-steward-mist-muted" aria-hidden="true"><span className="h-px flex-1 bg-steward-ink-800" /><span>or use a local account</span><span className="h-px flex-1 bg-steward-ink-800" /></div>}
+            <p className="mt-3 text-steward-mist-muted">Use your local organization account{oidcEnabled || samlEnabled ? ' or an organization identity provider' : ''}.</p>
+            {(oidcEnabled || samlEnabled) && <div className="mt-6 grid gap-3">
+              {oidcEnabled && <a className="block min-h-11 w-full rounded-lg border border-steward-teal px-4 py-3 text-center font-semibold text-steward-teal transition hover:bg-steward-teal/10" href="/api/v1/auth/oidc/start">Continue with OpenID Connect</a>}
+              {samlEnabled && <a className="block min-h-11 w-full rounded-lg border border-steward-teal px-4 py-3 text-center font-semibold text-steward-teal transition hover:bg-steward-teal/10" href="/api/v1/auth/saml/start">Continue with SAML</a>}
+            </div>}
+            {(oidcEnabled || samlEnabled) && <div className="my-6 flex items-center gap-3 text-sm text-steward-mist-muted" aria-hidden="true"><span className="h-px flex-1 bg-steward-ink-800" /><span>or use a local account</span><span className="h-px flex-1 bg-steward-ink-800" /></div>}
             <form className="mt-6 space-y-5" onSubmit={handleLogin}>
               <Field id="username" label="Username" autoComplete="username" required />
               <Field id="password" label="Password" autoComplete="current-password" type="password" required />

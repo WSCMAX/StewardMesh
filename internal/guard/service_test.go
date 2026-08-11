@@ -552,6 +552,72 @@ func TestServiceRejectsInvalidOIDCPrincipal(t *testing.T) {
 	}
 }
 
+func TestServiceTracksSAMLRequestAndSynchronizesJITAdministrator(t *testing.T) {
+	store := repository.NewMemoryGuardStore()
+	auditor := &recordingAuditor{}
+	now := time.Now().UTC().Truncate(time.Second)
+	service, err := NewService(store, fastTestHasher{}, auditor, nil, ServiceConfig{
+		OrganizationID: "saml-organization", SessionTTL: time.Hour, Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Bootstrap(context.Background(), BootstrapInput{
+		Username: "administrator", Email: "administrator@example.test", DisplayName: "Administrator",
+		Password: "correct horse battery staple",
+	}, true); err != nil {
+		t.Fatal(err)
+	}
+	relayState := base64.RawURLEncoding.EncodeToString(make([]byte, 32))
+	if err := service.TrackSAMLRequest(context.Background(), relayState, "id-saml-request", now.Add(10*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	requestID, err := service.ConsumeSAMLRequest(context.Background(), relayState)
+	if err != nil || requestID != "id-saml-request" {
+		t.Fatalf("unexpected SAML request id %q err=%v", requestID, err)
+	}
+	if _, err := service.ConsumeSAMLRequest(context.Background(), relayState); !errors.Is(err, ErrInvalidCredential) {
+		t.Fatalf("expected consumed SAML request replay to fail, got %v", err)
+	}
+	principal := identity.SAMLPrincipal{
+		Issuer: "https://identity.example.test/saml", Subject: "persistent-name-id",
+		Email: "person@example.test", DisplayName: "Example Person", Administrator: true,
+	}
+	credentials, err := service.LoginSAML(context.Background(), principal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(credentials.Authentication.Principal.Username, "saml-") {
+		t.Fatalf("unexpected SAML principal %#v", credentials.Authentication.Principal)
+	}
+	if err := service.CheckPermission(context.Background(), credentials.Authentication, PermissionGuardManage, Scope{
+		Kind: ScopeOrganization, OrganizationID: "saml-organization", ResourceID: "saml-organization",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	accountID := credentials.Authentication.Principal.Subject
+	now = now.Add(time.Minute)
+	principal.Administrator = false
+	principal.DisplayName = "Refreshed SAML Person"
+	refreshed, err := service.LoginSAML(context.Background(), principal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refreshed.Authentication.Principal.Subject != accountID || len(refreshed.Authentication.Principal.Roles) != 0 {
+		t.Fatalf("unexpected refreshed SAML principal %#v", refreshed.Authentication)
+	}
+	foundSuccess := false
+	for _, event := range auditor.events {
+		foundSuccess = foundSuccess || event.Action == "guard.saml.login.succeeded"
+		if strings.Contains(event.ResourceID, principal.Issuer) || strings.Contains(event.ResourceID, principal.Subject) {
+			t.Fatal("audit event exposed SAML assertion values")
+		}
+	}
+	if !foundSuccess {
+		t.Fatal("expected SAML login audit event")
+	}
+}
+
 func TestServiceRequiresBootstrapTokenWhenConfigured(t *testing.T) {
 	store := repository.NewMemoryGuardStore()
 	service, err := NewService(store, fastTestHasher{}, foundation.NopAuditor{}, nil, ServiceConfig{

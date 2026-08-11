@@ -25,6 +25,7 @@ type MemoryGuardStore struct {
 	resourceOwnership   map[string]guard.ResourceOwnership
 	externalIdentities  map[string]guard.ExternalIdentity
 	externalAssignments map[string]string
+	samlRequests        map[string]guard.SAMLRequest
 	sessions            map[string]guard.Session
 	sessionByTokenHash  map[string]string
 }
@@ -41,9 +42,55 @@ func NewMemoryGuardStore() *MemoryGuardStore {
 		resourceOwnership:   make(map[string]guard.ResourceOwnership),
 		externalIdentities:  make(map[string]guard.ExternalIdentity),
 		externalAssignments: make(map[string]string),
+		samlRequests:        make(map[string]guard.SAMLRequest),
 		sessions:            make(map[string]guard.Session),
 		sessionByTokenHash:  make(map[string]string),
 	}
+}
+
+func (s *MemoryGuardStore) CreateSAMLRequest(_ context.Context, request guard.SAMLRequest) error {
+	if err := request.Validate(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for key, stored := range s.samlRequests {
+		if !stored.ExpiresAt.After(request.CreatedAt) {
+			delete(s.samlRequests, key)
+		}
+	}
+	key := samlRequestKey(request.OrganizationID, request.StateHash)
+	if _, exists := s.samlRequests[key]; exists {
+		return guard.ErrConflict
+	}
+	request.StateHash = append([]byte(nil), request.StateHash...)
+	s.samlRequests[key] = request
+	return nil
+}
+
+func (s *MemoryGuardStore) ConsumeSAMLRequest(
+	_ context.Context,
+	organizationID string,
+	stateHash []byte,
+	now time.Time,
+) (guard.SAMLRequest, error) {
+	if organizationID == "" || len(stateHash) == 0 || now.IsZero() {
+		return guard.SAMLRequest{}, errors.New("organization, RelayState hash, and current time are required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := samlRequestKey(organizationID, stateHash)
+	request, exists := s.samlRequests[key]
+	delete(s.samlRequests, key)
+	if !exists || !request.ExpiresAt.After(now) {
+		return guard.SAMLRequest{}, guard.ErrNotFound
+	}
+	request.StateHash = append([]byte(nil), request.StateHash...)
+	return request, nil
+}
+
+func samlRequestKey(organizationID string, stateHash []byte) string {
+	return organizationID + "\x00" + hex.EncodeToString(stateHash)
 }
 
 func (s *MemoryGuardStore) BootstrapRequired(_ context.Context, organizationID string) (bool, error) {

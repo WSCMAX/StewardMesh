@@ -46,6 +46,7 @@ type Dependencies struct {
 	Blobs               storage.BlobStore
 	Guard               *guard.Service
 	OIDC                *identity.OIDCFlow
+	SAML                *identity.SAMLFlow
 	Graph               directoryexpansion.GraphStore
 	SessionCookieSecure bool
 }
@@ -57,6 +58,7 @@ type Server struct {
 	goalsRepo           repository.GoalRepository
 	guard               *guard.Service
 	oidc                *identity.OIDCFlow
+	saml                *identity.SAMLFlow
 	graph               directoryexpansion.GraphStore
 	allowedOrigin       string
 	organization        bootstrap.Organization
@@ -128,6 +130,7 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 		goalsRepo:           deps.Goals,
 		guard:               deps.Guard,
 		oidc:                deps.OIDC,
+		saml:                deps.SAML,
 		graph:               deps.Graph,
 		allowedOrigin:       allowedOrigin,
 		organization:        organization,
@@ -140,6 +143,9 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 	mux.HandleFunc("POST /api/v1/auth/login", server.login)
 	mux.HandleFunc("GET /api/v1/auth/oidc/start", server.oidcStart)
 	mux.HandleFunc("GET /api/v1/auth/oidc/callback", server.oidcCallback)
+	mux.HandleFunc("GET /api/v1/auth/saml/metadata", server.samlMetadata)
+	mux.HandleFunc("GET /api/v1/auth/saml/start", server.samlStart)
+	mux.HandleFunc("POST /api/v1/auth/saml/acs", server.samlACS)
 	mux.Handle("GET /api/v1/auth/session", server.protected("", false, server.getSession))
 	mux.Handle("POST /api/v1/auth/logout", server.protected("", true, server.logout))
 	mux.Handle("GET /api/v1/guard/access", server.protected(guard.PermissionGuardManage, false, server.listGuardAccess))
@@ -218,6 +224,7 @@ func (s *Server) bootstrapStatus(w http.ResponseWriter, r *http.Request) {
 		"tokenRequired":             tokenRequired,
 		"minimumPasswordCharacters": guard.MinimumPasswordCharacters,
 		"oidcEnabled":               s.oidc != nil,
+		"samlEnabled":               s.saml != nil,
 	})
 }
 
@@ -309,7 +316,7 @@ func (s *Server) oidcStart(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusServiceUnavailable, "oidc_unavailable", "OpenID Connect sign-in is unavailable")
 		return
 	}
-	if !s.trustedOIDCStart(r) {
+	if !s.trustedExternalAuthStart(r) {
 		writeError(w, r, http.StatusForbidden, "origin_denied", "request origin is not allowed")
 		return
 	}
@@ -387,6 +394,110 @@ func (s *Server) oidcFailureRedirect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, s.allowedOrigin+"?auth=oidc_error", http.StatusSeeOther)
+}
+
+func (s *Server) samlMetadata(w http.ResponseWriter, r *http.Request) {
+	s.noStore(w)
+	if s.saml == nil {
+		writeError(w, r, http.StatusNotFound, "saml_unavailable", "SAML sign-in is unavailable")
+		return
+	}
+	metadata, err := s.saml.Metadata()
+	if err != nil {
+		writeError(w, r, http.StatusServiceUnavailable, "saml_unavailable", "SAML metadata is unavailable")
+		return
+	}
+	w.Header().Set("Content-Type", "application/samlmetadata+xml; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(metadata)
+}
+
+func (s *Server) samlStart(w http.ResponseWriter, r *http.Request) {
+	s.noStore(w)
+	if s.guard == nil || s.saml == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "saml_unavailable", "SAML sign-in is unavailable")
+		return
+	}
+	if !s.trustedExternalAuthStart(r) {
+		writeError(w, r, http.StatusForbidden, "origin_denied", "request origin is not allowed")
+		return
+	}
+	required, _, err := s.guard.BootstrapStatus(r.Context())
+	if err != nil {
+		writeError(w, r, http.StatusInternalServerError, "authentication_error", "unable to read administrator setup status")
+		return
+	}
+	if required {
+		writeError(w, r, http.StatusConflict, "bootstrap_required", "create the first administrator before using SAML")
+		return
+	}
+	authorizationURL, relayState, requestID, expiresAt, err := s.saml.Start()
+	if err != nil || s.guard.TrackSAMLRequest(r.Context(), relayState, requestID, expiresAt) != nil {
+		s.guard.RecordSAMLFailure(r.Context())
+		writeError(w, r, http.StatusServiceUnavailable, "saml_unavailable", "SAML sign-in is unavailable")
+		return
+	}
+	http.Redirect(w, r, authorizationURL, http.StatusSeeOther)
+}
+
+func (s *Server) samlACS(w http.ResponseWriter, r *http.Request) {
+	s.noStore(w)
+	if s.guard == nil || s.saml == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "saml_unavailable", "SAML sign-in is unavailable")
+		return
+	}
+	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || mediaType != "application/x-www-form-urlencoded" {
+		s.samlFailure(w, r)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 2<<20)
+	if err := r.ParseForm(); err != nil || !validSAMLResponseForm(r.Form) {
+		s.samlFailure(w, r)
+		return
+	}
+	expectedRequestID, err := s.guard.ConsumeSAMLRequest(r.Context(), r.Form.Get("RelayState"))
+	if err != nil {
+		s.samlFailure(w, r)
+		return
+	}
+	principal, err := s.saml.Complete(r, expectedRequestID)
+	if err != nil {
+		s.samlFailure(w, r)
+		return
+	}
+	credentials, err := s.guard.LoginSAML(r.Context(), principal)
+	if err != nil {
+		s.samlFailureRedirect(w, r)
+		return
+	}
+	s.setSessionCookie(w, credentials)
+	http.Redirect(w, r, s.allowedOrigin, http.StatusSeeOther)
+}
+
+func validSAMLResponseForm(form url.Values) bool {
+	if len(form) != 2 || form.Get("RelayState") == "" || len(form.Get("RelayState")) > 80 || form.Get("SAMLResponse") == "" {
+		return false
+	}
+	for name, values := range form {
+		if name != "RelayState" && name != "SAMLResponse" || len(values) != 1 {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *Server) samlFailure(w http.ResponseWriter, r *http.Request) {
+	s.guard.RecordSAMLFailure(r.Context())
+	s.samlFailureRedirect(w, r)
+}
+
+func (s *Server) samlFailureRedirect(w http.ResponseWriter, r *http.Request) {
+	if s.allowedOrigin == "" {
+		writeError(w, r, http.StatusUnauthorized, "saml_failed", "SAML sign-in could not be completed")
+		return
+	}
+	http.Redirect(w, r, s.allowedOrigin+"?auth=saml_error", http.StatusSeeOther)
 }
 
 func (s *Server) getSession(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
@@ -1203,7 +1314,7 @@ func (s *Server) clearOIDCTransactionCookie(w http.ResponseWriter) {
 	})
 }
 
-func (s *Server) trustedOIDCStart(r *http.Request) bool {
+func (s *Server) trustedExternalAuthStart(r *http.Request) bool {
 	origin := strings.TrimSpace(r.Header.Get("Origin"))
 	if origin != "" {
 		return s.allowedOrigin != "" && origin == s.allowedOrigin

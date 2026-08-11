@@ -30,10 +30,13 @@ provider-contract behavior.
 On the first web launch, Guard prompts for the one-time local administrator.
 Local passwords use Argon2id and are never stored in plaintext. Sessions use an
 opaque HttpOnly cookie, while CSRF material stays only in application memory.
-OpenID Connect is opt-in and uses authorization code flow with state, nonce,
-S256 PKCE, signed ID-token verification, and JIT Guard accounts. Provider
-tokens are not stored. See [Guard](docs/features/guard.md) for secure local
-setup, provider configuration, claim mapping, permissions, and audit behavior.
+OpenID Connect and SAML 2.0 are opt-in. OIDC uses authorization code flow with
+state, nonce, S256 PKCE, and signed ID-token verification. SAML uses signed
+SP-initiated requests, verified assertions, one-time replay-resistant request
+tracking, and published SP metadata. Both create JIT Guard accounts without
+storing provider tokens or assertions. See [Guard](docs/features/guard.md) for
+secure local setup, provider configuration, claim mapping, permissions, and
+audit behavior.
 
 The cache driver defaults to `none`, which preserves Guard's bounded local
 login limiter. Shared deployments set `STEWARDMESH_CACHE_DRIVER=valkey`, provide

@@ -27,6 +27,57 @@ func NewGuardStore(database *sql.DB) (*GuardStore, error) {
 	return &GuardStore{database: database}, nil
 }
 
+func (s *GuardStore) CreateSAMLRequest(ctx context.Context, request guard.SAMLRequest) error {
+	if err := request.Validate(); err != nil {
+		return err
+	}
+	transaction, err := s.database.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin SAML request tracking: %w", err)
+	}
+	defer transaction.Rollback()
+	if _, err := transaction.ExecContext(ctx, `
+		DELETE FROM guard_saml_requests
+		WHERE organization_id = $1 AND expires_at <= $2
+	`, request.OrganizationID, request.CreatedAt); err != nil {
+		return fmt.Errorf("remove expired SAML requests: %w", err)
+	}
+	if _, err := transaction.ExecContext(ctx, `
+		INSERT INTO guard_saml_requests (
+			organization_id, state_hash, request_id, created_at, expires_at
+		) VALUES ($1, $2, $3, $4, $5)
+	`, request.OrganizationID, request.StateHash, request.RequestID, request.CreatedAt, request.ExpiresAt); err != nil {
+		return fmt.Errorf("track SAML request: %w", err)
+	}
+	if err := transaction.Commit(); err != nil {
+		return fmt.Errorf("commit SAML request tracking: %w", err)
+	}
+	return nil
+}
+
+func (s *GuardStore) ConsumeSAMLRequest(
+	ctx context.Context,
+	organizationID string,
+	stateHash []byte,
+	now time.Time,
+) (guard.SAMLRequest, error) {
+	if organizationID == "" || len(stateHash) != sha256.Size || now.IsZero() {
+		return guard.SAMLRequest{}, errors.New("organization, RelayState hash, and current time are required")
+	}
+	row := s.database.QueryRowContext(ctx, `
+		DELETE FROM guard_saml_requests
+		WHERE organization_id = $1 AND state_hash = $2 AND expires_at > $3
+		RETURNING organization_id, state_hash, request_id, created_at, expires_at
+	`, organizationID, stateHash, now)
+	var request guard.SAMLRequest
+	if err := row.Scan(&request.OrganizationID, &request.StateHash, &request.RequestID, &request.CreatedAt, &request.ExpiresAt); errors.Is(err, sql.ErrNoRows) {
+		return guard.SAMLRequest{}, guard.ErrNotFound
+	} else if err != nil {
+		return guard.SAMLRequest{}, fmt.Errorf("consume SAML request: %w", err)
+	}
+	return request, nil
+}
+
 func (s *GuardStore) BootstrapRequired(ctx context.Context, organizationID string) (bool, error) {
 	if organizationID == "" {
 		return false, errors.New("organization id is required")

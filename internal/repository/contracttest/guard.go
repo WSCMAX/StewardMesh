@@ -196,6 +196,37 @@ func GuardStore(t *testing.T, store guard.Store, organizationID string) {
 		t.Fatalf("unexpected scoped assignment deletion %#v err=%v", deletedSite, err)
 	}
 
+	stateDigest := sha256.Sum256([]byte("one-time-saml-relay-state"))
+	samlRequest := guard.SAMLRequest{
+		OrganizationID: organizationID,
+		StateHash:      append([]byte(nil), stateDigest[:]...),
+		RequestID:      "id-saml-authentication-request",
+		CreatedAt:      now,
+		ExpiresAt:      now.Add(10 * time.Minute),
+	}
+	if err := store.CreateSAMLRequest(ctx, samlRequest); err != nil {
+		t.Fatalf("track SAML request: %v", err)
+	}
+	consumed, err := store.ConsumeSAMLRequest(ctx, organizationID, stateDigest[:], now.Add(time.Minute))
+	if err != nil || consumed.RequestID != samlRequest.RequestID {
+		t.Fatalf("unexpected consumed SAML request %#v err=%v", consumed, err)
+	}
+	if _, err := store.ConsumeSAMLRequest(ctx, organizationID, stateDigest[:], now.Add(time.Minute)); !errors.Is(err, guard.ErrNotFound) {
+		t.Fatalf("expected SAML request replay to fail closed, got %v", err)
+	}
+	expiredDigest := sha256.Sum256([]byte("expired-saml-relay-state"))
+	expiredRequest := samlRequest
+	expiredRequest.StateHash = append([]byte(nil), expiredDigest[:]...)
+	expiredRequest.RequestID = "id-expired-saml-authentication-request"
+	expiredRequest.CreatedAt = now.Add(-2 * time.Minute)
+	expiredRequest.ExpiresAt = now.Add(-time.Minute)
+	if err := store.CreateSAMLRequest(ctx, expiredRequest); err != nil {
+		t.Fatalf("track expired SAML request: %v", err)
+	}
+	if _, err := store.ConsumeSAMLRequest(ctx, organizationID, expiredDigest[:], now); !errors.Is(err, guard.ErrNotFound) {
+		t.Fatalf("expected expired SAML request to fail closed, got %v", err)
+	}
+
 	externalAccountID := randomID(t)
 	externalAssignmentID := randomID(t)
 	externalProvisioning := guard.ExternalAccountProvisioning{
@@ -265,6 +296,44 @@ func GuardStore(t *testing.T, store guard.Store, organizationID string) {
 	}
 	if len(externalAccess.Grants) != 0 || len(externalAccess.Roles) != 0 {
 		t.Fatalf("expected claim removal to remove only the external administrator mapping, access=%#v", externalAccess)
+	}
+	samlAccountID := randomID(t)
+	samlProvisioning := guard.ExternalAccountProvisioning{
+		Account: guard.Account{
+			ID: samlAccountID, OrganizationID: organizationID,
+			Username: "saml-" + samlAccountID[:12], NormalizedUsername: "saml-" + samlAccountID[:12],
+			Email: "saml@example.test", DisplayName: "SAML Administrator", Status: "active",
+			CreatedAt: now.Add(90 * time.Second), UpdatedAt: now.Add(90 * time.Second),
+		},
+		Identity: guard.ExternalIdentity{
+			OrganizationID: organizationID, Issuer: "https://identity.example.test/saml",
+			Subject: "persistent-name-id", AccountID: samlAccountID,
+			CreatedAt: now.Add(90 * time.Second), UpdatedAt: now.Add(90 * time.Second),
+		},
+		Administrator: true, AdministratorAssignmentID: randomID(t),
+		AssignmentSource: "saml:0123456789abcdef0123456789abcdef",
+	}
+	samlAccount, samlCreated, err := store.ProvisionExternalAccount(ctx, samlProvisioning)
+	if err != nil || !samlCreated || samlAccount.ID != samlAccountID {
+		t.Fatalf("unexpected SAML account %#v created=%t err=%v", samlAccount, samlCreated, err)
+	}
+	samlAccess, err := store.AccessForAccount(ctx, organizationID, samlAccount.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertGrant(t, samlAccess.Grants, guard.PermissionGuardManage)
+	samlProvisioning.Account.ID = randomID(t)
+	samlProvisioning.Account.UpdatedAt = now.Add(2 * time.Minute)
+	samlProvisioning.Identity.AccountID = samlProvisioning.Account.ID
+	samlProvisioning.Identity.UpdatedAt = now.Add(2 * time.Minute)
+	samlProvisioning.Administrator = false
+	samlProvisioning.AdministratorAssignmentID = ""
+	if samlAccount, samlCreated, err = store.ProvisionExternalAccount(ctx, samlProvisioning); err != nil || samlCreated {
+		t.Fatalf("unexpected refreshed SAML account %#v created=%t err=%v", samlAccount, samlCreated, err)
+	}
+	samlAccess, err = store.AccessForAccount(ctx, organizationID, samlAccount.ID)
+	if err != nil || len(samlAccess.Grants) != 0 {
+		t.Fatalf("expected SAML administrator removal, access=%#v err=%v", samlAccess, err)
 	}
 	localExternalAssignment := guard.RoleAssignment{
 		ID:             randomID(t),

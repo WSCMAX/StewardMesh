@@ -77,6 +77,28 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 			return nil, fmt.Errorf("initialize OpenID Connect flow: %w", err)
 		}
 	}
+	var samlFlow *identity.SAMLFlow
+	if cfg.SAMLEnabled() {
+		samlClient, err := identity.NewSAMLClient(ctx, identity.SAMLConfig{
+			IDPMetadataURL:         cfg.SAMLIDPMetadataURL,
+			EntityID:               cfg.EffectiveSAMLEntityID(),
+			MetadataURL:            cfg.SAMLMetadataURL(),
+			ACSURL:                 cfg.SAMLACSURL(),
+			CertificateFile:        cfg.SAMLSPCertificateFile,
+			PrivateKeyFile:         cfg.SAMLSPPrivateKeyFile,
+			EmailAttribute:         cfg.SAMLEmailAttribute,
+			DisplayNameAttribute:   cfg.SAMLDisplayNameAttribute,
+			AdministratorAttribute: cfg.SAMLAdministratorAttribute,
+			AdministratorValues:    cfg.SAMLAdministratorValues,
+		})
+		if err != nil {
+			return nil, err
+		}
+		samlFlow, err = identity.NewSAMLFlow(samlClient, nil)
+		if err != nil {
+			return nil, fmt.Errorf("initialize SAML flow: %w", err)
+		}
+	}
 
 	runtime, err := initializeFoundation(ctx, cfg, options.RunMigrations)
 	if err != nil {
@@ -135,6 +157,7 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 		Blobs:               blobStore,
 		Guard:               guardService,
 		OIDC:                oidcFlow,
+		SAML:                samlFlow,
 		SessionCookieSecure: cfg.SessionCookieSecure,
 	}, cfg.AllowedOrigin, runtime.organization)
 	return application, nil

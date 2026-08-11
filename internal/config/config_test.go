@@ -217,3 +217,73 @@ func TestValidateRejectsPartialOrUnsafeOIDCConfigurationWithoutLeakingSecrets(t 
 		})
 	}
 }
+
+func TestLoadSupportsSAMLWithExactAdministratorAttributeValues(t *testing.T) {
+	t.Setenv("STEWARDMESH_REPOSITORY_DRIVER", "memory")
+	t.Setenv("STEWARDMESH_SAML_IDP_METADATA_URL", "https://identity.example.test/metadata")
+	t.Setenv("STEWARDMESH_SAML_SP_CERTIFICATE_FILE", "/run/secrets/stewardmesh-saml.crt")
+	t.Setenv("STEWARDMESH_SAML_SP_PRIVATE_KEY_FILE", "/run/secrets/stewardmesh-saml.key")
+	t.Setenv("STEWARDMESH_SAML_EMAIL_ATTRIBUTE", "mail")
+	t.Setenv("STEWARDMESH_SAML_DISPLAY_NAME_ATTRIBUTE", "displayName")
+	t.Setenv("STEWARDMESH_SAML_ADMINISTRATOR_ATTRIBUTE", "groups")
+	t.Setenv("STEWARDMESH_SAML_ADMINISTRATOR_VALUES", "stewardmesh-admins, platform-admins, stewardmesh-admins")
+	configuration, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !configuration.SAMLEnabled() || configuration.EffectiveSAMLEntityID() != "http://localhost:5173/api/v1/auth/saml/metadata" ||
+		configuration.SAMLACSURL() != "http://localhost:5173/api/v1/auth/saml/acs" ||
+		len(configuration.SAMLAdministratorValues) != 2 || configuration.SAMLAdministratorValues[0] != "stewardmesh-admins" {
+		t.Fatalf("unexpected SAML configuration %#v", configuration)
+	}
+}
+
+func TestValidateRejectsPartialOrUnsafeSAMLConfigurationWithoutLeakingPaths(t *testing.T) {
+	valid := FromEnv()
+	valid.RepositoryDriver = RepositoryDriverMemory
+	valid.SAMLIDPMetadataURL = "https://identity.example.test/metadata"
+	valid.SAMLSPCertificateFile = "/run/secrets/service-provider.crt"
+	valid.SAMLSPPrivateKeyFile = "/run/secrets/super-secret-private-key.pem"
+	tests := []struct {
+		name   string
+		mutate func(*Config)
+	}{
+		{name: "ignored private key", mutate: func(configuration *Config) {
+			configuration.SAMLIDPMetadataURL = ""
+		}},
+		{name: "plaintext remote metadata", mutate: func(configuration *Config) {
+			configuration.SAMLIDPMetadataURL = "http://identity.example.test/metadata"
+		}},
+		{name: "credentialed metadata", mutate: func(configuration *Config) {
+			configuration.SAMLIDPMetadataURL = "https://user:super-secret@identity.example.test/metadata"
+		}},
+		{name: "missing certificate", mutate: func(configuration *Config) {
+			configuration.SAMLSPCertificateFile = ""
+		}},
+		{name: "invalid private key path", mutate: func(configuration *Config) {
+			configuration.SAMLSPPrivateKeyFile = "bad\x00path"
+		}},
+		{name: "relative entity id", mutate: func(configuration *Config) {
+			configuration.SAMLEntityID = "relative-entity"
+		}},
+		{name: "administrator values without attribute", mutate: func(configuration *Config) {
+			configuration.SAMLAdministratorValues = []string{"administrators"}
+		}},
+		{name: "multiline attribute", mutate: func(configuration *Config) {
+			configuration.SAMLEmailAttribute = "mail\nrole"
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			configuration := valid
+			test.mutate(&configuration)
+			err := configuration.Validate()
+			if err == nil {
+				t.Fatal("expected invalid SAML configuration")
+			}
+			if strings.Contains(err.Error(), "super-secret") {
+				t.Fatal("configuration error leaked a SAML secret or credential")
+			}
+		})
+	}
+}

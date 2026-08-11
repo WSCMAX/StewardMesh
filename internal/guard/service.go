@@ -276,15 +276,38 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (SessionCredentia
 }
 
 func (s *Service) LoginOIDC(ctx context.Context, principal identity.OIDCPrincipal) (SessionCredentials, error) {
+	return s.loginExternal(ctx, "oidc", externalPrincipal{
+		Issuer: principal.Issuer, Subject: principal.Subject, Email: principal.Email,
+		DisplayName: principal.DisplayName, Administrator: principal.Administrator,
+	})
+}
+
+func (s *Service) LoginSAML(ctx context.Context, principal identity.SAMLPrincipal) (SessionCredentials, error) {
+	return s.loginExternal(ctx, "saml", externalPrincipal{
+		Issuer: principal.Issuer, Subject: principal.Subject, Email: principal.Email,
+		DisplayName: principal.DisplayName, Administrator: principal.Administrator,
+	})
+}
+
+type externalPrincipal struct {
+	Issuer        string
+	Subject       string
+	Email         string
+	DisplayName   string
+	Administrator bool
+}
+
+func (s *Service) loginExternal(ctx context.Context, protocol string, principal externalPrincipal) (SessionCredentials, error) {
 	issuer := strings.TrimSpace(principal.Issuer)
 	subject := strings.TrimSpace(principal.Subject)
 	email := strings.ToLower(strings.TrimSpace(principal.Email))
 	displayName := strings.TrimSpace(principal.DisplayName)
+	failureEvent := "guard." + protocol + ".login.failed"
 	address, emailErr := mail.ParseAddress(email)
-	if issuer == "" || len(issuer) > 2048 || subject == "" || len(subject) > 512 ||
+	if protocol != "oidc" && protocol != "saml" || issuer == "" || len(issuer) > 2048 || subject == "" || len(subject) > 512 ||
 		emailErr != nil || address.Address != email || len(email) > 320 || displayName == "" ||
 		utf8.RuneCountInString(displayName) > 200 {
-		s.recordSecurityEvent(ctx, "anonymous", "guard.oidc.login.failed", "external_identity", "unknown", nil)
+		s.recordSecurityEvent(ctx, "anonymous", failureEvent, "external_identity", "unknown", nil)
 		return SessionCredentials{}, ErrInvalidCredential
 	}
 	now := s.now()
@@ -296,7 +319,7 @@ func (s *Service) LoginOIDC(ctx context.Context, principal identity.OIDCPrincipa
 	if err != nil {
 		return SessionCredentials{}, err
 	}
-	username := externalUsername(issuer, subject)
+	username := externalUsername(protocol, issuer, subject)
 	account, created, err := s.store.ProvisionExternalAccount(ctx, ExternalAccountProvisioning{
 		Account: Account{
 			ID:                 accountID,
@@ -319,14 +342,14 @@ func (s *Service) LoginOIDC(ctx context.Context, principal identity.OIDCPrincipa
 		},
 		Administrator:             principal.Administrator,
 		AdministratorAssignmentID: assignmentID,
-		AssignmentSource:          externalAssignmentSource(issuer),
+		AssignmentSource:          externalAssignmentSource(protocol, issuer),
 	})
 	if err != nil {
-		s.recordSecurityEvent(ctx, "anonymous", "guard.oidc.login.failed", "external_identity", "unknown", nil)
-		return SessionCredentials{}, fmt.Errorf("provision OpenID Connect account: %w", err)
+		s.recordSecurityEvent(ctx, "anonymous", failureEvent, "external_identity", "unknown", nil)
+		return SessionCredentials{}, fmt.Errorf("provision %s account: %w", protocol, err)
 	}
 	if account.Status != "active" {
-		s.recordSecurityEvent(ctx, account.ID, "guard.oidc.login.failed", "account", account.ID, map[string]string{"reason": "disabled"})
+		s.recordSecurityEvent(ctx, account.ID, failureEvent, "account", account.ID, map[string]string{"reason": "disabled"})
 		return SessionCredentials{}, ErrInvalidCredential
 	}
 	credentials, err := s.issueSession(ctx, account.ID)
@@ -337,15 +360,55 @@ func (s *Service) LoginOIDC(ctx context.Context, principal identity.OIDCPrincipa
 		"created":             fmt.Sprintf("%t", created),
 		"administratorMapped": fmt.Sprintf("%t", principal.Administrator),
 	}
-	if err := s.audit(ctx, account.ID, "guard.oidc.login.succeeded", "account", account.ID, metadata); err != nil {
+	if err := s.audit(ctx, account.ID, "guard."+protocol+".login.succeeded", "account", account.ID, metadata); err != nil {
 		_ = s.store.RevokeSession(ctx, credentials.Authentication.Session.ID, s.now())
-		return SessionCredentials{}, fmt.Errorf("audit OpenID Connect login: %w", err)
+		return SessionCredentials{}, fmt.Errorf("audit %s login: %w", protocol, err)
 	}
 	return credentials, nil
 }
 
 func (s *Service) RecordOIDCFailure(ctx context.Context) {
 	s.recordSecurityEvent(ctx, "anonymous", "guard.oidc.login.failed", "external_identity", "unknown", nil)
+}
+
+func (s *Service) TrackSAMLRequest(ctx context.Context, relayState, requestID string, expiresAt time.Time) error {
+	stateHash, err := hashSecret(relayState)
+	if err != nil || strings.TrimSpace(requestID) == "" {
+		return ErrInvalidCredential
+	}
+	now := s.now()
+	if !expiresAt.After(now) || expiresAt.After(now.Add(15*time.Minute)) {
+		return ErrInvalidCredential
+	}
+	if err := s.store.CreateSAMLRequest(ctx, SAMLRequest{
+		OrganizationID: s.organizationID,
+		StateHash:      stateHash,
+		RequestID:      requestID,
+		CreatedAt:      now,
+		ExpiresAt:      expiresAt,
+	}); err != nil {
+		return fmt.Errorf("track SAML authentication request: %w", err)
+	}
+	return nil
+}
+
+func (s *Service) ConsumeSAMLRequest(ctx context.Context, relayState string) (string, error) {
+	stateHash, err := hashSecret(relayState)
+	if err != nil {
+		return "", ErrInvalidCredential
+	}
+	request, err := s.store.ConsumeSAMLRequest(ctx, s.organizationID, stateHash, s.now())
+	if errors.Is(err, ErrNotFound) {
+		return "", ErrInvalidCredential
+	}
+	if err != nil {
+		return "", fmt.Errorf("consume SAML authentication request: %w", err)
+	}
+	return request.RequestID, nil
+}
+
+func (s *Service) RecordSAMLFailure(ctx context.Context) {
+	s.recordSecurityEvent(ctx, "anonymous", "guard.saml.login.failed", "external_identity", "unknown", nil)
 }
 
 func (s *Service) AuthenticateSession(ctx context.Context, rawToken string) (Authentication, error) {
@@ -820,14 +883,14 @@ func normalizeUsername(username string) string {
 	return strings.ToLower(strings.TrimSpace(username))
 }
 
-func externalUsername(issuer, subject string) string {
+func externalUsername(protocol, issuer, subject string) string {
 	digest := sha256.Sum256([]byte(issuer + "\x00" + subject))
-	return fmt.Sprintf("oidc-%x", digest[:12])
+	return fmt.Sprintf("%s-%x", protocol, digest[:12])
 }
 
-func externalAssignmentSource(issuer string) string {
+func externalAssignmentSource(protocol, issuer string) string {
 	digest := sha256.Sum256([]byte(issuer))
-	return fmt.Sprintf("oidc:%x", digest[:16])
+	return fmt.Sprintf("%s:%x", protocol, digest[:16])
 }
 
 func newID() (string, error) {

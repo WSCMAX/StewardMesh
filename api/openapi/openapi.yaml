@@ -2,7 +2,7 @@
 openapi: 3.1.0
 info:
   title: StewardMesh API
-  version: 0.5.0
+  version: 0.6.0
   description: Requirements-driven inventory, lifecycle, and secure organization management API.
   license:
     name: Apache License 2.0
@@ -187,6 +187,83 @@ paths:
               schema: {type: string}
         '503':
           description: OpenID Connect is disabled
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+  /api/v1/auth/saml/metadata:
+    get:
+      summary: Get SAML service-provider metadata
+      operationId: getSAMLServiceProviderMetadata
+      tags: [Guard]
+      x-requirement: SEC-GUARD-001
+      responses:
+        '200':
+          description: Signed-request-capable SAML 2.0 service-provider metadata
+          content:
+            application/samlmetadata+xml:
+              schema: {type: string}
+        '404':
+          description: SAML is disabled
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '503':
+          description: SAML metadata is unavailable
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+  /api/v1/auth/saml/start:
+    get:
+      summary: Start organization SAML sign-in
+      operationId: startSAMLLogin
+      tags: [Guard]
+      x-requirement: SEC-GUARD-001
+      responses:
+        '303':
+          description: Redirect to the configured IdP HTTP-Redirect SSO endpoint with a signed AuthnRequest and opaque RelayState
+          headers:
+            Location:
+              schema: {type: string, format: uri}
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: The one-time local administrator bootstrap must be complete first
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '503':
+          description: SAML is disabled, unavailable, or request tracking failed closed
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+  /api/v1/auth/saml/acs:
+    post:
+      summary: Complete organization SAML sign-in
+      operationId: completeSAMLLogin
+      tags: [Guard]
+      x-requirement: SEC-GUARD-001
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [RelayState, SAMLResponse]
+              properties:
+                RelayState: {type: string, minLength: 32, maxLength: 80}
+                SAMLResponse: {type: string, format: byte, minLength: 1}
+      responses:
+        '303':
+          description: Redirect to the fixed configured application origin after establishing a Guard session or reporting a generic failure
+          headers:
+            Location:
+              schema: {type: string, format: uri}
+            Set-Cookie:
+              description: Opaque Guard session cookie on success
+              schema: {type: string}
+        '503':
+          description: SAML is disabled
           content:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
@@ -862,12 +939,13 @@ components:
   schemas:
     BootstrapStatus:
       type: object
-      required: [required, tokenRequired, minimumPasswordCharacters, oidcEnabled]
+      required: [required, tokenRequired, minimumPasswordCharacters, oidcEnabled, samlEnabled]
       properties:
         required: {type: boolean}
         tokenRequired: {type: boolean}
         minimumPasswordCharacters: {type: integer, minimum: 15}
         oidcEnabled: {type: boolean}
+        samlEnabled: {type: boolean}
     BootstrapAdministratorRequest:
       type: object
       additionalProperties: false

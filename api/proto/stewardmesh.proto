@@ -76,6 +76,7 @@ message BootstrapStatus {
   bool token_required = 2;
   uint32 minimum_password_characters = 3;
   bool oidc_enabled = 4;
+  bool saml_enabled = 5;
 }
 
 message BootstrapAdministratorRequest {

@@ -4,6 +4,7 @@ package guard
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"strings"
@@ -186,10 +187,19 @@ func (a RoleAssignment) Validate() error {
 	if err := a.Scope.Validate(); err != nil {
 		return err
 	}
-	if a.Source != LocalAssignmentSource && !strings.HasPrefix(a.Source, "oidc:") {
+	if a.Source != LocalAssignmentSource && !validExternalAssignmentSource(a.Source) {
 		return errors.New("valid role assignment source is required")
 	}
 	return nil
+}
+
+func validExternalAssignmentSource(source string) bool {
+	protocol, encoded, found := strings.Cut(source, ":")
+	if !found || protocol != "oidc" && protocol != "saml" {
+		return false
+	}
+	decoded, err := hex.DecodeString(encoded)
+	return err == nil && len(decoded) == 16
 }
 
 type AuthorizationDirectory struct {
@@ -283,13 +293,30 @@ func (p ExternalAccountProvisioning) Validate() error {
 		identity.AccountID != account.ID || identity.CreatedAt.IsZero() || identity.UpdatedAt.IsZero() {
 		return errors.New("complete external identity is required")
 	}
-	encodedSource := strings.TrimPrefix(p.AssignmentSource, "oidc:")
-	decodedSource, sourceErr := hex.DecodeString(encodedSource)
-	if !strings.HasPrefix(p.AssignmentSource, "oidc:") || sourceErr != nil || len(decodedSource) != 16 {
+	if !validExternalAssignmentSource(p.AssignmentSource) {
 		return errors.New("valid external assignment source is required")
 	}
 	if p.Administrator && p.AdministratorAssignmentID == "" {
 		return errors.New("administrator mapping identity is required")
+	}
+	return nil
+}
+
+// SAMLRequest binds a short-lived, opaque RelayState hash to one SP-initiated
+// authentication request. Assertions and profile attributes are never stored.
+type SAMLRequest struct {
+	OrganizationID string
+	StateHash      []byte
+	RequestID      string
+	CreatedAt      time.Time
+	ExpiresAt      time.Time
+}
+
+func (r SAMLRequest) Validate() error {
+	if strings.TrimSpace(r.OrganizationID) == "" || len(r.StateHash) != sha256.Size ||
+		strings.TrimSpace(r.RequestID) == "" || len(r.RequestID) > 512 || r.CreatedAt.IsZero() ||
+		r.ExpiresAt.IsZero() || !r.ExpiresAt.After(r.CreatedAt) {
+		return errors.New("complete SAML request tracking data is required")
 	}
 	return nil
 }
@@ -390,6 +417,8 @@ type Store interface {
 	FindAccountByUsername(ctx context.Context, organizationID, normalizedUsername string) (Account, error)
 	UpdatePasswordHash(ctx context.Context, accountID, passwordHash string, updatedAt time.Time) error
 	ProvisionExternalAccount(ctx context.Context, provisioning ExternalAccountProvisioning) (account Account, created bool, err error)
+	CreateSAMLRequest(ctx context.Context, request SAMLRequest) error
+	ConsumeSAMLRequest(ctx context.Context, organizationID string, stateHash []byte, now time.Time) (SAMLRequest, error)
 	AccessForAccount(ctx context.Context, organizationID, accountID string) (Access, error)
 	ListAuthorization(ctx context.Context, organizationID string) (AuthorizationDirectory, error)
 	CreateRole(ctx context.Context, role Role) error

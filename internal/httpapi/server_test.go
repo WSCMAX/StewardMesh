@@ -54,6 +54,33 @@ type fakeHTTPOIDCAuthenticator struct {
 	authenticates int
 }
 
+type fakeHTTPSAMLAuthenticator struct {
+	relayState        string
+	expectedRequestID string
+	authenticates     int
+}
+
+func (f *fakeHTTPSAMLAuthenticator) AuthenticationURL(relayState string) (string, string, error) {
+	f.relayState = relayState
+	return "https://identity.example.test/sso?RelayState=" + url.QueryEscape(relayState), "id-saml-request", nil
+}
+
+func (f *fakeHTTPSAMLAuthenticator) Authenticate(request *http.Request, expectedRequestID string) (identity.SAMLPrincipal, error) {
+	f.authenticates++
+	f.expectedRequestID = expectedRequestID
+	if expectedRequestID != "id-saml-request" || request.Form.Get("SAMLResponse") != "verified-assertion" {
+		return identity.SAMLPrincipal{}, identity.ErrSAMLAuthentication
+	}
+	return identity.SAMLPrincipal{
+		Issuer: "https://identity.example.test/saml", Subject: "persistent-name-id",
+		Email: "saml@example.test", DisplayName: "SAML Administrator", Administrator: true,
+	}, nil
+}
+
+func (*fakeHTTPSAMLAuthenticator) Metadata() ([]byte, error) {
+	return []byte(`<?xml version="1.0"?><EntityDescriptor entityID="http://localhost:5173/api/v1/auth/saml/metadata"/>`), nil
+}
+
 func (f *fakeHTTPOIDCAuthenticator) AuthorizationURL(state, nonce, verifier string) (string, error) {
 	f.state, f.nonce, f.verifier = state, nonce, verifier
 	return "https://identity.example.test/authorize?state=" + url.QueryEscape(state), nil
@@ -188,25 +215,97 @@ func TestOIDCCallbackRejectsMismatchedStateAndClearsTransaction(t *testing.T) {
 	}
 }
 
-func TestOIDCStartTrustsConfiguredOriginAndLimitsLoopbackFallbackToDevelopment(t *testing.T) {
+func TestSAMLSPFlowPublishesMetadataCreatesJITSessionAndRejectsReplay(t *testing.T) {
+	authenticator := &fakeHTTPSAMLAuthenticator{}
+	flow, err := identity.NewSAMLFlow(authenticator, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := newGuardServerWithIdentity(t, nil, nil, flow)
+	statusRequest := httptest.NewRequest(http.MethodGet, "/api/v1/auth/bootstrap", nil)
+	statusResponse := httptest.NewRecorder()
+	handler.ServeHTTP(statusResponse, statusRequest)
+	var status struct {
+		SAMLEnabled bool `json:"samlEnabled"`
+	}
+	if err := json.Unmarshal(statusResponse.Body.Bytes(), &status); err != nil || !status.SAMLEnabled {
+		t.Fatalf("expected bootstrap status to advertise SAML, status=%#v err=%v", status, err)
+	}
+	metadataRequest := httptest.NewRequest(http.MethodGet, "/api/v1/auth/saml/metadata", nil)
+	metadataResponse := httptest.NewRecorder()
+	handler.ServeHTTP(metadataResponse, metadataRequest)
+	if metadataResponse.Code != http.StatusOK || metadataResponse.Header().Get("Cache-Control") != "no-store" ||
+		!strings.HasPrefix(metadataResponse.Header().Get("Content-Type"), "application/samlmetadata+xml") ||
+		!strings.Contains(metadataResponse.Body.String(), "EntityDescriptor") {
+		t.Fatalf("unexpected SAML metadata response %d %#v %s", metadataResponse.Code, metadataResponse.Header(), metadataResponse.Body.String())
+	}
+	beforeBootstrap := httptest.NewRequest(http.MethodGet, "/api/v1/auth/saml/start", nil)
+	beforeBootstrap.Header.Set("Sec-Fetch-Site", "same-origin")
+	beforeBootstrapResponse := httptest.NewRecorder()
+	handler.ServeHTTP(beforeBootstrapResponse, beforeBootstrap)
+	if beforeBootstrapResponse.Code != http.StatusConflict {
+		t.Fatalf("expected bootstrap before SAML, got %d", beforeBootstrapResponse.Code)
+	}
+	bootstrapAdministrator(t, handler)
+	startRequest := httptest.NewRequest(http.MethodGet, "/api/v1/auth/saml/start", nil)
+	startRequest.Header.Set("Sec-Fetch-Site", "same-origin")
+	startResponse := httptest.NewRecorder()
+	handler.ServeHTTP(startResponse, startRequest)
+	if startResponse.Code != http.StatusSeeOther || !strings.HasPrefix(startResponse.Header().Get("Location"), "https://identity.example.test/sso?") ||
+		authenticator.relayState == "" || len(startResponse.Result().Cookies()) != 0 {
+		t.Fatalf("unexpected SAML start response %d %#v relay=%q", startResponse.Code, startResponse.Header(), authenticator.relayState)
+	}
+	form := url.Values{"RelayState": {authenticator.relayState}, "SAMLResponse": {"verified-assertion"}}
+	acsRequest := httptest.NewRequest(http.MethodPost, "/api/v1/auth/saml/acs", strings.NewReader(form.Encode()))
+	acsRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	acsRequest.Header.Set("Origin", "https://identity.example.test")
+	acsResponse := httptest.NewRecorder()
+	handler.ServeHTTP(acsResponse, acsRequest)
+	if acsResponse.Code != http.StatusSeeOther || acsResponse.Header().Get("Location") != testOrigin ||
+		authenticator.authenticates != 1 || authenticator.expectedRequestID != "id-saml-request" {
+		t.Fatalf("unexpected SAML ACS response %d location=%q authentications=%d request=%q body=%s",
+			acsResponse.Code, acsResponse.Header().Get("Location"), authenticator.authenticates,
+			authenticator.expectedRequestID, acsResponse.Body.String())
+	}
+	sessionCookie := findCookie(t, acsResponse.Result().Cookies(), localSessionName)
+	sessionRequest := httptest.NewRequest(http.MethodGet, "/api/v1/auth/session", nil)
+	sessionRequest.AddCookie(sessionCookie)
+	sessionResponse := httptest.NewRecorder()
+	handler.ServeHTTP(sessionResponse, sessionRequest)
+	if sessionResponse.Code != http.StatusOK || !strings.Contains(sessionResponse.Body.String(), "saml@example.test") ||
+		!strings.Contains(sessionResponse.Body.String(), "Administrator") {
+		t.Fatalf("expected SAML JIT administrator session, got %d: %s", sessionResponse.Code, sessionResponse.Body.String())
+	}
+	replayRequest := httptest.NewRequest(http.MethodPost, "/api/v1/auth/saml/acs", strings.NewReader(form.Encode()))
+	replayRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	replayResponse := httptest.NewRecorder()
+	handler.ServeHTTP(replayResponse, replayRequest)
+	if replayResponse.Code != http.StatusSeeOther || replayResponse.Header().Get("Location") != testOrigin+"?auth=saml_error" ||
+		authenticator.authenticates != 1 {
+		t.Fatalf("expected SAML replay to fail before assertion processing, got %d location=%q authentications=%d",
+			replayResponse.Code, replayResponse.Header().Get("Location"), authenticator.authenticates)
+	}
+}
+
+func TestExternalAuthStartTrustsConfiguredOriginAndLimitsLoopbackFallbackToDevelopment(t *testing.T) {
 	production := &Server{allowedOrigin: "https://stewardmesh.example.test"}
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/auth/oidc/start", nil)
 	request.RemoteAddr = "127.0.0.1:1234"
-	if production.trustedOIDCStart(request) {
-		t.Fatal("a production reverse proxy must not make a headerless OIDC start request trusted")
+	if production.trustedExternalAuthStart(request) {
+		t.Fatal("a production reverse proxy must not make a headerless external-auth start request trusted")
 	}
 	request.Header.Set("Origin", "https://stewardmesh.example.test")
-	if !production.trustedOIDCStart(request) {
+	if !production.trustedExternalAuthStart(request) {
 		t.Fatal("the exact configured origin should be trusted")
 	}
 	request.Header.Del("Origin")
 	request.Header.Set("Sec-Fetch-Site", "cross-site")
 	development := &Server{allowedOrigin: testOrigin}
-	if development.trustedOIDCStart(request) {
-		t.Fatal("cross-site OIDC initiation must be rejected even on loopback")
+	if development.trustedExternalAuthStart(request) {
+		t.Fatal("cross-site external-auth initiation must be rejected even on loopback")
 	}
 	request.Header.Del("Sec-Fetch-Site")
-	if !development.trustedOIDCStart(request) {
+	if !development.trustedExternalAuthStart(request) {
 		t.Fatal("headerless loopback development should remain available")
 	}
 }
@@ -224,11 +323,12 @@ func TestBootstrapSessionAndOrganizationCorrelation(t *testing.T) {
 		TokenRequired             bool `json:"tokenRequired"`
 		MinimumPasswordCharacters int  `json:"minimumPasswordCharacters"`
 		OIDCEnabled               bool `json:"oidcEnabled"`
+		SAMLEnabled               bool `json:"samlEnabled"`
 	}
 	if err := json.Unmarshal(statusRes.Body.Bytes(), &status); err != nil {
 		t.Fatal(err)
 	}
-	if !status.Required || status.TokenRequired || status.OIDCEnabled || status.MinimumPasswordCharacters != guard.MinimumPasswordCharacters {
+	if !status.Required || status.TokenRequired || status.OIDCEnabled || status.SAMLEnabled || status.MinimumPasswordCharacters != guard.MinimumPasswordCharacters {
 		t.Fatalf("unexpected bootstrap status %#v", status)
 	}
 	session := bootstrapAdministrator(t, handler)
@@ -677,6 +777,10 @@ func newGuardServerWithLimiter(t *testing.T, limiter guard.AttemptLimiter) http.
 }
 
 func newGuardServerWithDependencies(t *testing.T, limiter guard.AttemptLimiter, oidcFlow *identity.OIDCFlow) http.Handler {
+	return newGuardServerWithIdentity(t, limiter, oidcFlow, nil)
+}
+
+func newGuardServerWithIdentity(t *testing.T, limiter guard.AttemptLimiter, oidcFlow *identity.OIDCFlow, samlFlow *identity.SAMLFlow) http.Handler {
 	t.Helper()
 	organization, err := bootstrap.NewOrganization("example-org", "Example Organization")
 	if err != nil {
@@ -705,6 +809,7 @@ func newGuardServerWithDependencies(t *testing.T, limiter guard.AttemptLimiter, 
 		Goals:  catalog,
 		Guard:  service,
 		OIDC:   oidcFlow,
+		SAML:   samlFlow,
 	}, testOrigin, organization)
 }
 

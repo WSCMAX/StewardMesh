@@ -31,30 +31,38 @@ const (
 )
 
 type Config struct {
-	Addr                     string
-	DataDir                  string
-	BlobDir                  string
-	DatabaseURL              string
-	RepositoryDriver         RepositoryDriver
-	CacheDriver              CacheDriver
-	CacheURL                 string
-	CacheKeySecret           string
-	OIDCIssuerURL            string
-	OIDCClientID             string
-	OIDCClientSecret         string
-	OIDCRedirectURL          string
-	OIDCTransactionSecret    string
-	OIDCAdministratorClaim   string
-	OIDCAdministratorValues  []string
-	OIDCRequireVerifiedEmail bool
-	AllowedOrigin            string
-	OrganizationID           string
-	OrganizationName         string
-	BootstrapToken           string
-	SessionCookieSecure      bool
-	SessionTTL               time.Duration
-	SeedSynthetic            bool
-	validationError          error
+	Addr                       string
+	DataDir                    string
+	BlobDir                    string
+	DatabaseURL                string
+	RepositoryDriver           RepositoryDriver
+	CacheDriver                CacheDriver
+	CacheURL                   string
+	CacheKeySecret             string
+	OIDCIssuerURL              string
+	OIDCClientID               string
+	OIDCClientSecret           string
+	OIDCRedirectURL            string
+	OIDCTransactionSecret      string
+	OIDCAdministratorClaim     string
+	OIDCAdministratorValues    []string
+	OIDCRequireVerifiedEmail   bool
+	SAMLIDPMetadataURL         string
+	SAMLEntityID               string
+	SAMLSPCertificateFile      string
+	SAMLSPPrivateKeyFile       string
+	SAMLEmailAttribute         string
+	SAMLDisplayNameAttribute   string
+	SAMLAdministratorAttribute string
+	SAMLAdministratorValues    []string
+	AllowedOrigin              string
+	OrganizationID             string
+	OrganizationName           string
+	BootstrapToken             string
+	SessionCookieSecure        bool
+	SessionTTL                 time.Duration
+	SeedSynthetic              bool
+	validationError            error
 }
 
 func Load() (Config, error) {
@@ -74,30 +82,38 @@ func FromEnv() Config {
 	sessionTTL, ttlErr := envDuration("STEWARDMESH_SESSION_TTL", 12*time.Hour)
 	oidcRequireVerifiedEmail, oidcVerifiedEmailErr := envBool("STEWARDMESH_OIDC_REQUIRE_VERIFIED_EMAIL", true)
 	return Config{
-		Addr:                     envOr("STEWARDMESH_ADDR", "127.0.0.1:8080"),
-		DataDir:                  envOr("STEWARDMESH_DATA_DIR", "./data"),
-		BlobDir:                  envOr("STEWARDMESH_BLOB_DIR", "./storage"),
-		DatabaseURL:              envOr("STEWARDMESH_DATABASE_URL", ""),
-		RepositoryDriver:         RepositoryDriver(envOr("STEWARDMESH_REPOSITORY_DRIVER", string(RepositoryDriverPostgres))),
-		CacheDriver:              CacheDriver(envOr("STEWARDMESH_CACHE_DRIVER", string(CacheDriverNone))),
-		CacheURL:                 os.Getenv("STEWARDMESH_CACHE_URL"),
-		CacheKeySecret:           os.Getenv("STEWARDMESH_CACHE_KEY_SECRET"),
-		OIDCIssuerURL:            os.Getenv("STEWARDMESH_OIDC_ISSUER_URL"),
-		OIDCClientID:             os.Getenv("STEWARDMESH_OIDC_CLIENT_ID"),
-		OIDCClientSecret:         os.Getenv("STEWARDMESH_OIDC_CLIENT_SECRET"),
-		OIDCRedirectURL:          os.Getenv("STEWARDMESH_OIDC_REDIRECT_URL"),
-		OIDCTransactionSecret:    os.Getenv("STEWARDMESH_OIDC_TRANSACTION_SECRET"),
-		OIDCAdministratorClaim:   os.Getenv("STEWARDMESH_OIDC_ADMINISTRATOR_CLAIM"),
-		OIDCAdministratorValues:  envCSV("STEWARDMESH_OIDC_ADMINISTRATOR_VALUES"),
-		OIDCRequireVerifiedEmail: oidcRequireVerifiedEmail,
-		AllowedOrigin:            allowedOrigin,
-		OrganizationID:           envOr("STEWARDMESH_ORGANIZATION_ID", "local-organization"),
-		OrganizationName:         envOr("STEWARDMESH_ORGANIZATION_NAME", "StewardMesh Local Organization"),
-		BootstrapToken:           os.Getenv("STEWARDMESH_BOOTSTRAP_TOKEN"),
-		SessionCookieSecure:      sessionCookieSecure,
-		SessionTTL:               sessionTTL,
-		SeedSynthetic:            envBoolDefault("STEWARDMESH_SEED_SYNTHETIC"),
-		validationError:          errors.Join(secureErr, ttlErr, oidcVerifiedEmailErr),
+		Addr:                       envOr("STEWARDMESH_ADDR", "127.0.0.1:8080"),
+		DataDir:                    envOr("STEWARDMESH_DATA_DIR", "./data"),
+		BlobDir:                    envOr("STEWARDMESH_BLOB_DIR", "./storage"),
+		DatabaseURL:                envOr("STEWARDMESH_DATABASE_URL", ""),
+		RepositoryDriver:           RepositoryDriver(envOr("STEWARDMESH_REPOSITORY_DRIVER", string(RepositoryDriverPostgres))),
+		CacheDriver:                CacheDriver(envOr("STEWARDMESH_CACHE_DRIVER", string(CacheDriverNone))),
+		CacheURL:                   os.Getenv("STEWARDMESH_CACHE_URL"),
+		CacheKeySecret:             os.Getenv("STEWARDMESH_CACHE_KEY_SECRET"),
+		OIDCIssuerURL:              os.Getenv("STEWARDMESH_OIDC_ISSUER_URL"),
+		OIDCClientID:               os.Getenv("STEWARDMESH_OIDC_CLIENT_ID"),
+		OIDCClientSecret:           os.Getenv("STEWARDMESH_OIDC_CLIENT_SECRET"),
+		OIDCRedirectURL:            os.Getenv("STEWARDMESH_OIDC_REDIRECT_URL"),
+		OIDCTransactionSecret:      os.Getenv("STEWARDMESH_OIDC_TRANSACTION_SECRET"),
+		OIDCAdministratorClaim:     os.Getenv("STEWARDMESH_OIDC_ADMINISTRATOR_CLAIM"),
+		OIDCAdministratorValues:    envCSV("STEWARDMESH_OIDC_ADMINISTRATOR_VALUES"),
+		OIDCRequireVerifiedEmail:   oidcRequireVerifiedEmail,
+		SAMLIDPMetadataURL:         os.Getenv("STEWARDMESH_SAML_IDP_METADATA_URL"),
+		SAMLEntityID:               os.Getenv("STEWARDMESH_SAML_ENTITY_ID"),
+		SAMLSPCertificateFile:      os.Getenv("STEWARDMESH_SAML_SP_CERTIFICATE_FILE"),
+		SAMLSPPrivateKeyFile:       os.Getenv("STEWARDMESH_SAML_SP_PRIVATE_KEY_FILE"),
+		SAMLEmailAttribute:         os.Getenv("STEWARDMESH_SAML_EMAIL_ATTRIBUTE"),
+		SAMLDisplayNameAttribute:   os.Getenv("STEWARDMESH_SAML_DISPLAY_NAME_ATTRIBUTE"),
+		SAMLAdministratorAttribute: os.Getenv("STEWARDMESH_SAML_ADMINISTRATOR_ATTRIBUTE"),
+		SAMLAdministratorValues:    envCSV("STEWARDMESH_SAML_ADMINISTRATOR_VALUES"),
+		AllowedOrigin:              allowedOrigin,
+		OrganizationID:             envOr("STEWARDMESH_ORGANIZATION_ID", "local-organization"),
+		OrganizationName:           envOr("STEWARDMESH_ORGANIZATION_NAME", "StewardMesh Local Organization"),
+		BootstrapToken:             os.Getenv("STEWARDMESH_BOOTSTRAP_TOKEN"),
+		SessionCookieSecure:        sessionCookieSecure,
+		SessionTTL:                 sessionTTL,
+		SeedSynthetic:              envBoolDefault("STEWARDMESH_SEED_SYNTHETIC"),
+		validationError:            errors.Join(secureErr, ttlErr, oidcVerifiedEmailErr),
 	}
 }
 
@@ -166,6 +182,9 @@ func (c Config) Validate() error {
 			return errors.New("STEWARDMESH_SESSION_COOKIE_SECURE must be false for an HTTP development origin")
 		}
 	}
+	if err := c.validateSAML(); err != nil {
+		return err
+	}
 	if c.SessionTTL < 15*time.Minute || c.SessionTTL > 24*time.Hour {
 		return errors.New("STEWARDMESH_SESSION_TTL must be between 15m and 24h")
 	}
@@ -188,6 +207,68 @@ func (c Config) Validate() error {
 
 func (c Config) OIDCEnabled() bool {
 	return strings.TrimSpace(c.OIDCIssuerURL) != ""
+}
+
+func (c Config) SAMLEnabled() bool {
+	return strings.TrimSpace(c.SAMLIDPMetadataURL) != ""
+}
+
+func (c Config) SAMLMetadataURL() string {
+	return strings.TrimRight(c.AllowedOrigin, "/") + "/api/v1/auth/saml/metadata"
+}
+
+func (c Config) SAMLACSURL() string {
+	return strings.TrimRight(c.AllowedOrigin, "/") + "/api/v1/auth/saml/acs"
+}
+
+func (c Config) EffectiveSAMLEntityID() string {
+	if value := strings.TrimSpace(c.SAMLEntityID); value != "" {
+		return value
+	}
+	return c.SAMLMetadataURL()
+}
+
+func (c Config) validateSAML() error {
+	if !c.SAMLEnabled() {
+		if c.SAMLEntityID != "" || c.SAMLSPCertificateFile != "" || c.SAMLSPPrivateKeyFile != "" ||
+			c.SAMLEmailAttribute != "" || c.SAMLDisplayNameAttribute != "" || c.SAMLAdministratorAttribute != "" ||
+			len(c.SAMLAdministratorValues) > 0 {
+			return errors.New("STEWARDMESH_SAML_IDP_METADATA_URL is required when SAML settings are configured")
+		}
+		return nil
+	}
+	if _, err := validateOIDCURL(c.SAMLIDPMetadataURL, false); err != nil {
+		return fmt.Errorf("STEWARDMESH_SAML_IDP_METADATA_URL: %w", err)
+	}
+	if strings.TrimSpace(c.SAMLSPCertificateFile) == "" || strings.TrimSpace(c.SAMLSPPrivateKeyFile) == "" {
+		return errors.New("STEWARDMESH_SAML_SP_CERTIFICATE_FILE and STEWARDMESH_SAML_SP_PRIVATE_KEY_FILE are required")
+	}
+	if strings.ContainsRune(c.SAMLSPCertificateFile, '\x00') || strings.ContainsRune(c.SAMLSPPrivateKeyFile, '\x00') {
+		return errors.New("SAML certificate and private key file paths must be valid")
+	}
+	entityID := c.EffectiveSAMLEntityID()
+	parsedEntityID, err := url.Parse(entityID)
+	if err != nil || !parsedEntityID.IsAbs() || parsedEntityID.User != nil || len(entityID) > 2048 {
+		return errors.New("STEWARDMESH_SAML_ENTITY_ID must be an absolute URI without credentials")
+	}
+	for key, attribute := range map[string]string{
+		"STEWARDMESH_SAML_EMAIL_ATTRIBUTE":         c.SAMLEmailAttribute,
+		"STEWARDMESH_SAML_DISPLAY_NAME_ATTRIBUTE":  c.SAMLDisplayNameAttribute,
+		"STEWARDMESH_SAML_ADMINISTRATOR_ATTRIBUTE": c.SAMLAdministratorAttribute,
+	} {
+		if len(attribute) > 512 || strings.ContainsAny(attribute, "\r\n") {
+			return fmt.Errorf("%s must be a single-line value of at most 512 characters", key)
+		}
+	}
+	if len(c.SAMLAdministratorValues) > 0 && strings.TrimSpace(c.SAMLAdministratorAttribute) == "" {
+		return errors.New("STEWARDMESH_SAML_ADMINISTRATOR_ATTRIBUTE is required when administrator values are configured")
+	}
+	for _, value := range c.SAMLAdministratorValues {
+		if value == "" || len(value) > 512 {
+			return errors.New("STEWARDMESH_SAML_ADMINISTRATOR_VALUES contains an invalid value")
+		}
+	}
+	return nil
 }
 
 func (c Config) validateOIDC() error {

@@ -11,8 +11,8 @@ func TestEmbeddedMigrationsAreOrderedAndChecksummed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(migrations) != 9 {
-		t.Fatalf("expected 9 platform migrations, got %d", len(migrations))
+	if len(migrations) != 10 {
+		t.Fatalf("expected 10 platform migrations, got %d", len(migrations))
 	}
 	for index, migration := range migrations {
 		expectedVersion := int64(index + 1)
@@ -21,6 +21,34 @@ func TestEmbeddedMigrationsAreOrderedAndChecksummed(t *testing.T) {
 		}
 		if len(migration.checksum) != 64 {
 			t.Fatalf("expected SHA-256 checksum for migration %d", migration.version)
+		}
+	}
+}
+
+func TestGuardSAMLMigrationTracksOneTimeRequestsWithoutAssertions(t *testing.T) {
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(migrations) < 10 {
+		t.Fatal("Guard SAML migration is missing")
+	}
+	contents := migrations[9].contents
+	for _, expected := range []string{
+		"SEC-GUARD-001",
+		"^(oidc|saml):[a-f0-9]{32}$",
+		"CREATE TABLE guard_saml_requests",
+		"state_hash BYTEA NOT NULL",
+		"request_id TEXT NOT NULL",
+		"CHECK (expires_at > created_at)",
+	} {
+		if !strings.Contains(contents, expected) {
+			t.Fatalf("Guard SAML migration is missing %q", expected)
+		}
+	}
+	for _, forbidden := range []string{"assertion", "name_id", "attribute"} {
+		if strings.Contains(strings.ToLower(contents), forbidden) {
+			t.Fatalf("Guard SAML request tracking must not persist %q", forbidden)
 		}
 	}
 }

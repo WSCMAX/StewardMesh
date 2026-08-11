@@ -1,7 +1,7 @@
 # Guard — Authentication, roles, policies, and audit
 
 - **Canonical ID:** `authorization.security`
-- **Requirements:** `SEC-GUARD-001`, `SEC-HTTP-001`, `A11Y-001`, `DOC-001`, `DOC-002`, `REQ-PLATFORM-VALKEY-001`
+- **Requirements:** `SEC-GUARD-001`, `SEC-HTTP-001`, `A11Y-001`, `DOC-001`, `DOC-002`, `REQ-PLATFORM-VALKEY-001`, `REQ-LEDGER-001`
 - **Roadmap issue:** [#13](https://github.com/WSCMAX/StewardMesh/issues/13)
 
 ## Purpose
@@ -133,6 +133,8 @@ The initial Administrator role directly contains `guard.manage` and attaches the
 - `goals.write`
 - `storage.read`
 - `storage.write`
+- `finance.read`
+- `finance.write`
 
 Role assignments carry an explicit organization, site, department, or resource scope. Organization-scoped grants cover resources in that organization; narrower grants require an exact scope match. Every protected API enforces permissions on the server, and a disabled account is rejected even if one of its sessions has not expired. Frontend role display is user guidance, never the security boundary.
 

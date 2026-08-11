@@ -1,7 +1,7 @@
 package httpapi
 
 // Requirements: REQ-FOUNDATION-001, REQ-ATLAS-001, REQ-PEOPLE-001,
-// REQ-DIRECTORY-EXPANSION-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-PLATFORM-VALKEY-001,
+// REQ-DIRECTORY-EXPANSION-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-PLATFORM-VALKEY-001,
 // SEC-GUARD-001, SEC-HTTP-001.
 
 import (
@@ -24,6 +24,7 @@ import (
 	"github.com/maxlemke/stewardmesh/internal/foundation"
 	"github.com/maxlemke/stewardmesh/internal/guard"
 	"github.com/maxlemke/stewardmesh/internal/identity"
+	"github.com/maxlemke/stewardmesh/internal/ledger"
 	"github.com/maxlemke/stewardmesh/internal/people"
 	"github.com/maxlemke/stewardmesh/internal/storage"
 	"github.com/maxlemke/stewardmesh/internal/threads"
@@ -44,6 +45,7 @@ type Dependencies struct {
 	People              *people.Service
 	Threads             *threads.Service
 	Vault               *storage.Service
+	Ledger              *ledger.Service
 	Guard               *guard.Service
 	OIDC                *identity.OIDCFlow
 	SAML                *identity.SAMLFlow
@@ -56,6 +58,7 @@ type Server struct {
 	people              *people.Service
 	threads             *threads.Service
 	vault               *storage.Service
+	ledger              *ledger.Service
 	guard               *guard.Service
 	oidc                *identity.OIDCFlow
 	saml                *identity.SAMLFlow
@@ -128,6 +131,7 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 		people:              deps.People,
 		threads:             deps.Threads,
 		vault:               deps.Vault,
+		ledger:              deps.Ledger,
 		guard:               deps.Guard,
 		oidc:                deps.OIDC,
 		saml:                deps.SAML,
@@ -194,8 +198,229 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 	mux.Handle("GET /api/v1/blobs/{blobID}", server.protected(guard.PermissionStorageRead, false, server.getBlob))
 	mux.Handle("GET /api/v1/blobs/{blobID}/content", server.protected(guard.PermissionStorageRead, false, server.downloadBlob))
 	mux.Handle("POST /api/v1/blobs/{blobID}/download-authorization", server.protected(guard.PermissionStorageRead, true, server.authorizeBlobDownload))
+	mux.Handle("GET /api/v1/ledger", server.protected(guard.PermissionFinanceRead, false, server.getLedgerSnapshot))
+	mux.Handle("POST /api/v1/ledger/vendors", server.protected(guard.PermissionFinanceWrite, true, server.createLedgerVendor))
+	mux.Handle("POST /api/v1/ledger/purchase-orders", server.protected(guard.PermissionFinanceWrite, true, server.createLedgerPurchaseOrder))
+	mux.Handle("PUT /api/v1/ledger/purchase-orders/{purchaseOrderID}/status", server.protected(guard.PermissionFinanceWrite, true, server.updateLedgerPurchaseOrderStatus))
+	mux.Handle("POST /api/v1/ledger/contracts", server.protected(guard.PermissionFinanceWrite, true, server.createLedgerContract))
+	mux.Handle("PUT /api/v1/ledger/contracts/{contractID}/status", server.protected(guard.PermissionFinanceWrite, true, server.updateLedgerContractStatus))
+	mux.Handle("POST /api/v1/ledger/commitments", server.protected(guard.PermissionFinanceWrite, true, server.createLedgerCommitment))
+	mux.Handle("POST /api/v1/ledger/budgets", server.protected(guard.PermissionFinanceWrite, true, server.createLedgerBudget))
+	mux.Handle("POST /api/v1/ledger/costs/reconcile", server.protected(guard.PermissionFinanceWrite, true, server.reconcileLedgerCost))
+	mux.Handle("GET /api/v1/ledger/budget-variance", server.protected(guard.PermissionFinanceRead, false, server.getLedgerBudgetVariance))
+	mux.Handle("GET /api/v1/ledger/export.csv", server.protected(guard.PermissionFinanceRead, false, server.exportLedgerCSV))
 	mux.Handle("GET /api/v1/graph", server.protected("", false, server.graphView))
 	return server.correlation(server.securityHeaders(server.cors(mux)))
+}
+
+func (s *Server) getLedgerSnapshot(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.ledger == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "ledger_unavailable", "Ledger finance is unavailable")
+		return
+	}
+	snapshot, err := s.ledger.Snapshot(r.Context())
+	if err != nil {
+		writeLedgerError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, snapshot)
+}
+
+func (s *Server) createLedgerVendor(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.ledger == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "ledger_unavailable", "Ledger finance is unavailable")
+		return
+	}
+	var input ledger.CreateVendorInput
+	if err := decodeJSON(w, r, 32<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid vendor payload")
+		return
+	}
+	created, err := s.ledger.CreateVendor(r.Context(), input)
+	if err != nil {
+		writeLedgerError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, created)
+}
+
+func (s *Server) createLedgerPurchaseOrder(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.ledger == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "ledger_unavailable", "Ledger finance is unavailable")
+		return
+	}
+	var input ledger.CreatePurchaseOrderInput
+	if err := decodeJSON(w, r, 128<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid purchase order payload")
+		return
+	}
+	created, err := s.ledger.CreatePurchaseOrder(r.Context(), input)
+	if err != nil {
+		writeLedgerError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, created)
+}
+
+func (s *Server) updateLedgerPurchaseOrderStatus(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.ledger == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "ledger_unavailable", "Ledger finance is unavailable")
+		return
+	}
+	var input ledger.UpdatePurchaseOrderStatusInput
+	if err := decodeJSON(w, r, 16<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid purchase order status payload")
+		return
+	}
+	input.ID = r.PathValue("purchaseOrderID")
+	updated, err := s.ledger.UpdatePurchaseOrderStatus(r.Context(), input)
+	if err != nil {
+		writeLedgerError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
+}
+
+func (s *Server) createLedgerContract(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.ledger == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "ledger_unavailable", "Ledger finance is unavailable")
+		return
+	}
+	var input ledger.CreateContractInput
+	if err := decodeJSON(w, r, 128<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid contract payload")
+		return
+	}
+	created, err := s.ledger.CreateContract(r.Context(), input)
+	if err != nil {
+		writeLedgerError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, created)
+}
+
+func (s *Server) updateLedgerContractStatus(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.ledger == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "ledger_unavailable", "Ledger finance is unavailable")
+		return
+	}
+	var input ledger.UpdateContractStatusInput
+	if err := decodeJSON(w, r, 16<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid contract status payload")
+		return
+	}
+	input.ID = r.PathValue("contractID")
+	updated, err := s.ledger.UpdateContractStatus(r.Context(), input)
+	if err != nil {
+		writeLedgerError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
+}
+
+func (s *Server) createLedgerCommitment(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.ledger == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "ledger_unavailable", "Ledger finance is unavailable")
+		return
+	}
+	var input ledger.CreateCommitmentInput
+	if err := decodeJSON(w, r, 64<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid commitment payload")
+		return
+	}
+	created, err := s.ledger.CreateCommitment(r.Context(), input)
+	if err != nil {
+		writeLedgerError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, created)
+}
+
+func (s *Server) createLedgerBudget(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.ledger == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "ledger_unavailable", "Ledger finance is unavailable")
+		return
+	}
+	var input ledger.CreateBudgetInput
+	if err := decodeJSON(w, r, 32<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid budget payload")
+		return
+	}
+	created, err := s.ledger.CreateBudget(r.Context(), input)
+	if err != nil {
+		writeLedgerError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, created)
+}
+
+func (s *Server) reconcileLedgerCost(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.ledger == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "ledger_unavailable", "Ledger finance is unavailable")
+		return
+	}
+	var input ledger.ReconcileCostInput
+	if err := decodeJSON(w, r, 64<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid cost payload")
+		return
+	}
+	result, err := s.ledger.ReconcileCost(r.Context(), input)
+	if err != nil {
+		writeLedgerError(w, r, err)
+		return
+	}
+	status := http.StatusOK
+	if result.Created {
+		status = http.StatusCreated
+	}
+	writeJSON(w, status, result)
+}
+
+func (s *Server) getLedgerBudgetVariance(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.ledger == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "ledger_unavailable", "Ledger finance is unavailable")
+		return
+	}
+	report, err := s.ledger.BudgetVariance(r.Context(), r.URL.Query().Get("fiscalPeriod"), r.URL.Query().Get("scenario"))
+	if err != nil {
+		writeLedgerError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, report)
+}
+
+func (s *Server) exportLedgerCSV(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.ledger == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "ledger_unavailable", "Ledger finance is unavailable")
+		return
+	}
+	content, err := s.ledger.ExportCSV(r.Context(), r.URL.Query().Get("fiscalPeriod"), r.URL.Query().Get("scenario"))
+	if err != nil {
+		writeLedgerError(w, r, err)
+		return
+	}
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="stewardmesh-ledger.csv"`)
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(content)
+}
+
+func writeLedgerError(w http.ResponseWriter, r *http.Request, err error) {
+	switch {
+	case errors.Is(err, ledger.ErrInvalidInput):
+		writeError(w, r, http.StatusBadRequest, "validation_failed", "Ledger details are invalid")
+	case errors.Is(err, ledger.ErrReferenceMissing):
+		writeError(w, r, http.StatusUnprocessableEntity, "reference_missing", "a referenced Ledger record is unavailable")
+	case errors.Is(err, ledger.ErrNotFound):
+		writeError(w, r, http.StatusNotFound, "not_found", "the requested Ledger record was not found")
+	case errors.Is(err, ledger.ErrInvalidTransition):
+		writeError(w, r, http.StatusConflict, "invalid_transition", "the requested Ledger status transition is not allowed")
+	case errors.Is(err, ledger.ErrConflict):
+		writeError(w, r, http.StatusConflict, "conflict", "this Ledger record conflicts with current data")
+	default:
+		writeError(w, r, http.StatusInternalServerError, "ledger_error", "the Ledger operation could not be completed")
+	}
 }
 
 func (s *Server) listBlobs(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {

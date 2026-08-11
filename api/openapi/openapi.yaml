@@ -1,4 +1,4 @@
-# Requirements: REQ-ATLAS-001, REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
+# Requirements: REQ-ATLAS-001, REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
 openapi: 3.1.0
 info:
   title: StewardMesh API
@@ -1335,6 +1335,225 @@ paths:
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/ledger:
+    get:
+      summary: List the organization Ledger snapshot
+      operationId: getLedgerSnapshot
+      tags: [Ledger]
+      x-requirement: REQ-LEDGER-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200':
+          description: Vendors, purchase orders, contracts, commitments, budgets, and current costs
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/LedgerSnapshot'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /api/v1/ledger/vendors:
+    post:
+      summary: Create a vendor
+      operationId: createLedgerVendor
+      tags: [Ledger]
+      x-requirement: REQ-LEDGER-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateLedgerVendorRequest'}
+      responses:
+        '201': {description: Vendor created, content: {application/json: {schema: {$ref: '#/components/schemas/LedgerVendor'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/ledger/purchase-orders:
+    post:
+      summary: Create a purchase order with Atlas and Vault references
+      operationId: createLedgerPurchaseOrder
+      tags: [Ledger]
+      x-requirement: REQ-LEDGER-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateLedgerPurchaseOrderRequest'}
+      responses:
+        '201': {description: Purchase order created, content: {application/json: {schema: {$ref: '#/components/schemas/LedgerPurchaseOrder'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {description: An Atlas asset or Vault document reference is missing, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+  /api/v1/ledger/purchase-orders/{purchaseOrderId}/status:
+    parameters:
+      - in: path
+        name: purchaseOrderId
+        required: true
+        schema: {$ref: '#/components/schemas/LedgerID'}
+    put:
+      summary: Advance a purchase order status
+      operationId: updateLedgerPurchaseOrderStatus
+      tags: [Ledger]
+      x-requirement: REQ-LEDGER-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/UpdateLedgerPurchaseOrderStatusRequest'}
+      responses:
+        '200': {description: Purchase order status updated, content: {application/json: {schema: {$ref: '#/components/schemas/LedgerPurchaseOrder'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/ledger/contracts:
+    post:
+      summary: Create a contract with independent operational and financial status
+      operationId: createLedgerContract
+      tags: [Ledger]
+      x-requirement: REQ-LEDGER-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateLedgerContractRequest'}
+      responses:
+        '201': {description: Contract created, content: {application/json: {schema: {$ref: '#/components/schemas/LedgerContract'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {description: A vendor or Vault document reference is missing, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+  /api/v1/ledger/contracts/{contractId}/status:
+    parameters:
+      - in: path
+        name: contractId
+        required: true
+        schema: {$ref: '#/components/schemas/LedgerID'}
+    put:
+      summary: Advance independent contract statuses
+      operationId: updateLedgerContractStatus
+      tags: [Ledger]
+      x-requirement: REQ-LEDGER-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/UpdateLedgerContractStatusRequest'}
+      responses:
+        '200': {description: Contract statuses updated, content: {application/json: {schema: {$ref: '#/components/schemas/LedgerContract'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/ledger/commitments:
+    post:
+      summary: Create a multi-year contract commitment
+      operationId: createLedgerCommitment
+      tags: [Ledger]
+      x-requirement: REQ-LEDGER-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateLedgerCommitmentRequest'}
+      responses:
+        '201': {description: Commitment created, content: {application/json: {schema: {$ref: '#/components/schemas/LedgerCommitment'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '422': {description: The contract reference is missing, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+  /api/v1/ledger/budgets:
+    post:
+      summary: Create a fiscal-period scenario budget
+      operationId: createLedgerBudget
+      tags: [Ledger]
+      x-requirement: REQ-LEDGER-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateLedgerBudgetRequest'}
+      responses:
+        '201': {description: Budget created, content: {application/json: {schema: {$ref: '#/components/schemas/LedgerBudget'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {description: A directory scope reference is missing, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+  /api/v1/ledger/costs/reconcile:
+    post:
+      summary: Idempotently create or reconcile a current cost record
+      operationId: reconcileLedgerCost
+      tags: [Ledger]
+      x-requirement: REQ-LEDGER-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ReconcileLedgerCostRequest'}
+      responses:
+        '200': {description: Existing source record was unchanged or reconciled, content: {application/json: {schema: {$ref: '#/components/schemas/ReconcileLedgerCostResult'}}}}
+        '201': {description: New cost record created, content: {application/json: {schema: {$ref: '#/components/schemas/ReconcileLedgerCostResult'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {description: 'A linked financial, Atlas, People, or Vault record is missing', content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+  /api/v1/ledger/budget-variance:
+    get:
+      summary: Calculate budget variance for a fiscal period and scenario
+      operationId: getLedgerBudgetVariance
+      tags: [Ledger]
+      x-requirement: REQ-LEDGER-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - {$ref: '#/components/parameters/LedgerFiscalPeriod'}
+        - {$ref: '#/components/parameters/LedgerScenario'}
+      responses:
+        '200': {description: 'Budget allocation, recognized current costs, variance, and over-budget state', content: {application/json: {schema: {$ref: '#/components/schemas/LedgerBudgetVariance'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {description: The selected budget scope contains mixed currencies, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+  /api/v1/ledger/export.csv:
+    get:
+      summary: Export Ledger budgets, commitments, and costs as CSV
+      operationId: exportLedgerCSV
+      tags: [Ledger]
+      x-requirement: REQ-LEDGER-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - {$ref: '#/components/parameters/LedgerFiscalPeriod'}
+        - {$ref: '#/components/parameters/LedgerScenario'}
+      responses:
+        '200':
+          description: RFC 4180-compatible financial export using integer minor units
+          content:
+            text/csv:
+              schema: {type: string}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
 components:
   securitySchemes:
     localCookieAuth:
@@ -1389,6 +1608,16 @@ components:
       name: targetId
       required: true
       schema: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+    LedgerFiscalPeriod:
+      in: query
+      name: fiscalPeriod
+      required: true
+      schema: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,31}$'}
+    LedgerScenario:
+      in: query
+      name: scenario
+      required: true
+      schema: {type: string, pattern: '^[a-z0-9][a-z0-9._-]{0,63}$'}
     CSRFToken:
       in: header
       name: X-CSRF-Token
@@ -1995,6 +2224,285 @@ components:
           type: string
           description: Ephemeral HTTPS provider URL or same-origin authenticated path. Never store this value.
         expiresAt: {type: string, format: date-time}
+    LedgerID:
+      type: string
+      pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+    LedgerCurrency:
+      type: string
+      pattern: '^[A-Z]{3}$'
+    LedgerFiscalPeriod:
+      type: string
+      pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,31}$'
+    LedgerScenario:
+      type: string
+      pattern: '^[a-z0-9][a-z0-9._-]{0,63}$'
+    LedgerVendor:
+      type: object
+      additionalProperties: false
+      required: [id, organizationId, name, status, revision, createdAt, updatedAt]
+      properties:
+        id: {$ref: '#/components/schemas/LedgerID'}
+        organizationId: {type: string, minLength: 1, maxLength: 128}
+        name: {type: string, minLength: 1, maxLength: 200}
+        externalId: {type: string, maxLength: 200}
+        status: {type: string, enum: [active, inactive]}
+        revision: {type: integer, format: int64, minimum: 1}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    CreateLedgerVendorRequest:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        id: {$ref: '#/components/schemas/LedgerID'}
+        name: {type: string, minLength: 1, maxLength: 200}
+        externalId: {type: string, maxLength: 200}
+        status: {type: string, enum: [active, inactive], default: active}
+    LedgerPurchaseOrderStatus:
+      type: string
+      enum: [draft, approved, ordered, partially_received, received, cancelled]
+    LedgerPurchaseOrder:
+      type: object
+      additionalProperties: false
+      required: [id, organizationId, number, vendorId, status, currency, totalMinor, assetIds, receiptDocumentIds, revision, createdAt, updatedAt]
+      properties:
+        id: {$ref: '#/components/schemas/LedgerID'}
+        organizationId: {type: string, minLength: 1, maxLength: 128}
+        number: {type: string, minLength: 1, maxLength: 100}
+        vendorId: {$ref: '#/components/schemas/LedgerID'}
+        status: {$ref: '#/components/schemas/LedgerPurchaseOrderStatus'}
+        currency: {$ref: '#/components/schemas/LedgerCurrency'}
+        totalMinor: {type: integer, format: int64, minimum: 0}
+        orderedOn: {type: string, format: date-time}
+        assetIds: {type: array, uniqueItems: true, items: {$ref: '#/components/schemas/LedgerID'}}
+        receiptDocumentIds: {type: array, uniqueItems: true, items: {$ref: '#/components/schemas/LedgerID'}}
+        revision: {type: integer, format: int64, minimum: 1}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    CreateLedgerPurchaseOrderRequest:
+      type: object
+      additionalProperties: false
+      required: [number, vendorId, currency, totalMinor]
+      properties:
+        id: {$ref: '#/components/schemas/LedgerID'}
+        number: {type: string, minLength: 1, maxLength: 100}
+        vendorId: {$ref: '#/components/schemas/LedgerID'}
+        status: {$ref: '#/components/schemas/LedgerPurchaseOrderStatus'}
+        currency: {$ref: '#/components/schemas/LedgerCurrency'}
+        totalMinor: {type: integer, format: int64, minimum: 0}
+        orderedOn: {type: string, format: date-time}
+        assetIds: {type: array, uniqueItems: true, items: {$ref: '#/components/schemas/LedgerID'}}
+        receiptDocumentIds: {type: array, uniqueItems: true, items: {$ref: '#/components/schemas/LedgerID'}}
+    UpdateLedgerPurchaseOrderStatusRequest:
+      type: object
+      additionalProperties: false
+      required: [status, revision]
+      properties:
+        status: {$ref: '#/components/schemas/LedgerPurchaseOrderStatus'}
+        revision: {type: integer, format: int64, minimum: 1}
+    LedgerOperationalStatus:
+      type: string
+      enum: [planned, active, suspended, expired, terminated, cancelled]
+    LedgerFinancialStatus:
+      type: string
+      enum: [planned, committed, billed, paid, closed, cancelled]
+    LedgerContract:
+      type: object
+      additionalProperties: false
+      required: [id, organizationId, name, vendorId, operationalStatus, financialStatus, currency, ceilingMinor, startsOn, endsOn, documentIds, revision, createdAt, updatedAt]
+      properties:
+        id: {$ref: '#/components/schemas/LedgerID'}
+        organizationId: {type: string, minLength: 1, maxLength: 128}
+        name: {type: string, minLength: 1, maxLength: 200}
+        vendorId: {$ref: '#/components/schemas/LedgerID'}
+        operationalStatus: {$ref: '#/components/schemas/LedgerOperationalStatus'}
+        financialStatus: {$ref: '#/components/schemas/LedgerFinancialStatus'}
+        currency: {$ref: '#/components/schemas/LedgerCurrency'}
+        ceilingMinor: {type: integer, format: int64, minimum: 0}
+        startsOn: {type: string, format: date-time}
+        endsOn: {type: string, format: date-time}
+        renewsOn: {type: string, format: date-time}
+        documentIds: {type: array, uniqueItems: true, items: {$ref: '#/components/schemas/LedgerID'}}
+        revision: {type: integer, format: int64, minimum: 1}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    CreateLedgerContractRequest:
+      type: object
+      additionalProperties: false
+      required: [name, vendorId, currency, ceilingMinor, startsOn, endsOn]
+      properties:
+        id: {$ref: '#/components/schemas/LedgerID'}
+        name: {type: string, minLength: 1, maxLength: 200}
+        vendorId: {$ref: '#/components/schemas/LedgerID'}
+        operationalStatus: {$ref: '#/components/schemas/LedgerOperationalStatus'}
+        financialStatus: {$ref: '#/components/schemas/LedgerFinancialStatus'}
+        currency: {$ref: '#/components/schemas/LedgerCurrency'}
+        ceilingMinor: {type: integer, format: int64, minimum: 0}
+        startsOn: {type: string, format: date-time}
+        endsOn: {type: string, format: date-time}
+        renewsOn: {type: string, format: date-time}
+        documentIds: {type: array, uniqueItems: true, items: {$ref: '#/components/schemas/LedgerID'}}
+    UpdateLedgerContractStatusRequest:
+      type: object
+      additionalProperties: false
+      required: [operationalStatus, financialStatus, revision]
+      properties:
+        operationalStatus: {$ref: '#/components/schemas/LedgerOperationalStatus'}
+        financialStatus: {$ref: '#/components/schemas/LedgerFinancialStatus'}
+        revision: {type: integer, format: int64, minimum: 1}
+    LedgerCommitmentKind:
+      type: string
+      enum: [savings_plan, subscription, reserved_capacity, lease, maintenance, license, financing, other]
+    LedgerCommitment:
+      type: object
+      additionalProperties: false
+      required: [id, organizationId, contractId, kind, description, currency, amountMinor, startsOn, endsOn, fiscalPeriod, scenario, revision, createdAt, updatedAt]
+      properties:
+        id: {$ref: '#/components/schemas/LedgerID'}
+        organizationId: {type: string, minLength: 1, maxLength: 128}
+        contractId: {$ref: '#/components/schemas/LedgerID'}
+        kind: {$ref: '#/components/schemas/LedgerCommitmentKind'}
+        description: {type: string, minLength: 1, maxLength: 500}
+        currency: {$ref: '#/components/schemas/LedgerCurrency'}
+        amountMinor: {type: integer, format: int64, minimum: 0}
+        startsOn: {type: string, format: date-time}
+        endsOn: {type: string, format: date-time}
+        fiscalPeriod: {$ref: '#/components/schemas/LedgerFiscalPeriod'}
+        scenario: {$ref: '#/components/schemas/LedgerScenario'}
+        revision: {type: integer, format: int64, minimum: 1}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    CreateLedgerCommitmentRequest:
+      type: object
+      additionalProperties: false
+      required: [contractId, kind, description, currency, amountMinor, startsOn, endsOn, fiscalPeriod, scenario]
+      properties:
+        id: {$ref: '#/components/schemas/LedgerID'}
+        contractId: {$ref: '#/components/schemas/LedgerID'}
+        kind: {$ref: '#/components/schemas/LedgerCommitmentKind'}
+        description: {type: string, minLength: 1, maxLength: 500}
+        currency: {$ref: '#/components/schemas/LedgerCurrency'}
+        amountMinor: {type: integer, format: int64, minimum: 0}
+        startsOn: {type: string, format: date-time}
+        endsOn: {type: string, format: date-time}
+        fiscalPeriod: {$ref: '#/components/schemas/LedgerFiscalPeriod'}
+        scenario: {$ref: '#/components/schemas/LedgerScenario'}
+    LedgerBudget:
+      type: object
+      additionalProperties: false
+      required: [id, organizationId, name, fiscalPeriod, scenario, currency, allocatedMinor, revision, createdAt, updatedAt]
+      properties:
+        id: {$ref: '#/components/schemas/LedgerID'}
+        organizationId: {type: string, minLength: 1, maxLength: 128}
+        name: {type: string, minLength: 1, maxLength: 200}
+        fiscalPeriod: {$ref: '#/components/schemas/LedgerFiscalPeriod'}
+        scenario: {$ref: '#/components/schemas/LedgerScenario'}
+        departmentId: {$ref: '#/components/schemas/LedgerID'}
+        siteId: {$ref: '#/components/schemas/LedgerID'}
+        currency: {$ref: '#/components/schemas/LedgerCurrency'}
+        allocatedMinor: {type: integer, format: int64, minimum: 0}
+        revision: {type: integer, format: int64, minimum: 1}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    CreateLedgerBudgetRequest:
+      type: object
+      additionalProperties: false
+      required: [name, fiscalPeriod, scenario, currency, allocatedMinor]
+      properties:
+        id: {$ref: '#/components/schemas/LedgerID'}
+        name: {type: string, minLength: 1, maxLength: 200}
+        fiscalPeriod: {$ref: '#/components/schemas/LedgerFiscalPeriod'}
+        scenario: {$ref: '#/components/schemas/LedgerScenario'}
+        departmentId: {$ref: '#/components/schemas/LedgerID'}
+        siteId: {$ref: '#/components/schemas/LedgerID'}
+        currency: {$ref: '#/components/schemas/LedgerCurrency'}
+        allocatedMinor: {type: integer, format: int64, minimum: 0}
+    LedgerCostKind:
+      type: string
+      enum: [planned, estimated, actual, billed, paid, committed, normalized_real, tco]
+    LedgerCostRecord:
+      type: object
+      additionalProperties: false
+      required: [id, organizationId, description, kind, currency, amountMinor, fiscalPeriod, scenario, revision, createdAt, updatedAt]
+      properties:
+        id: {$ref: '#/components/schemas/LedgerID'}
+        organizationId: {type: string, minLength: 1, maxLength: 128}
+        description: {type: string, minLength: 1, maxLength: 500}
+        kind: {$ref: '#/components/schemas/LedgerCostKind'}
+        currency: {$ref: '#/components/schemas/LedgerCurrency'}
+        amountMinor: {type: integer, format: int64, minimum: 0}
+        fiscalPeriod: {$ref: '#/components/schemas/LedgerFiscalPeriod'}
+        scenario: {$ref: '#/components/schemas/LedgerScenario'}
+        purchaseOrderId: {$ref: '#/components/schemas/LedgerID'}
+        contractId: {$ref: '#/components/schemas/LedgerID'}
+        assetId: {$ref: '#/components/schemas/LedgerID'}
+        departmentId: {$ref: '#/components/schemas/LedgerID'}
+        siteId: {$ref: '#/components/schemas/LedgerID'}
+        documentId: {$ref: '#/components/schemas/LedgerID'}
+        externalReference: {type: string, maxLength: 255}
+        sourceSystemId: {type: string, maxLength: 128}
+        sourceRecordId: {type: string, maxLength: 255}
+        revision: {type: integer, format: int64, minimum: 1}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    ReconcileLedgerCostRequest:
+      type: object
+      additionalProperties: false
+      required: [description, kind, currency, amountMinor, fiscalPeriod, scenario]
+      properties:
+        id: {$ref: '#/components/schemas/LedgerID'}
+        description: {type: string, minLength: 1, maxLength: 500}
+        kind: {$ref: '#/components/schemas/LedgerCostKind'}
+        currency: {$ref: '#/components/schemas/LedgerCurrency'}
+        amountMinor: {type: integer, format: int64, minimum: 0}
+        fiscalPeriod: {$ref: '#/components/schemas/LedgerFiscalPeriod'}
+        scenario: {$ref: '#/components/schemas/LedgerScenario'}
+        purchaseOrderId: {$ref: '#/components/schemas/LedgerID'}
+        contractId: {$ref: '#/components/schemas/LedgerID'}
+        assetId: {$ref: '#/components/schemas/LedgerID'}
+        departmentId: {$ref: '#/components/schemas/LedgerID'}
+        siteId: {$ref: '#/components/schemas/LedgerID'}
+        documentId: {$ref: '#/components/schemas/LedgerID'}
+        externalReference: {type: string, maxLength: 255}
+        sourceSystemId: {type: string, maxLength: 128}
+        sourceRecordId: {type: string, maxLength: 255}
+      dependentRequired:
+        sourceSystemId: [sourceRecordId]
+        sourceRecordId: [sourceSystemId]
+    ReconcileLedgerCostResult:
+      type: object
+      additionalProperties: false
+      required: [record, applied, created]
+      properties:
+        record: {$ref: '#/components/schemas/LedgerCostRecord'}
+        applied: {type: boolean}
+        created: {type: boolean}
+    LedgerSnapshot:
+      type: object
+      additionalProperties: false
+      required: [vendors, purchaseOrders, contracts, commitments, budgets, costs]
+      properties:
+        vendors: {type: array, items: {$ref: '#/components/schemas/LedgerVendor'}}
+        purchaseOrders: {type: array, items: {$ref: '#/components/schemas/LedgerPurchaseOrder'}}
+        contracts: {type: array, items: {$ref: '#/components/schemas/LedgerContract'}}
+        commitments: {type: array, items: {$ref: '#/components/schemas/LedgerCommitment'}}
+        budgets: {type: array, items: {$ref: '#/components/schemas/LedgerBudget'}}
+        costs: {type: array, items: {$ref: '#/components/schemas/LedgerCostRecord'}}
+    LedgerBudgetVariance:
+      type: object
+      additionalProperties: false
+      required: [fiscalPeriod, scenario, currency, allocatedMinor, recognizedMinor, varianceMinor, overBudget, amountsByKindMinor]
+      properties:
+        fiscalPeriod: {$ref: '#/components/schemas/LedgerFiscalPeriod'}
+        scenario: {$ref: '#/components/schemas/LedgerScenario'}
+        currency: {type: string, pattern: '^$|^[A-Z]{3}$'}
+        allocatedMinor: {type: integer, format: int64, minimum: 0}
+        recognizedMinor: {type: integer, format: int64, minimum: 0}
+        varianceMinor: {type: integer, format: int64}
+        overBudget: {type: boolean}
+        amountsByKindMinor:
+          type: object
+          additionalProperties: {type: integer, format: int64, minimum: 0}
     Tag:
       type: object
       additionalProperties: false

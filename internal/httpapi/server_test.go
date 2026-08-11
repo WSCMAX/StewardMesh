@@ -1,7 +1,7 @@
 package httpapi
 
 // Requirements: REQ-FOUNDATION-001, REQ-ATLAS-001, REQ-PEOPLE-001,
-// REQ-DIRECTORY-EXPANSION-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-PLATFORM-VALKEY-001,
+// REQ-DIRECTORY-EXPANSION-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-PLATFORM-VALKEY-001,
 // SEC-GUARD-001, SEC-HTTP-001.
 
 import (
@@ -26,6 +26,7 @@ import (
 	"github.com/maxlemke/stewardmesh/internal/foundation"
 	"github.com/maxlemke/stewardmesh/internal/guard"
 	"github.com/maxlemke/stewardmesh/internal/identity"
+	"github.com/maxlemke/stewardmesh/internal/ledger"
 	"github.com/maxlemke/stewardmesh/internal/people"
 	"github.com/maxlemke/stewardmesh/internal/repository"
 	"github.com/maxlemke/stewardmesh/internal/storage"
@@ -64,6 +65,12 @@ type allowHTTPThreadTargets struct{}
 func (allowHTTPThreadTargets) ValidateThreadTarget(context.Context, string, threads.TargetType, string) error {
 	return nil
 }
+
+type allowHTTPLedgerReferences struct{}
+
+func (allowHTTPLedgerReferences) ValidateAssets(context.Context, []string) error          { return nil }
+func (allowHTTPLedgerReferences) ValidateDocuments(context.Context, []string) error       { return nil }
+func (allowHTTPLedgerReferences) ValidateDirectory(context.Context, string, string) error { return nil }
 
 type fakeHTTPOIDCAuthenticator struct {
 	state         string
@@ -200,6 +207,78 @@ func TestVaultUploadMetadataAuthorizationAndDownload(t *testing.T) {
 	handler.ServeHTTP(unauthorizedDownloadRes, unauthorizedDownload)
 	if unauthorizedDownloadRes.Code != http.StatusBadRequest {
 		t.Fatalf("expected missing short-lived token to fail, got %d", unauthorizedDownloadRes.Code)
+	}
+}
+
+func TestLedgerFinanceWorkflowVarianceReconciliationAndExport(t *testing.T) {
+	handler := newGuardServer(t)
+	session := bootstrapAdministrator(t, handler)
+	vendor := createPeopleRecord[ledger.Vendor](t, handler, session, "/api/v1/ledger/vendors", map[string]any{
+		"id": "vendor-1", "name": "Example Vendor", "externalId": "V-42",
+	})
+	if vendor.Status != "active" {
+		t.Fatalf("unexpected vendor %#v", vendor)
+	}
+	orderedOn := "2026-08-01T00:00:00Z"
+	purchaseOrder := createPeopleRecord[ledger.PurchaseOrder](t, handler, session, "/api/v1/ledger/purchase-orders", map[string]any{
+		"id": "po-1", "number": "PO-2026-001", "vendorId": vendor.ID, "status": "ordered", "currency": "USD",
+		"totalMinor": 180000, "orderedOn": orderedOn, "assetIds": []string{}, "receiptDocumentIds": []string{},
+	})
+	statusPayload, _ := json.Marshal(map[string]any{"status": "received", "revision": purchaseOrder.Revision})
+	statusRequest := authenticatedRequest(http.MethodPut, "/api/v1/ledger/purchase-orders/po-1/status", bytes.NewReader(statusPayload), session)
+	statusResponse := httptest.NewRecorder()
+	handler.ServeHTTP(statusResponse, statusRequest)
+	if statusResponse.Code != http.StatusOK || !strings.Contains(statusResponse.Body.String(), `"status":"received"`) {
+		t.Fatalf("unexpected purchase status response %d: %s", statusResponse.Code, statusResponse.Body.String())
+	}
+
+	contract := createPeopleRecord[ledger.Contract](t, handler, session, "/api/v1/ledger/contracts", map[string]any{
+		"id": "contract-1", "name": "Managed service", "vendorId": vendor.ID, "operationalStatus": "active",
+		"financialStatus": "committed", "currency": "USD", "ceilingMinor": 600000,
+		"startsOn": "2026-01-01T00:00:00Z", "endsOn": "2028-12-31T00:00:00Z",
+	})
+	createPeopleRecord[ledger.Commitment](t, handler, session, "/api/v1/ledger/commitments", map[string]any{
+		"contractId": contract.ID, "kind": "subscription", "description": "Three-year managed service", "currency": "USD",
+		"amountMinor": 200000, "startsOn": "2026-01-01T00:00:00Z", "endsOn": "2028-12-31T00:00:00Z",
+		"fiscalPeriod": "FY2027", "scenario": "baseline",
+	})
+	createPeopleRecord[ledger.Budget](t, handler, session, "/api/v1/ledger/budgets", map[string]any{
+		"name": "Infrastructure", "fiscalPeriod": "FY2027", "scenario": "baseline", "currency": "USD", "allocatedMinor": 200000,
+	})
+	costPayload, _ := json.Marshal(map[string]any{
+		"description": "Vendor invoice", "kind": "billed", "currency": "USD", "amountMinor": 175000,
+		"fiscalPeriod": "FY2027", "scenario": "baseline", "purchaseOrderId": purchaseOrder.ID,
+		"sourceSystemId": "erp", "sourceRecordId": "invoice-42", "externalReference": "INV-42",
+	})
+	for index, expectedStatus := range []int{http.StatusCreated, http.StatusOK} {
+		request := authenticatedRequest(http.MethodPost, "/api/v1/ledger/costs/reconcile", bytes.NewReader(costPayload), session)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != expectedStatus {
+			t.Fatalf("reconciliation %d returned %d: %s", index, response.Code, response.Body.String())
+		}
+		if index == 1 && !strings.Contains(response.Body.String(), `"applied":false`) {
+			t.Fatalf("expected idempotent reconciliation: %s", response.Body.String())
+		}
+	}
+	varianceRequest := authenticatedRequest(http.MethodGet, "/api/v1/ledger/budget-variance?fiscalPeriod=FY2027&scenario=baseline", nil, session)
+	varianceResponse := httptest.NewRecorder()
+	handler.ServeHTTP(varianceResponse, varianceRequest)
+	if varianceResponse.Code != http.StatusOK || !strings.Contains(varianceResponse.Body.String(), `"varianceMinor":25000`) || !strings.Contains(varianceResponse.Body.String(), `"overBudget":false`) {
+		t.Fatalf("unexpected budget variance %d: %s", varianceResponse.Code, varianceResponse.Body.String())
+	}
+	exportRequest := authenticatedRequest(http.MethodGet, "/api/v1/ledger/export.csv?fiscalPeriod=FY2027&scenario=baseline", nil, session)
+	exportResponse := httptest.NewRecorder()
+	handler.ServeHTTP(exportResponse, exportRequest)
+	if exportResponse.Code != http.StatusOK || !strings.HasPrefix(exportResponse.Header().Get("Content-Type"), "text/csv") ||
+		!strings.Contains(exportResponse.Body.String(), "Vendor invoice") || exportResponse.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("unexpected Ledger export %d headers=%v body=%s", exportResponse.Code, exportResponse.Header(), exportResponse.Body.String())
+	}
+	snapshotRequest := authenticatedRequest(http.MethodGet, "/api/v1/ledger", nil, session)
+	snapshotResponse := httptest.NewRecorder()
+	handler.ServeHTTP(snapshotResponse, snapshotRequest)
+	if snapshotResponse.Code != http.StatusOK || !strings.Contains(snapshotResponse.Body.String(), "Managed service") || !strings.Contains(snapshotResponse.Body.String(), "Three-year managed service") {
+		t.Fatalf("unexpected Ledger snapshot %d: %s", snapshotResponse.Code, snapshotResponse.Body.String())
 	}
 }
 
@@ -1023,11 +1102,16 @@ func newGuardServerWithIdentity(t *testing.T, limiter guard.AttemptLimiter, oidc
 	if err != nil {
 		t.Fatal(err)
 	}
+	ledgerService, err := ledger.NewService(repository.NewMemoryLedgerStore(), allowHTTPLedgerReferences{}, foundation.NopAuditor{}, ledger.ServiceConfig{OrganizationID: organization.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
 	return NewServer(Dependencies{
 		Atlas:   atlasService,
 		People:  peopleService,
 		Threads: threadsService,
 		Vault:   vaultService,
+		Ledger:  ledgerService,
 		Guard:   service,
 		OIDC:    oidcFlow,
 		SAML:    samlFlow,

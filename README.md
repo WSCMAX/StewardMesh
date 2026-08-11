@@ -88,6 +88,15 @@ mandatory server-side encryption and short-lived downloads. See
 [Vault](docs/features/vault.md) for configuration, permissions, threat
 boundaries, API behavior, and validation coverage.
 
+Ledger provides organization-scoped vendors, multi-asset purchase orders,
+independent operational and financial contract states, multi-year commitments,
+integer-minor-unit costs, idempotent reconciliation, fiscal-period budgets,
+variance, over-budget state, and CSV export. Atlas and Vault references are
+validated through their owning services, while PostgreSQL and memory adapters
+share one provider-neutral financial contract. See
+[Ledger](docs/features/ledger.md) for money semantics, status transitions,
+permissions, APIs, security boundaries, and validation coverage.
+
 People now provides sites, departments, person/shared/public/lab identities,
 structured site addresses, buildings and rooms, scoped directory search, and
 effective-dated multi-user asset assignments.

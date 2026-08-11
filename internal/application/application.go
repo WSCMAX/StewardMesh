@@ -1,6 +1,6 @@
 // Package application constructs StewardMesh's transport-neutral HTTP
 // application and owns the lifecycle of its shared runtime dependencies.
-// Requirements: REQ-FOUNDATION-001, REQ-ATLAS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001.
+// Requirements: REQ-FOUNDATION-001, REQ-ATLAS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001.
 package application
 
 import (
@@ -20,6 +20,7 @@ import (
 	"github.com/maxlemke/stewardmesh/internal/guard"
 	"github.com/maxlemke/stewardmesh/internal/httpapi"
 	"github.com/maxlemke/stewardmesh/internal/identity"
+	"github.com/maxlemke/stewardmesh/internal/ledger"
 	"github.com/maxlemke/stewardmesh/internal/people"
 	"github.com/maxlemke/stewardmesh/internal/repository"
 	postgresrepository "github.com/maxlemke/stewardmesh/internal/repository/postgres"
@@ -168,12 +169,19 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 	if err != nil {
 		return fail(fmt.Errorf("initialize People: %w", err))
 	}
+	ledgerService, err := ledger.NewService(runtime.ledgerStore, ledgerReferenceValidator{
+		atlas: atlasService, vault: vaultService, people: runtime.peopleStore, organizationID: cfg.OrganizationID,
+	}, runtime.auditor, ledger.ServiceConfig{OrganizationID: cfg.OrganizationID})
+	if err != nil {
+		return fail(fmt.Errorf("initialize Ledger: %w", err))
+	}
 
 	application.handler = httpapi.NewServer(httpapi.Dependencies{
 		Atlas:               atlasService,
 		People:              peopleService,
 		Threads:             threadsService,
 		Vault:               vaultService,
+		Ledger:              ledgerService,
 		Guard:               guardService,
 		OIDC:                oidcFlow,
 		SAML:                samlFlow,
@@ -222,6 +230,7 @@ type foundationRuntime struct {
 	assetStore   atlas.Store
 	threadsStore threads.Store
 	storageStore storage.MetadataStore
+	ledgerStore  ledger.Store
 	guardStore   guard.Store
 	peopleStore  people.Store
 	auditor      foundation.Auditor
@@ -284,6 +293,7 @@ func initializeFoundation(ctx context.Context, cfg config.Config, runMigrations 
 		assetStore    atlas.Store
 		threadsStore  threads.Store
 		storageStore  storage.MetadataStore
+		ledgerStore   ledger.Store
 		guardStore    guard.Store
 		peopleStore   people.Store
 		auditor       foundation.Auditor = foundation.NopAuditor{}
@@ -297,6 +307,7 @@ func initializeFoundation(ctx context.Context, cfg config.Config, runMigrations 
 		assetStore = repository.NewMemoryAtlasStore()
 		threadsStore = repository.NewMemoryThreadsStore()
 		storageStore = repository.NewMemoryStorageStore()
+		ledgerStore = repository.NewMemoryLedgerStore()
 	case config.RepositoryDriverPostgres:
 		database, err := postgresrepository.Open(ctx, cfg.DatabaseURL)
 		if err != nil {
@@ -340,6 +351,11 @@ func initializeFoundation(ctx context.Context, cfg config.Config, runMigrations 
 			return foundationRuntime{}, err
 		}
 		storageStore, err = postgresrepository.NewStorageStore(database)
+		if err != nil {
+			_ = database.Close()
+			return foundationRuntime{}, err
+		}
+		ledgerStore, err = postgresrepository.NewLedgerStore(database)
 		if err != nil {
 			_ = database.Close()
 			return foundationRuntime{}, err
@@ -395,6 +411,7 @@ func initializeFoundation(ctx context.Context, cfg config.Config, runMigrations 
 		assetStore:   assetStore,
 		threadsStore: threadsStore,
 		storageStore: storageStore,
+		ledgerStore:  ledgerStore,
 		guardStore:   guardStore,
 		peopleStore:  peopleStore,
 		auditor:      auditor,
@@ -415,6 +432,76 @@ func initializeBlobStore(ctx context.Context, cfg config.Config) (storage.Object
 
 type threadsTargetValidator struct {
 	atlas *atlas.Service
+}
+
+type ledgerReferenceValidator struct {
+	atlas          *atlas.Service
+	vault          *storage.Service
+	people         people.Store
+	organizationID string
+}
+
+func (v ledgerReferenceValidator) ValidateAssets(ctx context.Context, assetIDs []string) error {
+	if v.atlas == nil {
+		return errors.New("Atlas service is required")
+	}
+	for _, id := range assetIDs {
+		if _, err := v.atlas.GetAsset(ctx, id); err != nil {
+			if errors.Is(err, atlas.ErrNotFound) {
+				return ledger.ErrReferenceMissing
+			}
+			if errors.Is(err, atlas.ErrInvalidInput) {
+				return ledger.ErrInvalidInput
+			}
+			return fmt.Errorf("validate Ledger asset reference: %w", err)
+		}
+	}
+	return nil
+}
+
+func (v ledgerReferenceValidator) ValidateDocuments(ctx context.Context, documentIDs []string) error {
+	if v.vault == nil {
+		return errors.New("Vault service is required")
+	}
+	for _, id := range documentIDs {
+		if _, err := v.vault.GetBlob(ctx, id); err != nil {
+			if errors.Is(err, storage.ErrNotFound) {
+				return ledger.ErrReferenceMissing
+			}
+			if errors.Is(err, storage.ErrInvalidInput) {
+				return ledger.ErrInvalidInput
+			}
+			return fmt.Errorf("validate Ledger document reference: %w", err)
+		}
+	}
+	return nil
+}
+
+func (v ledgerReferenceValidator) ValidateDirectory(ctx context.Context, siteID, departmentID string) error {
+	if v.people == nil {
+		return errors.New("People store is required")
+	}
+	if siteID != "" {
+		if _, err := v.people.GetSite(ctx, v.organizationID, siteID); err != nil {
+			return mapLedgerDirectoryError(err)
+		}
+	}
+	if departmentID != "" {
+		if _, err := v.people.GetDepartment(ctx, v.organizationID, departmentID); err != nil {
+			return mapLedgerDirectoryError(err)
+		}
+	}
+	return nil
+}
+
+func mapLedgerDirectoryError(err error) error {
+	if errors.Is(err, people.ErrNotFound) || errors.Is(err, people.ErrReferenceMissing) {
+		return ledger.ErrReferenceMissing
+	}
+	if errors.Is(err, people.ErrInvalidInput) {
+		return ledger.ErrInvalidInput
+	}
+	return fmt.Errorf("validate Ledger directory reference: %w", err)
 }
 
 func (v threadsTargetValidator) ValidateThreadTarget(ctx context.Context, _ string, targetType threads.TargetType, targetID string) error {

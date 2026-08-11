@@ -53,6 +53,7 @@ func GuardStore(t *testing.T, store guard.Store, organizationID string) {
 			Name:            "Administrator",
 			Permissions:     []guard.Permission{guard.PermissionGuardManage},
 			PolicyBundleIDs: []string{bundleID},
+			Source:          guard.BuiltInRoleSource,
 		},
 		Assignment: guard.RoleAssignment{
 			ID:             assignmentID,
@@ -121,8 +122,50 @@ func GuardStore(t *testing.T, store guard.Store, organizationID string) {
 	}
 	if len(directory.Accounts) != 1 || directory.Accounts[0].PasswordHash != "" ||
 		len(directory.Roles) != 1 || len(directory.Assignments) != 1 ||
+		len(directory.PolicyBundles) != 1 || directory.Roles[0].Source != guard.BuiltInRoleSource ||
 		directory.Assignments[0].Source != guard.LocalAssignmentSource {
 		t.Fatalf("unexpected authorization directory %#v", directory)
+	}
+	if err := store.DeleteRole(ctx, organizationID, roleID); !errors.Is(err, guard.ErrBuiltInRole) {
+		t.Fatalf("expected built-in role to be protected, got %v", err)
+	}
+	customRole := guard.Role{
+		ID: randomID(t), OrganizationID: organizationID, Name: "Asset steward",
+		Description: "Manages inventory records.", Permissions: []guard.Permission{guard.PermissionAssetsWrite},
+		PolicyBundleIDs: []string{bundleID}, Source: guard.LocalRoleSource,
+	}
+	if err := store.CreateRole(ctx, customRole); err != nil {
+		t.Fatalf("create custom role: %v", err)
+	}
+	duplicateName := customRole
+	duplicateName.ID = randomID(t)
+	duplicateName.Name = "  ASSET STEWARD  "
+	if err := store.CreateRole(ctx, duplicateName); !errors.Is(err, guard.ErrConflict) {
+		t.Fatalf("expected normalized role name conflict, got %v", err)
+	}
+	missingBundle := customRole
+	missingBundle.ID = randomID(t)
+	missingBundle.Name = "Missing bundle"
+	missingBundle.PolicyBundleIDs = []string{randomID(t)}
+	if err := store.CreateRole(ctx, missingBundle); !errors.Is(err, guard.ErrNotFound) {
+		t.Fatalf("expected unknown policy bundle rejection, got %v", err)
+	}
+	customAssignment := guard.RoleAssignment{
+		ID: randomID(t), OrganizationID: organizationID, AccountID: accountID, RoleID: customRole.ID,
+		Scope:  guard.Scope{Kind: guard.ScopeSite, OrganizationID: organizationID, ResourceID: "custom-role-site"},
+		Source: guard.LocalAssignmentSource, CreatedAt: now.Add(30 * time.Second),
+	}
+	if err := store.CreateRoleAssignment(ctx, customAssignment); err != nil {
+		t.Fatalf("assign custom role: %v", err)
+	}
+	if err := store.DeleteRole(ctx, organizationID, customRole.ID); !errors.Is(err, guard.ErrConflict) {
+		t.Fatalf("expected assigned custom role to be protected, got %v", err)
+	}
+	if _, err := store.DeleteRoleAssignment(ctx, organizationID, customAssignment.ID); err != nil {
+		t.Fatalf("remove custom role assignment: %v", err)
+	}
+	if err := store.DeleteRole(ctx, organizationID, customRole.ID); err != nil {
+		t.Fatalf("delete unassigned custom role: %v", err)
 	}
 	if _, err := store.DeleteRoleAssignment(ctx, organizationID, assignmentID); !errors.Is(err, guard.ErrLastAdministrator) {
 		t.Fatalf("expected the only organization administrator to be protected, got %v", err)

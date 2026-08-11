@@ -8,6 +8,7 @@ import (
 	"errors"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 const (
@@ -28,6 +29,7 @@ var (
 	ErrInvalidCSRF                = errors.New("invalid csrf token")
 	ErrPermissionDenied           = errors.New("permission denied")
 	ErrConflict                   = errors.New("guard record conflicts with existing data")
+	ErrBuiltInRole                = errors.New("built-in roles cannot be changed")
 	ErrManagedAssignment          = errors.New("provider-managed role assignment cannot be changed locally")
 	ErrLastAdministrator          = errors.New("the last organization administrator cannot be removed")
 	ErrResourceWriteLocked        = errors.New("resource is write-locked until ownership is claimed")
@@ -55,6 +57,20 @@ func AdministratorBundlePermissions() []Permission {
 		PermissionDirectoryRead,
 		PermissionDirectoryWrite,
 		PermissionGoalsRead,
+	}
+}
+
+// SupportedPermissions returns the stable permission catalog exposed to
+// organization administrators when building custom roles.
+func SupportedPermissions() []Permission {
+	return []Permission{
+		PermissionOrganizationRead,
+		PermissionAssetsRead,
+		PermissionAssetsWrite,
+		PermissionDirectoryRead,
+		PermissionDirectoryWrite,
+		PermissionGoalsRead,
+		PermissionGuardManage,
 	}
 }
 
@@ -120,6 +136,31 @@ type Role struct {
 	Description     string
 	Permissions     []Permission
 	PolicyBundleIDs []string
+	Source          string
+}
+
+const (
+	BuiltInRoleSource = "builtin"
+	LocalRoleSource   = "local"
+)
+
+func (r Role) Validate() error {
+	name := strings.TrimSpace(r.Name)
+	description := strings.TrimSpace(r.Description)
+	if strings.TrimSpace(r.ID) == "" || strings.TrimSpace(r.OrganizationID) == "" || name == "" {
+		return errors.New("complete role identity and name are required")
+	}
+	if !utf8.ValidString(name) || utf8.RuneCountInString(name) > 120 ||
+		!utf8.ValidString(description) || utf8.RuneCountInString(description) > 1000 {
+		return errors.New("valid role name and description lengths are required")
+	}
+	if r.Source != BuiltInRoleSource && r.Source != LocalRoleSource {
+		return errors.New("valid role source is required")
+	}
+	if len(r.Permissions) == 0 && len(r.PolicyBundleIDs) == 0 {
+		return errors.New("at least one role permission or policy bundle is required")
+	}
+	return nil
 }
 
 type RoleAssignment struct {
@@ -152,9 +193,18 @@ func (a RoleAssignment) Validate() error {
 }
 
 type AuthorizationDirectory struct {
-	Accounts    []Account
-	Roles       []Role
-	Assignments []RoleAssignment
+	Accounts             []Account
+	Roles                []Role
+	PolicyBundles        []PolicyBundle
+	AvailablePermissions []Permission
+	Assignments          []RoleAssignment
+}
+
+type CreateRoleInput struct {
+	Name            string
+	Description     string
+	Permissions     []Permission
+	PolicyBundleIDs []string
 }
 
 type RoleAssignmentInput struct {
@@ -262,7 +312,8 @@ func (b AdministratorBootstrap) Validate() error {
 		return errors.New("administrator policy bundle is required")
 	}
 	if b.Role.ID == "" || b.Role.OrganizationID != account.OrganizationID ||
-		len(b.Role.Permissions) == 0 || len(b.Role.PolicyBundleIDs) == 0 || b.Role.PolicyBundleIDs[0] != b.Bundle.ID {
+		b.Role.Source != BuiltInRoleSource || len(b.Role.Permissions) == 0 ||
+		len(b.Role.PolicyBundleIDs) == 0 || b.Role.PolicyBundleIDs[0] != b.Bundle.ID {
 		return errors.New("administrator role is required")
 	}
 	assignment := b.Assignment
@@ -341,6 +392,8 @@ type Store interface {
 	ProvisionExternalAccount(ctx context.Context, provisioning ExternalAccountProvisioning) (account Account, created bool, err error)
 	AccessForAccount(ctx context.Context, organizationID, accountID string) (Access, error)
 	ListAuthorization(ctx context.Context, organizationID string) (AuthorizationDirectory, error)
+	CreateRole(ctx context.Context, role Role) error
+	DeleteRole(ctx context.Context, organizationID, roleID string) error
 	CreateRoleAssignment(ctx context.Context, assignment RoleAssignment) error
 	DeleteRoleAssignment(ctx context.Context, organizationID, assignmentID string) (RoleAssignment, error)
 	RegisterResourceOwnership(ctx context.Context, ownership ResourceOwnership) (ResourceOwnership, bool, error)

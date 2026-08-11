@@ -22,6 +22,7 @@ service GuardService {
   rpc GetSession(GetSessionRequest) returns (AuthenticationSession);
   rpc Logout(LogoutRequest) returns (LogoutResponse);
   rpc ListGuardAccess(ListGuardAccessRequest) returns (ListGuardAccessResponse);
+  rpc CreateRole(CreateRoleRequest) returns (GuardRole);
   rpc CreateRoleAssignment(CreateRoleAssignmentRequest) returns (GuardRoleAssignment);
   rpc DeleteRoleAssignment(DeleteRoleAssignmentRequest) returns (DeleteRoleAssignmentResponse);
   rpc ListResourceOwnership(ListResourceOwnershipRequest) returns (ListResourceOwnershipResponse);
@@ -132,6 +133,8 @@ message ListGuardAccessResponse {
   repeated GuardAccount accounts = 1;
   repeated GuardRole roles = 2;
   repeated GuardRoleAssignment assignments = 3;
+  repeated GuardPolicyBundle policy_bundles = 4;
+  repeated string available_permissions = 5;
 }
 
 message GuardAccount {
@@ -148,6 +151,23 @@ message GuardRole {
   string description = 3;
   repeated string permissions = 4;
   repeated string policy_bundle_ids = 5;
+  string source = 6;
+  bool managed = 7;
+}
+
+message GuardPolicyBundle {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  repeated string permissions = 4;
+}
+
+message CreateRoleRequest {
+  string name = 1;
+  string description = 2;
+  repeated string permissions = 3;
+  repeated string policy_bundle_ids = 4;
+  string csrf_token = 5;
 }
 
 message GuardRoleAssignment {

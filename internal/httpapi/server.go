@@ -79,6 +79,15 @@ type guardRoleResponse struct {
 	Description     string             `json:"description"`
 	Permissions     []guard.Permission `json:"permissions"`
 	PolicyBundleIDs []string           `json:"policyBundleIds"`
+	Source          string             `json:"source"`
+	Managed         bool               `json:"managed"`
+}
+
+type guardPolicyBundleResponse struct {
+	ID          string             `json:"id"`
+	Name        string             `json:"name"`
+	Description string             `json:"description"`
+	Permissions []guard.Permission `json:"permissions"`
 }
 
 type guardScopeResponse struct {
@@ -134,6 +143,7 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 	mux.Handle("GET /api/v1/auth/session", server.protected("", false, server.getSession))
 	mux.Handle("POST /api/v1/auth/logout", server.protected("", true, server.logout))
 	mux.Handle("GET /api/v1/guard/access", server.protected(guard.PermissionGuardManage, false, server.listGuardAccess))
+	mux.Handle("POST /api/v1/guard/roles", server.protected(guard.PermissionGuardManage, true, server.createGuardRole))
 	mux.Handle("POST /api/v1/guard/role-assignments", server.protected(guard.PermissionGuardManage, true, server.createGuardRoleAssignment))
 	mux.Handle("DELETE /api/v1/guard/role-assignments/{assignmentID}", server.protected(guard.PermissionGuardManage, true, server.deleteGuardRoleAssignment))
 	mux.Handle("GET /api/v1/guard/resource-ownership", server.protected(guard.PermissionGuardManage, false, server.listGuardResourceOwnership))
@@ -419,6 +429,14 @@ func (s *Server) listGuardAccess(w http.ResponseWriter, r *http.Request, authent
 			ID: role.ID, Name: role.Name, Description: role.Description,
 			Permissions:     append([]guard.Permission(nil), role.Permissions...),
 			PolicyBundleIDs: append([]string(nil), role.PolicyBundleIDs...),
+			Source:          role.Source, Managed: role.Source == guard.BuiltInRoleSource,
+		})
+	}
+	policyBundles := make([]guardPolicyBundleResponse, 0, len(directory.PolicyBundles))
+	for _, bundle := range directory.PolicyBundles {
+		policyBundles = append(policyBundles, guardPolicyBundleResponse{
+			ID: bundle.ID, Name: bundle.Name, Description: bundle.Description,
+			Permissions: append([]guard.Permission(nil), bundle.Permissions...),
 		})
 	}
 	assignments := make([]guardRoleAssignmentResponse, 0, len(directory.Assignments))
@@ -426,7 +444,37 @@ func (s *Server) listGuardAccess(w http.ResponseWriter, r *http.Request, authent
 		assignments = append(assignments, guardAssignmentResponse(assignment))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"accounts": accounts, "roles": roles, "assignments": assignments,
+		"accounts": accounts, "roles": roles, "policyBundles": policyBundles,
+		"availablePermissions": append([]guard.Permission(nil), directory.AvailablePermissions...),
+		"assignments":          assignments,
+	})
+}
+
+func (s *Server) createGuardRole(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
+	s.noStore(w)
+	var input struct {
+		Name            string             `json:"name"`
+		Description     string             `json:"description"`
+		Permissions     []guard.Permission `json:"permissions"`
+		PolicyBundleIDs []string           `json:"policyBundleIds"`
+	}
+	if err := decodeJSON(w, r, 32<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid role payload")
+		return
+	}
+	role, err := s.guard.CreateRole(r.Context(), authentication, guard.CreateRoleInput{
+		Name: input.Name, Description: input.Description,
+		Permissions: input.Permissions, PolicyBundleIDs: input.PolicyBundleIDs,
+	})
+	if err != nil {
+		s.writeGuardManagementError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, guardRoleResponse{
+		ID: role.ID, Name: role.Name, Description: role.Description,
+		Permissions:     append([]guard.Permission(nil), role.Permissions...),
+		PolicyBundleIDs: append([]string(nil), role.PolicyBundleIDs...),
+		Source:          role.Source, Managed: false,
 	})
 }
 
@@ -544,6 +592,8 @@ func (s *Server) writeGuardManagementError(w http.ResponseWriter, r *http.Reques
 		writeError(w, r, http.StatusConflict, "managed_assignment", "this role assignment is managed by the identity provider")
 	case errors.Is(err, guard.ErrLastAdministrator):
 		writeError(w, r, http.StatusConflict, "last_administrator", "Assign another organization administrator before removing this assignment")
+	case errors.Is(err, guard.ErrBuiltInRole):
+		writeError(w, r, http.StatusConflict, "built_in_role", "built-in roles cannot be changed")
 	case errors.Is(err, guard.ErrConflict):
 		writeError(w, r, http.StatusConflict, "conflict", "this Guard record conflicts with existing data")
 	case errors.Is(err, guard.ErrPermissionDenied):

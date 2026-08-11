@@ -38,6 +38,19 @@ const role = {
   description: 'Organization administrator',
   permissions: ['guard.manage'],
   policyBundleIds: ['55555555555555555555555555555555'],
+  source: 'builtin',
+  managed: true,
+}
+const policyBundle = {
+  id: '55555555555555555555555555555555',
+  name: 'Core administration',
+  description: 'Common organization permissions.',
+  permissions: ['organization.read', 'assets.read'],
+}
+const availablePermissions = ['organization.read', 'assets.read', 'assets.write', 'directory.read', 'directory.write', 'goals.read', 'guard.manage']
+
+function accessResponse(assignments: typeof localAssignment[], roles = [role]) {
+  return { accounts: [account], roles, policyBundles: [policyBundle], availablePermissions, assignments }
 }
 
 function jsonResponse(body: unknown, status = 200) {
@@ -59,7 +72,7 @@ test('creates and removes local scoped assignments while keeping provider assign
   }
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input)
-    if (path === '/api/v1/guard/access') return jsonResponse({ accounts: [account], roles: [role], assignments })
+    if (path === '/api/v1/guard/access') return jsonResponse(accessResponse(assignments))
     if (path === '/api/v1/guard/role-assignments' && init?.method === 'POST') {
       assignments = [...assignments, createdAssignment]
       return jsonResponse(createdAssignment, 201)
@@ -73,7 +86,7 @@ test('creates and removes local scoped assignments while keeping provider assign
   vi.stubGlobal('fetch', fetchMock)
   const { container } = render(<GuardAccessManager csrfToken="csrf-value" />)
 
-  expect(await screen.findByRole('heading', { name: 'Assign the right access at the right scope' })).toBeInTheDocument()
+  expect(await screen.findByRole('heading', { name: 'Build roles and assign the right access' })).toBeInTheDocument()
   expect(screen.getByText('Identity provider')).toBeInTheDocument()
   expect(screen.getByText('Read only')).toBeInTheDocument()
   const results = await axe.run(container)
@@ -101,7 +114,7 @@ test('creates and removes local scoped assignments while keeping provider assign
 test('announces the server protection when removal would lock out the last administrator', async () => {
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input)
-    if (path === '/api/v1/guard/access') return jsonResponse({ accounts: [account], roles: [role], assignments: [localAssignment] })
+    if (path === '/api/v1/guard/access') return jsonResponse(accessResponse([localAssignment]))
     if (path.endsWith(localAssignment.id) && init?.method === 'DELETE') {
       return jsonResponse({ error: { message: 'Assign another organization administrator before removing this assignment.' } }, 409)
     }
@@ -115,4 +128,50 @@ test('announces the server protection when removal would lock out the last admin
   const alert = await screen.findByRole('alert')
   expect(alert).toHaveTextContent('Assign another organization administrator')
   await waitFor(() => expect(alert).toHaveFocus())
+})
+
+test('creates an accessible custom role from direct permissions and a policy bundle', async () => {
+  const customRole = {
+    id: '77777777777777777777777777777777',
+    name: 'Asset steward',
+    description: 'Maintains inventory records.',
+    permissions: ['assets.write'],
+    policyBundleIds: [policyBundle.id],
+    source: 'local',
+    managed: false,
+  }
+  let roles = [role]
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input)
+    if (path === '/api/v1/guard/access') return jsonResponse(accessResponse([localAssignment], roles))
+    if (path === '/api/v1/guard/roles' && init?.method === 'POST') {
+      roles = [...roles, customRole]
+      return jsonResponse(customRole, 201)
+    }
+    throw new Error(`unexpected request: ${path}`)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  const { container } = render(<GuardAccessManager csrfToken="csrf-value" />)
+
+  await screen.findByText('Built in · protected')
+  fireEvent.click(screen.getByText('Create a custom role'))
+  fireEvent.change(screen.getByLabelText('Role name'), { target: { value: 'Asset steward' } })
+  fireEvent.change(screen.getByLabelText(/Description/), { target: { value: 'Maintains inventory records.' } })
+  fireEvent.click(screen.getByLabelText(/Create and update assets/))
+  fireEvent.click(screen.getByLabelText(/Core administration/))
+  const results = await axe.run(container)
+  expect(results.violations).toEqual([])
+
+  fireEvent.click(screen.getByRole('button', { name: 'Create custom role' }))
+  expect(await screen.findByText('Custom role created and ready to assign.')).toBeInTheDocument()
+  expect(screen.getByRole('heading', { name: 'Asset steward' })).toBeInTheDocument()
+  expect(screen.getByText('Custom role')).toBeInTheDocument()
+  const createCall = fetchMock.mock.calls.find(([path, init]) => path === '/api/v1/guard/roles' && init?.method === 'POST')
+  expect(createCall?.[1]?.headers).toMatchObject({ 'X-CSRF-Token': 'csrf-value' })
+  expect(JSON.parse(String(createCall?.[1]?.body))).toEqual({
+    name: 'Asset steward',
+    description: 'Maintains inventory records.',
+    permissions: ['assets.write'],
+    policyBundleIds: [policyBundle.id],
+  })
 })

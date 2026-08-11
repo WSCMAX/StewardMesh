@@ -90,9 +90,9 @@ func (s *GuardStore) BootstrapAdministrator(ctx context.Context, bootstrap guard
 	}
 	role := bootstrap.Role
 	if _, err := transaction.ExecContext(ctx, `
-		INSERT INTO guard_roles (id, organization_id, name, description)
-		VALUES ($1, $2, $3, $4)
-	`, role.ID, role.OrganizationID, role.Name, role.Description); err != nil {
+		INSERT INTO guard_roles (id, organization_id, name, description, source)
+		VALUES ($1, $2, $3, $4, $5)
+	`, role.ID, role.OrganizationID, role.Name, role.Description, role.Source); err != nil {
 		return guard.Account{}, fmt.Errorf("create administrator role: %w", err)
 	}
 	for _, permission := range role.Permissions {
@@ -284,7 +284,7 @@ func (s *GuardStore) AccessForAccount(ctx context.Context, organizationID, accou
 	}
 	account.PasswordHash = ""
 	rows, err := s.database.QueryContext(ctx, `
-		SELECT r.id, r.organization_id, r.name, r.description,
+		SELECT r.id, r.organization_id, r.name, r.description, r.source,
 		       a.scope_kind, a.scope_id,
 		       permissions.permission, permissions.source, permissions.bundle_id
 		FROM guard_role_assignments a
@@ -319,13 +319,14 @@ func (s *GuardStore) AccessForAccount(ctx context.Context, organizationID, accou
 			scopeKind, scopeID                                    string
 			permission, source, bundleID                          sql.NullString
 		)
-		if err := rows.Scan(&roleID, &roleOrganizationID, &roleName, &roleDescription,
+		var roleSource string
+		if err := rows.Scan(&roleID, &roleOrganizationID, &roleName, &roleDescription, &roleSource,
 			&scopeKind, &scopeID, &permission, &source, &bundleID); err != nil {
 			return guard.Access{}, fmt.Errorf("scan account grant: %w", err)
 		}
 		role, exists := roles[roleID]
 		if !exists {
-			role = &guard.Role{ID: roleID, OrganizationID: roleOrganizationID, Name: roleName, Description: roleDescription}
+			role = &guard.Role{ID: roleID, OrganizationID: roleOrganizationID, Name: roleName, Description: roleDescription, Source: roleSource}
 			roles[roleID] = role
 			roleOrder = append(roleOrder, roleID)
 			seenBundles[roleID] = make(map[string]struct{})
@@ -397,7 +398,7 @@ func (s *GuardStore) ListAuthorization(ctx context.Context, organizationID strin
 	accountRows.Close()
 
 	roleRows, err := s.database.QueryContext(ctx, `
-		SELECT r.id, r.organization_id, r.name, r.description,
+		SELECT r.id, r.organization_id, r.name, r.description, r.source,
 		       rp.permission, rb.bundle_id
 		FROM guard_roles r
 		LEFT JOIN guard_role_permissions rp
@@ -414,7 +415,7 @@ func (s *GuardStore) ListAuthorization(ctx context.Context, organizationID strin
 	for roleRows.Next() {
 		var role guard.Role
 		var permission, bundleID sql.NullString
-		if err := roleRows.Scan(&role.ID, &role.OrganizationID, &role.Name, &role.Description, &permission, &bundleID); err != nil {
+		if err := roleRows.Scan(&role.ID, &role.OrganizationID, &role.Name, &role.Description, &role.Source, &permission, &bundleID); err != nil {
 			roleRows.Close()
 			return guard.AuthorizationDirectory{}, fmt.Errorf("scan guard role: %w", err)
 		}
@@ -436,6 +437,43 @@ func (s *GuardStore) ListAuthorization(ctx context.Context, organizationID strin
 		return guard.AuthorizationDirectory{}, fmt.Errorf("iterate guard roles: %w", err)
 	}
 	roleRows.Close()
+
+	bundleRows, err := s.database.QueryContext(ctx, `
+		SELECT b.id, b.organization_id, b.name, b.description, bp.permission
+		FROM guard_policy_bundles b
+		LEFT JOIN guard_policy_bundle_permissions bp
+		  ON bp.organization_id = b.organization_id AND bp.bundle_id = b.id
+		WHERE b.organization_id = $1
+		ORDER BY b.name, b.id, bp.permission
+	`, organizationID)
+	if err != nil {
+		return guard.AuthorizationDirectory{}, fmt.Errorf("list guard policy bundles: %w", err)
+	}
+	bundleIndexes := make(map[string]int)
+	for bundleRows.Next() {
+		var bundle guard.PolicyBundle
+		var permission sql.NullString
+		if err := bundleRows.Scan(&bundle.ID, &bundle.OrganizationID, &bundle.Name, &bundle.Description, &permission); err != nil {
+			bundleRows.Close()
+			return guard.AuthorizationDirectory{}, fmt.Errorf("scan guard policy bundle: %w", err)
+		}
+		index, exists := bundleIndexes[bundle.ID]
+		if !exists {
+			index = len(directory.PolicyBundles)
+			bundleIndexes[bundle.ID] = index
+			directory.PolicyBundles = append(directory.PolicyBundles, bundle)
+		}
+		if permission.Valid {
+			directory.PolicyBundles[index].Permissions = appendUniquePermission(
+				directory.PolicyBundles[index].Permissions, guard.Permission(permission.String),
+			)
+		}
+	}
+	if err := bundleRows.Err(); err != nil {
+		bundleRows.Close()
+		return guard.AuthorizationDirectory{}, fmt.Errorf("iterate guard policy bundles: %w", err)
+	}
+	bundleRows.Close()
 
 	assignmentRows, err := s.database.QueryContext(ctx, `
 		SELECT id, organization_id, account_id, role_id, scope_kind, scope_id, source, created_at
@@ -462,6 +500,118 @@ func (s *GuardStore) ListAuthorization(ctx context.Context, organizationID strin
 		return guard.AuthorizationDirectory{}, fmt.Errorf("iterate guard role assignments: %w", err)
 	}
 	return directory, nil
+}
+
+func (s *GuardStore) CreateRole(ctx context.Context, role guard.Role) error {
+	if err := role.Validate(); err != nil {
+		return err
+	}
+	if role.Source != guard.LocalRoleSource {
+		return guard.ErrBuiltInRole
+	}
+	transaction, err := s.database.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin role creation: %w", err)
+	}
+	defer transaction.Rollback()
+	if _, err := transaction.ExecContext(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", role.OrganizationID); err != nil {
+		return fmt.Errorf("lock organization roles: %w", err)
+	}
+	for _, bundleID := range role.PolicyBundleIDs {
+		var exists bool
+		if err := transaction.QueryRowContext(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM guard_policy_bundles WHERE organization_id = $1 AND id = $2
+			)
+		`, role.OrganizationID, bundleID).Scan(&exists); err != nil {
+			return fmt.Errorf("verify role policy bundle: %w", err)
+		}
+		if !exists {
+			return guard.ErrNotFound
+		}
+	}
+	result, err := transaction.ExecContext(ctx, `
+		INSERT INTO guard_roles (id, organization_id, name, description, source)
+		VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT DO NOTHING
+	`, role.ID, role.OrganizationID, role.Name, role.Description, role.Source)
+	if err != nil {
+		return fmt.Errorf("create role: %w", err)
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read created role: %w", err)
+	}
+	if count == 0 {
+		return guard.ErrConflict
+	}
+	for _, permission := range role.Permissions {
+		if _, err := transaction.ExecContext(ctx, `
+			INSERT INTO guard_role_permissions (organization_id, role_id, permission)
+			VALUES ($1, $2, $3)
+		`, role.OrganizationID, role.ID, string(permission)); err != nil {
+			return fmt.Errorf("create role permission: %w", err)
+		}
+	}
+	for _, bundleID := range role.PolicyBundleIDs {
+		if _, err := transaction.ExecContext(ctx, `
+			INSERT INTO guard_role_policy_bundles (organization_id, role_id, bundle_id)
+			VALUES ($1, $2, $3)
+		`, role.OrganizationID, role.ID, bundleID); err != nil {
+			return fmt.Errorf("attach role policy bundle: %w", err)
+		}
+	}
+	if err := transaction.Commit(); err != nil {
+		return fmt.Errorf("commit role creation: %w", err)
+	}
+	return nil
+}
+
+func (s *GuardStore) DeleteRole(ctx context.Context, organizationID, roleID string) error {
+	if organizationID == "" || roleID == "" {
+		return errors.New("organization id and role id are required")
+	}
+	transaction, err := s.database.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin role deletion: %w", err)
+	}
+	defer transaction.Rollback()
+	if _, err := transaction.ExecContext(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", organizationID); err != nil {
+		return fmt.Errorf("lock organization roles: %w", err)
+	}
+	var source string
+	err = transaction.QueryRowContext(ctx, `
+		SELECT source FROM guard_roles WHERE organization_id = $1 AND id = $2 FOR UPDATE
+	`, organizationID, roleID).Scan(&source)
+	if errors.Is(err, sql.ErrNoRows) {
+		return guard.ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("load role for deletion: %w", err)
+	}
+	if source != guard.LocalRoleSource {
+		return guard.ErrBuiltInRole
+	}
+	var assigned bool
+	if err := transaction.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM guard_role_assignments WHERE organization_id = $1 AND role_id = $2
+		)
+	`, organizationID, roleID).Scan(&assigned); err != nil {
+		return fmt.Errorf("inspect role assignments: %w", err)
+	}
+	if assigned {
+		return guard.ErrConflict
+	}
+	if _, err := transaction.ExecContext(ctx, `
+		DELETE FROM guard_roles WHERE organization_id = $1 AND id = $2
+	`, organizationID, roleID); err != nil {
+		return fmt.Errorf("delete role: %w", err)
+	}
+	if err := transaction.Commit(); err != nil {
+		return fmt.Errorf("commit role deletion: %w", err)
+	}
+	return nil
 }
 
 func (s *GuardStore) CreateRoleAssignment(ctx context.Context, assignment guard.RoleAssignment) error {

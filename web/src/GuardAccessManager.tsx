@@ -20,6 +20,15 @@ type GuardRole = {
   description: string
   permissions: string[]
   policyBundleIds: string[]
+  source: 'builtin' | 'local'
+  managed: boolean
+}
+
+type PolicyBundle = {
+  id: string
+  name: string
+  description: string
+  permissions: string[]
 }
 
 type RoleAssignment = {
@@ -35,6 +44,8 @@ type RoleAssignment = {
 type AuthorizationDirectory = {
   accounts: GuardAccount[]
   roles: GuardRole[]
+  policyBundles: PolicyBundle[]
+  availablePermissions: string[]
   assignments: RoleAssignment[]
 }
 
@@ -52,6 +63,16 @@ const scopeLabels: Record<ScopeKind, string> = {
   site: 'One site',
   department: 'One department',
   resource: 'One resource',
+}
+
+const permissionLabels: Record<string, string> = {
+  'organization.read': 'View organization details',
+  'assets.read': 'View assets',
+  'assets.write': 'Create and update assets',
+  'directory.read': 'View people and locations',
+  'directory.write': 'Create and update people and locations',
+  'goals.read': 'View goals and tags',
+  'guard.manage': 'Manage Guard access',
 }
 
 function isString(value: unknown): value is string {
@@ -78,6 +99,14 @@ function isRole(value: unknown): value is GuardRole {
     && isString(role.name) && role.name.length > 0 && isString(role.description)
     && Array.isArray(role.permissions) && role.permissions.every(isString)
     && Array.isArray(role.policyBundleIds) && role.policyBundleIds.every(isString)
+    && (role.source === 'builtin' || role.source === 'local') && typeof role.managed === 'boolean'
+}
+
+function isPolicyBundle(value: unknown): value is PolicyBundle {
+  if (typeof value !== 'object' || value === null) return false
+  const bundle = value as Record<string, unknown>
+  return isString(bundle.id) && bundle.id.length > 0 && isString(bundle.name) && bundle.name.length > 0
+    && isString(bundle.description) && Array.isArray(bundle.permissions) && bundle.permissions.every(isString)
 }
 
 function isAssignment(value: unknown): value is RoleAssignment {
@@ -97,12 +126,16 @@ function readDirectory(value: unknown): AuthorizationDirectory {
   const directory = value as Record<string, unknown>
   if (!Array.isArray(directory.accounts) || !directory.accounts.every(isAccount)
     || !Array.isArray(directory.roles) || !directory.roles.every(isRole)
+    || !Array.isArray(directory.policyBundles) || !directory.policyBundles.every(isPolicyBundle)
+    || !Array.isArray(directory.availablePermissions) || !directory.availablePermissions.every(isString)
     || !Array.isArray(directory.assignments) || !directory.assignments.every(isAssignment)) {
     throw new Error('invalid Guard access response')
   }
   return {
     accounts: directory.accounts,
     roles: directory.roles,
+    policyBundles: directory.policyBundles,
+    availablePermissions: directory.availablePermissions,
     assignments: directory.assignments,
   }
 }
@@ -113,7 +146,7 @@ function formatScope(assignment: RoleAssignment) {
 }
 
 export default function GuardAccessManager({ csrfToken }: GuardAccessManagerProps) {
-  const [directory, setDirectory] = useState<AuthorizationDirectory>({ accounts: [], roles: [], assignments: [] })
+  const [directory, setDirectory] = useState<AuthorizationDirectory>({ accounts: [], roles: [], policyBundles: [], availablePermissions: [], assignments: [] })
   const [scopeKind, setScopeKind] = useState<ScopeKind>('organization')
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState('')
@@ -122,6 +155,7 @@ export default function GuardAccessManager({ csrfToken }: GuardAccessManagerProp
   const errorRef = useRef<HTMLDivElement>(null)
   const accountNames = useMemo(() => new Map(directory.accounts.map((account) => [account.id, account.displayName])), [directory.accounts])
   const roleNames = useMemo(() => new Map(directory.roles.map((role) => [role.id, role.name])), [directory.roles])
+  const bundleNames = useMemo(() => new Map(directory.policyBundles.map((bundle) => [bundle.id, bundle.name])), [directory.policyBundles])
 
   useEffect(() => {
     if (error) errorRef.current?.focus()
@@ -182,6 +216,42 @@ export default function GuardAccessManager({ csrfToken }: GuardAccessManagerProp
     }
   }
 
+  async function handleCreateRole(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const form = event.currentTarget
+    const values = new FormData(form)
+    const permissions = values.getAll('guardPermission').map(String)
+    const policyBundleIds = values.getAll('guardPolicyBundleId').map(String)
+    if (permissions.length === 0 && policyBundleIds.length === 0) {
+      setStatus('')
+      setError('Select at least one direct permission or reusable policy bundle.')
+      return
+    }
+    setBusy('create-role')
+    setError('')
+    setStatus('')
+    try {
+      const response = await requestJSON('/api/v1/guard/roles', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+        body: JSON.stringify({
+          name: String(values.get('guardRoleName') ?? '').trim(),
+          description: String(values.get('guardRoleDescription') ?? '').trim(),
+          permissions,
+          policyBundleIds,
+        }),
+      })
+      if (!isRole(response)) throw new Error('invalid role response')
+      await loadAccess()
+      form.reset()
+      setStatus('Custom role created and ready to assign.')
+    } catch (mutationError) {
+      reportError(mutationError, 'The custom role could not be created.')
+    } finally {
+      setBusy('')
+    }
+  }
+
   async function handleRevoke(assignment: RoleAssignment) {
     setBusy(assignment.id)
     setError('')
@@ -205,8 +275,8 @@ export default function GuardAccessManager({ csrfToken }: GuardAccessManagerProp
   return (
     <section aria-labelledby="guard-access-heading" className="rounded-xl border border-steward-teal/30 bg-steward-ink-900 p-6" data-feature="authorization.security" data-requirement="SEC-GUARD-001">
       <p className="text-sm font-semibold text-steward-teal">Guard · Access administration</p>
-      <h2 className="mt-2 text-2xl font-semibold" id="guard-access-heading">Assign the right access at the right scope</h2>
-      <p className="mt-2 max-w-3xl leading-7 text-steward-mist-muted">Apply an existing role to the whole organization or limit it to a site, department, or resource. Identity-provider assignments stay synchronized with the provider and cannot be removed here.</p>
+      <h2 className="mt-2 text-2xl font-semibold" id="guard-access-heading">Build roles and assign the right access</h2>
+      <p className="mt-2 max-w-3xl leading-7 text-steward-mist-muted">Combine direct permissions with reusable policy bundles, then apply a role to the whole organization or limit it to a site, department, or resource. Built-in roles stay protected.</p>
 
       {error && <div className="mt-5 rounded-xl border border-steward-danger/50 bg-steward-danger/15 p-4 text-[#ffccd1]" ref={errorRef} role="alert" tabIndex={-1}>{error}</div>}
       <p aria-live="polite" className="mt-4 text-sm text-[#67dd99]" role="status">{status}</p>
@@ -217,6 +287,67 @@ export default function GuardAccessManager({ csrfToken }: GuardAccessManagerProp
             <Summary label="Accounts" value={directory.accounts.length} />
             <Summary label="Roles" value={directory.roles.length} />
             <Summary label="Assignments" value={directory.assignments.length} />
+          </div>
+
+          <details className="mt-6 rounded-xl border border-steward-teal/40 bg-steward-ink-950/40 p-5">
+            <summary className="cursor-pointer text-base font-semibold text-steward-mist">Create a custom role</summary>
+            <p className="mt-2 max-w-3xl text-sm leading-6 text-steward-mist-muted">Give people only the capabilities they need. Direct permissions and policy bundles are combined when Guard evaluates access.</p>
+            <form className="mt-5 grid gap-5 lg:grid-cols-2" onSubmit={handleCreateRole}>
+              <div>
+                <label className={labelClass} htmlFor="guardRoleName">Role name</label>
+                <input autoComplete="off" className={inputClass} disabled={busy !== ''} id="guardRoleName" maxLength={120} name="guardRoleName" required />
+              </div>
+              <div>
+                <label className={labelClass} htmlFor="guardRoleDescription">Description <span className="font-normal">(optional)</span></label>
+                <textarea className={`${inputClass} min-h-24 resize-y`} disabled={busy !== ''} id="guardRoleDescription" maxLength={1000} name="guardRoleDescription" />
+              </div>
+              <fieldset className="rounded-xl border border-steward-ink-800 p-4">
+                <legend className="px-1 text-sm font-semibold text-steward-mist">Direct permissions</legend>
+                <div className="mt-2 grid gap-3">
+                  {directory.availablePermissions.map((permission) => (
+                    <label className="flex min-h-11 items-start gap-3 rounded-lg px-2 py-2 text-sm transition hover:bg-steward-ink-800/60" key={permission}>
+                      <input className="mt-1 size-4 accent-steward-teal" disabled={busy !== ''} name="guardPermission" type="checkbox" value={permission} />
+                      <span><span className="block font-medium text-steward-mist">{permissionLabels[permission] ?? permission}</span><span className="mt-0.5 block font-mono text-xs text-steward-mist-muted">{permission}</span></span>
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+              <fieldset className="rounded-xl border border-steward-ink-800 p-4">
+                <legend className="px-1 text-sm font-semibold text-steward-mist">Reusable policy bundles</legend>
+                {directory.policyBundles.length === 0 ? <p className="mt-2 text-sm text-steward-mist-muted">No policy bundles are available.</p> : (
+                  <div className="mt-2 grid gap-3">
+                    {directory.policyBundles.map((bundle) => (
+                      <label className="flex min-h-11 items-start gap-3 rounded-lg px-2 py-2 text-sm transition hover:bg-steward-ink-800/60" key={bundle.id}>
+                        <input className="mt-1 size-4 accent-steward-teal" disabled={busy !== ''} name="guardPolicyBundleId" type="checkbox" value={bundle.id} />
+                        <span><span className="block font-medium text-steward-mist">{bundle.name}</span><span className="mt-0.5 block leading-5 text-steward-mist-muted">{bundle.description || `${bundle.permissions.length} permissions`}</span></span>
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </fieldset>
+              <div className="lg:col-span-2">
+                <button className={buttonClass} disabled={busy !== ''} type="submit">{busy === 'create-role' ? 'Creating role…' : 'Create custom role'}</button>
+              </div>
+            </form>
+          </details>
+
+          <div className="mt-6">
+            <h3 className="text-lg font-semibold">Current roles</h3>
+            <p className="mt-1 text-sm text-steward-mist-muted">Built-in roles are read only. Custom roles can be assigned at any supported scope.</p>
+            <div className="mt-4 grid gap-4 lg:grid-cols-2">
+              {directory.roles.map((role) => (
+                <article className="rounded-xl border border-steward-ink-800 bg-steward-ink-950/30 p-4" key={role.id}>
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div><h4 className="font-semibold text-steward-mist">{role.name}</h4><p className="mt-1 text-sm leading-6 text-steward-mist-muted">{role.description || 'No description provided.'}</p></div>
+                    <span className="rounded-full border border-steward-teal/40 px-2.5 py-1 text-xs font-semibold text-steward-teal">{role.managed ? 'Built in · protected' : 'Custom role'}</span>
+                  </div>
+                  <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
+                    <div><dt className="font-semibold text-steward-mist-muted">Direct permissions</dt><dd className="mt-1 break-words text-steward-mist">{role.permissions.length > 0 ? role.permissions.map((permission) => permissionLabels[permission] ?? permission).join(', ') : 'None'}</dd></div>
+                    <div><dt className="font-semibold text-steward-mist-muted">Policy bundles</dt><dd className="mt-1 break-words text-steward-mist">{role.policyBundleIds.length > 0 ? role.policyBundleIds.map((id) => bundleNames.get(id) ?? 'Unknown bundle').join(', ') : 'None'}</dd></div>
+                  </dl>
+                </article>
+              ))}
+            </div>
           </div>
 
           <details className="mt-6 rounded-xl border border-steward-ink-800 bg-steward-ink-950/40 p-5">

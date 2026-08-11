@@ -6,9 +6,9 @@
 
 ## Purpose
 
-Guard protects organization and resource operations. The implemented boundary provides one-time local administrator bootstrap, local password authentication, OpenID Connect authorization-code login, just-in-time external accounts, opaque server-side sessions, synchronized CSRF protection, administrator-managed scoped role assignments, reusable policy bundles, externally sourced resource ownership locks and claims, permission enforcement, rate limiting, and security audit events.
+Guard protects organization and resource operations. The implemented boundary provides one-time local administrator bootstrap, local password authentication, OpenID Connect authorization-code login, just-in-time external accounts, opaque server-side sessions, synchronized CSRF protection, administrator-built custom roles, scoped role assignments, reusable policy bundles, externally sourced resource ownership locks and claims, permission enforcement, rate limiting, and security audit events.
 
-SAML, custom role creation, and the role-building interface remain planned Guard slices. Issue #13 stays open until those acceptance criteria are delivered.
+SAML remains the planned Guard slice. Issue #13 stays open until that acceptance criterion is delivered.
 
 ## One-time administrator setup
 
@@ -95,6 +95,10 @@ Role assignments carry an explicit organization, site, department, or resource s
 
 An organization administrator can list Guard accounts, roles, and assignments in the **Guard · Access administration** panel, then assign an existing role to the whole organization or to one exact site, department, or resource ID. The organization boundary comes from the authenticated server configuration and is never accepted from request data. Mutations require synchronized CSRF validation and `guard.manage` at organization scope in both the HTTP and service layers.
 
+The same panel provides an accessible role-building workflow. An administrator supplies a unique name and optional description, then selects one or more direct permissions, reusable policy bundles, or both. Guard publishes the supported permission catalog from the server, validates every submitted permission and bundle reference, removes duplicates, and stores custom roles with a `local` source. Role names are unique per organization after trimming and case normalization. The built-in Administrator role has a `builtin` source, is visibly marked protected, and cannot be changed through the custom-role persistence boundary.
+
+Role creation is serialized per organization and recorded as `guard.role.created` with permission and bundle counts, never the role name or submitted description. If audit persistence fails, Guard removes the newly created role before returning an error. A newly created role is immediately available in the scoped-assignment workflow.
+
 Local assignments can be removed through StewardMesh. Assignments synchronized from an OpenID Connect administrator claim are marked read-only and must be changed at the identity provider. The storage adapters serialize assignment changes and reject removal of the final active organization-scoped assignment that grants `guard.manage`, preventing administrator lockout. Assignment changes take effect when Guard resolves access on the next authenticated request.
 
 ## Resource ownership and write locks
@@ -128,6 +132,7 @@ Source record IDs remain available to authorized administrators for reconciliati
 - `GET /api/v1/auth/session`
 - `POST /api/v1/auth/logout`
 - `GET /api/v1/guard/access`
+- `POST /api/v1/guard/roles`
 - `POST /api/v1/guard/role-assignments`
 - `DELETE /api/v1/guard/role-assignments/{assignmentID}`
 - `GET /api/v1/guard/resource-ownership`
@@ -135,13 +140,13 @@ Source record IDs remain available to authorized administrators for reconciliati
 - `POST /api/v1/guard/resource-ownership/{resourceType}/{resourceID}/claim`
 - OpenAPI: `api/openapi/openapi.yaml`
 - gRPC contract: `api/proto/stewardmesh.proto`
-- PostgreSQL migrations: `internal/repository/postgres/migrations/0004_guard_local_auth.sql`, `0007_guard_oidc.sql`, and `0008_guard_resource_ownership.sql`
+- PostgreSQL migrations: `internal/repository/postgres/migrations/0004_guard_local_auth.sql`, `0007_guard_oidc.sql`, `0008_guard_resource_ownership.sql`, and `0009_guard_custom_roles.sql`
 
 The `guard.Store` interface is provider-neutral. PostgreSQL and the in-memory evaluation adapter pass the same local and external-account contract tests; DynamoDB must implement that contract. `identity.OIDCAuthenticator` isolates discovery, code exchange, PKCE, and ID-token verification from Guard's JIT account and session behavior.
 
 ## Accessibility and guided help
 
-The setup and login experiences use semantic headings, explicit labels, password-manager autocomplete values, descriptive help text, visible focus, a skip link, polite service status, and focus-managed error alerts. Status and errors are not conveyed by color alone. Reduced-motion behavior remains global.
+The setup, login, scoped-assignment, and custom-role experiences use semantic headings, explicit labels and grouped fieldsets, password-manager autocomplete values, descriptive help text, visible focus, a skip link, polite service status, and focus-managed error alerts. The role builder pairs human-readable capability names with stable permission identifiers and identifies protected roles with text. Status and errors are not conveyed by color alone. Reduced-motion behavior remains global.
 
 The application links to this page from every Guard setup state and provides the configurable issue-reporting link beside it. Never attach passwords, bootstrap tokens, cookies, CSRF values, or database URLs to an issue.
 
@@ -156,6 +161,7 @@ The application links to this page from every Guard setup state and provides the
 - `guard.oidc.login.succeeded`
 - `guard.oidc.login.failed`
 - `guard.logout.succeeded`
+- `guard.role.created`
 - `guard.role_assignment.created`
 - `guard.role_assignment.revoked`
 - `guard.ownership.locked`
@@ -172,12 +178,13 @@ Audit events contain stable account or resource IDs, correlation IDs, actions, t
 - login-rate-limit and uniform-error tests
 - distributed rate-limit, cache outage, TTL, and organization-isolation tests
 - memory and PostgreSQL provider contract tests
+- custom-role validation, permission and policy-bundle composition, normalized-name conflict, built-in protection, and audit rollback tests
 - local and provider-managed assignment contract tests, duplicate detection, and final-administrator protection
 - memory and PostgreSQL ownership registration, provenance conflict, idempotency, claim, and write-lock contract tests
 - session hashing, CSRF rotation, expiration, and revocation tests
 - state, nonce, S256 PKCE, encrypted transaction, exact claim mapping, JIT refresh, and provider-mapping removal tests
 - server-side permission, ownership lock, origin, CORS, JSON-boundary, and header tests
-- React setup, login fallback, scoped-assignment management, keyboard-focus, and safe-link tests
+- React setup, login fallback, custom-role building, scoped-assignment management, keyboard-focus, and safe-link tests
 - automated axe accessibility analysis
 - race detection, `go vet`, `govulncheck`, dependency audit, and filesystem security scanning in CI
 

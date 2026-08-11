@@ -45,6 +45,7 @@ type ThreadsManagerProps = {
   assets: readonly Asset[]
   csrfToken: string
   permissions: readonly string[]
+  onOpenHelp?: () => void
 }
 
 const inputClass = 'mt-2 min-h-11 w-full rounded-lg border border-steward-ink-800 bg-steward-ink-950 px-3 py-2 text-steward-mist shadow-inner shadow-black/20'
@@ -88,7 +89,7 @@ function isGoalLink(value: unknown): value is GoalLink {
   return typeof item.goalId === 'string' && ['asset', 'purchase'].includes(String(item.targetType)) && typeof item.targetId === 'string'
 }
 
-export default function ThreadsManager({ assets, csrfToken, permissions }: ThreadsManagerProps) {
+export default function ThreadsManager({ assets, csrfToken, permissions, onOpenHelp }: ThreadsManagerProps) {
   const [tags, setTags] = useState<Tag[]>([])
   const [goals, setGoals] = useState<Goal[]>([])
   const [assetID, setAssetID] = useState('')
@@ -313,10 +314,13 @@ export default function ThreadsManager({ assets, csrfToken, permissions }: Threa
 
   return (
     <section aria-labelledby="threads-heading" className="rounded-xl border border-steward-ink-800 bg-steward-ink-900 p-6" data-feature="goals.tags" data-requirement="REQ-THREADS-001">
-      <div>
-        <p className="text-sm font-semibold text-steward-teal">Shared context and strategy</p>
-        <h2 className="mt-1 text-2xl font-semibold" id="threads-heading">Threads — Tags and goals</h2>
-        <p className="mt-2 max-w-3xl text-sm leading-6 text-steward-mist-muted">Connect inventory to a consistent tag hierarchy and strategic goals. Every applied, inherited, and suppressed value stays visible so provenance is never silent.</p>
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <p className="text-sm font-semibold text-steward-teal">Shared context and strategy</p>
+          <h2 className="mt-1 text-2xl font-semibold" id="threads-heading">Threads — Tags and goals</h2>
+          <p className="mt-2 max-w-3xl text-sm leading-6 text-steward-mist-muted">Connect inventory to a consistent tag hierarchy and strategic goals. Every applied, inherited, and suppressed value stays visible so provenance is never silent.</p>
+        </div>
+        {onOpenHelp && <button className={secondaryButtonClass} onClick={onOpenHelp} type="button">Threads help</button>}
       </div>
 
       {error && <div className="mt-4 rounded-lg border border-red-400/50 bg-red-950/50 p-3 text-sm" ref={errorRef} role="alert" tabIndex={-1}>{error}</div>}

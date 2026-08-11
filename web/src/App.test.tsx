@@ -4,7 +4,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, expect, test, vi } from 'vitest'
 import App, { resolvePublicUrl } from './App'
 
-// Requirements: A11Y-001, SEC-GUARD-001, SEC-HTTP-001.
+// Requirements: A11Y-001, DOC-001, DOC-002, SEC-GUARD-001, SEC-HTTP-001. Feature: experience.help.
 
 const session = {
   principal: {
@@ -45,6 +45,7 @@ function installAuthenticatedFetch() {
 beforeEach(() => {
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
+  localStorage.clear()
   window.history.replaceState(null, '', '/')
 })
 
@@ -56,6 +57,20 @@ test('restores a server-managed session and renders StewardMesh modules', async 
   expect(await screen.findByText('Atlas — Asset inventory')).toBeInTheDocument()
   expect(screen.getByText('Signed in as', { exact: false })).toHaveTextContent('Example Administrator')
   expect(screen.getByText('Guard role:', { exact: false })).toHaveTextContent('Administrator')
+})
+
+test('opens contextual Guide help and a sanitized issue report from the workspace', async () => {
+  installAuthenticatedFetch()
+  render(<App />)
+  await screen.findByText('Atlas — Asset inventory')
+
+  fireEvent.click(screen.getByRole('button', { name: 'Open Atlas help' }))
+  expect(screen.getByRole('heading', { name: 'What you can do here' })).toBeInTheDocument()
+  expect(screen.queryByRole('heading', { name: 'Take a quick tour of your workspace' })).not.toBeInTheDocument()
+  expect(screen.getByRole('link', { name: 'Read Atlas documentation' })).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Report issue' }))
+  expect(screen.getByRole('heading', { name: 'Prepare technical context' })).toBeInTheDocument()
+  expect(screen.getByRole('link', { name: 'Review issue before submitting' })).toHaveAttribute('href', expect.stringContaining('/issues/new'))
 })
 
 test('renders an accessible one-time administrator setup and submits without browser token storage', async () => {
@@ -197,6 +212,7 @@ test('Guard administrator setup has no automated WCAG violations', async () => {
 
 test('allows only safe configurable public links', () => {
   expect(resolvePublicUrl('javascript:alert(1)')).toBe('https://github.com/WSCMAX/StewardMesh/issues')
+  expect(resolvePublicUrl('https://token@example.org/issues')).toBe('https://github.com/WSCMAX/StewardMesh/issues')
   expect(resolvePublicUrl('/support/issues')).toBe('/support/issues')
   expect(resolvePublicUrl('https://issues.example.org/project')).toBe('https://issues.example.org/project')
 })

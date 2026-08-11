@@ -11,7 +11,7 @@ type Budget = { id: string; name: string; fiscalPeriod: string; scenario: string
 type CostRecord = { id: string; description: string; kind: string; currency: string; amountMinor: number; fiscalPeriod: string; scenario: string; externalReference?: string; revision: number }
 type LedgerSnapshot = { vendors: Vendor[]; purchaseOrders: PurchaseOrder[]; contracts: Contract[]; commitments: Commitment[]; budgets: Budget[]; costs: CostRecord[] }
 type BudgetVariance = { fiscalPeriod: string; scenario: string; currency: string; allocatedMinor: number; recognizedMinor: number; varianceMinor: number; overBudget: boolean; amountsByKindMinor: Record<string, number> }
-type LedgerManagerProps = { csrfToken: string; permissions: readonly string[] }
+type LedgerManagerProps = { csrfToken: string; permissions: readonly string[]; onOpenHelp?: () => void }
 
 const purchaseStatuses = ['draft', 'approved', 'ordered', 'partially_received', 'received', 'cancelled']
 const operationalStatuses = ['planned', 'active', 'suspended', 'expired', 'terminated', 'cancelled']
@@ -69,7 +69,7 @@ function list(value: FormDataEntryValue | null) {
 
 function dateValue(value: FormDataEntryValue | null) { return `${String(value ?? '')}T00:00:00Z` }
 
-export default function LedgerManager({ csrfToken, permissions }: LedgerManagerProps) {
+export default function LedgerManager({ csrfToken, permissions, onOpenHelp }: LedgerManagerProps) {
   const canRead = permissions.includes('finance.read')
   const canWrite = permissions.includes('finance.write')
   const [snapshot, setSnapshot] = useState<LedgerSnapshot>({ vendors: [], purchaseOrders: [], contracts: [], commitments: [], budgets: [], costs: [] })
@@ -149,13 +149,14 @@ export default function LedgerManager({ csrfToken, permissions }: LedgerManagerP
     finally { setBusy('') }
   }
 
-  if (!canRead) return <section aria-labelledby="ledger-heading" className="rounded-xl border border-steward-ink-800 bg-steward-ink-900 p-6" data-feature="procurement.finance" data-requirement="REQ-LEDGER-001"><h2 id="ledger-heading" className="text-2xl font-semibold">Ledger — Procurement and budgets</h2><p className="mt-2 text-steward-mist-muted">Your role does not include permission to view financial records.</p></section>
+  if (!canRead) return <section aria-labelledby="ledger-heading" className="rounded-xl border border-steward-ink-800 bg-steward-ink-900 p-6" data-feature="procurement.finance" data-requirement="REQ-LEDGER-001"><div className="flex flex-wrap items-start justify-between gap-4"><div><h2 id="ledger-heading" className="text-2xl font-semibold">Ledger — Procurement and budgets</h2><p className="mt-2 text-steward-mist-muted">Your role does not include permission to view financial records.</p></div>{onOpenHelp && <button className={smallButtonClass} onClick={onOpenHelp} type="button">Ledger help</button>}</div></section>
 
   return (
     <section aria-labelledby="ledger-heading" className="rounded-xl border border-steward-ink-800 bg-steward-ink-900 p-4 sm:p-6" data-feature="procurement.finance" data-requirement="REQ-LEDGER-001">
-      <p className="text-sm font-semibold text-steward-teal">Ledger</p>
-      <h2 id="ledger-heading" className="mt-2 text-2xl font-semibold">Procurement, contracts, budgets, and costs</h2>
-      <p className="mt-2 max-w-4xl leading-7 text-steward-mist-muted">Track obligations in exact minor units, keep operational and financial contract states separate, and reconcile source records without creating duplicates.</p>
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div><p className="text-sm font-semibold text-steward-teal">Ledger</p><h2 id="ledger-heading" className="mt-2 text-2xl font-semibold">Procurement, contracts, budgets, and costs</h2><p className="mt-2 max-w-4xl leading-7 text-steward-mist-muted">Track obligations in exact minor units, keep operational and financial contract states separate, and reconcile source records without creating duplicates.</p></div>
+        {onOpenHelp && <button className={smallButtonClass} onClick={onOpenHelp} type="button">Ledger help</button>}
+      </div>
       {error && <div ref={errorRef} className="mt-4 rounded-lg border border-steward-danger/50 bg-steward-danger/15 p-3 text-[#ffccd1]" role="alert" tabIndex={-1}>{error}</div>}
       {message && <p className="mt-4 rounded-lg border border-steward-success/50 bg-steward-success/15 p-3 text-[#aaf0c6]" role="status">{message}</p>}
 

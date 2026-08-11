@@ -107,6 +107,8 @@ type PeopleDirectoryProps = {
   csrfToken: string
   issuesUrl: string
   permissions: readonly string[]
+  onOpenHelp?: () => void
+  onReportIssue?: () => void
 }
 
 const peopleHelpUrl = 'https://github.com/WSCMAX/StewardMesh/blob/main/docs/features/people.md'
@@ -262,7 +264,7 @@ function siteAddressFromForm(values: FormData): SiteAddress | undefined {
   return address
 }
 
-export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissions }: PeopleDirectoryProps) {
+export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissions, onOpenHelp, onReportIssue }: PeopleDirectoryProps) {
   const [sites, setSites] = useState<Site[]>([])
   const [buildings, setBuildings] = useState<Building[]>([])
   const [rooms, setRooms] = useState<Room[]>([])
@@ -600,8 +602,8 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
           <p className="mt-2 leading-7 text-steward-mist-muted">Organize people and shared-use identities by department, site, building, and room. Assign one primary steward, multiple users, and a responsible department while retaining prior assignments.</p>
         </div>
         <div className="flex gap-4 text-sm">
-          <a className="text-steward-teal underline underline-offset-4 hover:text-[#58d9c7]" href={peopleHelpUrl}>People help</a>
-          <a className="text-steward-teal underline underline-offset-4 hover:text-[#58d9c7]" href={issuesUrl}>Report a People issue</a>
+          {onOpenHelp ? <button className="min-h-11 text-steward-teal underline underline-offset-4 hover:text-[#58d9c7]" onClick={onOpenHelp} type="button">People help</button> : <a className="text-steward-teal underline underline-offset-4 hover:text-[#58d9c7]" href={peopleHelpUrl}>People help</a>}
+          {onReportIssue ? <button className="min-h-11 text-steward-teal underline underline-offset-4 hover:text-[#58d9c7]" onClick={onReportIssue} type="button">Report a People issue</button> : <a className="text-steward-teal underline underline-offset-4 hover:text-[#58d9c7]" href={issuesUrl}>Report a People issue</a>}
         </div>
       </div>
 

@@ -19,7 +19,7 @@ export type VaultBlob = {
 
 type VaultResponse = { items: VaultBlob[]; maximumUploadBytes: number }
 type DownloadAuthorization = { url: string; expiresAt: string }
-type VaultManagerProps = { csrfToken: string; permissions: readonly string[] }
+type VaultManagerProps = { csrfToken: string; permissions: readonly string[]; onOpenHelp?: () => void }
 
 export function isVaultBlob(value: unknown): value is VaultBlob {
   if (typeof value !== 'object' || value === null) return false
@@ -63,7 +63,7 @@ function formatBytes(value: number) {
   return `${(value / (1024 * 1024)).toFixed(1)} MiB`
 }
 
-export default function VaultManager({ csrfToken, permissions }: VaultManagerProps) {
+export default function VaultManager({ csrfToken, permissions, onOpenHelp }: VaultManagerProps) {
   const canRead = permissions.includes('storage.read')
   const canWrite = permissions.includes('storage.write')
   const [blobs, setBlobs] = useState<VaultBlob[]>([])
@@ -129,14 +129,15 @@ export default function VaultManager({ csrfToken, permissions }: VaultManagerPro
   }
 
   if (!canRead) {
-    return <section aria-labelledby="vault-heading" className="rounded-xl border border-steward-ink-800 bg-steward-ink-900 p-6" data-feature="storage.blobs" data-requirement="REQ-STORAGE-001"><h2 id="vault-heading" className="text-2xl font-semibold">Vault — File storage</h2><p className="mt-2 text-steward-mist-muted">Your role does not include permission to view stored files.</p></section>
+    return <section aria-labelledby="vault-heading" className="rounded-xl border border-steward-ink-800 bg-steward-ink-900 p-6" data-feature="storage.blobs" data-requirement="REQ-STORAGE-001"><div className="flex flex-wrap items-start justify-between gap-4"><div><h2 id="vault-heading" className="text-2xl font-semibold">Vault — File storage</h2><p className="mt-2 text-steward-mist-muted">Your role does not include permission to view stored files.</p></div>{onOpenHelp && <button className="min-h-11 rounded-lg border border-steward-teal px-4 py-2 font-semibold text-steward-teal" onClick={onOpenHelp} type="button">Vault help</button>}</div></section>
   }
 
   return (
     <section aria-labelledby="vault-heading" className="rounded-xl border border-steward-ink-800 bg-steward-ink-900 p-6" data-feature="storage.blobs" data-requirement="REQ-STORAGE-001">
-      <p className="text-sm font-semibold text-steward-teal">Vault</p>
-      <h2 id="vault-heading" className="mt-2 text-2xl font-semibold">Private file storage</h2>
-      <p className="mt-2 max-w-3xl leading-7 text-steward-mist-muted">Keep checksummed evidence and attachments with their ownership and provenance. Downloads are authorized only when requested and expire shortly afterward.</p>
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div><p className="text-sm font-semibold text-steward-teal">Vault</p><h2 id="vault-heading" className="mt-2 text-2xl font-semibold">Private file storage</h2><p className="mt-2 max-w-3xl leading-7 text-steward-mist-muted">Keep checksummed evidence and attachments with their ownership and provenance. Downloads are authorized only when requested and expire shortly afterward.</p></div>
+        {onOpenHelp && <button className="min-h-11 rounded-lg border border-steward-teal px-4 py-2 font-semibold text-steward-teal" onClick={onOpenHelp} type="button">Vault help</button>}
+      </div>
       {error && <div ref={errorRef} className="mt-4 rounded-lg border border-steward-danger/50 bg-steward-danger/15 p-3 text-[#ffccd1]" role="alert" tabIndex={-1}>{error}</div>}
 
       {canWrite && (

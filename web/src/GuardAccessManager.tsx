@@ -51,11 +51,13 @@ type AuthorizationDirectory = {
 
 type GuardAccessManagerProps = {
   csrfToken: string
+  onOpenHelp?: () => void
 }
 
 const inputClass = 'mt-2 min-h-11 w-full rounded-lg border border-steward-ink-800 bg-steward-ink-950 px-3 py-2.5 text-steward-mist transition hover:border-steward-blue disabled:cursor-not-allowed disabled:opacity-60'
 const labelClass = 'block text-sm font-semibold text-steward-mist-muted'
 const buttonClass = 'min-h-11 rounded-lg bg-steward-teal px-4 py-2.5 font-semibold text-steward-ink-950 shadow-sm transition hover:bg-[#29cfb9] disabled:cursor-wait disabled:opacity-60'
+const secondaryButtonClass = 'min-h-11 rounded-lg border border-steward-ink-800 bg-steward-ink-900 px-4 py-2.5 text-sm font-semibold text-steward-mist transition hover:border-steward-blue hover:bg-steward-ink-800'
 const dangerButtonClass = 'min-h-11 rounded-lg border border-steward-danger/60 px-3 py-2 text-sm font-semibold text-[#ffadb5] transition hover:bg-steward-danger/15 disabled:cursor-wait disabled:opacity-60'
 
 const scopeLabels: Record<ScopeKind, string> = {
@@ -148,7 +150,7 @@ function formatScope(assignment: RoleAssignment) {
   return `${scopeLabels[assignment.scope.kind]} · ${assignment.scope.resourceId}`
 }
 
-export default function GuardAccessManager({ csrfToken }: GuardAccessManagerProps) {
+export default function GuardAccessManager({ csrfToken, onOpenHelp }: GuardAccessManagerProps) {
   const [directory, setDirectory] = useState<AuthorizationDirectory>({ accounts: [], roles: [], policyBundles: [], availablePermissions: [], assignments: [] })
   const [scopeKind, setScopeKind] = useState<ScopeKind>('organization')
   const [loading, setLoading] = useState(true)
@@ -277,9 +279,10 @@ export default function GuardAccessManager({ csrfToken }: GuardAccessManagerProp
 
   return (
     <section aria-labelledby="guard-access-heading" className="rounded-xl border border-steward-teal/30 bg-steward-ink-900 p-6" data-feature="authorization.security" data-requirement="SEC-GUARD-001">
-      <p className="text-sm font-semibold text-steward-teal">Guard · Access administration</p>
-      <h2 className="mt-2 text-2xl font-semibold" id="guard-access-heading">Build roles and assign the right access</h2>
-      <p className="mt-2 max-w-3xl leading-7 text-steward-mist-muted">Combine direct permissions with reusable policy bundles, then apply a role to the whole organization or limit it to a site, department, or resource. Built-in roles stay protected.</p>
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div><p className="text-sm font-semibold text-steward-teal">Guard · Access administration</p><h2 className="mt-2 text-2xl font-semibold" id="guard-access-heading">Build roles and assign the right access</h2><p className="mt-2 max-w-3xl leading-7 text-steward-mist-muted">Combine direct permissions with reusable policy bundles, then apply a role to the whole organization or limit it to a site, department, or resource. Built-in roles stay protected.</p></div>
+        {onOpenHelp && <button className={secondaryButtonClass} onClick={onOpenHelp} type="button">Guard help</button>}
+      </div>
 
       {error && <div className="mt-5 rounded-xl border border-steward-danger/50 bg-steward-danger/15 p-4 text-[#ffccd1]" ref={errorRef} role="alert" tabIndex={-1}>{error}</div>}
       <p aria-live="polite" className="mt-4 text-sm text-[#67dd99]" role="status">{status}</p>

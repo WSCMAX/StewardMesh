@@ -33,9 +33,13 @@ service GuardService {
 // Authenticated Guard RPCs carry the opaque session bearer in gRPC
 // authorization metadata. The bearer is never repeated in request bodies.
 
+// Requirement: REQ-ATLAS-001. Feature: inventory.assets.
 service AssetService {
   rpc ListAssets(ListAssetsRequest) returns (ListAssetsResponse);
+  rpc GetAsset(GetAssetRequest) returns (Asset);
   rpc CreateAsset(CreateAssetRequest) returns (Asset);
+  rpc UpdateAsset(UpdateAssetRequest) returns (Asset);
+  rpc ListAssetLifecycle(ListAssetLifecycleRequest) returns (ListAssetLifecycleResponse);
 }
 
 // People directory and effective-dated asset assignments.
@@ -226,7 +230,15 @@ message ClaimResourceOwnershipRequest {
   string csrf_token = 3;
 }
 
-message ListAssetsRequest {}
+message ListAssetsRequest {
+  string search = 1;
+  string kind = 2;
+  string status = 3;
+  string site_id = 4;
+  string department_id = 5;
+  string user_id = 6;
+  int32 limit = 7;
+}
 
 message ListAssetsResponse {
   repeated Asset items = 1;
@@ -234,6 +246,23 @@ message ListAssetsResponse {
 
 message CreateAssetRequest {
   Asset asset = 1;
+}
+
+message GetAssetRequest {
+  string asset_id = 1;
+}
+
+message UpdateAssetRequest {
+  Asset asset = 1;
+  string lifecycle_note = 2;
+}
+
+message ListAssetLifecycleRequest {
+  string asset_id = 1;
+}
+
+message ListAssetLifecycleResponse {
+  repeated AssetLifecycleEvent items = 1;
 }
 
 message Asset {
@@ -244,6 +273,28 @@ message Asset {
   string department_id = 5;
   string user_id = 6;
   string status = 7;
+  string asset_tag = 8;
+  string hostname = 9;
+  string site_id = 10;
+  string building_id = 11;
+  string room_id = 12;
+  google.protobuf.Timestamp purchase_date = 13;
+  int64 revision = 14;
+  google.protobuf.Timestamp created_at = 15;
+  google.protobuf.Timestamp updated_at = 16;
+  string organization_id = 17;
+}
+
+message AssetLifecycleEvent {
+  string id = 1;
+  string organization_id = 2;
+  string asset_id = 3;
+  string from_status = 4;
+  string to_status = 5;
+  string note = 6;
+  int64 revision = 7;
+  string actor_id = 8;
+  google.protobuf.Timestamp occurred_at = 9;
 }
 
 enum RecordStatus {

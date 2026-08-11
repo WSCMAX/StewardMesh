@@ -1,6 +1,6 @@
 // Package application constructs StewardMesh's transport-neutral HTTP
 // application and owns the lifecycle of its shared runtime dependencies.
-// Requirements: REQ-FOUNDATION-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001.
+// Requirements: REQ-FOUNDATION-001, REQ-ATLAS-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001.
 package application
 
 import (
@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/maxlemke/stewardmesh/internal/atlas"
 	"github.com/maxlemke/stewardmesh/internal/bootstrap"
 	"github.com/maxlemke/stewardmesh/internal/cache"
 	"github.com/maxlemke/stewardmesh/internal/config"
@@ -121,7 +122,6 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 	}
 	application.closeCache = closeCache
 
-	assets := repository.NewMemoryAssetRepository()
 	catalog := repository.NewMemoryCatalog()
 	blobStore, err := storage.NewLocalBlobStore(cfg.BlobDir, maximumLocalBlobBytes)
 	if err != nil {
@@ -142,7 +142,13 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 	if err != nil {
 		return fail(fmt.Errorf("initialize Guard: %w", err))
 	}
-	peopleService, err := people.NewService(runtime.peopleStore, assets, runtime.auditor, people.ServiceConfig{
+	atlasService, err := atlas.NewService(runtime.assetStore, peopleAssetReferenceValidator{store: runtime.peopleStore}, runtime.auditor, atlas.ServiceConfig{
+		OrganizationID: cfg.OrganizationID,
+	})
+	if err != nil {
+		return fail(fmt.Errorf("initialize Atlas: %w", err))
+	}
+	peopleService, err := people.NewService(runtime.peopleStore, atlasService, runtime.auditor, people.ServiceConfig{
 		OrganizationID: cfg.OrganizationID,
 	})
 	if err != nil {
@@ -150,7 +156,7 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 	}
 
 	application.handler = httpapi.NewServer(httpapi.Dependencies{
-		Assets:              assets,
+		Atlas:               atlasService,
 		People:              peopleService,
 		Tags:                catalog,
 		Goals:               catalog,
@@ -200,6 +206,7 @@ func (a *Application) Close() error {
 
 type foundationRuntime struct {
 	organization bootstrap.Organization
+	assetStore   atlas.Store
 	guardStore   guard.Store
 	peopleStore  people.Store
 	auditor      foundation.Auditor
@@ -259,6 +266,7 @@ func initializeFoundation(ctx context.Context, cfg config.Config, runMigrations 
 	}
 	var (
 		organizations repository.OrganizationRepository
+		assetStore    atlas.Store
 		guardStore    guard.Store
 		peopleStore   people.Store
 		auditor       foundation.Auditor = foundation.NopAuditor{}
@@ -269,6 +277,7 @@ func initializeFoundation(ctx context.Context, cfg config.Config, runMigrations 
 		organizations = repository.NewMemoryOrganizationRepository()
 		guardStore = repository.NewMemoryGuardStore()
 		peopleStore = repository.NewMemoryPeopleStore()
+		assetStore = repository.NewMemoryAtlasStore()
 	case config.RepositoryDriverPostgres:
 		database, err := postgresrepository.Open(ctx, cfg.DatabaseURL)
 		if err != nil {
@@ -297,6 +306,11 @@ func initializeFoundation(ctx context.Context, cfg config.Config, runMigrations 
 			return foundationRuntime{}, err
 		}
 		peopleStore, err = postgresrepository.NewPeopleStore(database)
+		if err != nil {
+			_ = database.Close()
+			return foundationRuntime{}, err
+		}
+		assetStore, err = postgresrepository.NewAtlasStore(database)
 		if err != nil {
 			_ = database.Close()
 			return foundationRuntime{}, err
@@ -349,9 +363,61 @@ func initializeFoundation(ctx context.Context, cfg config.Config, runMigrations 
 	}
 	return foundationRuntime{
 		organization: organization,
+		assetStore:   assetStore,
 		guardStore:   guardStore,
 		peopleStore:  peopleStore,
 		auditor:      auditor,
 		close:        closeRuntime,
 	}, nil
+}
+
+type peopleAssetReferenceValidator struct {
+	store people.Store
+}
+
+func (v peopleAssetReferenceValidator) ValidateAssetReferences(ctx context.Context, organizationID string, references atlas.References) error {
+	if v.store == nil {
+		return errors.New("people store is required")
+	}
+	if references.SiteID != "" {
+		if _, err := v.store.GetSite(ctx, organizationID, references.SiteID); err != nil {
+			return mapAtlasReferenceError("site", err)
+		}
+	}
+	if references.BuildingID != "" {
+		building, err := v.store.GetBuilding(ctx, organizationID, references.BuildingID)
+		if err != nil {
+			return mapAtlasReferenceError("building", err)
+		}
+		if building.SiteID != references.SiteID {
+			return atlas.ErrReferenceMissing
+		}
+	}
+	if references.RoomID != "" {
+		room, err := v.store.GetRoom(ctx, organizationID, references.RoomID)
+		if err != nil {
+			return mapAtlasReferenceError("room", err)
+		}
+		if room.SiteID != references.SiteID || room.BuildingID != references.BuildingID {
+			return atlas.ErrReferenceMissing
+		}
+	}
+	if references.DepartmentID != "" {
+		if _, err := v.store.GetDepartment(ctx, organizationID, references.DepartmentID); err != nil {
+			return mapAtlasReferenceError("department", err)
+		}
+	}
+	if references.UserID != "" {
+		if _, err := v.store.GetIdentity(ctx, organizationID, references.UserID); err != nil {
+			return mapAtlasReferenceError("identity", err)
+		}
+	}
+	return nil
+}
+
+func mapAtlasReferenceError(kind string, err error) error {
+	if errors.Is(err, people.ErrNotFound) || errors.Is(err, people.ErrReferenceMissing) {
+		return fmt.Errorf("%s: %w", kind, atlas.ErrReferenceMissing)
+	}
+	return fmt.Errorf("validate Atlas %s reference: %w", kind, err)
 }

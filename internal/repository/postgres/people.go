@@ -209,6 +209,22 @@ func (s *PeopleStore) CreateRoom(ctx context.Context, room people.Room) (people.
 	return created, nil
 }
 
+func (s *PeopleStore) GetRoom(ctx context.Context, organizationID, id string) (people.Room, error) {
+	room, err := scanPeopleRoom(s.database.QueryRowContext(ctx, `
+		SELECT id, organization_id, site_id, building_id, room_number, normalized_number,
+		       name, status, revision, created_at, updated_at
+		FROM people_rooms
+		WHERE organization_id = $1 AND id = $2
+	`, organizationID, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return people.Room{}, people.ErrNotFound
+	}
+	if err != nil {
+		return people.Room{}, fmt.Errorf("get room: %w", err)
+	}
+	return room, nil
+}
+
 func (s *PeopleStore) ListRooms(ctx context.Context, organizationID, siteID, buildingID string, visibility people.Visibility) ([]people.Room, error) {
 	if organizationID == "" {
 		return nil, people.ErrInvalidInput

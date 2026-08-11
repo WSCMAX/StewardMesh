@@ -4,17 +4,13 @@ import (
 	"context"
 	"errors"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/maxlemke/stewardmesh/internal/domain"
 )
 
 var ErrNotFound = errors.New("record not found")
-
-type MemoryAssetRepository struct {
-	mu     sync.RWMutex
-	assets map[string]domain.Asset
-}
 
 type MemoryCatalog struct {
 	tags  []domain.Tag
@@ -69,40 +65,21 @@ func (c *MemoryCatalog) ListGoals(_ context.Context) ([]domain.Goal, error) {
 	return append([]domain.Goal(nil), c.goals...), nil
 }
 
-func NewMemoryAssetRepository() *MemoryAssetRepository {
-	return &MemoryAssetRepository{assets: make(map[string]domain.Asset)}
+func sortAssets(items []domain.Asset) {
+	sort.Slice(items, func(i, j int) bool {
+		left, right := strings.ToLower(items[i].Name), strings.ToLower(items[j].Name)
+		if left == right {
+			return items[i].ID < items[j].ID
+		}
+		return left < right
+	})
 }
 
-func (r *MemoryAssetRepository) List(_ context.Context) ([]domain.Asset, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	result := make([]domain.Asset, 0, len(r.assets))
-	for _, asset := range r.assets {
-		result = append(result, asset)
-	}
-	sort.Slice(result, func(i, j int) bool { return result[i].Name < result[j].Name })
-	return result, nil
-}
-
-func (r *MemoryAssetRepository) Get(_ context.Context, id string) (domain.Asset, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	asset, ok := r.assets[id]
-	if !ok {
-		return domain.Asset{}, ErrNotFound
-	}
-	return asset, nil
-}
-
-func (r *MemoryAssetRepository) Create(_ context.Context, asset domain.Asset) (domain.Asset, error) {
-	if asset.ID == "" || asset.Name == "" || asset.Kind == "" {
-		return domain.Asset{}, errors.New("id, name, and kind are required")
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if _, exists := r.assets[asset.ID]; exists {
-		return domain.Asset{}, errors.New("asset already exists")
-	}
-	r.assets[asset.ID] = asset
-	return asset, nil
+func sortLifecycle(items []domain.AssetLifecycleEvent) {
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].Revision == items[j].Revision {
+			return items[i].ID < items[j].ID
+		}
+		return items[i].Revision < items[j].Revision
+	})
 }

@@ -64,6 +64,14 @@ operators should also follow the
 [ElastiCache and Lambda deployment guidance](docs/deployment/aws-valkey-lambda.md),
 including its current Lambda and IAM-authentication readiness boundaries.
 
+Atlas provides the durable organization asset registry for servers and devices,
+including searchable identity, People-owned location/department/user references,
+purchase dates, optimistic revisions, and immutable lifecycle status history.
+Memory and PostgreSQL adapters share one provider-neutral contract so a future
+DynamoDB adapter and Exchange imports reuse the same validation and audit rules.
+See [Atlas](docs/features/atlas.md) for permissions, API behavior, the accessible
+workflow, migration details, and validation coverage.
+
 People now provides sites, departments, person/shared/public/lab identities,
 structured site addresses, buildings and rooms, scoped directory search, and
 effective-dated multi-user asset assignments.

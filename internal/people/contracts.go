@@ -245,6 +245,7 @@ type Store interface {
 	ListBuildings(ctx context.Context, organizationID, siteID string, visibility Visibility) ([]Building, error)
 
 	CreateRoom(ctx context.Context, room Room) (Room, error)
+	GetRoom(ctx context.Context, organizationID, id string) (Room, error)
 	ListRooms(ctx context.Context, organizationID, siteID, buildingID string, visibility Visibility) ([]Room, error)
 
 	CreateDepartment(ctx context.Context, department Department) (Department, error)

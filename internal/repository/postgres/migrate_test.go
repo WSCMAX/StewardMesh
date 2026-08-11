@@ -6,14 +6,14 @@ import (
 )
 
 // Requirements: REQ-FOUNDATION-001, SEC-GUARD-001, REQ-PEOPLE-001,
-// REQ-DIRECTORY-EXPANSION-001, REQ-ATLAS-001.
+// REQ-DIRECTORY-EXPANSION-001, REQ-ATLAS-001, REQ-THREADS-001.
 func TestEmbeddedMigrationsAreOrderedAndChecksummed(t *testing.T) {
 	migrations, err := loadMigrations()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(migrations) != 11 {
-		t.Fatalf("expected 11 platform migrations, got %d", len(migrations))
+	if len(migrations) != 13 {
+		t.Fatalf("expected 13 platform migrations, got %d", len(migrations))
 	}
 	for index, migration := range migrations {
 		expectedVersion := int64(index + 1)
@@ -22,6 +22,46 @@ func TestEmbeddedMigrationsAreOrderedAndChecksummed(t *testing.T) {
 		}
 		if len(migration.checksum) != 64 {
 			t.Fatalf("expected SHA-256 checksum for migration %d", migration.version)
+		}
+	}
+}
+
+func TestThreadsAdministratorPermissionMigrationUpgradesOnlyBuiltInRoleBundles(t *testing.T) {
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(migrations) < 13 {
+		t.Fatal("Threads administrator permission migration is missing")
+	}
+	contents := migrations[12].contents
+	for _, expected := range []string{
+		"REQ-THREADS-001", "SEC-GUARD-001", "guard_policy_bundle_permissions",
+		"'goals.write'", "r.source = 'builtin'", "lower(btrim(r.name)) = 'administrator'", "ON CONFLICT",
+	} {
+		if !strings.Contains(contents, expected) {
+			t.Fatalf("Threads administrator permission migration is missing %q", expected)
+		}
+	}
+}
+
+func TestThreadsMigrationAddsScopedHierarchiesRulesAndLinks(t *testing.T) {
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(migrations) < 12 {
+		t.Fatal("Threads migration is missing")
+	}
+	contents := migrations[11].contents
+	for _, expected := range []string{
+		"REQ-THREADS-001", "CREATE TABLE threads_tags", "REFERENCES threads_tags",
+		"CREATE TABLE threads_goals", "REFERENCES threads_goals", "CREATE TABLE threads_tag_rules",
+		"mode IN ('include', 'suppress')", "CREATE TABLE threads_goal_links",
+		"target_type IN ('asset', 'purchase')", "PRIMARY KEY (organization_id, target_type, target_id, goal_id)",
+	} {
+		if !strings.Contains(contents, expected) {
+			t.Fatalf("Threads migration is missing %q", expected)
 		}
 	}
 }

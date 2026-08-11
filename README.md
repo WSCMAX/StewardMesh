@@ -72,6 +72,13 @@ DynamoDB adapter and Exchange imports reuse the same validation and audit rules.
 See [Atlas](docs/features/atlas.md) for permissions, API behavior, the accessible
 workflow, migration details, and validation coverage.
 
+Threads provides organization tag and strategy hierarchies, explicit include
+and suppression rules, visible inheritance provenance, and guarded goal links
+for assets and purchases. Memory and PostgreSQL adapters share the same
+provider-neutral relationship contract so future Ledger, Stack, and Exchange
+work can reuse it. See [Threads](docs/features/threads.md) for permissions,
+precedence rules, API behavior, audit events, and the accessible workflow.
+
 People now provides sites, departments, person/shared/public/lab identities,
 structured site addresses, buildings and rooms, scoped directory search, and
 effective-dated multi-user asset assignments.

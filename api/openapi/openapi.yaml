@@ -1,8 +1,8 @@
-# Requirements: REQ-ATLAS-001, REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
+# Requirements: REQ-ATLAS-001, REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, REQ-THREADS-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
 openapi: 3.1.0
 info:
   title: StewardMesh API
-  version: 0.7.0
+  version: 0.8.0
   description: Requirements-driven inventory, lifecycle, and secure organization management API.
   license:
     name: Apache License 2.0
@@ -932,6 +932,7 @@ paths:
       summary: List tags
       operationId: listTags
       tags: [Threads]
+      x-requirement: REQ-THREADS-001
       security: [{localCookieAuth: []}, {secureCookieAuth: []}]
       responses:
         '200':
@@ -943,11 +944,80 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+    post:
+      summary: Create a tag
+      operationId: createTag
+      tags: [Threads]
+      x-requirement: REQ-THREADS-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateTagRequest'}
+      responses:
+        '201':
+          description: Tag created
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Tag'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/tags/{tagId}:
+    parameters:
+      - $ref: '#/components/parameters/TagID'
+    get:
+      summary: Get a tag
+      operationId: getTag
+      tags: [Threads]
+      x-requirement: REQ-THREADS-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200':
+          description: Tag detail
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Tag'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    put:
+      summary: Update a tag
+      operationId: updateTag
+      tags: [Threads]
+      x-requirement: REQ-THREADS-001
+      description: Updates hierarchy and inheritance settings using optimistic revision control; hierarchy cycles are rejected.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/UpdateTagRequest'}
+      responses:
+        '200':
+          description: Tag updated
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Tag'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '423': {$ref: '#/components/responses/Locked'}
   /api/v1/goals:
     get:
       summary: List goals
       operationId: listGoals
       tags: [Threads]
+      x-requirement: REQ-THREADS-001
       security: [{localCookieAuth: []}, {secureCookieAuth: []}]
       responses:
         '200':
@@ -959,6 +1029,206 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+    post:
+      summary: Create a goal
+      operationId: createGoal
+      tags: [Threads]
+      x-requirement: REQ-THREADS-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateGoalRequest'}
+      responses:
+        '201':
+          description: Goal created
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Goal'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/goals/{goalId}:
+    parameters:
+      - $ref: '#/components/parameters/GoalID'
+    get:
+      summary: Get a goal
+      operationId: getGoal
+      tags: [Threads]
+      x-requirement: REQ-THREADS-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200':
+          description: Goal detail
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Goal'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    put:
+      summary: Update a goal
+      operationId: updateGoal
+      tags: [Threads]
+      x-requirement: REQ-THREADS-001
+      description: Updates the strategic goal hierarchy using optimistic revision control; hierarchy cycles are rejected.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/UpdateGoalRequest'}
+      responses:
+        '200':
+          description: Goal updated
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Goal'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '423': {$ref: '#/components/responses/Locked'}
+  /api/v1/threads/{targetType}/{targetId}/tags:
+    parameters:
+      - $ref: '#/components/parameters/ThreadTargetType'
+      - $ref: '#/components/parameters/ThreadTargetID'
+    get:
+      summary: Evaluate effective tags for a target
+      operationId: listEffectiveTags
+      tags: [Threads]
+      x-requirement: REQ-THREADS-001
+      description: Returns explicit, inherited, and suppressed values with source and rule provenance.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200':
+          description: Effective tag collection
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/EffectiveTagCollection'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/threads/{targetType}/{targetId}/tags/{tagId}:
+    parameters:
+      - $ref: '#/components/parameters/ThreadTargetType'
+      - $ref: '#/components/parameters/ThreadTargetID'
+      - $ref: '#/components/parameters/TagID'
+    put:
+      summary: Set an explicit tag rule for a target
+      operationId: setTagRule
+      tags: [Threads]
+      x-requirement: REQ-THREADS-001
+      description: Explicit include or suppress rules take precedence over inherited values.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/SetTagRuleRequest'}
+      responses:
+        '200':
+          description: Explicit rule created or updated
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/TagRule'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '423': {$ref: '#/components/responses/Locked'}
+    delete:
+      summary: Delete an explicit tag rule
+      operationId: deleteTagRule
+      tags: [Threads]
+      x-requirement: REQ-THREADS-001
+      description: Removes the explicit rule so normal inheritance applies again.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+        - in: query
+          name: revision
+          required: true
+          schema: {type: integer, minimum: 1}
+      responses:
+        '204': {description: Explicit rule removed}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '423': {$ref: '#/components/responses/Locked'}
+  /api/v1/threads/{targetType}/{targetId}/goals:
+    parameters:
+      - $ref: '#/components/parameters/GoalTargetType'
+      - $ref: '#/components/parameters/ThreadTargetID'
+    get:
+      summary: List goals linked to a target
+      operationId: listGoalLinks
+      tags: [Threads]
+      x-requirement: REQ-THREADS-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200':
+          description: Goal links for the target
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/GoalLinkCollection'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/threads/{targetType}/{targetId}/goals/{goalId}:
+    parameters:
+      - $ref: '#/components/parameters/GoalTargetType'
+      - $ref: '#/components/parameters/ThreadTargetID'
+      - $ref: '#/components/parameters/GoalID'
+    put:
+      summary: Link a goal to a target
+      operationId: linkGoal
+      tags: [Threads]
+      x-requirement: REQ-THREADS-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        '200':
+          description: Idempotently created goal link
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/GoalLink'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '423': {$ref: '#/components/responses/Locked'}
+    delete:
+      summary: Unlink a goal from a target
+      operationId: unlinkGoal
+      tags: [Threads]
+      x-requirement: REQ-THREADS-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        '204': {description: Goal unlinked}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '423': {$ref: '#/components/responses/Locked'}
 components:
   securitySchemes:
     localCookieAuth:
@@ -975,6 +1245,31 @@ components:
     AssetID:
       in: path
       name: assetId
+      required: true
+      schema: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+    TagID:
+      in: path
+      name: tagId
+      required: true
+      schema: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+    GoalID:
+      in: path
+      name: goalId
+      required: true
+      schema: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+    ThreadTargetType:
+      in: path
+      name: targetType
+      required: true
+      schema: {$ref: '#/components/schemas/ThreadTargetType'}
+    GoalTargetType:
+      in: path
+      name: targetType
+      required: true
+      schema: {type: string, enum: [asset, purchase]}
+    ThreadTargetID:
+      in: path
+      name: targetId
       required: true
       schema: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
     CSRFToken:
@@ -1530,26 +1825,137 @@ components:
         items: {type: array, items: {$ref: '#/components/schemas/AssetAssignment'}}
     Tag:
       type: object
-      required: [id, name, inheritByDefault]
+      additionalProperties: false
+      required: [id, organizationId, name, inheritByDefault, revision, createdAt, updatedAt]
       properties:
-        id: {type: string}
-        name: {type: string}
-        parentId: {type: string}
+        id: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        organizationId: {type: string, minLength: 1, maxLength: 128}
+        name: {type: string, minLength: 1, maxLength: 100}
+        parentId: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
         inheritByDefault: {type: boolean}
+        revision: {type: integer, minimum: 1}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    CreateTagRequest:
+      type: object
+      additionalProperties: false
+      required: [name, inheritByDefault]
+      properties:
+        id: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        name: {type: string, minLength: 1, maxLength: 100}
+        parentId: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        inheritByDefault: {type: boolean}
+    UpdateTagRequest:
+      type: object
+      additionalProperties: false
+      required: [name, inheritByDefault, revision]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 100}
+        parentId: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        inheritByDefault: {type: boolean}
+        revision: {type: integer, minimum: 1}
     TagCollection:
       type: object
+      additionalProperties: false
       required: [items]
       properties:
         items: {type: array, items: {$ref: '#/components/schemas/Tag'}}
     Goal:
       type: object
-      required: [id, name]
+      additionalProperties: false
+      required: [id, organizationId, name, revision, createdAt, updatedAt]
       properties:
-        id: {type: string}
-        name: {type: string}
-        description: {type: string}
+        id: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        organizationId: {type: string, minLength: 1, maxLength: 128}
+        name: {type: string, minLength: 1, maxLength: 160}
+        description: {type: string, maxLength: 2000}
+        parentId: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        revision: {type: integer, minimum: 1}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    CreateGoalRequest:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        id: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        name: {type: string, minLength: 1, maxLength: 160}
+        description: {type: string, maxLength: 2000}
+        parentId: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+    UpdateGoalRequest:
+      type: object
+      additionalProperties: false
+      required: [name, revision]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 160}
+        description: {type: string, maxLength: 2000}
+        parentId: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        revision: {type: integer, minimum: 1}
     GoalCollection:
       type: object
+      additionalProperties: false
       required: [items]
       properties:
         items: {type: array, items: {$ref: '#/components/schemas/Goal'}}
+    ThreadTargetType:
+      type: string
+      enum: [asset, purchase, contract, software, budget, goal]
+    TagRule:
+      type: object
+      additionalProperties: false
+      required: [organizationId, targetType, targetId, tagId, mode, revision, updatedBy, createdAt, updatedAt]
+      properties:
+        organizationId: {type: string, minLength: 1, maxLength: 128}
+        targetType: {$ref: '#/components/schemas/ThreadTargetType'}
+        targetId: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        tagId: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        mode: {type: string, enum: [include, suppress]}
+        revision: {type: integer, minimum: 1}
+        updatedBy: {type: string, minLength: 1, maxLength: 128}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    SetTagRuleRequest:
+      type: object
+      additionalProperties: false
+      required: [mode, revision]
+      properties:
+        mode: {type: string, enum: [include, suppress]}
+        revision:
+          type: integer
+          minimum: 0
+          description: Zero creates a rule; the current positive revision updates one.
+    EffectiveTag:
+      type: object
+      additionalProperties: false
+      required: [tag, state]
+      properties:
+        tag: {$ref: '#/components/schemas/Tag'}
+        state: {type: string, enum: [explicit, inherited, suppressed]}
+        sourceTagId:
+          type: string
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+          description: Explicit descendant tag that produced an inherited ancestor value.
+        rule: {$ref: '#/components/schemas/TagRule'}
+    EffectiveTagCollection:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/EffectiveTag'}}
+    GoalLink:
+      type: object
+      additionalProperties: false
+      required: [organizationId, goalId, targetType, targetId, createdBy, createdAt]
+      properties:
+        organizationId: {type: string, minLength: 1, maxLength: 128}
+        goalId: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        targetType: {type: string, enum: [asset, purchase]}
+        targetId: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        createdBy: {type: string, minLength: 1, maxLength: 128}
+        createdAt: {type: string, format: date-time}
+    GoalLinkCollection:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/GoalLink'}}

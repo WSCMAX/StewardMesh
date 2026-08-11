@@ -1,6 +1,6 @@
 // Package application constructs StewardMesh's transport-neutral HTTP
 // application and owns the lifecycle of its shared runtime dependencies.
-// Requirements: REQ-FOUNDATION-001, REQ-ATLAS-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001.
+// Requirements: REQ-FOUNDATION-001, REQ-ATLAS-001, REQ-THREADS-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001.
 package application
 
 import (
@@ -24,6 +24,7 @@ import (
 	"github.com/maxlemke/stewardmesh/internal/repository"
 	postgresrepository "github.com/maxlemke/stewardmesh/internal/repository/postgres"
 	"github.com/maxlemke/stewardmesh/internal/storage"
+	"github.com/maxlemke/stewardmesh/internal/threads"
 )
 
 const maximumLocalBlobBytes = 25 << 20
@@ -122,7 +123,6 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 	}
 	application.closeCache = closeCache
 
-	catalog := repository.NewMemoryCatalog()
 	blobStore, err := storage.NewLocalBlobStore(cfg.BlobDir, maximumLocalBlobBytes)
 	if err != nil {
 		return fail(fmt.Errorf("initialize blob store: %w", err))
@@ -148,6 +148,12 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 	if err != nil {
 		return fail(fmt.Errorf("initialize Atlas: %w", err))
 	}
+	threadsService, err := threads.NewService(runtime.threadsStore, threadsTargetValidator{atlas: atlasService}, runtime.auditor, threads.ServiceConfig{
+		OrganizationID: cfg.OrganizationID,
+	})
+	if err != nil {
+		return fail(fmt.Errorf("initialize Threads: %w", err))
+	}
 	peopleService, err := people.NewService(runtime.peopleStore, atlasService, runtime.auditor, people.ServiceConfig{
 		OrganizationID: cfg.OrganizationID,
 	})
@@ -158,8 +164,7 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 	application.handler = httpapi.NewServer(httpapi.Dependencies{
 		Atlas:               atlasService,
 		People:              peopleService,
-		Tags:                catalog,
-		Goals:               catalog,
+		Threads:             threadsService,
 		Blobs:               blobStore,
 		Guard:               guardService,
 		OIDC:                oidcFlow,
@@ -207,6 +212,7 @@ func (a *Application) Close() error {
 type foundationRuntime struct {
 	organization bootstrap.Organization
 	assetStore   atlas.Store
+	threadsStore threads.Store
 	guardStore   guard.Store
 	peopleStore  people.Store
 	auditor      foundation.Auditor
@@ -267,6 +273,7 @@ func initializeFoundation(ctx context.Context, cfg config.Config, runMigrations 
 	var (
 		organizations repository.OrganizationRepository
 		assetStore    atlas.Store
+		threadsStore  threads.Store
 		guardStore    guard.Store
 		peopleStore   people.Store
 		auditor       foundation.Auditor = foundation.NopAuditor{}
@@ -278,6 +285,7 @@ func initializeFoundation(ctx context.Context, cfg config.Config, runMigrations 
 		guardStore = repository.NewMemoryGuardStore()
 		peopleStore = repository.NewMemoryPeopleStore()
 		assetStore = repository.NewMemoryAtlasStore()
+		threadsStore = repository.NewMemoryThreadsStore()
 	case config.RepositoryDriverPostgres:
 		database, err := postgresrepository.Open(ctx, cfg.DatabaseURL)
 		if err != nil {
@@ -311,6 +319,11 @@ func initializeFoundation(ctx context.Context, cfg config.Config, runMigrations 
 			return foundationRuntime{}, err
 		}
 		assetStore, err = postgresrepository.NewAtlasStore(database)
+		if err != nil {
+			_ = database.Close()
+			return foundationRuntime{}, err
+		}
+		threadsStore, err = postgresrepository.NewThreadsStore(database)
 		if err != nil {
 			_ = database.Close()
 			return foundationRuntime{}, err
@@ -364,11 +377,37 @@ func initializeFoundation(ctx context.Context, cfg config.Config, runMigrations 
 	return foundationRuntime{
 		organization: organization,
 		assetStore:   assetStore,
+		threadsStore: threadsStore,
 		guardStore:   guardStore,
 		peopleStore:  peopleStore,
 		auditor:      auditor,
 		close:        closeRuntime,
 	}, nil
+}
+
+type threadsTargetValidator struct {
+	atlas *atlas.Service
+}
+
+func (v threadsTargetValidator) ValidateThreadTarget(ctx context.Context, _ string, targetType threads.TargetType, targetID string) error {
+	if targetType != threads.TargetAsset {
+		// Future feature-owned record types keep stable, organization-scoped IDs.
+		// Their services will extend this boundary when those domains land.
+		return nil
+	}
+	if v.atlas == nil {
+		return errors.New("Atlas service is required")
+	}
+	if _, err := v.atlas.GetAsset(ctx, targetID); err != nil {
+		if errors.Is(err, atlas.ErrNotFound) {
+			return threads.ErrNotFound
+		}
+		if errors.Is(err, atlas.ErrInvalidInput) {
+			return threads.ErrInvalidInput
+		}
+		return fmt.Errorf("validate Threads asset target: %w", err)
+	}
+	return nil
 }
 
 type peopleAssetReferenceValidator struct {

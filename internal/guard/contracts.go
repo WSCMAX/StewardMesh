@@ -47,6 +47,7 @@ const (
 	PermissionDirectoryRead    Permission = "directory.read"
 	PermissionDirectoryWrite   Permission = "directory.write"
 	PermissionGoalsRead        Permission = "goals.read"
+	PermissionGoalsWrite       Permission = "goals.write"
 	PermissionGuardManage      Permission = "guard.manage"
 )
 
@@ -58,6 +59,7 @@ func AdministratorBundlePermissions() []Permission {
 		PermissionDirectoryRead,
 		PermissionDirectoryWrite,
 		PermissionGoalsRead,
+		PermissionGoalsWrite,
 	}
 }
 
@@ -71,6 +73,7 @@ func SupportedPermissions() []Permission {
 		PermissionDirectoryRead,
 		PermissionDirectoryWrite,
 		PermissionGoalsRead,
+		PermissionGoalsWrite,
 		PermissionGuardManage,
 	}
 }

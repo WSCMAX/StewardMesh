@@ -3,6 +3,7 @@ import { ApiRequestError, requestJSON } from './api'
 import AtlasInventory, { isAsset, type Asset } from './AtlasInventory'
 import GuardAccessManager from './GuardAccessManager'
 import PeopleDirectory from './PeopleDirectory'
+import ThreadsManager from './ThreadsManager'
 
 type Module = readonly [name: string, description: string]
 
@@ -395,6 +396,8 @@ export default function App() {
             </section>
 
             <AtlasInventory assets={assets} csrfToken={csrfToken} onAssetsChange={setAssets} permissions={permissions} />
+
+            <ThreadsManager assets={assets} csrfToken={csrfToken} permissions={permissions} />
 
             {permissions.includes('guard.manage') && <GuardAccessManager csrfToken={csrfToken} />}
 

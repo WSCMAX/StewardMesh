@@ -33,16 +33,3 @@ type AssetLifecycleEvent struct {
 	ActorID        string    `json:"actorId"`
 	OccurredAt     time.Time `json:"occurredAt"`
 }
-
-type Tag struct {
-	ID               string `json:"id"`
-	Name             string `json:"name"`
-	ParentID         string `json:"parentId,omitempty"`
-	InheritByDefault bool   `json:"inheritByDefault"`
-}
-
-type Goal struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
-}

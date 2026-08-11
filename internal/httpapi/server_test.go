@@ -1,7 +1,8 @@
 package httpapi
 
 // Requirements: REQ-FOUNDATION-001, REQ-ATLAS-001, REQ-PEOPLE-001,
-// REQ-DIRECTORY-EXPANSION-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
+// REQ-DIRECTORY-EXPANSION-001, REQ-THREADS-001, REQ-PLATFORM-VALKEY-001,
+// SEC-GUARD-001, SEC-HTTP-001.
 
 import (
 	"bytes"
@@ -26,6 +27,7 @@ import (
 	"github.com/maxlemke/stewardmesh/internal/identity"
 	"github.com/maxlemke/stewardmesh/internal/people"
 	"github.com/maxlemke/stewardmesh/internal/repository"
+	"github.com/maxlemke/stewardmesh/internal/threads"
 )
 
 const testOrigin = "http://localhost:5173"
@@ -52,6 +54,12 @@ type unavailableHTTPAttemptLimiter struct{}
 type allowHTTPAssetReferences struct{}
 
 func (allowHTTPAssetReferences) ValidateAssetReferences(context.Context, string, atlas.References) error {
+	return nil
+}
+
+type allowHTTPThreadTargets struct{}
+
+func (allowHTTPThreadTargets) ValidateThreadTarget(context.Context, string, threads.TargetType, string) error {
 	return nil
 }
 
@@ -632,6 +640,88 @@ func TestPeopleAndThreadsCollectionsRequireDirectoryGrants(t *testing.T) {
 	}
 }
 
+func TestThreadsHierarchyProvenanceAndGoalLinks(t *testing.T) {
+	handler := newGuardServer(t)
+	session := bootstrapAdministrator(t, handler)
+
+	assetPayload, _ := json.Marshal(map[string]string{"id": "asset-threads-1", "name": "Primary server", "kind": "server"})
+	assetRequest := authenticatedRequest(http.MethodPost, "/api/v1/assets", bytes.NewReader(assetPayload), session)
+	assetResponse := httptest.NewRecorder()
+	handler.ServeHTTP(assetResponse, assetRequest)
+	if assetResponse.Code != http.StatusCreated {
+		t.Fatalf("expected asset creation, got %d: %s", assetResponse.Code, assetResponse.Body.String())
+	}
+
+	parent := createPeopleRecord[threads.Tag](t, handler, session, "/api/v1/tags", map[string]any{
+		"id": "governance", "name": "Governance", "inheritByDefault": true,
+	})
+	child := createPeopleRecord[threads.Tag](t, handler, session, "/api/v1/tags", map[string]any{
+		"id": "security", "name": "Security", "parentId": parent.ID, "inheritByDefault": false,
+	})
+	if child.ParentID != parent.ID {
+		t.Fatalf("unexpected tag hierarchy %#v", child)
+	}
+
+	includePayload, _ := json.Marshal(map[string]any{"mode": "include", "revision": 0})
+	includeRequest := authenticatedRequest(http.MethodPut, "/api/v1/threads/asset/asset-threads-1/tags/security", bytes.NewReader(includePayload), session)
+	includeResponse := httptest.NewRecorder()
+	handler.ServeHTTP(includeResponse, includeRequest)
+	if includeResponse.Code != http.StatusOK || !strings.Contains(includeResponse.Body.String(), `"revision":1`) {
+		t.Fatalf("expected explicit tag rule, got %d: %s", includeResponse.Code, includeResponse.Body.String())
+	}
+
+	evaluateRequest := authenticatedRequest(http.MethodGet, "/api/v1/threads/asset/asset-threads-1/tags", nil, session)
+	evaluateResponse := httptest.NewRecorder()
+	handler.ServeHTTP(evaluateResponse, evaluateRequest)
+	if evaluateResponse.Code != http.StatusOK || !strings.Contains(evaluateResponse.Body.String(), `"state":"explicit"`) ||
+		!strings.Contains(evaluateResponse.Body.String(), `"state":"inherited"`) ||
+		!strings.Contains(evaluateResponse.Body.String(), `"sourceTagId":"security"`) {
+		t.Fatalf("expected explicit and inherited provenance, got %d: %s", evaluateResponse.Code, evaluateResponse.Body.String())
+	}
+
+	suppressPayload, _ := json.Marshal(map[string]any{"mode": "suppress", "revision": 0})
+	suppressRequest := authenticatedRequest(http.MethodPut, "/api/v1/threads/asset/asset-threads-1/tags/governance", bytes.NewReader(suppressPayload), session)
+	suppressResponse := httptest.NewRecorder()
+	handler.ServeHTTP(suppressResponse, suppressRequest)
+	if suppressResponse.Code != http.StatusOK {
+		t.Fatalf("expected suppression rule, got %d: %s", suppressResponse.Code, suppressResponse.Body.String())
+	}
+
+	cyclePayload, _ := json.Marshal(map[string]any{
+		"name": parent.Name, "parentId": child.ID, "inheritByDefault": true, "revision": parent.Revision,
+	})
+	cycleRequest := authenticatedRequest(http.MethodPut, "/api/v1/tags/governance", bytes.NewReader(cyclePayload), session)
+	cycleResponse := httptest.NewRecorder()
+	handler.ServeHTTP(cycleResponse, cycleRequest)
+	if cycleResponse.Code != http.StatusConflict || !strings.Contains(cycleResponse.Body.String(), "hierarchy_cycle") {
+		t.Fatalf("expected cycle prevention, got %d: %s", cycleResponse.Code, cycleResponse.Body.String())
+	}
+
+	goal := createPeopleRecord[threads.Goal](t, handler, session, "/api/v1/goals", map[string]any{
+		"id": "reduce-risk", "name": "Reduce operational risk", "description": "Lower material service exposure.",
+	})
+	linkRequest := authenticatedRequest(http.MethodPut, "/api/v1/threads/asset/asset-threads-1/goals/"+goal.ID, nil, session)
+	linkResponse := httptest.NewRecorder()
+	handler.ServeHTTP(linkResponse, linkRequest)
+	if linkResponse.Code != http.StatusOK || !strings.Contains(linkResponse.Body.String(), `"goalId":"reduce-risk"`) {
+		t.Fatalf("expected goal link, got %d: %s", linkResponse.Code, linkResponse.Body.String())
+	}
+	listRequest := authenticatedRequest(http.MethodGet, "/api/v1/threads/asset/asset-threads-1/goals", nil, session)
+	listResponse := httptest.NewRecorder()
+	handler.ServeHTTP(listResponse, listRequest)
+	if listResponse.Code != http.StatusOK || !strings.Contains(listResponse.Body.String(), `"goalId":"reduce-risk"`) {
+		t.Fatalf("expected goal relationship list, got %d: %s", listResponse.Code, listResponse.Body.String())
+	}
+
+	missingCSRF := authenticatedRequest(http.MethodPost, "/api/v1/tags", bytes.NewBufferString(`{"name":"Denied","inheritByDefault":false}`), session)
+	missingCSRF.Header.Del(csrfHeader)
+	missingCSRFResponse := httptest.NewRecorder()
+	handler.ServeHTTP(missingCSRFResponse, missingCSRF)
+	if missingCSRFResponse.Code != http.StatusForbidden || !strings.Contains(missingCSRFResponse.Body.String(), "csrf_failed") {
+		t.Fatalf("expected CSRF protection, got %d: %s", missingCSRFResponse.Code, missingCSRFResponse.Body.String())
+	}
+}
+
 func TestPeopleDirectoryCreateSearchAndAssignmentHistory(t *testing.T) {
 	handler := newGuardServer(t)
 	session := bootstrapAdministrator(t, handler)
@@ -854,15 +944,19 @@ func newGuardServerWithIdentity(t *testing.T, limiter guard.AttemptLimiter, oidc
 	if err != nil {
 		t.Fatal(err)
 	}
-	catalog := repository.NewMemoryCatalog()
+	threadsService, err := threads.NewService(repository.NewMemoryThreadsStore(), allowHTTPThreadTargets{}, foundation.NopAuditor{}, threads.ServiceConfig{
+		OrganizationID: organization.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	return NewServer(Dependencies{
-		Atlas:  atlasService,
-		People: peopleService,
-		Tags:   catalog,
-		Goals:  catalog,
-		Guard:  service,
-		OIDC:   oidcFlow,
-		SAML:   samlFlow,
+		Atlas:   atlasService,
+		People:  peopleService,
+		Threads: threadsService,
+		Guard:   service,
+		OIDC:    oidcFlow,
+		SAML:    samlFlow,
 	}, testOrigin, organization)
 }
 

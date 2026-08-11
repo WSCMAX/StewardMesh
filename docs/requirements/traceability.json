@@ -165,6 +165,48 @@
       }
     },
     {
+      "requirementId": "REQ-LEDGER-001",
+      "featureId": "procurement.finance",
+      "artifacts": {
+        "documentation": [
+          "docs/features/dictionary.md",
+          "docs/features/guard.md",
+          "docs/features/ledger.md",
+          "docs/requirements/initial.md"
+        ],
+        "api": [
+          "api/openapi/openapi.yaml",
+          "api/proto/stewardmesh.proto"
+        ],
+        "code": [
+          "internal/application/application.go",
+          "internal/guard/contracts.go",
+          "internal/httpapi/server.go",
+          "internal/ledger/contracts.go",
+          "internal/ledger/service.go",
+          "internal/repository/memory_ledger.go",
+          "internal/repository/postgres/ledger.go"
+        ],
+        "schema": [
+          "internal/repository/postgres/migrations/0016_ledger_finance.sql",
+          "internal/repository/postgres/migrations/0017_ledger_administrator_permissions.sql"
+        ],
+        "tests": [
+          "internal/httpapi/server_test.go",
+          "internal/ledger/service_test.go",
+          "internal/repository/contracttest/ledger.go",
+          "internal/repository/memory_ledger_test.go",
+          "internal/repository/postgres/migrate_test.go",
+          "internal/repository/postgres/postgres_integration_test.go",
+          "web/src/LedgerManager.test.tsx"
+        ],
+        "ui": [
+          "web/src/App.tsx",
+          "web/src/LedgerManager.tsx"
+        ]
+      }
+    },
+    {
       "requirementId": "SEC-GUARD-001",
       "featureId": "authorization.security",
       "artifacts": {

@@ -1,7 +1,7 @@
 package postgres
 
 // Requirements: REQ-FOUNDATION-001, SEC-GUARD-001, REQ-PEOPLE-001,
-// REQ-DIRECTORY-EXPANSION-001, REQ-ATLAS-001, REQ-THREADS-001, REQ-STORAGE-001.
+// REQ-DIRECTORY-EXPANSION-001, REQ-ATLAS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001.
 
 import (
 	"context"
@@ -233,4 +233,38 @@ func TestStorageStoreIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	contracttest.StorageStore(t, store, organizationID, fmt.Sprintf("postgres-%d", time.Now().UnixNano()))
+}
+
+func TestLedgerStoreIntegration(t *testing.T) {
+	databaseURL := os.Getenv("STEWARDMESH_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("STEWARDMESH_TEST_DATABASE_URL is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	database, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := Migrate(ctx, database); err != nil {
+		t.Fatal(err)
+	}
+	organizations, err := NewOrganizationRepository(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	organizationID := fmt.Sprintf("ledger-integration-%d", time.Now().UnixNano())
+	service, err := bootstrap.NewOrganizationService(organizations)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := service.EnsureOrganization(ctx, organizationID, "Ledger Integration"); err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewLedgerStore(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contracttest.LedgerStore(t, store, organizationID, fmt.Sprintf("postgres-%d", time.Now().UnixNano()))
 }

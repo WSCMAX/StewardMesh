@@ -2,11 +2,12 @@ import { type FormEvent, useEffect, useRef, useState } from 'react'
 import { ApiRequestError, requestJSON } from './api'
 import AtlasInventory, { isAsset, type Asset } from './AtlasInventory'
 import GuardAccessManager from './GuardAccessManager'
+import LedgerManager from './LedgerManager'
 import PeopleDirectory from './PeopleDirectory'
 import ThreadsManager from './ThreadsManager'
 import VaultManager from './VaultManager'
 
-// Requirements include REQ-STORAGE-001. Vault feature: storage.blobs.
+// Requirements include REQ-STORAGE-001 and REQ-LEDGER-001.
 
 type Module = readonly [name: string, description: string]
 
@@ -404,6 +405,8 @@ export default function App() {
             <ThreadsManager assets={assets} csrfToken={csrfToken} permissions={permissions} />
 
             <VaultManager csrfToken={csrfToken} permissions={permissions} />
+
+            <LedgerManager csrfToken={csrfToken} permissions={permissions} />
 
             {permissions.includes('guard.manage') && <GuardAccessManager csrfToken={csrfToken} />}
 

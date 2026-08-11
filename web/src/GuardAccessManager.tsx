@@ -73,6 +73,8 @@ const permissionLabels: Record<string, string> = {
   'directory.write': 'Create and update people and locations',
   'goals.read': 'View goals and tags',
   'goals.write': 'Manage goals, tags, and relationships',
+  'storage.read': 'View and download Vault files',
+  'storage.write': 'Upload files to Vault',
   'guard.manage': 'Manage Guard access',
 }
 

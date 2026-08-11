@@ -119,6 +119,52 @@
       }
     },
     {
+      "requirementId": "REQ-STORAGE-001",
+      "featureId": "storage.blobs",
+      "artifacts": {
+        "documentation": [
+          "docs/features/dictionary.md",
+          "docs/features/vault.md",
+          "docs/requirements/initial.md"
+        ],
+        "api": [
+          "api/openapi/openapi.yaml",
+          "api/proto/stewardmesh.proto"
+        ],
+        "code": [
+          "internal/application/application.go",
+          "internal/config/config.go",
+          "internal/httpapi/server.go",
+          "internal/repository/memory_storage.go",
+          "internal/repository/postgres/storage.go",
+          "internal/storage/contracts.go",
+          "internal/storage/local.go",
+          "internal/storage/s3.go",
+          "internal/storage/service.go"
+        ],
+        "schema": [
+          "internal/repository/postgres/migrations/0014_vault_blobs.sql",
+          "internal/repository/postgres/migrations/0015_vault_administrator_permissions.sql"
+        ],
+        "tests": [
+          "internal/config/config_test.go",
+          "internal/httpapi/server_test.go",
+          "internal/repository/contracttest/storage.go",
+          "internal/repository/memory_storage_test.go",
+          "internal/repository/postgres/migrate_test.go",
+          "internal/repository/postgres/postgres_integration_test.go",
+          "internal/storage/local_test.go",
+          "internal/storage/s3_test.go",
+          "internal/storage/service_test.go",
+          "web/src/VaultManager.test.tsx"
+        ],
+        "ui": [
+          "web/src/App.tsx",
+          "web/src/VaultManager.tsx"
+        ]
+      }
+    },
+    {
       "requirementId": "SEC-GUARD-001",
       "featureId": "authorization.security",
       "artifacts": {

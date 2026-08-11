@@ -1,6 +1,6 @@
 package config
 
-// Requirements: REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
+// Requirements: REQ-STORAGE-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
 
 import (
 	"strings"
@@ -27,6 +27,81 @@ func TestValidateRejectsUnknownRepositoryDriver(t *testing.T) {
 	configuration.RepositoryDriver = "sqlite"
 	if err := configuration.Validate(); err == nil || !strings.Contains(err.Error(), "unsupported") {
 		t.Fatal("expected unsupported driver to fail validation")
+	}
+}
+
+func TestLoadSupportsSecureLocalAndS3StorageDrivers(t *testing.T) {
+	t.Run("local", func(t *testing.T) {
+		t.Setenv("STEWARDMESH_REPOSITORY_DRIVER", "memory")
+		t.Setenv("STEWARDMESH_STORAGE_DRIVER", "local")
+		t.Setenv("STEWARDMESH_BLOB_DIR", t.TempDir())
+		t.Setenv("STEWARDMESH_BLOB_MAXIMUM_BYTES", "4096")
+		configuration, err := Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if configuration.StorageDriver != StorageDriverLocal || configuration.BlobMaximumBytes != 4096 {
+			t.Fatalf("unexpected local storage %#v", configuration)
+		}
+	})
+	t.Run("S3 default identity", func(t *testing.T) {
+		t.Setenv("STEWARDMESH_REPOSITORY_DRIVER", "memory")
+		t.Setenv("STEWARDMESH_STORAGE_DRIVER", "s3")
+		t.Setenv("STEWARDMESH_S3_BUCKET", "private-vault")
+		t.Setenv("STEWARDMESH_S3_REGION", "us-east-1")
+		t.Setenv("STEWARDMESH_S3_ROLE_ARN", "arn:aws:iam::123456789012:role/StewardMeshVault")
+		configuration, err := Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if configuration.StorageDriver != StorageDriverS3 || configuration.S3Encryption != "AES256" || configuration.S3RoleARN == "" {
+			t.Fatalf("unexpected S3 storage %#v", configuration)
+		}
+	})
+}
+
+func TestValidateRejectsUnsafeStorageConfigurationWithoutLeakingSecrets(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*Config)
+	}{
+		{name: "unknown driver", mutate: func(c *Config) { c.StorageDriver = "gcs" }},
+		{name: "ignored local secret", mutate: func(c *Config) { c.S3SecretAccessKey = "super-secret-storage-value" }},
+		{name: "plaintext remote endpoint", mutate: func(c *Config) {
+			c.StorageDriver = StorageDriverS3
+			c.S3Bucket = "private"
+			c.S3Region = "us-east-1"
+			c.S3Encryption = "AES256"
+			c.S3EndpointURL = "http://storage.example.test"
+		}},
+		{name: "unsafe metadata endpoint", mutate: func(c *Config) {
+			c.StorageDriver = StorageDriverS3
+			c.S3Bucket = "private"
+			c.S3Region = "us-east-1"
+			c.S3Encryption = "AES256"
+			c.S3EndpointURL = "http://169.254.169.254"
+		}},
+		{name: "partial credentials", mutate: func(c *Config) {
+			c.StorageDriver = StorageDriverS3
+			c.S3Bucket = "private"
+			c.S3Region = "us-east-1"
+			c.S3Encryption = "AES256"
+			c.S3AccessKeyID = "visible-access-key"
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			configuration := FromEnv()
+			configuration.RepositoryDriver = RepositoryDriverMemory
+			test.mutate(&configuration)
+			err := configuration.Validate()
+			if err == nil {
+				t.Fatal("expected invalid storage configuration")
+			}
+			if strings.Contains(err.Error(), "super-secret") || strings.Contains(err.Error(), "visible-access-key") {
+				t.Fatalf("storage error leaked a credential: %v", err)
+			}
+		})
 	}
 }
 

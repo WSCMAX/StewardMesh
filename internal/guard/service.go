@@ -165,7 +165,7 @@ func (s *Service) Bootstrap(ctx context.Context, input BootstrapInput, trustedRe
 			ID:             bundleID,
 			OrganizationID: s.organizationID,
 			Name:           "Core administration",
-			Description:    "Common organization, inventory, directory, and goals permissions.",
+			Description:    "Common organization, inventory, directory, goals, and Vault permissions.",
 			Permissions:    AdministratorBundlePermissions(),
 		},
 		Role: Role{

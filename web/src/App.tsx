@@ -4,6 +4,9 @@ import AtlasInventory, { isAsset, type Asset } from './AtlasInventory'
 import GuardAccessManager from './GuardAccessManager'
 import PeopleDirectory from './PeopleDirectory'
 import ThreadsManager from './ThreadsManager'
+import VaultManager from './VaultManager'
+
+// Requirements include REQ-STORAGE-001. Vault feature: storage.blobs.
 
 type Module = readonly [name: string, description: string]
 
@@ -51,6 +54,7 @@ const modules: Module[] = [
   ['Horizon', 'Lifecycle planning'],
   ['Ledger', 'Procurement and budgets'],
   ['Threads', 'Tags and strategic goals'],
+  ['Vault', 'Private files and evidence'],
   ['People', 'Users and departments'],
   ['Guard', 'Authentication, roles, policies, and audit'],
   ['Guide', 'Help and walkthroughs'],
@@ -398,6 +402,8 @@ export default function App() {
             <AtlasInventory assets={assets} csrfToken={csrfToken} onAssetsChange={setAssets} permissions={permissions} />
 
             <ThreadsManager assets={assets} csrfToken={csrfToken} permissions={permissions} />
+
+            <VaultManager csrfToken={csrfToken} permissions={permissions} />
 
             {permissions.includes('guard.manage') && <GuardAccessManager csrfToken={csrfToken} />}
 

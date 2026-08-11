@@ -1,7 +1,7 @@
 package httpapi
 
 // Requirements: REQ-FOUNDATION-001, REQ-ATLAS-001, REQ-PEOPLE-001,
-// REQ-DIRECTORY-EXPANSION-001, REQ-THREADS-001, REQ-PLATFORM-VALKEY-001,
+// REQ-DIRECTORY-EXPANSION-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-PLATFORM-VALKEY-001,
 // SEC-GUARD-001, SEC-HTTP-001.
 
 import (
@@ -43,7 +43,7 @@ type Dependencies struct {
 	Atlas               *atlas.Service
 	People              *people.Service
 	Threads             *threads.Service
-	Blobs               storage.BlobStore
+	Vault               *storage.Service
 	Guard               *guard.Service
 	OIDC                *identity.OIDCFlow
 	SAML                *identity.SAMLFlow
@@ -55,6 +55,7 @@ type Server struct {
 	atlas               *atlas.Service
 	people              *people.Service
 	threads             *threads.Service
+	vault               *storage.Service
 	guard               *guard.Service
 	oidc                *identity.OIDCFlow
 	saml                *identity.SAMLFlow
@@ -126,6 +127,7 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 		atlas:               deps.Atlas,
 		people:              deps.People,
 		threads:             deps.Threads,
+		vault:               deps.Vault,
 		guard:               deps.Guard,
 		oidc:                deps.OIDC,
 		saml:                deps.SAML,
@@ -187,8 +189,141 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 	mux.Handle("GET /api/v1/threads/{targetType}/{targetID}/goals", server.protected(guard.PermissionGoalsRead, false, server.listGoalLinks))
 	mux.Handle("PUT /api/v1/threads/{targetType}/{targetID}/goals/{goalID}", server.protected(guard.PermissionGoalsWrite, true, server.linkGoal))
 	mux.Handle("DELETE /api/v1/threads/{targetType}/{targetID}/goals/{goalID}", server.protected(guard.PermissionGoalsWrite, true, server.unlinkGoal))
+	mux.Handle("GET /api/v1/blobs", server.protected(guard.PermissionStorageRead, false, server.listBlobs))
+	mux.Handle("POST /api/v1/blobs", server.protected(guard.PermissionStorageWrite, true, server.createBlob))
+	mux.Handle("GET /api/v1/blobs/{blobID}", server.protected(guard.PermissionStorageRead, false, server.getBlob))
+	mux.Handle("GET /api/v1/blobs/{blobID}/content", server.protected(guard.PermissionStorageRead, false, server.downloadBlob))
+	mux.Handle("POST /api/v1/blobs/{blobID}/download-authorization", server.protected(guard.PermissionStorageRead, true, server.authorizeBlobDownload))
 	mux.Handle("GET /api/v1/graph", server.protected("", false, server.graphView))
 	return server.correlation(server.securityHeaders(server.cors(mux)))
+}
+
+func (s *Server) listBlobs(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.vault == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "vault_unavailable", "Vault storage is unavailable")
+		return
+	}
+	blobs, err := s.vault.ListBlobs(r.Context())
+	if err != nil {
+		writeVaultError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": blobs, "maximumUploadBytes": s.vault.MaximumUploadBytes()})
+}
+
+func (s *Server) getBlob(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.vault == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "vault_unavailable", "Vault storage is unavailable")
+		return
+	}
+	blob, err := s.vault.GetBlob(r.Context(), r.PathValue("blobID"))
+	if err != nil {
+		writeVaultError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, blob)
+}
+
+func (s *Server) createBlob(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.vault == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "vault_unavailable", "Vault storage is unavailable")
+		return
+	}
+	maximumBodyBytes := s.vault.MaximumUploadBytes() + 1<<20
+	r.Body = http.MaxBytesReader(w, r.Body, maximumBodyBytes)
+	contentType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || contentType != "multipart/form-data" {
+		writeError(w, r, http.StatusUnsupportedMediaType, "content_type_invalid", "Vault uploads require multipart form data")
+		return
+	}
+	if err := r.ParseMultipartForm(1 << 20); err != nil {
+		var maximumError *http.MaxBytesError
+		if errors.As(err, &maximumError) {
+			writeError(w, r, http.StatusRequestEntityTooLarge, "blob_too_large", "the file exceeds the configured Vault size limit")
+			return
+		}
+		writeError(w, r, http.StatusBadRequest, "validation_failed", "the Vault upload form is invalid")
+		return
+	}
+	if r.MultipartForm != nil {
+		defer r.MultipartForm.RemoveAll()
+	}
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		writeError(w, r, http.StatusBadRequest, "validation_failed", "a file is required")
+		return
+	}
+	defer file.Close()
+	if header.Size > s.vault.MaximumUploadBytes() {
+		writeError(w, r, http.StatusRequestEntityTooLarge, "blob_too_large", "the file exceeds the configured Vault size limit")
+		return
+	}
+	mediaType, _, err := mime.ParseMediaType(header.Header.Get("Content-Type"))
+	if err != nil || mediaType == "" {
+		mediaType = "application/octet-stream"
+	}
+	blob, err := s.vault.CreateBlob(r.Context(), storage.CreateBlobInput{
+		Name: header.Filename, MediaType: mediaType, Content: file,
+		SourceSystemID: r.FormValue("sourceSystemId"), SourceRecordID: r.FormValue("sourceRecordId"),
+		ResourceType: r.FormValue("resourceType"), ResourceID: r.FormValue("resourceId"),
+	})
+	if err != nil {
+		writeVaultError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, blob)
+}
+
+func (s *Server) downloadBlob(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.vault == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "vault_unavailable", "Vault storage is unavailable")
+		return
+	}
+	blob, content, err := s.vault.OpenAuthorizedBlob(r.Context(), r.PathValue("blobID"), r.URL.Query().Get("token"))
+	if err != nil {
+		writeVaultError(w, r, err)
+		return
+	}
+	defer content.Close()
+	w.Header().Set("Content-Type", blob.MediaType)
+	w.Header().Set("Content-Length", strconv.FormatInt(blob.SizeBytes, 10))
+	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": blob.Name}))
+	w.Header().Set("ETag", `"sha256:`+blob.SHA256+`"`)
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.Copy(w, content)
+}
+
+func (s *Server) authorizeBlobDownload(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.vault == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "vault_unavailable", "Vault storage is unavailable")
+		return
+	}
+	authorization, err := s.vault.AuthorizeDownload(r.Context(), r.PathValue("blobID"))
+	if err != nil {
+		writeVaultError(w, r, err)
+		return
+	}
+	if strings.HasPrefix(authorization.URL, "?token=") {
+		authorization.URL = "/api/v1/blobs/" + r.PathValue("blobID") + "/content" + authorization.URL
+	}
+	writeJSON(w, http.StatusCreated, authorization)
+}
+
+func writeVaultError(w http.ResponseWriter, r *http.Request, err error) {
+	switch {
+	case errors.Is(err, storage.ErrInvalidInput):
+		writeError(w, r, http.StatusBadRequest, "validation_failed", "Vault file details are invalid")
+	case errors.Is(err, storage.ErrNotFound):
+		writeError(w, r, http.StatusNotFound, "not_found", "the requested Vault file was not found")
+	case errors.Is(err, storage.ErrConflict):
+		writeError(w, r, http.StatusConflict, "conflict", "this Vault file conflicts with existing data")
+	case errors.Is(err, storage.ErrTooLarge):
+		writeError(w, r, http.StatusRequestEntityTooLarge, "blob_too_large", "the file exceeds the configured Vault size limit")
+	case errors.Is(err, storage.ErrIntegrity):
+		writeError(w, r, http.StatusInternalServerError, "integrity_failed", "Vault could not verify the stored file")
+	default:
+		writeError(w, r, http.StatusInternalServerError, "vault_error", "the Vault operation could not be completed")
+	}
 }
 
 func (s *Server) graphView(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {

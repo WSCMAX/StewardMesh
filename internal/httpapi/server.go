@@ -1,7 +1,8 @@
 package httpapi
 
 // Requirements: REQ-FOUNDATION-001, REQ-ATLAS-001, REQ-PEOPLE-001,
-// REQ-DIRECTORY-EXPANSION-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
+// REQ-DIRECTORY-EXPANSION-001, REQ-THREADS-001, REQ-PLATFORM-VALKEY-001,
+// SEC-GUARD-001, SEC-HTTP-001.
 
 import (
 	"encoding/json"
@@ -24,8 +25,8 @@ import (
 	"github.com/maxlemke/stewardmesh/internal/guard"
 	"github.com/maxlemke/stewardmesh/internal/identity"
 	"github.com/maxlemke/stewardmesh/internal/people"
-	"github.com/maxlemke/stewardmesh/internal/repository"
 	"github.com/maxlemke/stewardmesh/internal/storage"
+	"github.com/maxlemke/stewardmesh/internal/threads"
 )
 
 const (
@@ -41,8 +42,7 @@ var correlationIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127
 type Dependencies struct {
 	Atlas               *atlas.Service
 	People              *people.Service
-	Tags                repository.TagRepository
-	Goals               repository.GoalRepository
+	Threads             *threads.Service
 	Blobs               storage.BlobStore
 	Guard               *guard.Service
 	OIDC                *identity.OIDCFlow
@@ -54,8 +54,7 @@ type Dependencies struct {
 type Server struct {
 	atlas               *atlas.Service
 	people              *people.Service
-	tagsRepo            repository.TagRepository
-	goalsRepo           repository.GoalRepository
+	threads             *threads.Service
 	guard               *guard.Service
 	oidc                *identity.OIDCFlow
 	saml                *identity.SAMLFlow
@@ -126,8 +125,7 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 	server := &Server{
 		atlas:               deps.Atlas,
 		people:              deps.People,
-		tagsRepo:            deps.Tags,
-		goalsRepo:           deps.Goals,
+		threads:             deps.Threads,
 		guard:               deps.Guard,
 		oidc:                deps.OIDC,
 		saml:                deps.SAML,
@@ -175,8 +173,20 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 	mux.Handle("GET /api/v1/assets/{assetID}/assignments", server.protected(guard.PermissionAssetsRead, false, server.listAssetAssignments))
 	mux.Handle("POST /api/v1/assets/{assetID}/assignments", server.protected(guard.PermissionDirectoryWrite, true, server.createAssetAssignment))
 	mux.Handle("PATCH /api/v1/assets/{assetID}/assignments/{assignmentID}", server.protected(guard.PermissionDirectoryWrite, true, server.endAssetAssignment))
-	mux.Handle("GET /api/v1/tags", server.protected(guard.PermissionGoalsRead, false, server.tags))
-	mux.Handle("GET /api/v1/goals", server.protected(guard.PermissionGoalsRead, false, server.goals))
+	mux.Handle("GET /api/v1/tags", server.protected(guard.PermissionGoalsRead, false, server.listTags))
+	mux.Handle("POST /api/v1/tags", server.protected(guard.PermissionGoalsWrite, true, server.createTag))
+	mux.Handle("GET /api/v1/tags/{tagID}", server.protected(guard.PermissionGoalsRead, false, server.getTag))
+	mux.Handle("PUT /api/v1/tags/{tagID}", server.protected(guard.PermissionGoalsWrite, true, server.updateTag))
+	mux.Handle("GET /api/v1/goals", server.protected(guard.PermissionGoalsRead, false, server.listGoals))
+	mux.Handle("POST /api/v1/goals", server.protected(guard.PermissionGoalsWrite, true, server.createGoal))
+	mux.Handle("GET /api/v1/goals/{goalID}", server.protected(guard.PermissionGoalsRead, false, server.getGoal))
+	mux.Handle("PUT /api/v1/goals/{goalID}", server.protected(guard.PermissionGoalsWrite, true, server.updateGoal))
+	mux.Handle("GET /api/v1/threads/{targetType}/{targetID}/tags", server.protected(guard.PermissionGoalsRead, false, server.listEffectiveTags))
+	mux.Handle("PUT /api/v1/threads/{targetType}/{targetID}/tags/{tagID}", server.protected(guard.PermissionGoalsWrite, true, server.setTagRule))
+	mux.Handle("DELETE /api/v1/threads/{targetType}/{targetID}/tags/{tagID}", server.protected(guard.PermissionGoalsWrite, true, server.deleteTagRule))
+	mux.Handle("GET /api/v1/threads/{targetType}/{targetID}/goals", server.protected(guard.PermissionGoalsRead, false, server.listGoalLinks))
+	mux.Handle("PUT /api/v1/threads/{targetType}/{targetID}/goals/{goalID}", server.protected(guard.PermissionGoalsWrite, true, server.linkGoal))
+	mux.Handle("DELETE /api/v1/threads/{targetType}/{targetID}/goals/{goalID}", server.protected(guard.PermissionGoalsWrite, true, server.unlinkGoal))
 	mux.Handle("GET /api/v1/graph", server.protected("", false, server.graphView))
 	return server.correlation(server.securityHeaders(server.cors(mux)))
 }
@@ -1074,30 +1084,228 @@ func (s *Server) endAssetAssignment(w http.ResponseWriter, r *http.Request, auth
 	writeJSON(w, http.StatusOK, ended)
 }
 
-func (s *Server) tags(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
-	if s.tagsRepo == nil {
-		writeError(w, r, http.StatusServiceUnavailable, "repository_unavailable", "tag repository unavailable")
+func (s *Server) listTags(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if !s.requireThreads(w, r) {
 		return
 	}
-	items, err := s.tagsRepo.ListTags(r.Context())
+	items, err := s.threads.ListTags(r.Context())
 	if err != nil {
-		writeError(w, r, http.StatusInternalServerError, "repository_error", "unable to list tags")
+		writeThreadsError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
-func (s *Server) goals(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
-	if s.goalsRepo == nil {
-		writeError(w, r, http.StatusServiceUnavailable, "repository_unavailable", "goal repository unavailable")
+func (s *Server) getTag(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if !s.requireThreads(w, r) {
 		return
 	}
-	items, err := s.goalsRepo.ListGoals(r.Context())
+	item, err := s.threads.GetTag(r.Context(), r.PathValue("tagID"))
 	if err != nil {
-		writeError(w, r, http.StatusInternalServerError, "repository_error", "unable to list goals")
+		writeThreadsError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) createTag(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if !s.requireThreads(w, r) {
+		return
+	}
+	var input threads.CreateTagInput
+	if err := decodeJSON(w, r, 32<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid tag payload")
+		return
+	}
+	item, err := s.threads.CreateTag(r.Context(), input)
+	if err != nil {
+		writeThreadsError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, item)
+}
+
+func (s *Server) updateTag(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
+	if !s.requireThreads(w, r) || !s.requireResourceWrite(w, r, authentication, "tag", r.PathValue("tagID")) {
+		return
+	}
+	var input threads.UpdateTagInput
+	if err := decodeJSON(w, r, 32<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid tag payload")
+		return
+	}
+	input.ID = r.PathValue("tagID")
+	item, err := s.threads.UpdateTag(r.Context(), input)
+	if err != nil {
+		writeThreadsError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) listGoals(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if !s.requireThreads(w, r) {
+		return
+	}
+	items, err := s.threads.ListGoals(r.Context())
+	if err != nil {
+		writeThreadsError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) getGoal(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if !s.requireThreads(w, r) {
+		return
+	}
+	item, err := s.threads.GetGoal(r.Context(), r.PathValue("goalID"))
+	if err != nil {
+		writeThreadsError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) createGoal(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if !s.requireThreads(w, r) {
+		return
+	}
+	var input threads.CreateGoalInput
+	if err := decodeJSON(w, r, 32<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid goal payload")
+		return
+	}
+	item, err := s.threads.CreateGoal(r.Context(), input)
+	if err != nil {
+		writeThreadsError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, item)
+}
+
+func (s *Server) updateGoal(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
+	if !s.requireThreads(w, r) || !s.requireResourceWrite(w, r, authentication, "goal", r.PathValue("goalID")) {
+		return
+	}
+	var input threads.UpdateGoalInput
+	if err := decodeJSON(w, r, 32<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid goal payload")
+		return
+	}
+	input.ID = r.PathValue("goalID")
+	item, err := s.threads.UpdateGoal(r.Context(), input)
+	if err != nil {
+		writeThreadsError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) listEffectiveTags(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if !s.requireThreads(w, r) {
+		return
+	}
+	items, err := s.threads.EvaluateTags(r.Context(), threads.TargetType(r.PathValue("targetType")), r.PathValue("targetID"))
+	if err != nil {
+		writeThreadsError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) setTagRule(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
+	if !s.requireThreads(w, r) || !s.requireResourceWrite(w, r, authentication, r.PathValue("targetType"), r.PathValue("targetID")) {
+		return
+	}
+	var input struct {
+		Mode     threads.RuleMode `json:"mode"`
+		Revision int64            `json:"revision"`
+	}
+	if err := decodeJSON(w, r, 16<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid tag rule payload")
+		return
+	}
+	item, err := s.threads.SetTagRule(r.Context(), threads.SetTagRuleInput{
+		TargetType: threads.TargetType(r.PathValue("targetType")), TargetID: r.PathValue("targetID"),
+		TagID: r.PathValue("tagID"), Mode: input.Mode, Revision: input.Revision,
+	})
+	if err != nil {
+		writeThreadsError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) deleteTagRule(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
+	if !s.requireThreads(w, r) || !s.requireResourceWrite(w, r, authentication, r.PathValue("targetType"), r.PathValue("targetID")) {
+		return
+	}
+	revision, err := positiveRevision(r)
+	if err != nil {
+		writeError(w, r, http.StatusBadRequest, "validation_failed", "tag rule revision is required")
+		return
+	}
+	err = s.threads.DeleteTagRule(r.Context(), threads.TargetType(r.PathValue("targetType")), r.PathValue("targetID"), r.PathValue("tagID"), revision)
+	if err != nil {
+		writeThreadsError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) listGoalLinks(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if !s.requireThreads(w, r) {
+		return
+	}
+	items, err := s.threads.ListGoalLinks(r.Context(), threads.TargetType(r.PathValue("targetType")), r.PathValue("targetID"))
+	if err != nil {
+		writeThreadsError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) linkGoal(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
+	if !s.requireThreads(w, r) || !s.requireResourceWrite(w, r, authentication, r.PathValue("targetType"), r.PathValue("targetID")) {
+		return
+	}
+	item, err := s.threads.LinkGoal(r.Context(), threads.LinkGoalInput{
+		GoalID: r.PathValue("goalID"), TargetType: threads.TargetType(r.PathValue("targetType")), TargetID: r.PathValue("targetID"),
+	})
+	if err != nil {
+		writeThreadsError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) unlinkGoal(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
+	if !s.requireThreads(w, r) || !s.requireResourceWrite(w, r, authentication, r.PathValue("targetType"), r.PathValue("targetID")) {
+		return
+	}
+	err := s.threads.UnlinkGoal(r.Context(), threads.TargetType(r.PathValue("targetType")), r.PathValue("targetID"), r.PathValue("goalID"))
+	if err != nil {
+		writeThreadsError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) requireThreads(w http.ResponseWriter, r *http.Request) bool {
+	if s.threads != nil {
+		return true
+	}
+	writeError(w, r, http.StatusServiceUnavailable, "repository_unavailable", "Threads service unavailable")
+	return false
+}
+
+func positiveRevision(r *http.Request) (int64, error) {
+	value, err := strconv.ParseInt(strings.TrimSpace(r.URL.Query().Get("revision")), 10, 64)
+	if err != nil || value < 1 {
+		return 0, errors.New("revision must be positive")
+	}
+	return value, nil
 }
 
 func (s *Server) createAsset(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
@@ -1183,6 +1391,21 @@ func writeAtlasError(w http.ResponseWriter, r *http.Request, err error) {
 		writeError(w, r, http.StatusConflict, "conflict", "asset identity or revision conflicts with current data")
 	default:
 		writeError(w, r, http.StatusInternalServerError, "repository_error", "the asset operation could not be completed")
+	}
+}
+
+func writeThreadsError(w http.ResponseWriter, r *http.Request, err error) {
+	switch {
+	case errors.Is(err, threads.ErrInvalidInput):
+		writeError(w, r, http.StatusBadRequest, "validation_failed", "tag, goal, target, or revision details are invalid")
+	case errors.Is(err, threads.ErrNotFound):
+		writeError(w, r, http.StatusNotFound, "not_found", "the requested tag, goal, or target was not found")
+	case errors.Is(err, threads.ErrCycle):
+		writeError(w, r, http.StatusConflict, "hierarchy_cycle", "the selected parent would create a hierarchy cycle")
+	case errors.Is(err, threads.ErrConflict):
+		writeError(w, r, http.StatusConflict, "conflict", "the tag, goal, or relationship conflicts with current data")
+	default:
+		writeError(w, r, http.StatusInternalServerError, "repository_error", "the Threads operation could not be completed")
 	}
 }
 
@@ -1462,7 +1685,7 @@ func (s *Server) cors(next http.Handler) http.Handler {
 				writeError(w, r, http.StatusForbidden, "origin_denied", "request origin is not allowed")
 				return
 			}
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-CSRF-Token, X-Correlation-ID")
 			w.WriteHeader(http.StatusNoContent)
 			return

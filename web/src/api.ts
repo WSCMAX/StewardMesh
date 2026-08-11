@@ -1,4 +1,4 @@
-// Requirements: SEC-HTTP-001, SEC-GUARD-001, REQ-PEOPLE-001.
+// Requirements: SEC-HTTP-001, SEC-GUARD-001, REQ-PEOPLE-001, REQ-THREADS-001.
 
 const httpNoContent = 204
 

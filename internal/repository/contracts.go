@@ -13,11 +13,3 @@ type OrganizationRepository interface {
 	GetOrganization(ctx context.Context, id string) (domain.Organization, error)
 	BootstrapOrganization(ctx context.Context, organization domain.Organization) (domain.Organization, bool, error)
 }
-
-type TagRepository interface {
-	ListTags(ctx context.Context) ([]domain.Tag, error)
-}
-
-type GoalRepository interface {
-	ListGoals(ctx context.Context) ([]domain.Goal, error)
-}

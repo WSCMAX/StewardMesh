@@ -72,6 +72,7 @@ const permissionLabels: Record<string, string> = {
   'directory.read': 'View people and locations',
   'directory.write': 'Create and update people and locations',
   'goals.read': 'View goals and tags',
+  'goals.write': 'Manage goals, tags, and relationships',
   'guard.manage': 'Manage Guard access',
 }
 

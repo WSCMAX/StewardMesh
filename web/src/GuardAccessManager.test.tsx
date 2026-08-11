@@ -47,7 +47,7 @@ const policyBundle = {
   description: 'Common organization permissions.',
   permissions: ['organization.read', 'assets.read'],
 }
-const availablePermissions = ['organization.read', 'assets.read', 'assets.write', 'directory.read', 'directory.write', 'goals.read', 'guard.manage']
+const availablePermissions = ['organization.read', 'assets.read', 'assets.write', 'directory.read', 'directory.write', 'goals.read', 'goals.write', 'guard.manage']
 
 function accessResponse(assignments: typeof localAssignment[], roles = [role]) {
   return { accounts: [account], roles, policyBundles: [policyBundle], availablePermissions, assignments }

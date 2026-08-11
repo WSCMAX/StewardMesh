@@ -12,11 +12,6 @@ import (
 
 var ErrNotFound = errors.New("record not found")
 
-type MemoryCatalog struct {
-	tags  []domain.Tag
-	goals []domain.Goal
-}
-
 type MemoryOrganizationRepository struct {
 	mu            sync.RWMutex
 	organizations map[string]domain.Organization
@@ -51,18 +46,6 @@ func (r *MemoryOrganizationRepository) BootstrapOrganization(_ context.Context, 
 	}
 	r.organizations[organization.ID] = organization
 	return organization, true, nil
-}
-
-func NewMemoryCatalog() *MemoryCatalog {
-	return &MemoryCatalog{}
-}
-
-func (c *MemoryCatalog) ListTags(_ context.Context) ([]domain.Tag, error) {
-	return append([]domain.Tag(nil), c.tags...), nil
-}
-
-func (c *MemoryCatalog) ListGoals(_ context.Context) ([]domain.Goal, error) {
-	return append([]domain.Goal(nil), c.goals...), nil
 }
 
 func sortAssets(items []domain.Asset) {

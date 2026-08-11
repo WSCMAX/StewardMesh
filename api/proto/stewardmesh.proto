@@ -63,6 +63,25 @@ service PeopleService {
   rpc EndAssetAssignment(EndAssetAssignmentRequest) returns (AssetAssignment);
 }
 
+// Organization-scoped tag and goal hierarchies with explicit inheritance
+// provenance. Requirement: REQ-THREADS-001. Feature: goals.tags.
+service ThreadsService {
+  rpc ListTags(ListTagsRequest) returns (ListTagsResponse);
+  rpc GetTag(GetTagRequest) returns (Tag);
+  rpc CreateTag(CreateTagRequest) returns (Tag);
+  rpc UpdateTag(UpdateTagRequest) returns (Tag);
+  rpc ListGoals(ListGoalsRequest) returns (ListGoalsResponse);
+  rpc GetGoal(GetGoalRequest) returns (Goal);
+  rpc CreateGoal(CreateGoalRequest) returns (Goal);
+  rpc UpdateGoal(UpdateGoalRequest) returns (Goal);
+  rpc ListEffectiveTags(ListEffectiveTagsRequest) returns (ListEffectiveTagsResponse);
+  rpc SetTagRule(SetTagRuleRequest) returns (TagRule);
+  rpc DeleteTagRule(DeleteTagRuleRequest) returns (DeleteTagRuleResponse);
+  rpc ListGoalLinks(ListGoalLinksRequest) returns (ListGoalLinksResponse);
+  rpc LinkGoal(LinkGoalRequest) returns (GoalLink);
+  rpc UnlinkGoal(UnlinkGoalRequest) returns (UnlinkGoalResponse);
+}
+
 message GetOrganizationRequest {}
 
 message Organization {
@@ -508,3 +527,168 @@ message AssetAssignment {
   string created_by = 9;
   google.protobuf.Timestamp created_at = 10;
 }
+
+enum ThreadTargetType {
+  THREAD_TARGET_TYPE_UNSPECIFIED = 0;
+  THREAD_TARGET_TYPE_ASSET = 1;
+  THREAD_TARGET_TYPE_PURCHASE = 2;
+  THREAD_TARGET_TYPE_CONTRACT = 3;
+  THREAD_TARGET_TYPE_SOFTWARE = 4;
+  THREAD_TARGET_TYPE_BUDGET = 5;
+  THREAD_TARGET_TYPE_GOAL = 6;
+}
+
+enum TagRuleMode {
+  TAG_RULE_MODE_UNSPECIFIED = 0;
+  TAG_RULE_MODE_INCLUDE = 1;
+  TAG_RULE_MODE_SUPPRESS = 2;
+}
+
+message ListTagsRequest {}
+
+message ListTagsResponse {
+  repeated Tag items = 1;
+}
+
+message GetTagRequest {
+  string tag_id = 1;
+}
+
+message CreateTagRequest {
+  string id = 1;
+  string name = 2;
+  string parent_id = 3;
+  bool inherit_by_default = 4;
+}
+
+message UpdateTagRequest {
+  string tag_id = 1;
+  string name = 2;
+  string parent_id = 3;
+  bool inherit_by_default = 4;
+  int64 revision = 5;
+}
+
+message Tag {
+  string id = 1;
+  string organization_id = 2;
+  string name = 3;
+  string parent_id = 4;
+  bool inherit_by_default = 5;
+  int64 revision = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp updated_at = 8;
+}
+
+message ListGoalsRequest {}
+
+message ListGoalsResponse {
+  repeated Goal items = 1;
+}
+
+message GetGoalRequest {
+  string goal_id = 1;
+}
+
+message CreateGoalRequest {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  string parent_id = 4;
+}
+
+message UpdateGoalRequest {
+  string goal_id = 1;
+  string name = 2;
+  string description = 3;
+  string parent_id = 4;
+  int64 revision = 5;
+}
+
+message Goal {
+  string id = 1;
+  string organization_id = 2;
+  string name = 3;
+  string description = 4;
+  string parent_id = 5;
+  int64 revision = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp updated_at = 8;
+}
+
+message ListEffectiveTagsRequest {
+  ThreadTargetType target_type = 1;
+  string target_id = 2;
+}
+
+message ListEffectiveTagsResponse {
+  repeated EffectiveTag items = 1;
+}
+
+message EffectiveTag {
+  Tag tag = 1;
+  string state = 2;
+  string source_tag_id = 3;
+  TagRule rule = 4;
+}
+
+message SetTagRuleRequest {
+  ThreadTargetType target_type = 1;
+  string target_id = 2;
+  string tag_id = 3;
+  TagRuleMode mode = 4;
+  int64 revision = 5;
+}
+
+message TagRule {
+  string organization_id = 1;
+  ThreadTargetType target_type = 2;
+  string target_id = 3;
+  string tag_id = 4;
+  TagRuleMode mode = 5;
+  int64 revision = 6;
+  string updated_by = 7;
+  google.protobuf.Timestamp created_at = 8;
+  google.protobuf.Timestamp updated_at = 9;
+}
+
+message DeleteTagRuleRequest {
+  ThreadTargetType target_type = 1;
+  string target_id = 2;
+  string tag_id = 3;
+  int64 revision = 4;
+}
+
+message DeleteTagRuleResponse {}
+
+message ListGoalLinksRequest {
+  ThreadTargetType target_type = 1;
+  string target_id = 2;
+}
+
+message ListGoalLinksResponse {
+  repeated GoalLink items = 1;
+}
+
+message LinkGoalRequest {
+  string goal_id = 1;
+  ThreadTargetType target_type = 2;
+  string target_id = 3;
+}
+
+message GoalLink {
+  string organization_id = 1;
+  string goal_id = 2;
+  ThreadTargetType target_type = 3;
+  string target_id = 4;
+  string created_by = 5;
+  google.protobuf.Timestamp created_at = 6;
+}
+
+message UnlinkGoalRequest {
+  string goal_id = 1;
+  ThreadTargetType target_type = 2;
+  string target_id = 3;
+}
+
+message UnlinkGoalResponse {}

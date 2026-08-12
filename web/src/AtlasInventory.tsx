@@ -1,6 +1,7 @@
 import { type FormEvent, useMemo, useRef, useState } from 'react'
 import { ApiRequestError, requestJSON } from './api'
 import AtlasIdentifiers from './AtlasIdentifiers'
+import { buttonClass, emptyStateClass, inputClass, panelClass, secondaryButtonClass, subpanelClass } from './ui'
 
 // Requirements: REQ-ATLAS-001, REQ-ATLAS-CODES-001. Features: inventory.assets, inventory.identifiers.
 
@@ -62,9 +63,6 @@ type AtlasInventoryProps = {
 const kinds = ['server', 'computer', 'desktop', 'laptop', 'tablet', 'phone', 'network', 'peripheral', 'virtual', 'other']
 const statuses = ['draft', 'active', 'inactive', 'retired', 'disposed']
 const emptyReferences: ReferenceOptions = { sites: [], buildings: [], rooms: [], departments: [], identities: [] }
-const inputClass = 'mt-2 min-h-11 w-full rounded-lg border border-steward-ink-800 bg-steward-ink-950 px-3 py-2 text-steward-mist shadow-inner shadow-black/20'
-const buttonClass = 'min-h-11 rounded-lg bg-steward-teal px-4 py-2 font-semibold text-steward-ink-950 transition hover:bg-[#29cfb9] disabled:cursor-wait disabled:opacity-60'
-const secondaryButtonClass = 'min-h-11 rounded-lg border border-steward-teal px-4 py-2 font-semibold text-steward-teal transition hover:bg-steward-teal/10 disabled:cursor-wait disabled:opacity-60'
 
 export function isAsset(value: unknown): value is Asset {
   if (typeof value !== 'object' || value === null) return false
@@ -226,7 +224,7 @@ export default function AtlasInventory({ assets, csrfToken, permissions, onAsset
   }
 
   return (
-    <section aria-labelledby="assets-heading" className="rounded-xl border border-steward-ink-800 bg-steward-ink-900 p-6" data-feature="inventory.assets" data-requirement="REQ-ATLAS-001">
+    <section aria-labelledby="assets-heading" className={`${panelClass} p-5 sm:p-6`} data-feature="inventory.assets" data-requirement="REQ-ATLAS-001">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <p className="text-sm font-semibold text-steward-teal">Organization asset registry</p>
@@ -255,7 +253,7 @@ export default function AtlasInventory({ assets, csrfToken, permissions, onAsset
       </div>
 
       {formOpen && canWrite && (
-        <form aria-label={editing ? 'Edit asset' : 'Add asset'} className="mt-6 rounded-xl border border-steward-blue/40 bg-steward-ink-950/55 p-5" key={editing?.id ?? 'new'} onSubmit={handleSubmit}>
+        <form aria-label={editing ? 'Edit asset' : 'Add asset'} className={`${subpanelClass} mt-6 border-steward-blue/35 p-5`} key={editing?.id ?? 'new'} onSubmit={handleSubmit}>
           <div className="flex flex-wrap items-center justify-between gap-3"><h3 className="text-lg font-semibold">{editing ? `Edit ${editing.name}` : 'Register an asset'}</h3><button className="text-sm text-steward-teal underline underline-offset-4" onClick={() => { setFormOpen(false); setEditing(null) }} type="button">Cancel</button></div>
           <div className="mt-4 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
             <TextField defaultValue={assetValue(editing, 'name')} label="Asset name" name="name" required />
@@ -280,16 +278,16 @@ export default function AtlasInventory({ assets, csrfToken, permissions, onAsset
       <div className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,1.4fr)_minmax(18rem,0.8fr)]">
         <div>
           <h3 className="text-lg font-semibold">Assets <span className="text-sm font-normal text-steward-mist-muted">({filteredAssets.length})</span></h3>
-          {filteredAssets.length === 0 ? <p className="mt-4 rounded-xl border border-dashed border-steward-ink-800 p-5 text-sm text-steward-mist-muted">No assets match these filters.</p> : (
-            <ul className="mt-3 divide-y divide-steward-ink-800">{filteredAssets.map((asset) => (
-              <li className="flex flex-wrap items-center justify-between gap-3 py-4" key={asset.id}>
+          {filteredAssets.length === 0 ? <p className={`${emptyStateClass} mt-4`}>No assets match these filters.</p> : (
+            <ul className="mt-3 space-y-2">{filteredAssets.map((asset) => (
+              <li className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-transparent px-3 py-3 transition hover:border-white/[0.08] hover:bg-white/[0.035]" key={asset.id}>
                 <button className="min-h-11 text-left" onClick={() => void selectAsset(asset)} type="button"><span className="block font-semibold text-steward-mist">{asset.name}</span><span className="text-sm text-steward-mist-muted">{asset.assetTag || asset.serialNumber || 'No asset tag'} · {asset.kind} · {asset.status}</span></button>
                 {canWrite && <button className={secondaryButtonClass} onClick={() => openEdit(asset)} type="button">Edit</button>}
               </li>
             ))}</ul>
           )}
         </div>
-        <aside aria-labelledby="asset-detail-heading" className="rounded-xl border border-steward-ink-800 bg-steward-ink-950/45 p-5">
+        <aside aria-labelledby="asset-detail-heading" className={`${subpanelClass} p-5`}>
           <h3 className="text-lg font-semibold" id="asset-detail-heading">Asset details</h3>
           {!selected ? <p className="mt-3 text-sm text-steward-mist-muted">Choose an asset to inspect its current record and lifecycle.</p> : <>
             <dl className="mt-4 grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm"><Detail label="Name" value={selected.name} /><Detail label="Kind" value={selected.kind} /><Detail label="Status" value={selected.status} /><Detail label="Asset tag" value={selected.assetTag} /><Detail label="Serial" value={selected.serialNumber} /><Detail label="Hostname" value={selected.hostname} /><Detail label="Site" value={selected.siteId} /><Detail label="Building" value={selected.buildingId} /><Detail label="Room" value={selected.roomId} /><Detail label="Department" value={selected.departmentId} /><Detail label="User" value={selected.userId} /><Detail label="Revision" value={String(selected.revision)} /></dl>

@@ -7,8 +7,11 @@ StewardMesh is a calm, capable workspace for understanding relationships and pla
 - Primary vector mark: [`web/public/brand/stewardmesh-s-mark.svg`](../../web/public/brand/stewardmesh-s-mark.svg)
 - Browser favicon: [`web/public/brand/stewardmesh-s-mark-favicon-arrow-face.svg`](../../web/public/brand/stewardmesh-s-mark-favicon-arrow-face.svg)
 - PNG export: [`web/public/brand/stewardmesh-logo.png`](../../web/public/brand/stewardmesh-logo.png)
+- Shared React UI primitives: [`web/src/ui.tsx`](../../web/src/ui.tsx)
 
 Use the primary SVG in the interface. Use the filled-face favicon asset in browser chrome, where the stronger shapes remain legible at small sizes. Keep the PNG as the portable raster export for integrations that do not accept SVG.
+
+The shared UI module adapts the installed Tailwind Plus and Catalyst patterns to this guide's palette. Reuse its panel, subpanel, input, button, table, status, and product-icon primitives before adding module-local utility strings. This keeps focus, hover, disabled, spacing, and responsive behavior consistent across Workspace surfaces.
 
 ## Brand palette
 

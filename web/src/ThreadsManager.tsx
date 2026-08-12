@@ -1,6 +1,7 @@
 import { type FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import { ApiRequestError, requestJSON } from './api'
 import type { Asset } from './AtlasInventory'
+import { buttonClass, inputClass, panelClass, secondaryButtonClass, subpanelClass } from './ui'
 
 // Requirement: REQ-THREADS-001. Feature: goals.tags.
 
@@ -48,9 +49,6 @@ type ThreadsManagerProps = {
   onOpenHelp?: () => void
 }
 
-const inputClass = 'mt-2 min-h-11 w-full rounded-lg border border-steward-ink-800 bg-steward-ink-950 px-3 py-2 text-steward-mist shadow-inner shadow-black/20'
-const buttonClass = 'min-h-11 rounded-lg bg-steward-teal px-4 py-2 font-semibold text-steward-ink-950 transition hover:bg-[#29cfb9] disabled:cursor-wait disabled:opacity-60'
-const secondaryButtonClass = 'min-h-11 rounded-lg border border-steward-teal px-3 py-2 text-sm font-semibold text-steward-teal transition hover:bg-steward-teal/10 disabled:cursor-wait disabled:opacity-60'
 
 function items(value: unknown): unknown[] {
   if (typeof value !== 'object' || value === null) return []
@@ -313,7 +311,7 @@ export default function ThreadsManager({ assets, csrfToken, permissions, onOpenH
   if (!canRead) return null
 
   return (
-    <section aria-labelledby="threads-heading" className="rounded-xl border border-steward-ink-800 bg-steward-ink-900 p-6" data-feature="goals.tags" data-requirement="REQ-THREADS-001">
+    <section aria-labelledby="threads-heading" className={`${panelClass} p-5 sm:p-6`} data-feature="goals.tags" data-requirement="REQ-THREADS-001">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <p className="text-sm font-semibold text-steward-teal">Shared context and strategy</p>
@@ -327,7 +325,7 @@ export default function ThreadsManager({ assets, csrfToken, permissions, onOpenH
       {message && <p className="mt-4 rounded-lg border border-steward-green/40 bg-steward-green/10 p-3 text-sm" role="status">{message}</p>}
 
       {canWrite && <div className="mt-6 grid gap-5 lg:grid-cols-2">
-        <form aria-label="Create tag" className="rounded-xl border border-steward-ink-800 bg-steward-ink-950/55 p-5" onSubmit={createTag}>
+        <form aria-label="Create tag" className={`${subpanelClass} p-5`} onSubmit={createTag}>
           <h3 className="text-lg font-semibold">Create a tag</h3>
           <label className="mt-4 block text-sm font-semibold text-steward-mist-muted">Tag name<input className={inputClass} maxLength={100} name="tagName" required /></label>
           <label className="mt-4 block text-sm font-semibold text-steward-mist-muted">Parent tag (optional)<select className={inputClass} name="tagParent"><option value="">No parent</option>{tags.map((tag) => <option key={tag.id} value={tag.id}>{tag.name}</option>)}</select></label>
@@ -335,7 +333,7 @@ export default function ThreadsManager({ assets, csrfToken, permissions, onOpenH
           <button className={`${buttonClass} mt-4`} disabled={busy === 'tag-create'} type="submit">{busy === 'tag-create' ? 'Creating tag…' : 'Create tag'}</button>
         </form>
 
-        <form aria-label="Create goal" className="rounded-xl border border-steward-ink-800 bg-steward-ink-950/55 p-5" onSubmit={createGoal}>
+        <form aria-label="Create goal" className={`${subpanelClass} p-5`} onSubmit={createGoal}>
           <h3 className="text-lg font-semibold">Create a goal</h3>
           <label className="mt-4 block text-sm font-semibold text-steward-mist-muted">Goal name<input className={inputClass} maxLength={160} name="goalName" required /></label>
           <label className="mt-4 block text-sm font-semibold text-steward-mist-muted">Description (optional)<textarea className={inputClass} maxLength={2000} name="goalDescription" rows={2} /></label>

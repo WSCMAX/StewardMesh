@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { expect, test, vi } from 'vitest'
 import WorkspaceShell, { workspaceAreaFromHash, workspaceHash, type WorkspaceArea } from './WorkspaceShell'
 
@@ -25,4 +25,28 @@ test('uses ordinary navigation links and reports the requested focused area', ()
   fireEvent.click(atlas)
   expect(onNavigate).toHaveBeenCalledWith('atlas')
   expect(screen.getByRole('link', { name: 'Overview — Work queue' })).toHaveAttribute('aria-current', 'page')
+})
+
+test('opens mobile navigation as a modal and restores focus after Escape', async () => {
+  const areas: WorkspaceArea[] = [
+    { id: 'overview', name: 'Overview', descriptor: 'Work queue', summary: 'Start here.', content: <p>Overview content</p> },
+    { id: 'atlas', name: 'Atlas', descriptor: 'Asset inventory', summary: 'Manage assets.', permission: 'assets.read', content: <p>Atlas content</p> },
+  ]
+  render(<WorkspaceShell activeArea="overview" areas={areas} assetCount={0} healthLabel="Connected" onNavigate={() => undefined} onOpenHelp={() => undefined} onReportIssue={() => undefined} roles={['Administrator']} visitedAreas={new Set(['overview'])} />)
+
+  const opener = screen.getByRole('button', { name: 'Open workspace navigation' })
+  fireEvent.click(opener)
+  const dialog = screen.getByRole('dialog', { name: 'Workspace navigation' })
+  expect(dialog).toHaveAttribute('aria-modal', 'true')
+  const close = screen.getByRole('button', { name: 'Close workspace navigation' })
+  const report = screen.getAllByRole('button', { name: 'Report an issue' }).at(-1)
+  await waitFor(() => expect(close).toHaveFocus())
+  fireEvent.keyDown(window, { key: 'Tab', shiftKey: true })
+  expect(report).toHaveFocus()
+  fireEvent.keyDown(window, { key: 'Tab' })
+  expect(close).toHaveFocus()
+
+  fireEvent.keyDown(window, { key: 'Escape' })
+  expect(screen.queryByRole('dialog', { name: 'Workspace navigation' })).not.toBeInTheDocument()
+  await waitFor(() => expect(opener).toHaveFocus())
 })

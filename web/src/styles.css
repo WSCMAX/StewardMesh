@@ -9,6 +9,7 @@
 
   --color-steward-ink-950: #061827;
   --color-steward-ink-900: #0b2238;
+  --color-steward-ink-850: #0f2942;
   --color-steward-ink-800: #12314c;
   --color-steward-mist: #f7fafc;
   --color-steward-mist-muted: #dce6ef;
@@ -24,13 +25,46 @@
   color-scheme: dark;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
+  scrollbar-color: #244760 #061827;
 }
 
 body {
   margin: 0;
   min-width: 0;
   min-height: 100vh;
-  background: #061827;
+  background:
+    radial-gradient(circle at 82% -10%, rgba(23, 104, 239, 0.12), transparent 30rem),
+    radial-gradient(circle at 8% 12%, rgba(22, 191, 167, 0.08), transparent 26rem),
+    #061827;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button,
+summary,
+select {
+  cursor: pointer;
+}
+
+button:disabled,
+select:disabled {
+  cursor: not-allowed;
+}
+
+input,
+select,
+textarea {
+  color-scheme: dark;
+}
+
+option {
+  background: #0b2238;
+  color: #f7fafc;
 }
 
 ::selection {
@@ -39,8 +73,23 @@ body {
 }
 
 *:focus-visible {
-  outline: 3px solid var(--color-steward-teal);
-  outline-offset: 3px;
+  outline: 2px solid var(--color-steward-teal);
+  outline-offset: 2px;
+}
+
+@keyframes steward-pulse {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}
+
+.steward-pulse {
+  animation: steward-pulse 1.8s ease-in-out infinite;
+}
+
+@media (min-width: 1024px) {
+  .steward-scrollbar {
+    scrollbar-width: thin;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

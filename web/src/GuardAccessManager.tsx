@@ -1,5 +1,6 @@
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ApiRequestError, requestJSON } from './api'
+import { buttonClass, dangerButtonClass, inputClass, labelClass, panelClass, secondaryButtonClass, subpanelClass, tableWrapClass } from './ui'
 
 // Requirements: REQ-HORIZON-001, SEC-GUARD-001, SEC-HTTP-001, A11Y-001.
 // Features: lifecycle.planning, authorization.security.
@@ -54,11 +55,6 @@ type GuardAccessManagerProps = {
   onOpenHelp?: () => void
 }
 
-const inputClass = 'mt-2 min-h-11 w-full rounded-lg border border-steward-ink-800 bg-steward-ink-950 px-3 py-2.5 text-steward-mist transition hover:border-steward-blue disabled:cursor-not-allowed disabled:opacity-60'
-const labelClass = 'block text-sm font-semibold text-steward-mist-muted'
-const buttonClass = 'min-h-11 rounded-lg bg-steward-teal px-4 py-2.5 font-semibold text-steward-ink-950 shadow-sm transition hover:bg-[#29cfb9] disabled:cursor-wait disabled:opacity-60'
-const secondaryButtonClass = 'min-h-11 rounded-lg border border-steward-ink-800 bg-steward-ink-900 px-4 py-2.5 text-sm font-semibold text-steward-mist transition hover:border-steward-blue hover:bg-steward-ink-800'
-const dangerButtonClass = 'min-h-11 rounded-lg border border-steward-danger/60 px-3 py-2 text-sm font-semibold text-[#ffadb5] transition hover:bg-steward-danger/15 disabled:cursor-wait disabled:opacity-60'
 
 const scopeLabels: Record<ScopeKind, string> = {
   organization: 'Entire organization',
@@ -282,7 +278,7 @@ export default function GuardAccessManager({ csrfToken, onOpenHelp }: GuardAcces
   const activeAccounts = directory.accounts.filter((account) => account.status === 'active')
 
   return (
-    <section aria-labelledby="guard-access-heading" className="rounded-xl border border-steward-teal/30 bg-steward-ink-900 p-6" data-feature="authorization.security" data-requirement="SEC-GUARD-001">
+    <section aria-labelledby="guard-access-heading" className={`${panelClass} border-steward-teal/25 p-5 sm:p-6`} data-feature="authorization.security" data-requirement="SEC-GUARD-001">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div><p className="text-sm font-semibold text-steward-teal">Guard · Access administration</p><h2 className="mt-2 text-2xl font-semibold" id="guard-access-heading">Build roles and assign the right access</h2><p className="mt-2 max-w-3xl leading-7 text-steward-mist-muted">Combine direct permissions with reusable policy bundles, then apply a role to the whole organization or limit it to a site, department, or resource. Built-in roles stay protected.</p></div>
         {onOpenHelp && <button className={secondaryButtonClass} onClick={onOpenHelp} type="button">Guard help</button>}
@@ -299,7 +295,7 @@ export default function GuardAccessManager({ csrfToken, onOpenHelp }: GuardAcces
             <Summary label="Assignments" value={directory.assignments.length} />
           </div>
 
-          <details className="mt-6 rounded-xl border border-steward-teal/40 bg-steward-ink-950/40 p-5">
+          <details className={`${subpanelClass} mt-6 border-steward-teal/35 p-5`}>
             <summary className="cursor-pointer text-base font-semibold text-steward-mist">Create a custom role</summary>
             <p className="mt-2 max-w-3xl text-sm leading-6 text-steward-mist-muted">Give people only the capabilities they need. Direct permissions and policy bundles are combined when Guard evaluates access.</p>
             <form className="mt-5 grid gap-5 lg:grid-cols-2" onSubmit={handleCreateRole}>
@@ -346,7 +342,7 @@ export default function GuardAccessManager({ csrfToken, onOpenHelp }: GuardAcces
             <p className="mt-1 text-sm text-steward-mist-muted">Built-in roles are read only. Custom roles can be assigned at any supported scope.</p>
             <div className="mt-4 grid gap-4 lg:grid-cols-2">
               {directory.roles.map((role) => (
-                <article className="rounded-xl border border-steward-ink-800 bg-steward-ink-950/30 p-4" key={role.id}>
+                <article className={`${subpanelClass} p-4`} key={role.id}>
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div><h4 className="font-semibold text-steward-mist">{role.name}</h4><p className="mt-1 text-sm leading-6 text-steward-mist-muted">{role.description || 'No description provided.'}</p></div>
                     <span className="rounded-full border border-steward-teal/40 px-2.5 py-1 text-xs font-semibold text-steward-teal">{role.managed ? 'Built in · protected' : 'Custom role'}</span>
@@ -360,7 +356,7 @@ export default function GuardAccessManager({ csrfToken, onOpenHelp }: GuardAcces
             </div>
           </div>
 
-          <details className="mt-6 rounded-xl border border-steward-ink-800 bg-steward-ink-950/40 p-5">
+          <details className={`${subpanelClass} mt-6 p-5`}>
             <summary className="cursor-pointer text-base font-semibold text-steward-mist">Add a scoped role assignment</summary>
             <form className="mt-5 grid gap-4 lg:grid-cols-2" onSubmit={handleCreate}>
               <div>
@@ -398,7 +394,7 @@ export default function GuardAccessManager({ csrfToken, onOpenHelp }: GuardAcces
             <h3 className="text-lg font-semibold">Current role assignments</h3>
             <p className="mt-1 text-sm text-steward-mist-muted">Guard prevents removal of the final active organization administrator.</p>
             {directory.assignments.length === 0 ? <p className="mt-4 rounded-xl border border-dashed border-steward-ink-800 p-5 text-sm text-steward-mist-muted">No role assignments are available.</p> : (
-              <div className="mt-4 rounded-xl border border-steward-ink-800">
+              <div className={`${tableWrapClass} mt-4`}>
                 <table className="w-full border-collapse text-left text-sm">
                   <thead className="hidden bg-steward-ink-800/60 text-steward-mist-muted md:table-header-group"><tr><th className="px-4 py-3 font-semibold" scope="col">Account</th><th className="px-4 py-3 font-semibold" scope="col">Role</th><th className="px-4 py-3 font-semibold" scope="col">Scope</th><th className="px-4 py-3 font-semibold" scope="col">Managed by</th><th className="px-4 py-3 font-semibold" scope="col"><span className="sr-only">Actions</span></th></tr></thead>
                   <tbody className="block divide-y divide-steward-ink-800 md:table-row-group">
@@ -423,7 +419,7 @@ export default function GuardAccessManager({ csrfToken, onOpenHelp }: GuardAcces
 }
 
 function Summary({ label, value }: { label: string; value: number }) {
-  return <div className="rounded-xl border border-steward-ink-800 bg-steward-ink-950/40 p-4"><p className="text-2xl font-semibold">{value}</p><p className="mt-1 text-sm text-steward-mist-muted">{label}</p></div>
+  return <div className={`${subpanelClass} p-4`}><p className="text-2xl font-semibold">{value}</p><p className="mt-1 text-sm text-steward-mist-muted">{label}</p></div>
 }
 
 function MobileLabel({ children }: { children: string }) {

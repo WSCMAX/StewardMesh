@@ -1,4 +1,4 @@
-import { type CSSProperties, type FormEvent, useEffect, useRef, useState } from 'react'
+import { type CSSProperties, type FormEvent, type ReactNode, useEffect, useRef, useState } from 'react'
 import { ApiRequestError, requestJSON } from './api'
 import AtlasInventory, { isAsset, type Asset } from './AtlasInventory'
 import GuideExperience, { GuideInvitation, type GuideDestination } from './GuideExperience'
@@ -8,11 +8,18 @@ import LedgerManager from './LedgerManager'
 import PeopleDirectory from './PeopleDirectory'
 import ThreadsManager from './ThreadsManager'
 import VaultManager from './VaultManager'
-import { brandingStyle, readWalkthroughStatus, resolveBranding, type GuideTopicID, type WalkthroughStatus, writeWalkthroughStatus } from './guide'
+import { brandingStyle, readWalkthroughStatus, resolveBranding, type WalkthroughStatus, writeWalkthroughStatus } from './guide'
+import WorkspaceShell, { workspaceAreaFromHash, workspaceHash, type WorkspaceArea, type WorkspaceAreaID } from './WorkspaceShell'
 
-// Requirements include REQ-STORAGE-001, REQ-LEDGER-001, REQ-HORIZON-001, A11Y-001, DOC-001, and DOC-002.
+// Requirements include REQ-WORKSPACE-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-HORIZON-001, A11Y-001, DOC-001, and DOC-002.
 
-type Module = readonly [name: string, description: string, topic: GuideTopicID]
+type WorkspaceModule = {
+  id: Exclude<WorkspaceAreaID, 'overview'>
+  name: string
+  descriptor: string
+  summary: string
+  permission: string
+}
 
 type AssetResponse = {
   items?: Asset[]
@@ -53,15 +60,14 @@ type ServiceHealth = 'checking' | 'connected' | 'unavailable'
 const defaultIssuesUrl = 'https://github.com/WSCMAX/StewardMesh/issues'
 const guardHelpUrl = 'https://github.com/WSCMAX/StewardMesh/blob/main/docs/features/guard.md'
 
-const modules: Module[] = [
-  ['Atlas', 'Asset inventory', 'atlas'],
-  ['Horizon', 'Lifecycle planning', 'horizon'],
-  ['Ledger', 'Procurement and budgets', 'ledger'],
-  ['Threads', 'Tags and strategic goals', 'threads'],
-  ['Vault', 'Private files and evidence', 'vault'],
-  ['People', 'Users and departments', 'people'],
-  ['Guard', 'Authentication, roles, policies, and audit', 'guard'],
-  ['Guide', 'Help and walkthroughs', 'guide'],
+const workspaceModules: readonly WorkspaceModule[] = [
+  { id: 'atlas', name: 'Atlas', descriptor: 'Asset inventory', summary: 'Register, locate, and maintain the assets your organization stewards.', permission: 'assets.read' },
+  { id: 'horizon', name: 'Horizon', descriptor: 'Lifecycle planning', summary: 'Plan useful life, replacement timing, scenarios, and forecasts.', permission: 'planning.read' },
+  { id: 'ledger', name: 'Ledger', descriptor: 'Procurement and budgets', summary: 'Work with vendors, purchases, contracts, commitments, costs, and budgets.', permission: 'finance.read' },
+  { id: 'threads', name: 'Threads', descriptor: 'Tags and strategic goals', summary: 'Connect inventory to hierarchical tags, goals, and visible provenance.', permission: 'goals.read' },
+  { id: 'vault', name: 'Vault', descriptor: 'Private files and evidence', summary: 'Store checksummed evidence and authorize private downloads.', permission: 'storage.read' },
+  { id: 'people', name: 'People', descriptor: 'Users and departments', summary: 'Organize locations, departments, identities, and asset assignments.', permission: 'directory.read' },
+  { id: 'guard', name: 'Guard', descriptor: 'Authentication and authorization', summary: 'Manage roles, scoped assignments, ownership, and access policy.', permission: 'guard.manage' },
 ]
 
 export function resolvePublicUrl(value: string | undefined, fallback = defaultIssuesUrl) {
@@ -148,6 +154,8 @@ export default function App() {
   const [guideOpen, setGuideOpen] = useState(false)
   const [guideDestination, setGuideDestination] = useState<GuideDestination>({ view: 'help', topic: 'workspace' })
   const [walkthroughStatus, setWalkthroughStatus] = useState(readWalkthroughStatus)
+  const [activeWorkspaceArea, setActiveWorkspaceArea] = useState<WorkspaceAreaID>(() => workspaceAreaFromHash(window.location.hash))
+  const [visitedWorkspaceAreas, setVisitedWorkspaceAreas] = useState<ReadonlySet<WorkspaceAreaID>>(() => new Set([workspaceAreaFromHash(window.location.hash)]))
   const errorRef = useRef<HTMLDivElement>(null)
 
   function openGuide(destination: GuideDestination) {
@@ -158,6 +166,16 @@ export default function App() {
   function updateWalkthroughStatus(status: WalkthroughStatus) {
     setWalkthroughStatus(status)
     writeWalkthroughStatus(status)
+  }
+
+  function navigateWorkspace(area: WorkspaceAreaID, history: 'push' | 'replace' = 'push', focus = true) {
+    setActiveWorkspaceArea(area)
+    setVisitedWorkspaceAreas((current) => current.has(area) ? current : new Set([...current, area]))
+    const nextHash = workspaceHash(area)
+    if (window.location.hash !== nextHash) {
+      window.history[history === 'push' ? 'pushState' : 'replaceState']({ workspaceArea: area }, '', `${window.location.pathname}${window.location.search}${nextHash}`)
+    }
+    if (focus) queueMicrotask(() => document.getElementById('workspace-context-heading')?.focus())
   }
 
   useEffect(() => {
@@ -220,6 +238,21 @@ export default function App() {
       active = false
     }
   }, [authFailure])
+
+  useEffect(() => {
+    function restoreWorkspaceLocation() {
+      const area = workspaceAreaFromHash(window.location.hash)
+      setActiveWorkspaceArea(area)
+      setVisitedWorkspaceAreas((current) => current.has(area) ? current : new Set([...current, area]))
+      queueMicrotask(() => document.getElementById('workspace-context-heading')?.focus())
+    }
+    window.addEventListener('popstate', restoreWorkspaceLocation)
+    window.addEventListener('hashchange', restoreWorkspaceLocation)
+    return () => {
+      window.removeEventListener('popstate', restoreWorkspaceLocation)
+      window.removeEventListener('hashchange', restoreWorkspaceLocation)
+    }
+  }, [])
 
   useEffect(() => {
     if (authPhase !== 'authenticated') return
@@ -333,6 +366,8 @@ export default function App() {
       setCSRFToken('')
       setPermissions([])
       setAssets([])
+      setActiveWorkspaceArea('overview')
+      setVisitedWorkspaceAreas(new Set(['overview']))
       setAuthPhase('login')
     } catch (error) {
       setAuthError(error instanceof ApiRequestError ? error.message : 'Sign out could not be completed.')
@@ -341,11 +376,37 @@ export default function App() {
     }
   }
 
+  const serviceLabel = health === 'connected' ? 'Connected' : health === 'unavailable' ? 'Unavailable' : 'Checking connection'
+  const workspaceContent: Record<Exclude<WorkspaceAreaID, 'overview'>, ReactNode> = {
+    atlas: <AtlasInventory assets={assets} csrfToken={csrfToken} onAssetsChange={setAssets} onOpenHelp={() => openGuide({ view: 'help', topic: 'atlas' })} permissions={permissions} />,
+    horizon: <HorizonPlanner assets={assets} csrfToken={csrfToken} onOpenHelp={() => openGuide({ view: 'help', topic: 'horizon' })} permissions={permissions} />,
+    ledger: <LedgerManager csrfToken={csrfToken} onOpenHelp={() => openGuide({ view: 'help', topic: 'ledger' })} permissions={permissions} />,
+    threads: <ThreadsManager assets={assets} csrfToken={csrfToken} onOpenHelp={() => openGuide({ view: 'help', topic: 'threads' })} permissions={permissions} />,
+    vault: <VaultManager csrfToken={csrfToken} onOpenHelp={() => openGuide({ view: 'help', topic: 'vault' })} permissions={permissions} />,
+    people: <PeopleDirectory assets={assets} csrfToken={csrfToken} issuesUrl={issuesUrl} onOpenHelp={() => openGuide({ view: 'help', topic: 'people' })} onReportIssue={() => openGuide({ view: 'report', topic: 'people' })} permissions={permissions} />,
+    guard: <GuardAccessManager csrfToken={csrfToken} onOpenHelp={() => openGuide({ view: 'help', topic: 'guard' })} />,
+  }
+  const workspaceAreas: WorkspaceArea[] = [
+    {
+      id: 'overview', name: 'Overview', descriptor: 'Work queue and product areas',
+      summary: 'Choose a focused area, see what is available, and return here without losing work already in progress.',
+      content: <WorkspaceOverview assets={assets} guideOpen={guideOpen} health={health} modules={workspaceModules} onNavigate={navigateWorkspace} onOpenGuide={openGuide} onWalkthroughStatus={updateWalkthroughStatus} permissions={permissions} principal={principal} walkthroughStatus={walkthroughStatus} />,
+    },
+    ...workspaceModules.map((module): WorkspaceArea => {
+      const limited = !permissions.includes(module.permission)
+      return {
+        ...module,
+        limited,
+        content: limited ? <PermissionLimitedArea module={module} onOpenGuide={() => openGuide({ view: 'help', topic: module.id })} /> : workspaceContent[module.id],
+      }
+    }),
+  ]
+
   return (
     <div className="min-h-screen bg-steward-ink-950 text-steward-mist" data-feature="authorization.security experience.help" data-requirement="SEC-GUARD-001 A11Y-001 DOC-001 DOC-002" style={brandingStyle(branding.appliedTheme) as CSSProperties}>
       <a className="sr-only rounded-lg bg-steward-teal px-3 py-2 font-semibold text-steward-ink-950 focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-50" href="#main-content">Skip to main content</a>
       <header className="border-b border-steward-ink-800/70 bg-steward-ink-900/90">
-        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-5 px-4 py-4 sm:px-6">
+        <div className="mx-auto flex max-w-[96rem] flex-wrap items-center justify-between gap-5 px-4 py-4 sm:px-6">
           <div className="flex items-center gap-4">
             <img alt="" aria-hidden="true" className="h-16 w-auto shrink-0" height="370" src="/brand/stewardmesh-s-mark.svg" width="294" />
             <div>
@@ -366,7 +427,7 @@ export default function App() {
         </div>
       </header>
 
-      <main id="main-content" className="mx-auto max-w-7xl space-y-10 px-4 py-8 sm:px-6 lg:py-10" tabIndex={-1}>
+      <main id="main-content" className="mx-auto max-w-[96rem] space-y-10 px-4 py-6 sm:px-6 lg:py-8" tabIndex={-1}>
         {authError && <div ref={errorRef} className="rounded-xl border border-steward-danger/50 bg-steward-danger/15 p-4 text-[#ffccd1]" role="alert" tabIndex={-1}>{authError}</div>}
 
         {authPhase === 'loading' && <section aria-labelledby="auth-loading-heading" className="rounded-xl border border-steward-ink-800 bg-steward-ink-900 p-6"><h2 id="auth-loading-heading" className="text-xl font-semibold">Guard — Checking access</h2><p className="mt-2 text-steward-mist-muted" role="status">Checking administrator setup and your secure session.</p></section>}
@@ -411,45 +472,74 @@ export default function App() {
         )}
 
         {authPhase === 'authenticated' && (
-          <>
-            <section aria-labelledby="welcome-heading" className="max-w-3xl">
-              <p className="text-sm font-medium text-steward-teal">Connect what you steward. Plan what comes next.</p>
-              <h2 id="welcome-heading" className="mt-3 text-4xl font-bold tracking-tight sm:text-5xl">A clear view of what your organization owns, funds, and operates.</h2>
-              <p className="mt-5 text-lg leading-8 text-steward-mist-muted">StewardMesh brings inventory, lifecycle planning, procurement, goals, and ownership into one accessible workspace.</p>
-              {principal && <p className="mt-4 text-sm text-steward-mist-muted">Guard role: {principal.roles.join(', ') || 'No role assigned'}</p>}
-            </section>
-
-            {!guideOpen && <GuideInvitation onNavigate={openGuide} onWalkthroughStatus={updateWalkthroughStatus} roles={principal?.roles ?? []} status={walkthroughStatus} />}
-
-            <section aria-labelledby="modules-heading">
-              <div className="flex flex-wrap items-end justify-between gap-4">
-                <div><h2 id="modules-heading" className="text-xl font-semibold">StewardMesh modules</h2><p className="mt-1 text-sm text-steward-mist-muted">Every module has a plain-language descriptor and accessible help.</p></div>
-                <button className="min-h-11 text-sm font-semibold text-steward-teal underline underline-offset-4 hover:text-[#58d9c7]" onClick={() => openGuide({ view: 'report', topic: 'workspace' })} type="button">Report an issue</button>
-              </div>
-              <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                {modules.map(([name, description, topic], index) => <article key={name} className="relative overflow-hidden rounded-xl border border-steward-ink-800/70 bg-steward-ink-900 p-5 shadow-sm"><span aria-hidden="true" className={`absolute inset-x-0 top-0 h-0.5 ${index % 3 === 0 ? 'bg-steward-green' : index % 3 === 1 ? 'bg-steward-teal' : 'bg-steward-blue'}`} /><p className="text-lg font-semibold">{name}</p><p className="mt-2 text-sm text-steward-mist-muted">{description}</p><button aria-label={`Open ${name} help`} className="mt-4 min-h-11 text-sm font-semibold text-steward-teal underline underline-offset-4" onClick={() => openGuide({ view: 'help', topic })} type="button">View help and example</button></article>)}
-              </div>
-            </section>
-
-            <div className="min-w-0" id="guide-atlas"><AtlasInventory assets={assets} csrfToken={csrfToken} onAssetsChange={setAssets} onOpenHelp={() => openGuide({ view: 'help', topic: 'atlas' })} permissions={permissions} /></div>
-
-            <div className="min-w-0" id="guide-horizon"><HorizonPlanner assets={assets} csrfToken={csrfToken} onOpenHelp={() => openGuide({ view: 'help', topic: 'horizon' })} permissions={permissions} /></div>
-
-            <div className="min-w-0" id="guide-threads"><ThreadsManager assets={assets} csrfToken={csrfToken} onOpenHelp={() => openGuide({ view: 'help', topic: 'threads' })} permissions={permissions} /></div>
-
-            <div className="min-w-0" id="guide-vault"><VaultManager csrfToken={csrfToken} onOpenHelp={() => openGuide({ view: 'help', topic: 'vault' })} permissions={permissions} /></div>
-
-            <div className="min-w-0" id="guide-ledger"><LedgerManager csrfToken={csrfToken} onOpenHelp={() => openGuide({ view: 'help', topic: 'ledger' })} permissions={permissions} /></div>
-
-            {permissions.includes('guard.manage') && <div className="min-w-0" id="guide-guard"><GuardAccessManager csrfToken={csrfToken} onOpenHelp={() => openGuide({ view: 'help', topic: 'guard' })} /></div>}
-
-            <div className="min-w-0" id="guide-people"><PeopleDirectory assets={assets} csrfToken={csrfToken} issuesUrl={issuesUrl} onOpenHelp={() => openGuide({ view: 'help', topic: 'people' })} onReportIssue={() => openGuide({ view: 'report', topic: 'people' })} permissions={permissions} /></div>
-          </>
+          <WorkspaceShell activeArea={activeWorkspaceArea} areas={workspaceAreas} assetCount={assets.length} healthLabel={serviceLabel} onNavigate={navigateWorkspace} onOpenHelp={(topic) => openGuide({ view: 'help', topic })} onReportIssue={() => openGuide({ view: 'report', topic: activeWorkspaceArea === 'overview' ? 'workspace' : activeWorkspaceArea })} roles={principal?.roles ?? []} visitedAreas={visitedWorkspaceAreas} />
         )}
       </main>
-      <GuideExperience branding={branding} destination={guideDestination} issuesUrl={issuesUrl} onClose={() => setGuideOpen(false)} onNavigate={openGuide} onWalkthroughStatus={updateWalkthroughStatus} open={guideOpen} permissions={permissions} roles={principal?.roles ?? []} version={appVersion} />
+      <GuideExperience branding={branding} destination={guideDestination} issuesUrl={issuesUrl} onClose={() => setGuideOpen(false)} onFollowSection={(topic) => { if (topic !== 'workspace' && topic !== 'guide') navigateWorkspace(topic, 'push', false) }} onNavigate={openGuide} onWalkthroughStatus={updateWalkthroughStatus} open={guideOpen} permissions={permissions} roles={principal?.roles ?? []} version={appVersion} />
     </div>
   )
+}
+
+function WorkspaceOverview({ assets, guideOpen, health, modules, onNavigate, onOpenGuide, onWalkthroughStatus, permissions, principal, walkthroughStatus }: {
+  assets: readonly Asset[]
+  guideOpen: boolean
+  health: ServiceHealth
+  modules: readonly WorkspaceModule[]
+  onNavigate: (area: WorkspaceAreaID) => void
+  onOpenGuide: (destination: GuideDestination) => void
+  onWalkthroughStatus: (status: WalkthroughStatus) => void
+  permissions: readonly string[]
+  principal: Principal | null
+  walkthroughStatus: WalkthroughStatus
+}) {
+  const availableCount = modules.filter((module) => permissions.includes(module.permission)).length
+  return <div className="space-y-5">
+    <section aria-labelledby="workspace-overview-heading" className="overflow-hidden rounded-2xl border border-steward-ink-800 bg-steward-ink-900 p-5 sm:p-6">
+      <p className="text-sm font-semibold text-steward-teal">Connect what you steward. Plan what comes next.</p>
+      <h3 className="mt-2 max-w-4xl text-2xl font-bold tracking-tight sm:text-3xl" id="workspace-overview-heading">A clear starting point for inventory, people, evidence, goals, planning, and finance.</h3>
+      <p className="mt-3 max-w-4xl leading-7 text-steward-mist-muted">Open one product area at a time from the navigation. StewardMesh keeps previously opened areas mounted, so filters, selected records, and incomplete form work remain in context while you move around.</p>
+      <dl className="mt-5 grid gap-3 sm:grid-cols-3">
+        <OverviewMetric label="Assets tracked" value={String(assets.length)} detail="Current Atlas records" />
+        <OverviewMetric label="Work areas available" value={`${availableCount} of ${modules.length}`} detail="Based on your current grants" />
+        <OverviewMetric label="Service state" value={health === 'connected' ? 'Connected' : health === 'unavailable' ? 'Unavailable' : 'Checking'} detail={health === 'unavailable' ? 'Protected work is temporarily unavailable' : 'Live application status'} />
+      </dl>
+    </section>
+
+    {!guideOpen && <GuideInvitation onNavigate={onOpenGuide} onWalkthroughStatus={onWalkthroughStatus} roles={principal?.roles ?? []} status={walkthroughStatus} />}
+
+    <section aria-labelledby="workspace-areas-heading" className="rounded-2xl border border-steward-ink-800 bg-steward-ink-900 p-5 sm:p-6">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div><p className="text-xs font-semibold uppercase tracking-[0.18em] text-steward-mist-muted">Product areas</p><h3 className="mt-1 text-xl font-semibold" id="workspace-areas-heading">Choose where to work</h3></div>
+        <button className="min-h-11 text-sm font-semibold text-steward-teal underline underline-offset-4" onClick={() => onOpenGuide({ view: 'help', topic: 'workspace' })} type="button">How Workspace works</button>
+      </div>
+      <ul className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        {modules.map((module, index) => {
+          const available = permissions.includes(module.permission)
+          return <li className="relative overflow-hidden rounded-xl border border-steward-ink-800 bg-steward-ink-950/35 p-4" key={module.id}>
+            <span aria-hidden="true" className={`absolute inset-y-0 left-0 w-1 ${index % 3 === 0 ? 'bg-steward-green' : index % 3 === 1 ? 'bg-steward-teal' : 'bg-steward-blue'}`} />
+            <div className="flex items-start justify-between gap-3">
+              <div><h4 className="font-semibold">{module.name} — {module.descriptor}</h4><p className="mt-2 text-sm leading-6 text-steward-mist-muted">{module.summary}</p></div>
+              <span className={`shrink-0 rounded-full border px-2 py-1 text-xs font-semibold ${available ? 'border-steward-success/55 bg-steward-success/15 text-[#aaf0c6]' : 'border-steward-warning/55 bg-steward-warning/15 text-[#ffc46b]'}`}>{available ? 'Available' : 'Limited'}</span>
+            </div>
+            <button className="mt-4 min-h-11 rounded-lg border border-steward-teal px-3 py-2 text-sm font-semibold text-steward-teal transition hover:bg-steward-teal/10" onClick={() => onNavigate(module.id)} type="button">Open {module.name}</button>
+          </li>
+        })}
+      </ul>
+    </section>
+  </div>
+}
+
+function OverviewMetric({ detail, label, value }: { detail: string; label: string; value: string }) {
+  return <div className="rounded-xl border border-steward-ink-800 bg-steward-ink-950/40 p-4"><dt className="text-xs font-semibold uppercase tracking-wide text-steward-mist-muted">{label}</dt><dd className="mt-1 text-2xl font-bold text-steward-mist">{value}</dd><dd className="mt-1 text-xs text-steward-mist-muted">{detail}</dd></div>
+}
+
+function PermissionLimitedArea({ module, onOpenGuide }: { module: WorkspaceModule; onOpenGuide: () => void }) {
+  return <section aria-labelledby={`${module.id}-limited-heading`} className="rounded-2xl border border-steward-ink-800 bg-steward-ink-900 p-6">
+    <p className="text-sm font-semibold text-steward-warning">Permission-limited area</p>
+    <h3 className="mt-2 text-xl font-semibold" id={`${module.id}-limited-heading`}>{module.name} data is protected</h3>
+    <p className="mt-3 max-w-3xl leading-7 text-steward-mist-muted">Your current access does not include <code className="rounded bg-steward-ink-950 px-1.5 py-0.5 text-steward-mist">{module.permission}</code>. Ask a StewardMesh administrator for the appropriate scoped role if this work is part of your responsibilities.</p>
+    <button className="mt-4 min-h-11 rounded-lg border border-steward-teal px-4 py-2 text-sm font-semibold text-steward-teal" onClick={onOpenGuide} type="button">Learn about {module.name}</button>
+  </section>
 }
 
 type FieldProps = {

@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { beforeEach, expect, test, vi } from 'vitest'
 import AtlasInventory, { type Asset } from './AtlasInventory'
 
-// Requirements: REQ-ATLAS-001, A11Y-001, SEC-GUARD-001.
+// Requirements: REQ-ATLAS-001, REQ-ATLAS-CODES-001, A11Y-001, SEC-GUARD-001.
 
 const asset: Asset = {
   id: 'asset-1', organizationId: 'example-org', name: 'Lab server', kind: 'server',
@@ -26,6 +26,7 @@ test('filters assets, loads lifecycle details, and has no automated accessibilit
       id: 'event-1', toStatus: 'active', note: 'Asset registered', revision: 1,
       actorId: 'account-1', occurredAt: '2026-08-10T12:00:00Z',
     }] })
+    if (String(input) === '/api/v1/assets/asset-1/identifiers') return jsonResponse({ items: [] })
     throw new Error(`unexpected request: ${String(input)}`)
   }))
   const { container } = render(<AtlasInventory assets={[asset]} csrfToken="csrf-token" onAssetsChange={() => undefined} permissions={['assets.read']} />)
@@ -47,6 +48,7 @@ test('creates an asset with CSRF protection and server-managed identity fields',
     if (['/api/v1/sites', '/api/v1/buildings', '/api/v1/rooms', '/api/v1/departments', '/api/v1/identities?limit=100'].includes(path)) return jsonResponse({ items: [] })
     if (path === '/api/v1/assets' && init?.method === 'POST') return jsonResponse(created, 201)
     if (path === '/api/v1/assets/asset-2/lifecycle') return jsonResponse({ items: [] })
+    if (path === '/api/v1/assets/asset-2/identifiers') return jsonResponse({ items: [] })
     throw new Error(`unexpected request: ${path}`)
   })
   vi.stubGlobal('fetch', fetchMock)
@@ -73,6 +75,7 @@ test('updates an asset using its current revision and records a lifecycle note',
     if (['/api/v1/sites', '/api/v1/buildings', '/api/v1/rooms', '/api/v1/departments', '/api/v1/identities?limit=100'].includes(path)) return jsonResponse({ items: [] })
     if (path === '/api/v1/assets/asset-1' && init?.method === 'PUT') return jsonResponse(updated)
     if (path === '/api/v1/assets/asset-1/lifecycle') return jsonResponse({ items: [] })
+    if (path === '/api/v1/assets/asset-1/identifiers') return jsonResponse({ items: [] })
     throw new Error(`unexpected request: ${path}`)
   })
   vi.stubGlobal('fetch', fetchMock)

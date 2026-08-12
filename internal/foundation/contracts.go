@@ -68,7 +68,12 @@ type AuditEvent struct {
 	Metadata       map[string]string
 }
 
+// Atlas Codes requires exact-replay audit idempotency so failed mutation
+// audits can be repaired without losing provenance.
+// Requirement: REQ-ATLAS-CODES-001. Feature: inventory.identifiers.
 type Auditor interface {
+	// Record is idempotent for an exact AuditEvent replay. Replaying an event ID
+	// with different immutable content must fail without changing the original.
 	Record(ctx context.Context, event AuditEvent) error
 }
 

@@ -7,14 +7,14 @@ import (
 
 // Requirements: REQ-FOUNDATION-001, SEC-GUARD-001, REQ-PEOPLE-001,
 // REQ-DIRECTORY-EXPANSION-001, REQ-ATLAS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001,
-// REQ-HORIZON-001. Feature: lifecycle.planning.
+// REQ-HORIZON-001, REQ-ATLAS-CODES-001. Features: lifecycle.planning, inventory.identifiers.
 func TestEmbeddedMigrationsAreOrderedAndChecksummed(t *testing.T) {
 	migrations, err := loadMigrations()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(migrations) != 20 {
-		t.Fatalf("expected 20 platform migrations, got %d", len(migrations))
+	if len(migrations) != 22 {
+		t.Fatalf("expected 22 platform migrations, got %d", len(migrations))
 	}
 	for index, migration := range migrations {
 		expectedVersion := int64(index + 1)
@@ -23,6 +23,45 @@ func TestEmbeddedMigrationsAreOrderedAndChecksummed(t *testing.T) {
 		}
 		if len(migration.checksum) != 64 {
 			t.Fatalf("expected SHA-256 checksum for migration %d", migration.version)
+		}
+	}
+}
+
+func TestAtlasCodesAuditProvenanceMigrationPreservesOriginalMutationIdentity(t *testing.T) {
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents := migrations[21].contents
+	for _, expected := range []string{
+		"REQ-ATLAS-CODES-001", "inventory.identifiers", "created_correlation_id", "updated_by",
+		"updated_correlation_id", "atlas.identifier.deactivated", "atlas.identifier.replaced",
+		"ALTER COLUMN created_correlation_id SET NOT NULL", "migration:atlas-codes-provenance",
+	} {
+		if !strings.Contains(contents, expected) {
+			t.Fatalf("Atlas Codes audit provenance migration is missing %q", expected)
+		}
+	}
+}
+
+func TestAtlasCodesMigrationAddsScopedIdentifierHistoryAndConflictBoundaries(t *testing.T) {
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents := migrations[20].contents
+	for _, expected := range []string{
+		"REQ-ATLAS-CODES-001", "inventory.identifiers", "CREATE TABLE atlas_asset_identifiers",
+		"REFERENCES atlas_assets (organization_id, id)", "DEFERRABLE INITIALLY DEFERRED",
+		"REFERENCES atlas_asset_identifiers (organization_id, asset_id, id)",
+		"status IN ('active', 'replaced', 'deactivated')", "octet_length(normalized_value) BETWEEN 1 AND 128",
+		"octet_length(normalized_value) BETWEEN 1 AND 512", "normalized_value ~ '^[ -~]+$'",
+		"CREATE UNIQUE INDEX atlas_asset_identifiers_active_value_idx",
+		"CREATE UNIQUE INDEX atlas_asset_identifiers_active_primary_idx",
+		"WHERE status = 'active'", "CREATE INDEX atlas_asset_identifiers_asset_history_idx",
+	} {
+		if !strings.Contains(contents, expected) {
+			t.Fatalf("Atlas Codes migration is missing %q", expected)
 		}
 	}
 }

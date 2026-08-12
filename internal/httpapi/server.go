@@ -1,10 +1,11 @@
 package httpapi
 
-// Requirements: REQ-FOUNDATION-001, REQ-ATLAS-001, REQ-PEOPLE-001,
+// Requirements: REQ-FOUNDATION-001, REQ-ATLAS-001, REQ-ATLAS-CODES-001, REQ-PEOPLE-001,
 // REQ-DIRECTORY-EXPANSION-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-HORIZON-001, REQ-PLATFORM-VALKEY-001,
 // SEC-GUARD-001, SEC-HTTP-001.
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -19,8 +20,10 @@ import (
 	"time"
 
 	"github.com/maxlemke/stewardmesh/internal/atlas"
+	"github.com/maxlemke/stewardmesh/internal/atlascodes"
 	"github.com/maxlemke/stewardmesh/internal/bootstrap"
 	"github.com/maxlemke/stewardmesh/internal/directoryexpansion"
+	"github.com/maxlemke/stewardmesh/internal/domain"
 	"github.com/maxlemke/stewardmesh/internal/foundation"
 	"github.com/maxlemke/stewardmesh/internal/guard"
 	"github.com/maxlemke/stewardmesh/internal/horizon"
@@ -43,6 +46,7 @@ var correlationIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127
 
 type Dependencies struct {
 	Atlas               *atlas.Service
+	AtlasCodes          *atlascodes.Service
 	People              *people.Service
 	Threads             *threads.Service
 	Vault               *storage.Service
@@ -57,6 +61,7 @@ type Dependencies struct {
 
 type Server struct {
 	atlas               *atlas.Service
+	atlasCodes          *atlascodes.Service
 	people              *people.Service
 	threads             *threads.Service
 	vault               *storage.Service
@@ -131,6 +136,7 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 	}
 	server := &Server{
 		atlas:               deps.Atlas,
+		atlasCodes:          deps.AtlasCodes,
 		people:              deps.People,
 		threads:             deps.Threads,
 		vault:               deps.Vault,
@@ -169,6 +175,14 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 	mux.Handle("GET /api/v1/assets/{assetID}", server.protected(guard.PermissionAssetsRead, false, server.getAsset))
 	mux.Handle("PUT /api/v1/assets/{assetID}", server.protected(guard.PermissionAssetsWrite, true, server.updateAsset))
 	mux.Handle("GET /api/v1/assets/{assetID}/lifecycle", server.protected(guard.PermissionAssetsRead, false, server.listAssetLifecycle))
+	// Resolution authorizes the matched asset after lookup so site,
+	// department, and resource-scoped readers can use the endpoint without
+	// revealing matches outside their grants.
+	mux.Handle("POST /api/v1/asset-identifiers/resolve", server.protected("", false, server.resolveAssetIdentifier))
+	mux.Handle("GET /api/v1/assets/{assetID}/identifiers", server.protected(guard.PermissionAssetsRead, false, server.listAssetIdentifiers))
+	mux.Handle("POST /api/v1/assets/{assetID}/identifiers", server.protected(guard.PermissionAssetsWrite, true, server.createAssetIdentifier))
+	mux.Handle("POST /api/v1/assets/{assetID}/identifiers/{identifierID}/replace", server.protected(guard.PermissionAssetsWrite, true, server.replaceAssetIdentifier))
+	mux.Handle("POST /api/v1/assets/{assetID}/identifiers/{identifierID}/deactivate", server.protected(guard.PermissionAssetsWrite, true, server.deactivateAssetIdentifier))
 	mux.Handle("GET /api/v1/sites", server.protected("", false, server.listSites))
 	mux.Handle("POST /api/v1/sites", server.protected(guard.PermissionDirectoryWrite, true, server.createSite))
 	mux.Handle("GET /api/v1/buildings", server.protected("", false, server.listBuildings))
@@ -1892,6 +1906,168 @@ func (s *Server) listAssetLifecycle(w http.ResponseWriter, r *http.Request, _ gu
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+// Atlas Codes handlers implement REQ-ATLAS-CODES-001 / inventory.identifiers.
+// Identifier values are accepted only in bounded JSON bodies and are never
+// interpolated into URLs or error messages.
+func (s *Server) resolveAssetIdentifier(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
+	if s.atlasCodes == nil || s.atlas == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "atlas_codes_unavailable", "Atlas Codes is unavailable")
+		return
+	}
+	var input struct {
+		Symbology atlascodes.Symbology `json:"symbology"`
+		Value     string               `json:"value"`
+	}
+	if err := decodeJSON(w, r, 8<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid identifier resolution payload")
+		return
+	}
+	identifier, err := s.atlasCodes.ResolveIdentifier(r.Context(), input.Symbology, input.Value)
+	if err != nil {
+		writeAtlasCodesError(w, r, err)
+		return
+	}
+	asset, err := s.atlas.GetAsset(r.Context(), identifier.AssetID)
+	if err != nil || !s.canReadAsset(r.Context(), authentication, asset) {
+		// A denied match is intentionally indistinguishable from an unknown
+		// code so identifier resolution cannot become an asset-discovery oracle.
+		writeError(w, r, http.StatusNotFound, "not_found", "the requested asset identifier was not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, identifier)
+}
+
+func (s *Server) canReadAsset(ctx context.Context, authentication guard.Authentication, asset domain.Asset) bool {
+	for _, grant := range authentication.Grants {
+		if grant.Permission != guard.PermissionAssetsRead || grant.Scope.OrganizationID != s.organization.ID {
+			continue
+		}
+		switch grant.Scope.Kind {
+		case guard.ScopeOrganization:
+			return true
+		case guard.ScopeResource:
+			if grant.Scope.ResourceID == asset.ID {
+				return true
+			}
+		case guard.ScopeSite:
+			if asset.SiteID != "" && grant.Scope.ResourceID == asset.SiteID {
+				return true
+			}
+		case guard.ScopeDepartment:
+			if asset.DepartmentID != "" && grant.Scope.ResourceID == asset.DepartmentID {
+				return true
+			}
+		}
+	}
+	// Preserve Guard's centralized denial event without exposing whether a
+	// value resolved successfully.
+	_ = s.guard.CheckPermission(ctx, authentication, guard.PermissionAssetsRead, guard.Scope{
+		Kind: guard.ScopeResource, OrganizationID: s.organization.ID, ResourceID: asset.ID,
+	})
+	return false
+}
+
+func (s *Server) listAssetIdentifiers(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.atlasCodes == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "atlas_codes_unavailable", "Atlas Codes is unavailable")
+		return
+	}
+	items, err := s.atlasCodes.ListIdentifiers(r.Context(), r.PathValue("assetID"))
+	if err != nil {
+		writeAtlasCodesError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) createAssetIdentifier(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
+	if s.atlasCodes == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "atlas_codes_unavailable", "Atlas Codes is unavailable")
+		return
+	}
+	assetID := r.PathValue("assetID")
+	if !s.requireResourceWrite(w, r, authentication, "asset", assetID) {
+		return
+	}
+	var input atlascodes.CreateIdentifierInput
+	if err := decodeJSON(w, r, 8<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid identifier association payload")
+		return
+	}
+	input.AssetID = assetID
+	identifier, created, err := s.atlasCodes.CreateIdentifier(r.Context(), input)
+	if err != nil {
+		writeAtlasCodesError(w, r, err)
+		return
+	}
+	status := http.StatusOK
+	if created {
+		status = http.StatusCreated
+	}
+	writeJSON(w, status, map[string]any{"identifier": identifier, "created": created})
+}
+
+func (s *Server) replaceAssetIdentifier(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
+	if s.atlasCodes == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "atlas_codes_unavailable", "Atlas Codes is unavailable")
+		return
+	}
+	assetID := r.PathValue("assetID")
+	if !s.requireResourceWrite(w, r, authentication, "asset", assetID) {
+		return
+	}
+	var input atlascodes.ReplaceIdentifierInput
+	if err := decodeJSON(w, r, 8<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid identifier replacement payload")
+		return
+	}
+	input.AssetID = assetID
+	input.IdentifierID = r.PathValue("identifierID")
+	identifier, changed, err := s.atlasCodes.ReplaceIdentifier(r.Context(), input)
+	if err != nil {
+		writeAtlasCodesError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"identifier": identifier, "changed": changed})
+}
+
+func (s *Server) deactivateAssetIdentifier(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
+	if s.atlasCodes == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "atlas_codes_unavailable", "Atlas Codes is unavailable")
+		return
+	}
+	assetID := r.PathValue("assetID")
+	if !s.requireResourceWrite(w, r, authentication, "asset", assetID) {
+		return
+	}
+	var input atlascodes.DeactivateIdentifierInput
+	if err := decodeJSON(w, r, 4<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid identifier deactivation payload")
+		return
+	}
+	input.AssetID = assetID
+	input.IdentifierID = r.PathValue("identifierID")
+	identifier, changed, err := s.atlasCodes.DeactivateIdentifier(r.Context(), input)
+	if err != nil {
+		writeAtlasCodesError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"identifier": identifier, "changed": changed})
+}
+
+func writeAtlasCodesError(w http.ResponseWriter, r *http.Request, err error) {
+	switch {
+	case errors.Is(err, atlascodes.ErrInvalidInput):
+		writeError(w, r, http.StatusBadRequest, "validation_failed", "identifier details are invalid")
+	case errors.Is(err, atlascodes.ErrNotFound), errors.Is(err, atlascodes.ErrReferenceMissing):
+		writeError(w, r, http.StatusNotFound, "not_found", "the requested asset identifier was not found")
+	case errors.Is(err, atlascodes.ErrConflict):
+		writeError(w, r, http.StatusConflict, "identifier_conflict", "the identifier association or revision conflicts with current data")
+	default:
+		writeError(w, r, http.StatusInternalServerError, "atlas_codes_error", "the identifier operation could not be completed")
+	}
 }
 
 func assetQueryFromRequest(r *http.Request) (atlas.Query, error) {

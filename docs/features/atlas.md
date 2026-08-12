@@ -3,6 +3,7 @@
 - **Canonical ID:** `inventory.assets`
 - **Requirement:** `REQ-ATLAS-001`
 - **GitHub issue:** [#2 — Atlas asset inventory](https://github.com/WSCMAX/StewardMesh/issues/2)
+- **Identification extension:** [Atlas Codes](atlas-codes.md) (`REQ-ATLAS-CODES-001`, [GitHub #60](https://github.com/WSCMAX/StewardMesh/issues/60))
 
 ## Purpose
 
@@ -26,6 +27,8 @@ Supported kinds are server, computer, desktop, laptop, tablet, phone, network, p
 Locations use People-owned site, building, and room records. Buildings require their owning site; rooms require their owning site and building. Department and primary-user references also resolve through People. PostgreSQL foreign keys and the provider-neutral reference validator enforce the same organization and hierarchy boundaries.
 
 Purchase dates are stored as calendar dates. Updates require the current revision, so a stale browser or integration receives a conflict rather than silently overwriting a newer record.
+
+Barcode and QR identifiers are implemented through the separately traceable Atlas Codes extension. Its association model supports multiple active or historical identifiers without overloading asset tags or serial numbers.
 
 ## Lifecycle history and audit
 

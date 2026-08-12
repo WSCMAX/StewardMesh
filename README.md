@@ -72,6 +72,15 @@ DynamoDB adapter and Exchange imports reuse the same validation and audit rules.
 See [Atlas](docs/features/atlas.md) for permissions, API behavior, the accessible
 workflow, migration details, and validation coverage.
 
+Horizon provides effective-dated per-asset lifecycle plans, useful-life and
+replacement assumptions, scenario comparisons, and deterministic fiscal-year
+forecasts across Atlas, Ledger, and Threads dimensions. Forecasts preserve exact
+minor-unit money, reject mixed currencies, distinguish actual, estimated,
+committed, normalized-real, and TCO amounts, and expose accessible tables plus
+formula-safe CSV. See [Horizon](docs/features/horizon.md) for planning semantics,
+permissions, grouping and non-additive tag/goal behavior, APIs, audit history,
+and validation coverage.
+
 Threads provides organization tag and strategy hierarchies, explicit include
 and suppression rules, visible inheritance provenance, and guarded goal links
 for assets and purchases. Memory and PostgreSQL adapters share the same

@@ -56,10 +56,7 @@ export default function GuideExperience({ branding, destination, issuesUrl, onCl
   const openerRef = useRef<HTMLElement | null>(null)
   const wasOpen = useRef(false)
   const availableTopics = useMemo(() => guideTopics.filter((topic) => !topic.permission || permissions.includes(topic.permission)), [permissions])
-  const walkthrough = useMemo(() => {
-    const available = availableTopics.filter((topic) => topic.id !== 'horizon')
-    return available.length > 0 ? available : guideTopics.filter((topic) => topic.id === 'workspace' || topic.id === 'guide')
-  }, [availableTopics])
+  const walkthrough = useMemo(() => availableTopics.length > 0 ? availableTopics : guideTopics.filter((topic) => topic.id === 'workspace' || topic.id === 'guide'), [availableTopics])
 
   useEffect(() => {
     if (open && !wasOpen.current) {

@@ -1,8 +1,8 @@
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ApiRequestError, requestJSON } from './api'
 
-// Requirements: SEC-GUARD-001, SEC-HTTP-001, A11Y-001.
-// Feature: authorization.security.
+// Requirements: REQ-HORIZON-001, SEC-GUARD-001, SEC-HTTP-001, A11Y-001.
+// Features: lifecycle.planning, authorization.security.
 
 type ScopeKind = 'organization' | 'site' | 'department' | 'resource'
 
@@ -77,6 +77,10 @@ const permissionLabels: Record<string, string> = {
   'goals.write': 'Manage goals, tags, and relationships',
   'storage.read': 'View and download Vault files',
   'storage.write': 'Upload files to Vault',
+  'finance.read': 'View Ledger financial records',
+  'finance.write': 'Manage Ledger financial records',
+  'planning.read': 'View Horizon lifecycle plans and forecasts',
+  'planning.write': 'Manage Horizon lifecycle plans',
   'guard.manage': 'Manage Guard access',
 }
 

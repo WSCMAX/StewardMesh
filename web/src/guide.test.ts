@@ -11,7 +11,7 @@ import {
   writeWalkthroughStatus,
 } from './guide'
 
-// Requirements: A11Y-001, DOC-001, DOC-002. Feature: experience.help.
+// Requirements: REQ-HORIZON-001, A11Y-001, DOC-001, DOC-002. Features: lifecycle.planning, experience.help.
 
 beforeEach(() => {
   localStorage.clear()

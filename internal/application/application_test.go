@@ -1,6 +1,7 @@
 package application
 
-// Requirements: REQ-FOUNDATION-001, REQ-STORAGE-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001.
+// Requirements: REQ-FOUNDATION-001, REQ-STORAGE-001, REQ-HORIZON-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001.
+// Feature: lifecycle.planning.
 
 import (
 	"context"

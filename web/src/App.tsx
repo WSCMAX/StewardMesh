@@ -3,13 +3,14 @@ import { ApiRequestError, requestJSON } from './api'
 import AtlasInventory, { isAsset, type Asset } from './AtlasInventory'
 import GuideExperience, { GuideInvitation, type GuideDestination } from './GuideExperience'
 import GuardAccessManager from './GuardAccessManager'
+import HorizonPlanner from './HorizonPlanner'
 import LedgerManager from './LedgerManager'
 import PeopleDirectory from './PeopleDirectory'
 import ThreadsManager from './ThreadsManager'
 import VaultManager from './VaultManager'
 import { brandingStyle, readWalkthroughStatus, resolveBranding, type GuideTopicID, type WalkthroughStatus, writeWalkthroughStatus } from './guide'
 
-// Requirements include REQ-STORAGE-001, REQ-LEDGER-001, A11Y-001, DOC-001, and DOC-002.
+// Requirements include REQ-STORAGE-001, REQ-LEDGER-001, REQ-HORIZON-001, A11Y-001, DOC-001, and DOC-002.
 
 type Module = readonly [name: string, description: string, topic: GuideTopicID]
 
@@ -431,6 +432,8 @@ export default function App() {
             </section>
 
             <div className="min-w-0" id="guide-atlas"><AtlasInventory assets={assets} csrfToken={csrfToken} onAssetsChange={setAssets} onOpenHelp={() => openGuide({ view: 'help', topic: 'atlas' })} permissions={permissions} /></div>
+
+            <div className="min-w-0" id="guide-horizon"><HorizonPlanner assets={assets} csrfToken={csrfToken} onOpenHelp={() => openGuide({ view: 'help', topic: 'horizon' })} permissions={permissions} /></div>
 
             <div className="min-w-0" id="guide-threads"><ThreadsManager assets={assets} csrfToken={csrfToken} onOpenHelp={() => openGuide({ view: 'help', topic: 'threads' })} permissions={permissions} /></div>
 

@@ -80,6 +80,47 @@
       }
     },
     {
+      "requirementId": "REQ-HORIZON-001",
+      "featureId": "lifecycle.planning",
+      "artifacts": {
+        "documentation": [
+          "docs/features/dictionary.md",
+          "docs/features/horizon.md",
+          "docs/requirements/initial.md"
+        ],
+        "api": [
+          "api/openapi/openapi.yaml",
+          "api/proto/stewardmesh.proto"
+        ],
+        "code": [
+          "internal/application/application.go",
+          "internal/horizon/contracts.go",
+          "internal/horizon/service.go",
+          "internal/httpapi/server.go",
+          "internal/repository/memory_horizon.go",
+          "internal/repository/postgres/horizon.go"
+        ],
+        "schema": [
+          "internal/repository/postgres/migrations/0018_horizon_lifecycle_planning.sql",
+          "internal/repository/postgres/migrations/0019_horizon_administrator_permissions.sql",
+          "internal/repository/postgres/migrations/0020_horizon_exact_money_boundary.sql"
+        ],
+        "tests": [
+          "internal/horizon/service_test.go",
+          "internal/httpapi/server_test.go",
+          "internal/repository/contracttest/horizon.go",
+          "internal/repository/memory_horizon_test.go",
+          "internal/repository/postgres/migrate_test.go",
+          "internal/repository/postgres/postgres_integration_test.go",
+          "web/src/HorizonPlanner.test.tsx"
+        ],
+        "ui": [
+          "web/src/App.tsx",
+          "web/src/HorizonPlanner.tsx"
+        ]
+      }
+    },
+    {
       "requirementId": "REQ-THREADS-001",
       "featureId": "goals.tags",
       "artifacts": {

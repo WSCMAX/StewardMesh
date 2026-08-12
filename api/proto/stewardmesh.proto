@@ -33,13 +33,21 @@ service GuardService {
 // Authenticated Guard RPCs carry the opaque session bearer in gRPC
 // authorization metadata. The bearer is never repeated in request bodies.
 
-// Requirement: REQ-ATLAS-001. Feature: inventory.assets.
+// Requirements: REQ-ATLAS-001, REQ-ATLAS-CODES-001.
+// Features: inventory.assets, inventory.identifiers.
 service AssetService {
   rpc ListAssets(ListAssetsRequest) returns (ListAssetsResponse);
   rpc GetAsset(GetAssetRequest) returns (Asset);
   rpc CreateAsset(CreateAssetRequest) returns (Asset);
   rpc UpdateAsset(UpdateAssetRequest) returns (Asset);
   rpc ListAssetLifecycle(ListAssetLifecycleRequest) returns (ListAssetLifecycleResponse);
+  // Resolution reauthorizes the matched asset against the caller's Guard
+  // organization, site, department, or resource scope before returning it.
+  rpc ResolveAssetIdentifier(ResolveAssetIdentifierRequest) returns (AssetIdentifier);
+  rpc ListAssetIdentifiers(ListAssetIdentifiersRequest) returns (ListAssetIdentifiersResponse);
+  rpc CreateAssetIdentifier(CreateAssetIdentifierRequest) returns (CreateAssetIdentifierResponse);
+  rpc ReplaceAssetIdentifier(ReplaceAssetIdentifierRequest) returns (ReplaceAssetIdentifierResponse);
+  rpc DeactivateAssetIdentifier(DeactivateAssetIdentifierRequest) returns (DeactivateAssetIdentifierResponse);
 }
 
 // People directory and effective-dated asset assignments.
@@ -319,6 +327,108 @@ message ListAssetLifecycleRequest {
 
 message ListAssetLifecycleResponse {
   repeated AssetLifecycleEvent items = 1;
+}
+
+message ResolveAssetIdentifierRequest {
+  AssetIdentifierSymbology symbology = 1;
+  // Code 128 accepts ASCII values through 128 bytes. QR accepts UTF-8 values
+  // through 512 bytes. The service enforces byte limits after normalization.
+  string value = 2;
+}
+
+message ListAssetIdentifiersRequest {
+  string asset_id = 1;
+}
+
+message ListAssetIdentifiersResponse {
+  repeated AssetIdentifier items = 1;
+}
+
+message CreateAssetIdentifierRequest {
+  string asset_id = 1;
+  string id = 2;
+  AssetIdentifierSymbology symbology = 3;
+  // Code 128 accepts ASCII values through 128 bytes. QR accepts UTF-8 values
+  // through 512 bytes. The service enforces byte limits after normalization.
+  string value = 4;
+  string display_value = 5;
+  AssetIdentifierSource source = 6;
+  bool primary = 7;
+}
+
+message CreateAssetIdentifierResponse {
+  AssetIdentifier identifier = 1;
+  bool created = 2;
+}
+
+message ReplaceAssetIdentifierRequest {
+  string asset_id = 1;
+  string identifier_id = 2;
+  string replacement_id = 3;
+  AssetIdentifierSymbology symbology = 4;
+  // Code 128 accepts ASCII values through 128 bytes. QR accepts UTF-8 values
+  // through 512 bytes. The service enforces byte limits after normalization.
+  string value = 5;
+  string display_value = 6;
+  AssetIdentifierSource source = 7;
+  int64 revision = 8;
+}
+
+message ReplaceAssetIdentifierResponse {
+  AssetIdentifier identifier = 1;
+  bool changed = 2;
+}
+
+message DeactivateAssetIdentifierRequest {
+  string asset_id = 1;
+  string identifier_id = 2;
+  int64 revision = 3;
+}
+
+message DeactivateAssetIdentifierResponse {
+  AssetIdentifier identifier = 1;
+  bool changed = 2;
+}
+
+message AssetIdentifier {
+  string id = 1;
+  string organization_id = 2;
+  string asset_id = 3;
+  AssetIdentifierSymbology symbology = 4;
+  // Normalized Code 128 values are ASCII through 128 bytes. Normalized QR
+  // values are UTF-8 through 512 bytes.
+  string normalized_value = 5;
+  string display_value = 6;
+  AssetIdentifierSource source = 7;
+  bool primary = 8;
+  AssetIdentifierStatus status = 9;
+  string supersedes_id = 10;
+  string replaced_by_id = 11;
+  int64 revision = 12;
+  string created_by = 13;
+  google.protobuf.Timestamp created_at = 14;
+  google.protobuf.Timestamp updated_at = 15;
+  google.protobuf.Timestamp deactivated_at = 16;
+}
+
+enum AssetIdentifierSymbology {
+  ASSET_IDENTIFIER_SYMBOLOGY_UNSPECIFIED = 0;
+  ASSET_IDENTIFIER_SYMBOLOGY_CODE128 = 1;
+  ASSET_IDENTIFIER_SYMBOLOGY_QR = 2;
+}
+
+enum AssetIdentifierSource {
+  ASSET_IDENTIFIER_SOURCE_UNSPECIFIED = 0;
+  ASSET_IDENTIFIER_SOURCE_USER_ENTERED = 1;
+  ASSET_IDENTIFIER_SOURCE_IMPORTED = 2;
+  ASSET_IDENTIFIER_SOURCE_GENERATED = 3;
+}
+
+enum AssetIdentifierStatus {
+  ASSET_IDENTIFIER_STATUS_UNSPECIFIED = 0;
+  ASSET_IDENTIFIER_STATUS_ACTIVE = 1;
+  ASSET_IDENTIFIER_STATUS_REPLACED = 2;
+  ASSET_IDENTIFIER_STATUS_DEACTIVATED = 3;
 }
 
 message Asset {

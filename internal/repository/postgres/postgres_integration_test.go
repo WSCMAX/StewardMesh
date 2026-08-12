@@ -2,7 +2,7 @@ package postgres
 
 // Requirements: REQ-FOUNDATION-001, SEC-GUARD-001, REQ-PEOPLE-001,
 // REQ-DIRECTORY-EXPANSION-001, REQ-ATLAS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001,
-// REQ-HORIZON-001. Feature: lifecycle.planning.
+// REQ-HORIZON-001, REQ-ATLAS-CODES-001. Features: lifecycle.planning, inventory.identifiers.
 
 import (
 	"context"
@@ -13,6 +13,7 @@ import (
 
 	"github.com/maxlemke/stewardmesh/internal/bootstrap"
 	"github.com/maxlemke/stewardmesh/internal/domain"
+	"github.com/maxlemke/stewardmesh/internal/foundation"
 	"github.com/maxlemke/stewardmesh/internal/repository/contracttest"
 )
 
@@ -64,6 +65,118 @@ func TestOrganizationRepositoryIntegration(t *testing.T) {
 	}
 	if loaded.ID != id || loaded.Name != updated.Name {
 		t.Fatalf("unexpected persisted organization %#v", loaded)
+	}
+}
+
+func TestAuditorIntegrationTreatsEventIDAsAnIdempotencyKey(t *testing.T) {
+	databaseURL := os.Getenv("STEWARDMESH_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("STEWARDMESH_TEST_DATABASE_URL is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	database, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := Migrate(ctx, database); err != nil {
+		t.Fatal(err)
+	}
+	organizations, err := NewOrganizationRepository(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	organizationID := fmt.Sprintf("audit-integration-%d", time.Now().UnixNano())
+	service, err := bootstrap.NewOrganizationService(organizations)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := service.EnsureOrganization(ctx, organizationID, "Audit Integration"); err != nil {
+		t.Fatal(err)
+	}
+	auditor, err := NewAuditor(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventID := fmt.Sprintf("audit-event-%d", time.Now().UnixNano())
+	event := foundation.AuditEvent{
+		ID: eventID, OrganizationID: organizationID, ActorID: "account-one", CorrelationID: "audit-correlation-one",
+		Action: "atlas.identifier.created", ResourceType: "asset_identifier", ResourceID: "identifier-one",
+		OccurredAt: time.Now().UTC(), Metadata: map[string]string{"requirementId": "REQ-ATLAS-CODES-001"},
+	}
+	if err := auditor.Record(ctx, event); err != nil {
+		t.Fatal(err)
+	}
+	if err := auditor.Record(ctx, event); err != nil {
+		t.Fatalf("expected exact audit replay to succeed: %v", err)
+	}
+	replayed := event
+	replayed.Action = "must-not-overwrite-original"
+	replayed.CorrelationID = "audit-correlation-retry"
+	if err := auditor.Record(ctx, replayed); err == nil {
+		t.Fatal("expected reused audit ID with different immutable content to fail")
+	}
+	var count int
+	var action string
+	if err := database.QueryRowContext(ctx, `SELECT COUNT(*), MIN(action) FROM audit_events WHERE id = $1`, eventID).Scan(&count, &action); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 || action != event.Action {
+		t.Fatalf("expected one immutable audit event, count=%d action=%q", count, action)
+	}
+}
+
+func TestAtlasCodesAuditProvenanceMigrationUpgradesExistingIdentifiers(t *testing.T) {
+	databaseURL := os.Getenv("STEWARDMESH_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("STEWARDMESH_TEST_DATABASE_URL is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	database, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := Migrate(ctx, database); err != nil {
+		t.Fatal(err)
+	}
+	transaction, err := database.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer transaction.Rollback()
+	if _, err := transaction.ExecContext(ctx, `
+		ALTER TABLE atlas_asset_identifiers
+			DROP CONSTRAINT atlas_asset_identifiers_created_correlation_check,
+			DROP CONSTRAINT atlas_asset_identifiers_updated_by_check,
+			DROP CONSTRAINT atlas_asset_identifiers_updated_correlation_check,
+			DROP COLUMN created_correlation_id,
+			DROP COLUMN updated_by,
+			DROP COLUMN updated_correlation_id;
+		DELETE FROM stewardmesh_schema_migrations WHERE version = 22;
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if err := transaction.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(ctx, database); err != nil {
+		t.Fatalf("expected migration 0022 to upgrade a 0021 schema: %v", err)
+	}
+	var nullable string
+	if err := database.QueryRowContext(ctx, `
+		SELECT is_nullable
+		FROM information_schema.columns
+		WHERE table_schema = current_schema()
+		  AND table_name = 'atlas_asset_identifiers'
+		  AND column_name = 'updated_correlation_id'
+	`).Scan(&nullable); err != nil {
+		t.Fatal(err)
+	}
+	if nullable != "NO" {
+		t.Fatalf("expected durable non-null Atlas Codes audit provenance, got is_nullable=%q", nullable)
 	}
 }
 
@@ -167,6 +280,74 @@ func TestAtlasStoreIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	contracttest.AtlasStore(t, store, organizationID, fmt.Sprintf("postgres-%d", time.Now().UnixNano()))
+}
+
+func TestAtlasCodesStoreIntegration(t *testing.T) {
+	databaseURL := os.Getenv("STEWARDMESH_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("STEWARDMESH_TEST_DATABASE_URL is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	database, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := Migrate(ctx, database); err != nil {
+		t.Fatal(err)
+	}
+	organizations, err := NewOrganizationRepository(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	suffix := fmt.Sprintf("postgres-%d", time.Now().UnixNano())
+	organizationID := "atlas-codes-" + suffix
+	otherOrganizationID := organizationID + "-other"
+	organizationService, err := bootstrap.NewOrganizationService(organizations)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for id, name := range map[string]string{
+		organizationID:      "Atlas Codes Integration",
+		otherOrganizationID: "Atlas Codes Other Integration",
+	} {
+		if _, _, err := organizationService.EnsureOrganization(ctx, id, name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	assetStore, err := NewAtlasStore(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assetID := "codes-asset-" + suffix
+	otherAssetID := "codes-other-asset-" + suffix
+	now := time.Date(2026, time.August, 11, 11, 0, 0, 0, time.UTC)
+	for index, seed := range []struct {
+		organizationID string
+		assetID        string
+	}{
+		{organizationID: organizationID, assetID: assetID},
+		{organizationID: organizationID, assetID: otherAssetID},
+		{organizationID: otherOrganizationID, assetID: otherAssetID},
+	} {
+		asset := domain.Asset{
+			ID: seed.assetID, OrganizationID: seed.organizationID, Name: "Atlas Codes Contract Asset",
+			Kind: "server", Status: "active", Revision: 1, CreatedAt: now, UpdatedAt: now,
+		}
+		lifecycle := domain.AssetLifecycleEvent{
+			ID: fmt.Sprintf("%032x", time.Now().UnixNano()+int64(index)), OrganizationID: seed.organizationID,
+			AssetID: seed.assetID, ToStatus: "active", Revision: 1, ActorID: "integration", OccurredAt: now,
+		}
+		if _, err := assetStore.CreateAsset(ctx, asset, lifecycle); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store, err := NewAtlasCodesStore(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contracttest.AtlasCodesStore(t, store, organizationID, assetID, otherOrganizationID, otherAssetID, suffix)
 }
 
 func TestThreadsStoreIntegration(t *testing.T) {

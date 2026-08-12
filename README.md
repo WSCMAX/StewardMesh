@@ -72,6 +72,13 @@ DynamoDB adapter and Exchange imports reuse the same validation and audit rules.
 See [Atlas](docs/features/atlas.md) for permissions, API behavior, the accessible
 workflow, migration details, and validation coverage.
 
+Atlas Codes adds organization-scoped Code 128 and QR associations with visible
+provenance, active uniqueness, optimistic replacement and deactivation history,
+Guard ownership locks, and redacted audits. Memory and PostgreSQL providers,
+REST/OpenAPI and gRPC contracts, and the accessible manual management panel use
+the same `REQ-ATLAS-CODES-001` rules. Scanner workflows and label printing remain
+separate planned slices. See [Atlas Codes](docs/features/atlas-codes.md).
+
 Horizon provides effective-dated per-asset lifecycle plans, useful-life and
 replacement assumptions, scenario comparisons, and deterministic fiscal-year
 forecasts across Atlas, Ledger, and Threads dimensions. Forecasts preserve exact

@@ -1,4 +1,4 @@
-# Requirements: REQ-ATLAS-001, REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-HORIZON-001, REQ-LEDGER-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
+# Requirements: REQ-ATLAS-001, REQ-ATLAS-CODES-001, REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-HORIZON-001, REQ-LEDGER-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
 openapi: 3.1.0
 info:
   title: StewardMesh API
@@ -472,6 +472,28 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+  /api/v1/asset-identifiers/resolve:
+    post:
+      summary: Resolve an active asset identifier
+      operationId: resolveAssetIdentifier
+      tags: [Atlas Codes]
+      x-requirement: REQ-ATLAS-CODES-001
+      description: Resolves an active identifier without placing the encoded value in a URL or access log, then authorizes the matched asset against the caller's organization, site, department, or resource-scoped assets.read grants. Unknown and unauthorized values return the same not-found response.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ResolveAssetIdentifierRequest'}
+      responses:
+        '200':
+          description: Active identifier association
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AssetIdentifier'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
   /api/v1/assets:
     get:
       summary: List assets
@@ -598,6 +620,123 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
+  /api/v1/assets/{assetId}/identifiers:
+    parameters:
+      - $ref: '#/components/parameters/AssetID'
+    get:
+      summary: List an asset's active and historical identifiers
+      operationId: listAssetIdentifiers
+      tags: [Atlas Codes]
+      x-requirement: REQ-ATLAS-CODES-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200':
+          description: Identifier association history
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AssetIdentifierCollection'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    post:
+      summary: Associate an identifier with an asset
+      operationId: createAssetIdentifier
+      tags: [Atlas Codes]
+      x-requirement: REQ-ATLAS-CODES-001
+      description: Creates an active association. An exact stable-ID or same-intent safe retry returns the existing association with created set to false and idempotently repairs its deterministic audit event when needed.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateAssetIdentifierRequest'}
+      responses:
+        '200':
+          description: Existing association returned for an exact stable-ID or same-intent retry
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CreateAssetIdentifierResponse'}
+        '201':
+          description: Identifier association created
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CreateAssetIdentifierResponse'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409':
+          description: The active identifier is already associated with a different asset
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '423': {$ref: '#/components/responses/Locked'}
+  /api/v1/assets/{assetId}/identifiers/{identifierId}/replace:
+    parameters:
+      - $ref: '#/components/parameters/AssetID'
+      - $ref: '#/components/parameters/AssetIdentifierID'
+    post:
+      summary: Replace an active asset identifier
+      operationId: replaceAssetIdentifier
+      tags: [Atlas Codes]
+      x-requirement: REQ-ATLAS-CODES-001
+      description: Atomically marks the current association as replaced and creates its replacement while preserving history and the current primary state.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ReplaceAssetIdentifierRequest'}
+      responses:
+        '200':
+          description: Replacement association, or the result of an exact safe retry
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ChangeAssetIdentifierResponse'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409':
+          description: The revision is stale or the replacement is already active for another asset
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '423': {$ref: '#/components/responses/Locked'}
+  /api/v1/assets/{assetId}/identifiers/{identifierId}/deactivate:
+    parameters:
+      - $ref: '#/components/parameters/AssetID'
+      - $ref: '#/components/parameters/AssetIdentifierID'
+    post:
+      summary: Deactivate an asset identifier
+      operationId: deactivateAssetIdentifier
+      tags: [Atlas Codes]
+      x-requirement: REQ-ATLAS-CODES-001
+      description: Deactivates the association at the expected revision while retaining its complete history.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/DeactivateAssetIdentifierRequest'}
+      responses:
+        '200':
+          description: Deactivated association, or the result of an exact safe retry
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ChangeAssetIdentifierResponse'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '423': {$ref: '#/components/responses/Locked'}
   /api/v1/departments:
     get:
       summary: List departments
@@ -1734,6 +1873,11 @@ components:
       name: assetId
       required: true
       schema: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+    AssetIdentifierID:
+      in: path
+      name: identifierId
+      required: true
+      schema: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
     TagID:
       in: path
       name: tagId
@@ -2125,6 +2269,103 @@ components:
         revision: {type: integer, format: int64, minimum: 1}
         createdAt: {type: string, format: date-time}
         updatedAt: {type: string, format: date-time}
+    ResolveAssetIdentifierRequest:
+      type: object
+      additionalProperties: false
+      required: [symbology, value]
+      properties:
+        symbology: {$ref: '#/components/schemas/AssetIdentifierSymbology'}
+        value: {$ref: '#/components/schemas/AssetIdentifierValue'}
+    CreateAssetIdentifierRequest:
+      type: object
+      additionalProperties: false
+      required: [symbology, value]
+      properties:
+        id: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        symbology: {$ref: '#/components/schemas/AssetIdentifierSymbology'}
+        value: {$ref: '#/components/schemas/AssetIdentifierValue'}
+        displayValue: {type: string, maxLength: 512}
+        source:
+          allOf: [{$ref: '#/components/schemas/AssetIdentifierSource'}]
+          default: user_entered
+        primary: {type: boolean, default: false}
+    ReplaceAssetIdentifierRequest:
+      type: object
+      additionalProperties: false
+      required: [symbology, value, revision]
+      properties:
+        replacementId: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        symbology: {$ref: '#/components/schemas/AssetIdentifierSymbology'}
+        value: {$ref: '#/components/schemas/AssetIdentifierValue'}
+        displayValue: {type: string, maxLength: 512}
+        source:
+          allOf: [{$ref: '#/components/schemas/AssetIdentifierSource'}]
+          default: user_entered
+        revision: {type: integer, format: int64, minimum: 1}
+    DeactivateAssetIdentifierRequest:
+      type: object
+      additionalProperties: false
+      required: [revision]
+      properties:
+        revision: {type: integer, format: int64, minimum: 1}
+    AssetIdentifier:
+      type: object
+      additionalProperties: false
+      required: [id, organizationId, assetId, symbology, normalizedValue, source, primary, status, revision, createdBy, createdAt, updatedAt]
+      properties:
+        id: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        organizationId: {type: string, minLength: 1, maxLength: 128}
+        assetId: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        symbology: {$ref: '#/components/schemas/AssetIdentifierSymbology'}
+        normalizedValue: {$ref: '#/components/schemas/AssetIdentifierValue'}
+        displayValue: {type: string, maxLength: 512}
+        source: {$ref: '#/components/schemas/AssetIdentifierSource'}
+        primary: {type: boolean}
+        status: {$ref: '#/components/schemas/AssetIdentifierStatus'}
+        supersedesId: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        replacedById: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        revision: {type: integer, format: int64, minimum: 1}
+        createdBy: {type: string, minLength: 1, maxLength: 128}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+        deactivatedAt: {type: string, format: date-time}
+    AssetIdentifierSymbology:
+      type: string
+      description: Code 128 values are ASCII and at most 128 bytes; QR values are UTF-8 and at most 512 bytes.
+      enum: [code128, qr]
+    AssetIdentifierValue:
+      type: string
+      minLength: 1
+      maxLength: 512
+      description: Encoded or normalized value. Code 128 has the stricter ASCII and 128-byte limit; QR permits up to 512 UTF-8 bytes. The service enforces byte limits after normalization.
+    AssetIdentifierSource:
+      type: string
+      enum: [user_entered, imported, generated]
+    AssetIdentifierStatus:
+      type: string
+      enum: [active, replaced, deactivated]
+    AssetIdentifierCollection:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/AssetIdentifier'}
+    CreateAssetIdentifierResponse:
+      type: object
+      additionalProperties: false
+      required: [identifier, created]
+      properties:
+        identifier: {$ref: '#/components/schemas/AssetIdentifier'}
+        created: {type: boolean}
+    ChangeAssetIdentifierResponse:
+      type: object
+      additionalProperties: false
+      required: [identifier, changed]
+      properties:
+        identifier: {$ref: '#/components/schemas/AssetIdentifier'}
+        changed: {type: boolean}
     CreateAssetRequest:
       type: object
       required: [name, kind]

@@ -1,7 +1,8 @@
 import { type FormEvent, useMemo, useRef, useState } from 'react'
 import { ApiRequestError, requestJSON } from './api'
+import AtlasIdentifiers from './AtlasIdentifiers'
 
-// Requirement: REQ-ATLAS-001. Feature: inventory.assets.
+// Requirements: REQ-ATLAS-001, REQ-ATLAS-CODES-001. Features: inventory.assets, inventory.identifiers.
 
 export type Asset = {
   id: string
@@ -294,6 +295,7 @@ export default function AtlasInventory({ assets, csrfToken, permissions, onAsset
             <dl className="mt-4 grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm"><Detail label="Name" value={selected.name} /><Detail label="Kind" value={selected.kind} /><Detail label="Status" value={selected.status} /><Detail label="Asset tag" value={selected.assetTag} /><Detail label="Serial" value={selected.serialNumber} /><Detail label="Hostname" value={selected.hostname} /><Detail label="Site" value={selected.siteId} /><Detail label="Building" value={selected.buildingId} /><Detail label="Room" value={selected.roomId} /><Detail label="Department" value={selected.departmentId} /><Detail label="User" value={selected.userId} /><Detail label="Revision" value={String(selected.revision)} /></dl>
             <h4 className="mt-6 font-semibold">Lifecycle history</h4>
             {busy === `history-${selected.id}` ? <p className="mt-2 text-sm text-steward-mist-muted" role="status">Loading lifecycle…</p> : lifecycle.length === 0 ? <p className="mt-2 text-sm text-steward-mist-muted">No lifecycle events loaded.</p> : <ol className="mt-3 space-y-3">{lifecycle.map((event) => <li className="border-l-2 border-steward-blue pl-3 text-sm" key={event.id}><p><strong>{event.fromStatus ? `${event.fromStatus} → ` : ''}{event.toStatus}</strong> · revision {event.revision}</p><p className="text-steward-mist-muted">{event.note || 'Status recorded'} · {new Date(event.occurredAt).toLocaleDateString()}</p></li>)}</ol>}
+            <AtlasIdentifiers assetId={selected.id} assetName={selected.name} canWrite={canWrite} csrfToken={csrfToken} />
           </>}
         </aside>
       </div>

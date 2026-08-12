@@ -1,6 +1,6 @@
 // Package application constructs StewardMesh's transport-neutral HTTP
 // application and owns the lifecycle of its shared runtime dependencies.
-// Requirements: REQ-FOUNDATION-001, REQ-ATLAS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-HORIZON-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001.
+// Requirements: REQ-FOUNDATION-001, REQ-ATLAS-001, REQ-ATLAS-CODES-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-HORIZON-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001.
 package application
 
 import (
@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/maxlemke/stewardmesh/internal/atlas"
+	"github.com/maxlemke/stewardmesh/internal/atlascodes"
 	"github.com/maxlemke/stewardmesh/internal/bootstrap"
 	"github.com/maxlemke/stewardmesh/internal/cache"
 	"github.com/maxlemke/stewardmesh/internal/config"
@@ -158,6 +159,12 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 	if err != nil {
 		return fail(fmt.Errorf("initialize Atlas: %w", err))
 	}
+	atlasCodesService, err := atlascodes.NewService(runtime.atlasCodesStore, atlasService, runtime.auditor, atlascodes.ServiceConfig{
+		OrganizationID: cfg.OrganizationID,
+	})
+	if err != nil {
+		return fail(fmt.Errorf("initialize Atlas Codes: %w", err))
+	}
 	threadsService, err := threads.NewService(runtime.threadsStore, threadsTargetValidator{atlas: atlasService}, runtime.auditor, threads.ServiceConfig{
 		OrganizationID: cfg.OrganizationID,
 	})
@@ -183,6 +190,7 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 
 	application.handler = httpapi.NewServer(httpapi.Dependencies{
 		Atlas:               atlasService,
+		AtlasCodes:          atlasCodesService,
 		People:              peopleService,
 		Threads:             threadsService,
 		Vault:               vaultService,
@@ -232,16 +240,17 @@ func (a *Application) Close() error {
 }
 
 type foundationRuntime struct {
-	organization bootstrap.Organization
-	assetStore   atlas.Store
-	threadsStore threads.Store
-	storageStore storage.MetadataStore
-	ledgerStore  ledger.Store
-	horizonStore horizon.Store
-	guardStore   guard.Store
-	peopleStore  people.Store
-	auditor      foundation.Auditor
-	close        func() error
+	organization    bootstrap.Organization
+	assetStore      atlas.Store
+	atlasCodesStore atlascodes.Store
+	threadsStore    threads.Store
+	storageStore    storage.MetadataStore
+	ledgerStore     ledger.Store
+	horizonStore    horizon.Store
+	guardStore      guard.Store
+	peopleStore     people.Store
+	auditor         foundation.Auditor
+	close           func() error
 }
 
 func initializeAttemptLimiter(ctx context.Context, cfg config.Config) (guard.AttemptLimiter, func() error, error) {
@@ -296,16 +305,17 @@ func initializeFoundation(ctx context.Context, cfg config.Config, runMigrations 
 		return foundationRuntime{}, errors.New("context is required")
 	}
 	var (
-		organizations repository.OrganizationRepository
-		assetStore    atlas.Store
-		threadsStore  threads.Store
-		storageStore  storage.MetadataStore
-		ledgerStore   ledger.Store
-		horizonStore  horizon.Store
-		guardStore    guard.Store
-		peopleStore   people.Store
-		auditor       foundation.Auditor = foundation.NopAuditor{}
-		closeRuntime                     = func() error { return nil }
+		organizations   repository.OrganizationRepository
+		assetStore      atlas.Store
+		atlasCodesStore atlascodes.Store
+		threadsStore    threads.Store
+		storageStore    storage.MetadataStore
+		ledgerStore     ledger.Store
+		horizonStore    horizon.Store
+		guardStore      guard.Store
+		peopleStore     people.Store
+		auditor         foundation.Auditor = foundation.NopAuditor{}
+		closeRuntime                       = func() error { return nil }
 	)
 	switch cfg.RepositoryDriver {
 	case config.RepositoryDriverMemory:
@@ -313,6 +323,7 @@ func initializeFoundation(ctx context.Context, cfg config.Config, runMigrations 
 		guardStore = repository.NewMemoryGuardStore()
 		peopleStore = repository.NewMemoryPeopleStore()
 		assetStore = repository.NewMemoryAtlasStore()
+		atlasCodesStore = repository.NewMemoryAtlasCodesStore()
 		threadsStore = repository.NewMemoryThreadsStore()
 		storageStore = repository.NewMemoryStorageStore()
 		ledgerStore = repository.NewMemoryLedgerStore()
@@ -350,6 +361,11 @@ func initializeFoundation(ctx context.Context, cfg config.Config, runMigrations 
 			return foundationRuntime{}, err
 		}
 		assetStore, err = postgresrepository.NewAtlasStore(database)
+		if err != nil {
+			_ = database.Close()
+			return foundationRuntime{}, err
+		}
+		atlasCodesStore, err = postgresrepository.NewAtlasCodesStore(database)
 		if err != nil {
 			_ = database.Close()
 			return foundationRuntime{}, err
@@ -421,16 +437,17 @@ func initializeFoundation(ctx context.Context, cfg config.Config, runMigrations 
 		return foundationRuntime{}, fmt.Errorf("audit organization bootstrap: %w", err)
 	}
 	return foundationRuntime{
-		organization: organization,
-		assetStore:   assetStore,
-		threadsStore: threadsStore,
-		storageStore: storageStore,
-		ledgerStore:  ledgerStore,
-		horizonStore: horizonStore,
-		guardStore:   guardStore,
-		peopleStore:  peopleStore,
-		auditor:      auditor,
-		close:        closeRuntime,
+		organization:    organization,
+		assetStore:      assetStore,
+		atlasCodesStore: atlasCodesStore,
+		threadsStore:    threadsStore,
+		storageStore:    storageStore,
+		ledgerStore:     ledgerStore,
+		horizonStore:    horizonStore,
+		guardStore:      guardStore,
+		peopleStore:     peopleStore,
+		auditor:         auditor,
+		close:           closeRuntime,
 	}, nil
 }
 

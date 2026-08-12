@@ -2,6 +2,8 @@ import axe from 'axe-core'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { expect, test, vi } from 'vitest'
 import GuideExperience, { GuideInvitation, type GuideDestination } from './GuideExperience'
+
+// Requirements: REQ-WORKSPACE-001, A11Y-001, DOC-001, DOC-002. Features: experience.workspace, experience.help.
 import { resolveBranding } from './guide'
 
 // Requirements: REQ-HORIZON-001, A11Y-001, DOC-001, DOC-002. Features: lifecycle.planning, experience.help.

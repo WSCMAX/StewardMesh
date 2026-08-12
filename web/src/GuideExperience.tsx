@@ -10,7 +10,7 @@ import {
   type WalkthroughStatus,
 } from './guide'
 
-// Requirements: A11Y-001, DOC-001, DOC-002. Feature: experience.help.
+// Requirements: REQ-WORKSPACE-001, A11Y-001, DOC-001, DOC-002. Features: experience.workspace, experience.help.
 
 export type GuideDestination = { view: GuideView; topic: GuideTopicID }
 
@@ -19,6 +19,7 @@ type GuideExperienceProps = {
   destination: GuideDestination
   issuesUrl: string
   onClose: () => void
+  onFollowSection?: (topic: GuideTopicID, anchor: string) => void
   onNavigate: (destination: GuideDestination) => void
   onWalkthroughStatus: (status: WalkthroughStatus) => void
   open: boolean
@@ -49,7 +50,7 @@ export function GuideInvitation({ onNavigate, onWalkthroughStatus, roles, status
   )
 }
 
-export default function GuideExperience({ branding, destination, issuesUrl, onClose, onNavigate, onWalkthroughStatus, open, permissions, roles, version }: GuideExperienceProps) {
+export default function GuideExperience({ branding, destination, issuesUrl, onClose, onFollowSection, onNavigate, onWalkthroughStatus, open, permissions, roles, version }: GuideExperienceProps) {
   const [activeStep, setActiveStep] = useState(0)
   const [walkthroughResult, setWalkthroughResult] = useState('')
   const closeButtonRef = useRef<HTMLButtonElement>(null)
@@ -81,6 +82,8 @@ export default function GuideExperience({ branding, destination, issuesUrl, onCl
   }
 
   function followSection(anchor: string) {
+    const followedTopic = guideTopics.find((candidate) => candidate.anchor === anchor)
+    if (followedTopic) onFollowSection?.(followedTopic.id, anchor)
     onClose()
     queueMicrotask(() => {
       const target = document.getElementById(anchor)

@@ -3,6 +3,7 @@
 - **Canonical ID:** `identity.directory`
 - **Requirement:** `REQ-PEOPLE-001`
 - **Location requirement:** `REQ-DIRECTORY-EXPANSION-001`
+- **Workspace requirement:** `REQ-WORKSPACE-001`
 - **Roadmap issue:** [#6](https://github.com/WSCMAX/StewardMesh/issues/6)
 
 ## Purpose
@@ -38,6 +39,16 @@ Every record carries its organization owner, stable server-generated ID, status,
 An organization-scoped `directory.read` grant can see the whole organization directory. A site-scoped grant returns only identities, departments, buildings, and rooms in that site. A department-scoped grant returns only identities in that department and its related site, including that site's locations. Every memory and PostgreSQL query receives an explicit visibility object; an empty visibility scope fails closed. Search and location filters can only narrow the records already allowed by Guard.
 
 The web interface uses organization permission hints only to hide unavailable controls. Guard enforces every permission on the server.
+
+## Guided person and location workflow
+
+The People work area composes existing directory APIs into a three-step person task without changing People ownership of the records:
+
+1. Enter the person's display name, email address, and optional department.
+2. Select a visible site, building, or room, or create the missing location inline when `directory.write` is available.
+3. Review the person and resolved location before creating the identity.
+
+The controlled draft survives forward and backward navigation as well as step-level validation errors. A building or room resolves to its containing site because the current identity contract persists a `siteId`; the exact selected building or room remains visible through review. Inline location writes and the final person write use the synchronized CSRF token and remain independently authorized by the existing endpoints. Read-only users keep the visible location inventory and receive a clear administrator path instead of creation controls.
 
 ## Asset assignments
 
@@ -83,9 +94,10 @@ The People workspace targets WCAG 2.2 AA. It provides a semantic heading hierarc
 
 The on-page quick guide follows this sequence:
 
-1. Create sites and departments.
-2. Add a typed directory identity.
-3. Select an asset and add one or more relationships.
+1. Use the guided task to add an individual person and resolve their location together.
+2. Use standalone controls for location hierarchies, departments, and shared-use identities.
+3. Review the scoped directory and location inventory.
+4. Select an asset and add one or more relationships.
 
 Use the configurable **Report a People issue** link on the workspace to report a component problem. Include the response correlation ID when available. Do not include email lists, identity-provider claims, cookies, CSRF values, or other private directory data.
 

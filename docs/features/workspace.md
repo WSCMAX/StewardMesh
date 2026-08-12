@@ -5,6 +5,7 @@
 - Owning roadmap issue: #33
 - Shell and navigation delivery: #34
 - Permission-aware panels and scoped access: #35
+- Guided person-plus-location delivery: #36
 
 ## Purpose
 
@@ -18,6 +19,8 @@ Workspace gives authenticated users one coherent application shell without prese
 - The context header always identifies the current area, signed-in role summary, visible-record boundary, change capability, and live service state.
 - Overview reports tracked asset count, the number of product areas available under current grants, service health, and direct entry points to each area.
 - Guide links activate the owning work area before focusing its section. Help and issue reporting remain available from both the global header and Workspace navigation.
+- People includes a three-step person-plus-location task. Person values remain controlled while the user moves between details, location, and review; an existing visible site, building, or room can be selected, or a user with `directory.write` can create the missing location inline.
+- Building and room choices resolve to their containing site for the existing People persistence contract. The exact selected location remains visible during review so the user can confirm the relationship before the person is submitted.
 
 ## Roles and permissions
 
@@ -49,6 +52,7 @@ These hints cannot widen access. Every API route continues to authenticate the c
 - Feature-owned panels retain their existing empty, loading, success, and error states.
 - Loss of service health produces a visible text warning that previously loaded context may be stale and protected operations may fail.
 - Permission-limited areas identify the missing grant and direct users to contextual Guide help.
+- A location or person validation failure stays on the failing workflow step without clearing person values. Read-only People users receive a direct `directory.write` alternative instead of inactive creation controls.
 - Scoped areas explain why organization-wide collections remain closed and identify whether a separate write grant is required.
 - A 401 from an authenticated API request clears in-memory principal, grant, CSRF, and record state, announces that the session expired, and returns the user to sign-in.
 - Invalid deep links fall back to Overview rather than exposing a blank or broken shell.
@@ -73,10 +77,11 @@ Workspace stores no credentials, grants, record identifiers, or form values in U
 
 - `internal/httpapi/server_test.go` proves scoped session hints are returned while the organization-wide asset list remains denied.
 - `web/src/App.test.tsx` covers authenticated rendering, read/write labels, scoped collection suppression, focused navigation, deep-link updates, session expiry, context preservation, Guide entry, and automated accessibility checks.
+- `web/src/PeopleDirectory.test.tsx` covers guided draft retention, existing room selection, inline missing-room creation, containing-site submission, step-specific validation, read-only alternatives, and automated accessibility checks.
 - `web/src/WorkspaceShell.test.tsx` covers safe hash parsing and stable deep-link generation.
 - `web/src/workspaceAccess.test.ts` covers deterministic organization, scoped, and absent grant classification.
 - Browser validation covers desktop and 320-pixel layouts, keyboard navigation, state preservation, service and permission states, console errors, and document-level overflow.
 
 ## Follow-up work
 
-Issue #36 owns the guided person-to-location workflow, #37 owns reusable related-record workflows, #38 owns the broader accessibility and mobile validation pass, and #39 owns final traceability and release evidence for the parent Workspace feature.
+Issue #37 owns reusable related-record workflows, #38 owns the broader accessibility and mobile validation pass, and #39 owns final traceability and release evidence for the parent Workspace feature.

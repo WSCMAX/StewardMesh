@@ -1,6 +1,19 @@
-// Requirements: SEC-HTTP-001, SEC-GUARD-001, REQ-PEOPLE-001, REQ-THREADS-001.
+// Requirements: SEC-HTTP-001, SEC-GUARD-001, REQ-PEOPLE-001, REQ-THREADS-001, A11Y-001, DOC-001, DOC-002.
 
 const httpNoContent = 204
+const correlationPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
+let lastCorrelationId = ''
+
+export const correlationEventName = 'stewardmesh:correlation'
+
+export function getLastCorrelationId() { return lastCorrelationId }
+
+function captureCorrelation(response: Response) {
+  const candidate = response.headers.get('X-Correlation-ID')?.trim() ?? ''
+  if (!correlationPattern.test(candidate)) return
+  lastCorrelationId = candidate
+  if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent(correlationEventName, { detail: candidate }))
+}
 
 export class ApiRequestError extends Error {
   status: number
@@ -24,6 +37,7 @@ export async function requestJSON(path: string, init?: RequestInit): Promise<unk
       ...init?.headers,
     },
   })
+  captureCorrelation(response)
   if (!response.ok) {
     let message = 'The request could not be completed.'
     try {

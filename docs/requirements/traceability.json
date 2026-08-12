@@ -409,6 +409,105 @@
           "docs/architecture/valkey.md"
         ]
       }
+    },
+    {
+      "requirementId": "A11Y-001",
+      "featureId": "experience.help",
+      "artifacts": {
+        "documentation": [
+          "docs/features/dictionary.md",
+          "docs/features/guide.md",
+          "docs/requirements/initial.md"
+        ],
+        "api": [
+          "web/src/api.ts"
+        ],
+        "code": [
+          "web/src/GuideExperience.tsx",
+          "web/src/api.ts",
+          "web/src/guide.ts"
+        ],
+        "schema": [
+          ".env.example",
+          "web/src/vite-env.d.ts"
+        ],
+        "tests": [
+          "web/src/App.test.tsx",
+          "web/src/GuideExperience.test.tsx",
+          "web/src/api.test.ts",
+          "web/src/guide.test.ts"
+        ],
+        "ui": [
+          "web/src/App.tsx",
+          "web/src/GuideExperience.tsx"
+        ]
+      }
+    },
+    {
+      "requirementId": "DOC-001",
+      "featureId": "experience.help",
+      "artifacts": {
+        "documentation": [
+          "docs/features/dictionary.md",
+          "docs/features/guide.md",
+          "docs/requirements/initial.md"
+        ],
+        "api": [
+          "web/src/api.ts"
+        ],
+        "code": [
+          "web/src/GuideExperience.tsx",
+          "web/src/api.ts",
+          "web/src/guide.ts"
+        ],
+        "schema": [
+          ".env.example",
+          "web/src/vite-env.d.ts"
+        ],
+        "tests": [
+          "web/src/App.test.tsx",
+          "web/src/GuideExperience.test.tsx",
+          "web/src/api.test.ts",
+          "web/src/guide.test.ts"
+        ],
+        "ui": [
+          "web/src/App.tsx",
+          "web/src/GuideExperience.tsx"
+        ]
+      }
+    },
+    {
+      "requirementId": "DOC-002",
+      "featureId": "experience.help",
+      "artifacts": {
+        "documentation": [
+          "docs/features/dictionary.md",
+          "docs/features/guide.md",
+          "docs/requirements/initial.md"
+        ],
+        "api": [
+          "web/src/api.ts"
+        ],
+        "code": [
+          "web/src/GuideExperience.tsx",
+          "web/src/api.ts",
+          "web/src/guide.ts"
+        ],
+        "schema": [
+          ".env.example",
+          "web/src/vite-env.d.ts"
+        ],
+        "tests": [
+          "web/src/App.test.tsx",
+          "web/src/GuideExperience.test.tsx",
+          "web/src/api.test.ts",
+          "web/src/guide.test.ts"
+        ],
+        "ui": [
+          "web/src/App.tsx",
+          "web/src/GuideExperience.tsx"
+        ]
+      }
     }
   ]
 }

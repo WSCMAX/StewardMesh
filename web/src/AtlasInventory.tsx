@@ -55,6 +55,7 @@ type AtlasInventoryProps = {
   csrfToken: string
   permissions: readonly string[]
   onAssetsChange: (assets: Asset[]) => void
+  onOpenHelp?: () => void
 }
 
 const kinds = ['server', 'computer', 'desktop', 'laptop', 'tablet', 'phone', 'network', 'peripheral', 'virtual', 'other']
@@ -99,7 +100,7 @@ function assetValue(asset: Asset | null, key: keyof Asset) {
   return typeof value === 'string' ? value : ''
 }
 
-export default function AtlasInventory({ assets, csrfToken, permissions, onAssetsChange }: AtlasInventoryProps) {
+export default function AtlasInventory({ assets, csrfToken, permissions, onAssetsChange, onOpenHelp }: AtlasInventoryProps) {
   const [search, setSearch] = useState('')
   const [kind, setKind] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
@@ -231,7 +232,10 @@ export default function AtlasInventory({ assets, csrfToken, permissions, onAsset
           <h2 id="assets-heading" className="mt-1 text-2xl font-semibold">Atlas — Asset inventory</h2>
           <p className="mt-2 max-w-3xl text-sm leading-6 text-steward-mist-muted">Know every asset and where it is in its lifecycle. Search organization-owned servers and devices, maintain identity and location details, and preserve every status transition.</p>
         </div>
-        {canWrite && <button className={buttonClass} onClick={openCreate} type="button">Add asset</button>}
+        <div className="flex flex-wrap gap-3">
+          {onOpenHelp && <button className={secondaryButtonClass} onClick={onOpenHelp} type="button">Atlas help</button>}
+          {canWrite && <button className={buttonClass} onClick={openCreate} type="button">Add asset</button>}
+        </div>
       </div>
 
       {error && <div className="mt-4 rounded-lg border border-red-400/50 bg-red-950/50 p-3 text-sm" ref={errorRef} role="alert" tabIndex={-1}>{error}</div>}

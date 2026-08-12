@@ -34,12 +34,12 @@ body {
 }
 
 ::selection {
-  background: #16bfa7;
-  color: #061827;
+  background: var(--color-steward-teal);
+  color: var(--color-steward-ink-950);
 }
 
 *:focus-visible {
-  outline: 3px solid #16bfa7;
+  outline: 3px solid var(--color-steward-teal);
   outline-offset: 3px;
 }
 

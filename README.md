@@ -105,6 +105,12 @@ See [People](docs/features/people.md) and
 privacy boundaries, provider contracts, location behavior, assignments, and
 the guided accessible workflow.
 
+Guide provides contextual module help and examples, dismissible and replayable
+permission-aware walkthroughs, a WCAG 2.2 AA branding-color gate with safe
+fallbacks, and sanitized issue-report context. See
+[Guide](docs/features/guide.md) for public branding variables, accessibility
+checks, privacy boundaries, and validation coverage.
+
 The loopback development settings in `.env.example` deliberately use an HTTP
 cookie. A shared listener must use an HTTPS allowed origin, secure cookies, and
 a deployment bootstrap token containing at least 32 bytes; configuration fails

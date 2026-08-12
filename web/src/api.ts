@@ -5,6 +5,7 @@ const correlationPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 let lastCorrelationId = ''
 
 export const correlationEventName = 'stewardmesh:correlation'
+export const authenticationRequiredEventName = 'stewardmesh:authentication-required'
 
 export function getLastCorrelationId() { return lastCorrelationId }
 
@@ -51,6 +52,9 @@ export async function requestJSON(path: string, init?: RequestInit): Promise<unk
       }
     } catch {
       // The status code remains authoritative when an intermediary returns non-JSON.
+    }
+    if (response.status === 401 && path !== '/api/v1/auth/session' && path !== '/api/v1/auth/login' && path !== '/api/v1/auth/bootstrap') {
+      window.dispatchEvent(new CustomEvent(authenticationRequiredEventName))
     }
     throw new ApiRequestError(response.status, message)
   }

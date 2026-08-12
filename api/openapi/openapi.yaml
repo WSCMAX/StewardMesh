@@ -2060,7 +2060,7 @@ components:
         password: {type: string, format: password, writeOnly: true, maxLength: 1024}
     SessionResponse:
       type: object
-      required: [principal, permissions, csrfToken, expiresAt]
+      required: [principal, permissions, grants, csrfToken, expiresAt]
       properties:
         principal: {$ref: '#/components/schemas/Principal'}
         permissions:
@@ -2068,8 +2068,23 @@ components:
           description: Organization-scoped permission hints for interface rendering; server authorization remains authoritative.
           items: {type: string, pattern: '^[a-z][a-z0-9._-]{2,127}$'}
           uniqueItems: true
+        grants:
+          type: array
+          description: REQ-WORKSPACE-001 experience.workspace organization, site, department, or resource-scoped interface hints. These hints never replace server authorization.
+          items: {$ref: '#/components/schemas/SessionGrant'}
         csrfToken: {type: string, minLength: 32, maxLength: 128}
         expiresAt: {type: string, format: date-time}
+    SessionGrant:
+      type: object
+      required: [permission, scope]
+      properties:
+        permission: {type: string, pattern: '^[a-z][a-z0-9._-]{2,127}$'}
+        scope:
+          type: object
+          required: [kind, resourceId]
+          properties:
+            kind: {type: string, enum: [organization, site, department, resource]}
+            resourceId: {type: string, minLength: 1, maxLength: 200}
     Principal:
       type: object
       required: [subject, organizationId, username, email, displayName, roles]

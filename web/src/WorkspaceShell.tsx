@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import type { GuideTopicID } from './guide'
+import { scopeSummary, type PermissionAccess } from './workspaceAccess'
 
 // Requirement: REQ-WORKSPACE-001. Feature: experience.workspace.
 
@@ -11,7 +12,9 @@ export type WorkspaceArea = {
   descriptor: string
   summary: string
   permission?: string
-  limited?: boolean
+  writePermission?: string
+  readAccess?: PermissionAccess
+  writeAccess?: PermissionAccess
   content: ReactNode
 }
 
@@ -53,10 +56,12 @@ export default function WorkspaceShell({ activeArea, areas, assetCount, healthLa
           <ul className="flex snap-x gap-2 overflow-x-auto pb-2 lg:block lg:space-y-1 lg:overflow-visible lg:pb-0">
             {areas.map((area) => {
               const selected = area.id === active.id
-              const limited = Boolean(area.limited)
+              const accessLabel = area.readAccess?.level === 'none' ? 'limited access'
+                : area.readAccess?.level === 'scoped' ? 'scoped access'
+                  : area.writePermission && area.writeAccess?.level !== 'organization' ? 'read only' : ''
               return <li className="min-w-[10rem] snap-start lg:min-w-0" key={area.id}>
                 <a
-                  aria-label={`${area.name} — ${area.descriptor}${limited ? ' (limited access)' : ''}`}
+                  aria-label={`${area.name} — ${area.descriptor}${accessLabel ? ` (${accessLabel})` : ''}`}
                   aria-current={selected ? 'page' : undefined}
                   className={`group flex min-h-12 w-full items-center gap-3 rounded-xl border px-3 py-2 text-left transition ${selected ? 'border-steward-teal/60 bg-steward-teal/12 text-steward-mist shadow-inner shadow-steward-teal/5' : 'border-transparent text-steward-mist-muted hover:border-steward-ink-800 hover:bg-steward-ink-950/45 hover:text-steward-mist'}`}
                   href={workspaceHash(area.id)}
@@ -67,7 +72,7 @@ export default function WorkspaceShell({ activeArea, areas, assetCount, healthLa
                     <span className="block truncate text-sm font-semibold">{area.name}</span>
                     <span className="block truncate text-xs">{area.descriptor}</span>
                   </span>
-                  {limited && <span className="sr-only">Limited access</span>}
+                  {accessLabel && <span className="sr-only">{accessLabel}</span>}
                 </a>
               </li>
             })}
@@ -89,9 +94,11 @@ export default function WorkspaceShell({ activeArea, areas, assetCount, healthLa
             </div>
             <button className="min-h-11 shrink-0 rounded-lg border border-steward-teal px-4 py-2 text-sm font-semibold text-steward-teal transition hover:bg-steward-teal/10" onClick={() => onOpenHelp(active.id === 'overview' ? 'workspace' : active.id)} type="button">Help for {active.name}</button>
           </div>
-          <dl className="mt-5 grid gap-2 text-sm sm:grid-cols-3">
+          <dl className="mt-5 grid gap-2 text-sm sm:grid-cols-2 xl:grid-cols-5">
             <ContextItem label="Current area" value={active.name} />
             <ContextItem label="Your access" value={roleSummary} />
+            <ContextItem label="Visible records" value={active.readAccess ? scopeSummary(active.readAccess) : 'Workspace overview'} />
+            <ContextItem label="Changes" value={active.writePermission ? active.writeAccess?.level === 'organization' ? 'Allowed organization-wide' : active.writeAccess?.level === 'scoped' ? scopeSummary(active.writeAccess) : `Requires ${active.writePermission}` : 'No feature changes'} />
             <ContextItem label="Service" value={healthLabel} />
           </dl>
         </header>

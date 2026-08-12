@@ -1,5 +1,5 @@
 import { type CSSProperties, type FormEvent, type ReactNode, useEffect, useRef, useState } from 'react'
-import { ApiRequestError, requestJSON } from './api'
+import { ApiRequestError, authenticationRequiredEventName, requestJSON } from './api'
 import AtlasInventory, { isAsset, type Asset } from './AtlasInventory'
 import GuideExperience, { GuideInvitation, type GuideDestination } from './GuideExperience'
 import GuardAccessManager from './GuardAccessManager'
@@ -10,6 +10,7 @@ import ThreadsManager from './ThreadsManager'
 import VaultManager from './VaultManager'
 import { brandingStyle, readWalkthroughStatus, resolveBranding, type WalkthroughStatus, writeWalkthroughStatus } from './guide'
 import WorkspaceShell, { workspaceAreaFromHash, workspaceHash, type WorkspaceArea, type WorkspaceAreaID } from './WorkspaceShell'
+import { permissionAccess, type PermissionAccess, type SessionGrant } from './workspaceAccess'
 
 // Requirements include REQ-WORKSPACE-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-HORIZON-001, A11Y-001, DOC-001, and DOC-002.
 
@@ -19,6 +20,7 @@ type WorkspaceModule = {
   descriptor: string
   summary: string
   permission: string
+  writePermission?: string
 }
 
 type AssetResponse = {
@@ -42,6 +44,7 @@ type Principal = {
 type SessionResponse = {
   principal: Principal
   permissions: string[]
+  grants: SessionGrant[]
   csrfToken: string
   expiresAt: string
 }
@@ -61,12 +64,12 @@ const defaultIssuesUrl = 'https://github.com/WSCMAX/StewardMesh/issues'
 const guardHelpUrl = 'https://github.com/WSCMAX/StewardMesh/blob/main/docs/features/guard.md'
 
 const workspaceModules: readonly WorkspaceModule[] = [
-  { id: 'atlas', name: 'Atlas', descriptor: 'Asset inventory', summary: 'Register, locate, and maintain the assets your organization stewards.', permission: 'assets.read' },
-  { id: 'horizon', name: 'Horizon', descriptor: 'Lifecycle planning', summary: 'Plan useful life, replacement timing, scenarios, and forecasts.', permission: 'planning.read' },
-  { id: 'ledger', name: 'Ledger', descriptor: 'Procurement and budgets', summary: 'Work with vendors, purchases, contracts, commitments, costs, and budgets.', permission: 'finance.read' },
-  { id: 'threads', name: 'Threads', descriptor: 'Tags and strategic goals', summary: 'Connect inventory to hierarchical tags, goals, and visible provenance.', permission: 'goals.read' },
-  { id: 'vault', name: 'Vault', descriptor: 'Private files and evidence', summary: 'Store checksummed evidence and authorize private downloads.', permission: 'storage.read' },
-  { id: 'people', name: 'People', descriptor: 'Users and departments', summary: 'Organize locations, departments, identities, and asset assignments.', permission: 'directory.read' },
+  { id: 'atlas', name: 'Atlas', descriptor: 'Asset inventory', summary: 'Register, locate, and maintain the assets your organization stewards.', permission: 'assets.read', writePermission: 'assets.write' },
+  { id: 'horizon', name: 'Horizon', descriptor: 'Lifecycle planning', summary: 'Plan useful life, replacement timing, scenarios, and forecasts.', permission: 'planning.read', writePermission: 'planning.write' },
+  { id: 'ledger', name: 'Ledger', descriptor: 'Procurement and budgets', summary: 'Work with vendors, purchases, contracts, commitments, costs, and budgets.', permission: 'finance.read', writePermission: 'finance.write' },
+  { id: 'threads', name: 'Threads', descriptor: 'Tags and strategic goals', summary: 'Connect inventory to hierarchical tags, goals, and visible provenance.', permission: 'goals.read', writePermission: 'goals.write' },
+  { id: 'vault', name: 'Vault', descriptor: 'Private files and evidence', summary: 'Store checksummed evidence and authorize private downloads.', permission: 'storage.read', writePermission: 'storage.write' },
+  { id: 'people', name: 'People', descriptor: 'Users and departments', summary: 'Organize locations, departments, identities, and asset assignments.', permission: 'directory.read', writePermission: 'directory.write' },
   { id: 'guard', name: 'Guard', descriptor: 'Authentication and authorization', summary: 'Manage roles, scoped assignments, ownership, and access policy.', permission: 'guard.manage' },
 ]
 
@@ -109,6 +112,15 @@ function isSessionResponse(value: unknown): value is SessionResponse {
   const principal = candidate.principal as Record<string, unknown>
   return Array.isArray(candidate.permissions)
     && candidate.permissions.every((permission) => typeof permission === 'string')
+    && Array.isArray(candidate.grants)
+    && candidate.grants.every((grant) => {
+      if (typeof grant !== 'object' || grant === null) return false
+      const record = grant as Record<string, unknown>
+      if (typeof record.permission !== 'string' || typeof record.scope !== 'object' || record.scope === null) return false
+      const scope = record.scope as Record<string, unknown>
+      return ['organization', 'site', 'department', 'resource'].includes(String(scope.kind))
+        && typeof scope.resourceId === 'string' && scope.resourceId.length > 0 && scope.resourceId.length <= 200
+    })
     && typeof principal.subject === 'string'
     && typeof principal.organizationId === 'string'
     && typeof principal.username === 'string'
@@ -141,6 +153,7 @@ export default function App() {
   const [principal, setPrincipal] = useState<Principal | null>(null)
   const [csrfToken, setCSRFToken] = useState('')
   const [permissions, setPermissions] = useState<string[]>([])
+  const [grants, setGrants] = useState<SessionGrant[]>([])
   const [tokenRequired, setTokenRequired] = useState(false)
   const [minimumPasswordCharacters, setMinimumPasswordCharacters] = useState(15)
   const [oidcEnabled, setOIDCEnabled] = useState(false)
@@ -220,6 +233,7 @@ export default function App() {
           if (!active) return
           setPrincipal(session.principal)
           setPermissions(session.permissions)
+          setGrants(session.grants)
           setCSRFToken(session.csrfToken)
           setAuthPhase('authenticated')
         } catch (error) {
@@ -240,6 +254,21 @@ export default function App() {
   }, [authFailure])
 
   useEffect(() => {
+    function requireAuthentication() {
+      setPrincipal(null)
+      setCSRFToken('')
+      setPermissions([])
+      setGrants([])
+      setAssets([])
+      setAuthError('Your session expired. Sign in again to continue; unsaved work was not submitted.')
+      setAuthPhase('login')
+      queueMicrotask(() => errorRef.current?.focus())
+    }
+    window.addEventListener(authenticationRequiredEventName, requireAuthentication)
+    return () => window.removeEventListener(authenticationRequiredEventName, requireAuthentication)
+  }, [])
+
+  useEffect(() => {
     function restoreWorkspaceLocation() {
       const area = workspaceAreaFromHash(window.location.hash)
       setActiveWorkspaceArea(area)
@@ -257,31 +286,32 @@ export default function App() {
   useEffect(() => {
     if (authPhase !== 'authenticated') return
     let active = true
-    requestJSON('/api/v1/organization')
-      .then((organization) => {
-        if (!isOrganization(organization)) throw new Error('invalid organization response')
-        if (active) setOrganizationName(organization.name)
-      })
-      .catch(() => {
-        if (active) setOrganizationName('Your organization')
-      })
-    requestJSON('/api/v1/assets')
-      .then((body) => {
-        if (typeof body !== 'object' || body === null) throw new Error('invalid asset response')
-        const items = (body as AssetResponse).items
-        if (active) setAssets(Array.isArray(items) ? items.filter(isAsset) : [])
-      })
-      .catch(() => {
-        if (active) setAssets([])
-      })
+    if (permissions.includes('organization.read')) {
+      requestJSON('/api/v1/organization')
+        .then((organization) => {
+          if (!isOrganization(organization)) throw new Error('invalid organization response')
+          if (active) setOrganizationName(organization.name)
+        })
+        .catch(() => { if (active) setOrganizationName('Your organization') })
+    }
+    if (permissions.includes('assets.read')) {
+      requestJSON('/api/v1/assets')
+        .then((body) => {
+          if (typeof body !== 'object' || body === null) throw new Error('invalid asset response')
+          const items = (body as AssetResponse).items
+          if (active) setAssets(Array.isArray(items) ? items.filter(isAsset) : [])
+        })
+        .catch(() => { if (active) setAssets([]) })
+    }
     return () => {
       active = false
     }
-  }, [authPhase])
+  }, [authPhase, permissions])
 
   function acceptSession(session: SessionResponse) {
     setPrincipal(session.principal)
     setPermissions(session.permissions)
+    setGrants(session.grants)
     setCSRFToken(session.csrfToken)
     setAuthError('')
     setAuthPhase('authenticated')
@@ -365,6 +395,7 @@ export default function App() {
       setPrincipal(null)
       setCSRFToken('')
       setPermissions([])
+      setGrants([])
       setAssets([])
       setActiveWorkspaceArea('overview')
       setVisitedWorkspaceAreas(new Set(['overview']))
@@ -390,14 +421,18 @@ export default function App() {
     {
       id: 'overview', name: 'Overview', descriptor: 'Work queue and product areas',
       summary: 'Choose a focused area, see what is available, and return here without losing work already in progress.',
-      content: <WorkspaceOverview assets={assets} guideOpen={guideOpen} health={health} modules={workspaceModules} onNavigate={navigateWorkspace} onOpenGuide={openGuide} onWalkthroughStatus={updateWalkthroughStatus} permissions={permissions} principal={principal} walkthroughStatus={walkthroughStatus} />,
+      content: <WorkspaceOverview assets={assets} grants={grants} guideOpen={guideOpen} health={health} modules={workspaceModules} onNavigate={navigateWorkspace} onOpenGuide={openGuide} onWalkthroughStatus={updateWalkthroughStatus} principal={principal} walkthroughStatus={walkthroughStatus} />,
     },
     ...workspaceModules.map((module): WorkspaceArea => {
-      const limited = !permissions.includes(module.permission)
+      const readAccess = permissionAccess(grants, module.permission)
+      const writeAccess = module.writePermission ? permissionAccess(grants, module.writePermission) : readAccess
       return {
         ...module,
-        limited,
-        content: limited ? <PermissionLimitedArea module={module} onOpenGuide={() => openGuide({ view: 'help', topic: module.id })} /> : workspaceContent[module.id],
+        readAccess,
+        writeAccess,
+        content: readAccess.level === 'organization'
+          ? workspaceContent[module.id]
+          : <PermissionLimitedArea module={module} onOpenGuide={() => openGuide({ view: 'help', topic: module.id })} readAccess={readAccess} writeAccess={writeAccess} />,
       }
     }),
   ]
@@ -480,19 +515,19 @@ export default function App() {
   )
 }
 
-function WorkspaceOverview({ assets, guideOpen, health, modules, onNavigate, onOpenGuide, onWalkthroughStatus, permissions, principal, walkthroughStatus }: {
+function WorkspaceOverview({ assets, grants, guideOpen, health, modules, onNavigate, onOpenGuide, onWalkthroughStatus, principal, walkthroughStatus }: {
   assets: readonly Asset[]
+  grants: readonly SessionGrant[]
   guideOpen: boolean
   health: ServiceHealth
   modules: readonly WorkspaceModule[]
   onNavigate: (area: WorkspaceAreaID) => void
   onOpenGuide: (destination: GuideDestination) => void
   onWalkthroughStatus: (status: WalkthroughStatus) => void
-  permissions: readonly string[]
   principal: Principal | null
   walkthroughStatus: WalkthroughStatus
 }) {
-  const availableCount = modules.filter((module) => permissions.includes(module.permission)).length
+  const availableCount = modules.filter((module) => permissionAccess(grants, module.permission).level !== 'none').length
   return <div className="space-y-5">
     <section aria-labelledby="workspace-overview-heading" className="overflow-hidden rounded-2xl border border-steward-ink-800 bg-steward-ink-900 p-5 sm:p-6">
       <p className="text-sm font-semibold text-steward-teal">Connect what you steward. Plan what comes next.</p>
@@ -514,12 +549,15 @@ function WorkspaceOverview({ assets, guideOpen, health, modules, onNavigate, onO
       </div>
       <ul className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
         {modules.map((module, index) => {
-          const available = permissions.includes(module.permission)
+          const readAccess = permissionAccess(grants, module.permission)
+          const writeAccess = module.writePermission ? permissionAccess(grants, module.writePermission) : readAccess
+          const available = readAccess.level !== 'none'
+          const accessLabel = readAccess.level === 'none' ? 'Limited' : readAccess.level === 'scoped' ? 'Scoped' : writeAccess.level === 'organization' ? 'Read and change' : 'Read only'
           return <li className="relative overflow-hidden rounded-xl border border-steward-ink-800 bg-steward-ink-950/35 p-4" key={module.id}>
             <span aria-hidden="true" className={`absolute inset-y-0 left-0 w-1 ${index % 3 === 0 ? 'bg-steward-green' : index % 3 === 1 ? 'bg-steward-teal' : 'bg-steward-blue'}`} />
             <div className="flex items-start justify-between gap-3">
               <div><h4 className="font-semibold">{module.name} — {module.descriptor}</h4><p className="mt-2 text-sm leading-6 text-steward-mist-muted">{module.summary}</p></div>
-              <span className={`shrink-0 rounded-full border px-2 py-1 text-xs font-semibold ${available ? 'border-steward-success/55 bg-steward-success/15 text-[#aaf0c6]' : 'border-steward-warning/55 bg-steward-warning/15 text-[#ffc46b]'}`}>{available ? 'Available' : 'Limited'}</span>
+              <span className={`shrink-0 rounded-full border px-2 py-1 text-xs font-semibold ${available ? 'border-steward-success/55 bg-steward-success/15 text-[#aaf0c6]' : 'border-steward-warning/55 bg-steward-warning/15 text-[#ffc46b]'}`}>{accessLabel}</span>
             </div>
             <button className="mt-4 min-h-11 rounded-lg border border-steward-teal px-3 py-2 text-sm font-semibold text-steward-teal transition hover:bg-steward-teal/10" onClick={() => onNavigate(module.id)} type="button">Open {module.name}</button>
           </li>
@@ -533,11 +571,15 @@ function OverviewMetric({ detail, label, value }: { detail: string; label: strin
   return <div className="rounded-xl border border-steward-ink-800 bg-steward-ink-950/40 p-4"><dt className="text-xs font-semibold uppercase tracking-wide text-steward-mist-muted">{label}</dt><dd className="mt-1 text-2xl font-bold text-steward-mist">{value}</dd><dd className="mt-1 text-xs text-steward-mist-muted">{detail}</dd></div>
 }
 
-function PermissionLimitedArea({ module, onOpenGuide }: { module: WorkspaceModule; onOpenGuide: () => void }) {
+function PermissionLimitedArea({ module, onOpenGuide, readAccess, writeAccess }: { module: WorkspaceModule; onOpenGuide: () => void; readAccess: PermissionAccess; writeAccess: PermissionAccess }) {
+  const scoped = readAccess.level === 'scoped'
   return <section aria-labelledby={`${module.id}-limited-heading`} className="rounded-2xl border border-steward-ink-800 bg-steward-ink-900 p-6">
-    <p className="text-sm font-semibold text-steward-warning">Permission-limited area</p>
-    <h3 className="mt-2 text-xl font-semibold" id={`${module.id}-limited-heading`}>{module.name} data is protected</h3>
-    <p className="mt-3 max-w-3xl leading-7 text-steward-mist-muted">Your current access does not include <code className="rounded bg-steward-ink-950 px-1.5 py-0.5 text-steward-mist">{module.permission}</code>. Ask a StewardMesh administrator for the appropriate scoped role if this work is part of your responsibilities.</p>
+    <p className="text-sm font-semibold text-steward-warning">{scoped ? 'Scoped access' : 'Permission-limited area'}</p>
+    <h3 className="mt-2 text-xl font-semibold" id={`${module.id}-limited-heading`}>{scoped ? `${module.name} access is limited to assigned records` : `${module.name} data is protected`}</h3>
+    <p className="mt-3 max-w-3xl leading-7 text-steward-mist-muted">{scoped
+      ? `Your ${module.permission} grant is limited to ${readAccess.scopeCount} assigned ${readAccess.scopeCount === 1 ? 'scope' : 'scopes'}. Organization-wide lists stay closed so Workspace cannot reveal records outside those boundaries.`
+      : <>Your current access does not include <code className="rounded bg-steward-ink-950 px-1.5 py-0.5 text-steward-mist">{module.permission}</code>. Ask a StewardMesh administrator for the appropriate scoped role if this work is part of your responsibilities.</>}</p>
+    {scoped && <p className="mt-3 max-w-3xl text-sm leading-6 text-steward-mist-muted">Direct record links still require a matching server-side grant. {writeAccess.level === 'none' ? `Changes require ${module.writePermission}.` : 'Any change remains limited to the matching server-authorized scope.'}</p>}
     <button className="mt-4 min-h-11 rounded-lg border border-steward-teal px-4 py-2 text-sm font-semibold text-steward-teal" onClick={onOpenGuide} type="button">Learn about {module.name}</button>
   </section>
 }

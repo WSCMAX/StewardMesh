@@ -194,6 +194,8 @@ Source record IDs remain available to authorized administrators for reconciliati
 
 The `guard.Store` interface is provider-neutral. PostgreSQL and the in-memory evaluation adapter pass the same local, external-account, and one-time SAML-request contract tests; DynamoDB must implement that contract. `identity.OIDCAuthenticator` and `identity.SAMLAuthenticator` isolate protocol verification from Guard's JIT account and session behavior.
 
+The authenticated session response includes organization-wide permission strings and structured scope hints for the principal's organization, site, department, and resource grants. These `no-store` hints let Workspace describe read-only, scoped, or unavailable panels, but every request is still authorized by Guard against its actual target. A client-supplied or stale hint can never grant API access.
+
 ## Accessibility and guided help
 
 The setup, login, scoped-assignment, and custom-role experiences use semantic headings, explicit labels and grouped fieldsets, password-manager autocomplete values, descriptive help text, visible focus, a skip link, polite service status, and focus-managed error alerts. The role builder pairs human-readable capability names with stable permission identifiers and identifies protected roles with text. Status and errors are not conveyed by color alone. Reduced-motion behavior remains global.

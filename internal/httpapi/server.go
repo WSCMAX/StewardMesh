@@ -1,8 +1,8 @@
 package httpapi
 
-// Requirements: REQ-FOUNDATION-001, REQ-ATLAS-001, REQ-ATLAS-CODES-001, REQ-PEOPLE-001,
+// Requirements: REQ-FOUNDATION-001, REQ-WORKSPACE-001, REQ-ATLAS-001, REQ-ATLAS-CODES-001, REQ-PEOPLE-001,
 // REQ-DIRECTORY-EXPANSION-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-HORIZON-001, REQ-PLATFORM-VALKEY-001,
-// SEC-GUARD-001, SEC-HTTP-001.
+// SEC-GUARD-001, SEC-HTTP-001. Features include experience.workspace.
 
 import (
 	"context"
@@ -106,6 +106,11 @@ type guardPolicyBundleResponse struct {
 type guardScopeResponse struct {
 	Kind       guard.ScopeKind `json:"kind"`
 	ResourceID string          `json:"resourceId"`
+}
+
+type guardGrantResponse struct {
+	Permission guard.Permission   `json:"permission"`
+	Scope      guardScopeResponse `json:"scope"`
 }
 
 type guardRoleAssignmentResponse struct {
@@ -2265,9 +2270,39 @@ func sessionResponse(authentication guard.Authentication, csrfToken string) map[
 	return map[string]any{
 		"principal":   authentication.Principal,
 		"permissions": organizationPermissions(authentication),
+		"grants":      sessionGrants(authentication),
 		"csrfToken":   csrfToken,
 		"expiresAt":   authentication.Session.ExpiresAt,
 	}
+}
+
+func sessionGrants(authentication guard.Authentication) []guardGrantResponse {
+	seen := make(map[string]struct{})
+	grants := make([]guardGrantResponse, 0, len(authentication.Grants))
+	for _, grant := range authentication.Grants {
+		if grant.Scope.OrganizationID != authentication.Principal.OrganizationID || grant.Scope.Validate() != nil {
+			continue
+		}
+		key := string(grant.Permission) + "\x00" + string(grant.Scope.Kind) + "\x00" + grant.Scope.ResourceID
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		grants = append(grants, guardGrantResponse{
+			Permission: grant.Permission,
+			Scope:      guardScopeResponse{Kind: grant.Scope.Kind, ResourceID: grant.Scope.ResourceID},
+		})
+	}
+	sort.Slice(grants, func(i, j int) bool {
+		if grants[i].Permission != grants[j].Permission {
+			return grants[i].Permission < grants[j].Permission
+		}
+		if grants[i].Scope.Kind != grants[j].Scope.Kind {
+			return grants[i].Scope.Kind < grants[j].Scope.Kind
+		}
+		return grants[i].Scope.ResourceID < grants[j].Scope.ResourceID
+	})
+	return grants
 }
 
 func organizationPermissions(authentication guard.Authentication) []string {

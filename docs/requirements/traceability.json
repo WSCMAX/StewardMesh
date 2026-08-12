@@ -51,21 +51,29 @@
           "docs/requirements/initial.md"
         ],
         "api": [
+          "api/openapi/openapi.yaml",
+          "internal/httpapi/server.go",
           "web/src/WorkspaceShell.tsx"
         ],
         "code": [
+          "internal/httpapi/server.go",
           "web/src/App.tsx",
           "web/src/GuideExperience.tsx",
           "web/src/WorkspaceShell.tsx",
-          "web/src/guide.ts"
+          "web/src/guide.ts",
+          "web/src/workspaceAccess.ts"
         ],
         "schema": [
-          "web/src/WorkspaceShell.tsx"
+          "api/openapi/openapi.yaml",
+          "web/src/WorkspaceShell.tsx",
+          "web/src/workspaceAccess.ts"
         ],
         "tests": [
+          "internal/httpapi/server_test.go",
           "web/src/App.test.tsx",
           "web/src/GuideExperience.test.tsx",
-          "web/src/WorkspaceShell.test.tsx"
+          "web/src/WorkspaceShell.test.tsx",
+          "web/src/workspaceAccess.test.ts"
         ],
         "ui": [
           "web/src/App.tsx",

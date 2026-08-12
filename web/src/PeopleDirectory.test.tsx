@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, expect, test, vi } from 'vitest'
 import PeopleDirectory from './PeopleDirectory'
 
-// Requirements: REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, A11Y-001, DOC-001, DOC-002.
+// Requirements: REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, REQ-WORKSPACE-001, A11Y-001, DOC-001, DOC-002.
 
 const timestamp = '2026-08-09T12:00:00Z'
 const site = {
@@ -56,7 +56,7 @@ function installPeopleFetch(options: { assignments?: unknown[]; buildings?: unkn
     if (path === '/api/v1/buildings') return jsonResponse({ items: options.buildings ?? [building] })
     if (path === '/api/v1/rooms' && init?.method === 'POST') {
       const body = JSON.parse(String(init.body)) as Record<string, unknown>
-      return jsonResponse({ ...room, siteId: body.siteId, buildingId: body.buildingId, number: body.number, name: body.name }, 201)
+      return jsonResponse({ ...room, id: 'room-created', siteId: body.siteId, buildingId: body.buildingId, number: body.number, name: body.name }, 201)
     }
     if (path === '/api/v1/rooms') return jsonResponse({ items: options.rooms ?? [room] })
     if (path === '/api/v1/departments' && init?.method === 'POST') return jsonResponse(department, 201)
@@ -107,6 +107,87 @@ test('renders a scoped People directory and guided help without automated WCAG v
   }
   const results = await axe.run(container)
   expect(results.violations).toEqual([])
+})
+
+test('guides a person through an existing room without losing their draft', async () => {
+  const fetchMock = installPeopleFetch()
+  render(<PeopleDirectory assets={[]} csrfToken="csrf-value" issuesUrl="https://github.com/WSCMAX/StewardMesh/issues" permissions={permissions} />)
+  await screen.findByRole('heading', { name: 'Innovation Hall' })
+
+  fireEvent.click(screen.getByRole('button', { name: 'Start person workflow' }))
+  fireEvent.change(screen.getByLabelText('Person display name'), { target: { value: 'Jordan Lee' } })
+  fireEvent.change(screen.getByLabelText('Person email address'), { target: { value: 'jordan@example.test' } })
+  fireEvent.change(screen.getByLabelText('Person department (optional)'), { target: { value: department.id } })
+  fireEvent.click(screen.getByRole('button', { name: 'Continue to location' }))
+
+  expect(screen.getByRole('heading', { name: 'Step 2 — Choose or create a location' })).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Back to person details' }))
+  expect(screen.getByLabelText('Person display name')).toHaveValue('Jordan Lee')
+  expect(screen.getByLabelText('Person email address')).toHaveValue('jordan@example.test')
+  expect(screen.getByLabelText('Person department (optional)')).toHaveValue(department.id)
+  fireEvent.click(screen.getByRole('button', { name: 'Continue to location' }))
+
+  fireEvent.change(screen.getByLabelText('Existing location'), { target: { value: `room:${room.id}` } })
+  fireEvent.click(screen.getByRole('button', { name: 'Continue to review' }))
+  expect(screen.getByRole('heading', { name: 'Step 3 — Review and create' })).toBeInTheDocument()
+  expect(screen.getByText('Room 101 · Conference room — Innovation Hall · Main Campus')).toBeInTheDocument()
+  expect(screen.getByText('The person record will be linked to the containing site: Main Campus.')).toBeInTheDocument()
+
+  fireEvent.click(screen.getByRole('button', { name: 'Create person' }))
+  expect(await screen.findByText(/Jordan Lee was created at Room 101/)).toBeInTheDocument()
+  const createCall = fetchMock.mock.calls.find(([path, init]) => path === '/api/v1/identities' && init?.method === 'POST')
+  expect(JSON.parse(String(createCall?.[1]?.body))).toEqual({
+    kind: 'person',
+    displayName: 'Jordan Lee',
+    email: 'jordan@example.test',
+    departmentId: department.id,
+    siteId: site.id,
+    status: 'active',
+  })
+})
+
+test('identifies the failing step and creates a missing room before the person', async () => {
+  const fetchMock = installPeopleFetch()
+  render(<PeopleDirectory assets={[]} csrfToken="csrf-value" issuesUrl="https://github.com/WSCMAX/StewardMesh/issues" permissions={permissions} />)
+  await screen.findByRole('heading', { name: 'Innovation Hall' })
+
+  fireEvent.click(screen.getByRole('button', { name: 'Start person workflow' }))
+  fireEvent.change(screen.getByLabelText('Person display name'), { target: { value: 'Morgan Chen' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Continue to location' }))
+  expect(await screen.findByRole('alert')).toHaveTextContent('Person details: enter a valid email address')
+  expect(screen.getByLabelText('Person display name')).toHaveValue('Morgan Chen')
+
+  fireEvent.change(screen.getByLabelText('Person email address'), { target: { value: 'morgan@example.test' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Continue to location' }))
+  fireEvent.click(screen.getByLabelText('Create a missing location'))
+  fireEvent.change(screen.getByLabelText('New location type'), { target: { value: 'room' } })
+  fireEvent.change(screen.getByLabelText('New room building'), { target: { value: building.id } })
+  fireEvent.change(screen.getByLabelText('New room number'), { target: { value: '205' } })
+  fireEvent.change(screen.getByLabelText('New room name (optional)'), { target: { value: 'Design studio' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Create and review' }))
+
+  expect(await screen.findByText('Room 205 · Design studio — Innovation Hall · Main Campus')).toBeInTheDocument()
+  const roomCall = fetchMock.mock.calls.find(([path, init]) => path === '/api/v1/rooms' && init?.method === 'POST')
+  expect(roomCall?.[1]?.headers).toMatchObject({ 'X-CSRF-Token': 'csrf-value' })
+  expect(JSON.parse(String(roomCall?.[1]?.body))).toEqual({
+    siteId: site.id,
+    buildingId: building.id,
+    number: '205',
+    name: 'Design studio',
+    status: 'active',
+  })
+  fireEvent.click(screen.getByRole('button', { name: 'Create person' }))
+  expect(await screen.findByText(/Morgan Chen was created at Room 205/)).toBeInTheDocument()
+})
+
+test('gives read-only users a clear alternative instead of creation controls', async () => {
+  installPeopleFetch()
+  render(<PeopleDirectory assets={[]} csrfToken="csrf-value" issuesUrl="https://github.com/WSCMAX/StewardMesh/issues" permissions={['directory.read']} />)
+  await screen.findByRole('heading', { name: 'Innovation Hall' })
+  expect(screen.getByText(/Ask an administrator for the/)).toHaveTextContent('directory.write')
+  expect(screen.queryByRole('button', { name: 'Start person workflow' })).not.toBeInTheDocument()
+  expect(screen.queryByText('Add a site')).not.toBeInTheDocument()
+  expect(screen.getByText(/Directory creation controls remain unavailable/)).toHaveTextContent('directory.write')
 })
 
 test('creates structured sites, buildings, and rooms through flat CSRF-protected endpoints', async () => {

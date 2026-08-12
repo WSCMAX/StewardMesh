@@ -2,8 +2,8 @@ import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } fro
 import type { Asset } from './AtlasInventory'
 import { ApiRequestError, requestJSON } from './api'
 
-// Requirements: REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, A11Y-001, DOC-001, DOC-002.
-// Feature: identity.directory.
+// Requirements: REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, REQ-WORKSPACE-001, A11Y-001, DOC-001, DOC-002.
+// Features: identity.directory, experience.workspace.
 
 type RecordStatus = 'active' | 'inactive'
 type IdentityKind = 'person' | 'shared' | 'public' | 'lab'
@@ -102,6 +102,22 @@ type Filters = {
   siteId: string
 }
 
+type GuidedPersonDraft = {
+  displayName: string
+  email: string
+  departmentId: string
+}
+
+type GuidedLocationKind = 'site' | 'building' | 'room'
+
+type GuidedLocationChoice = {
+  key: string
+  kind: GuidedLocationKind
+  label: string
+  siteId: string
+  siteLabel: string
+}
+
 type PeopleDirectoryProps = {
   assets: readonly Asset[]
   csrfToken: string
@@ -117,6 +133,7 @@ const inputClass = 'mt-2 min-h-11 w-full rounded-lg border border-steward-ink-80
 const labelClass = 'block text-sm font-semibold text-steward-mist-muted'
 const buttonClass = 'min-h-11 rounded-lg bg-steward-teal px-4 py-2.5 font-semibold text-steward-ink-950 shadow-sm transition hover:bg-[#29cfb9] disabled:cursor-wait disabled:opacity-60'
 const secondaryButtonClass = 'min-h-11 rounded-lg border border-steward-ink-800 bg-steward-ink-900 px-4 py-2.5 font-semibold text-steward-mist transition hover:border-steward-blue hover:bg-steward-ink-800 disabled:cursor-wait disabled:opacity-60'
+const emptyGuidedPerson: GuidedPersonDraft = { displayName: '', email: '', departmentId: '' }
 
 const kindLabels: Record<IdentityKind, string> = {
   person: 'Person',
@@ -264,6 +281,261 @@ function siteAddressFromForm(values: FormData): SiteAddress | undefined {
   return address
 }
 
+function locationChoices(sites: readonly Site[], buildings: readonly Building[], rooms: readonly Room[]) {
+  const siteNames = new Map(sites.map((site) => [site.id, site.name]))
+  const buildingNames = new Map(buildings.map((building) => [building.id, building.name]))
+  const choices: GuidedLocationChoice[] = sites.map((site) => ({
+    key: `site:${site.id}`,
+    kind: 'site',
+    label: `Site — ${site.name}`,
+    siteId: site.id,
+    siteLabel: site.name,
+  }))
+  for (const building of buildings) {
+    const siteLabel = siteNames.get(building.siteId)
+    if (!siteLabel) continue
+    choices.push({
+      key: `building:${building.id}`,
+      kind: 'building',
+      label: `Building — ${building.name} · ${siteLabel}`,
+      siteId: building.siteId,
+      siteLabel,
+    })
+  }
+  for (const room of rooms) {
+    const siteLabel = siteNames.get(room.siteId)
+    const buildingLabel = buildingNames.get(room.buildingId)
+    if (!siteLabel || !buildingLabel) continue
+    choices.push({
+      key: `room:${room.id}`,
+      kind: 'room',
+      label: `Room ${room.number}${room.name ? ` · ${room.name}` : ''} — ${buildingLabel} · ${siteLabel}`,
+      siteId: room.siteId,
+      siteLabel,
+    })
+  }
+  return choices
+}
+
+type PersonLocationWorkflowProps = {
+  buildings: readonly Building[]
+  canWrite: boolean
+  departments: readonly Department[]
+  rooms: readonly Room[]
+  sites: readonly Site[]
+  onCreateBuilding: (siteId: string, name: string) => Promise<Building>
+  onCreatePerson: (draft: GuidedPersonDraft, location: GuidedLocationChoice) => Promise<Identity>
+  onCreateRoom: (building: Building, number: string, name: string) => Promise<Room>
+  onCreateSite: (name: string) => Promise<Site>
+}
+
+function PersonLocationWorkflow({ buildings, canWrite, departments, rooms, sites, onCreateBuilding, onCreatePerson, onCreateRoom, onCreateSite }: PersonLocationWorkflowProps) {
+  const [step, setStep] = useState<'intro' | 'person' | 'location' | 'review'>('intro')
+  const [person, setPerson] = useState<GuidedPersonDraft>(emptyGuidedPerson)
+  const [locationMode, setLocationMode] = useState<'existing' | 'create'>('existing')
+  const [selectedLocationKey, setSelectedLocationKey] = useState('')
+  const [selectedLocation, setSelectedLocation] = useState<GuidedLocationChoice | null>(null)
+  const [createKind, setCreateKind] = useState<GuidedLocationKind>('site')
+  const [createParentId, setCreateParentId] = useState('')
+  const [createName, setCreateName] = useState('')
+  const [createRoomName, setCreateRoomName] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [workflowError, setWorkflowError] = useState('')
+  const [workflowStatus, setWorkflowStatus] = useState('')
+  const stepHeadingRef = useRef<HTMLHeadingElement>(null)
+  const workflowErrorRef = useRef<HTMLDivElement>(null)
+  const choices = useMemo(() => locationChoices(sites, buildings, rooms), [buildings, rooms, sites])
+
+  useEffect(() => {
+    if (workflowError) workflowErrorRef.current?.focus()
+  }, [workflowError])
+
+  useEffect(() => {
+    if (step !== 'intro' && !workflowError) stepHeadingRef.current?.focus()
+  }, [step, workflowError])
+
+  function moveTo(nextStep: 'person' | 'location' | 'review') {
+    setWorkflowError('')
+    setStep(nextStep)
+  }
+
+  function startWorkflow() {
+    setWorkflowStatus('')
+    moveTo('person')
+  }
+
+  function handlePersonNext(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const displayName = person.displayName.trim()
+    const email = person.email.trim()
+    if (!displayName) {
+      setWorkflowError('Person details: enter a display name before continuing.')
+      return
+    }
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      setWorkflowError('Person details: enter a valid email address before continuing.')
+      return
+    }
+    setPerson((current) => ({ ...current, displayName, email }))
+    moveTo('location')
+  }
+
+  async function handleLocationNext(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setWorkflowError('')
+    if (locationMode === 'existing') {
+      const choice = choices.find((candidate) => candidate.key === selectedLocationKey)
+      if (!choice) {
+        setWorkflowError('Location: select a visible site, building, or room before continuing.')
+        return
+      }
+      setSelectedLocation(choice)
+      moveTo('review')
+      return
+    }
+
+    const name = createName.trim()
+    if (!name) {
+      setWorkflowError(`Location: enter a ${createKind === 'room' ? 'room number' : `${createKind} name`} before continuing.`)
+      return
+    }
+    setSubmitting(true)
+    try {
+      let choice: GuidedLocationChoice
+      if (createKind === 'site') {
+        const site = await onCreateSite(name)
+        choice = { key: `site:${site.id}`, kind: 'site', label: `Site — ${site.name}`, siteId: site.id, siteLabel: site.name }
+      } else if (createKind === 'building') {
+        const site = sites.find((candidate) => candidate.id === createParentId)
+        if (!site) throw new Error('Location: select a visible site for the new building.')
+        const building = await onCreateBuilding(site.id, name)
+        choice = { key: `building:${building.id}`, kind: 'building', label: `Building — ${building.name} · ${site.name}`, siteId: site.id, siteLabel: site.name }
+      } else {
+        const building = buildings.find((candidate) => candidate.id === createParentId)
+        const site = building && sites.find((candidate) => candidate.id === building.siteId)
+        if (!building || !site) throw new Error('Location: select a visible building for the new room.')
+        const room = await onCreateRoom(building, name, createRoomName.trim())
+        choice = {
+          key: `room:${room.id}`,
+          kind: 'room',
+          label: `Room ${room.number}${room.name ? ` · ${room.name}` : ''} — ${building.name} · ${site.name}`,
+          siteId: site.id,
+          siteLabel: site.name,
+        }
+      }
+      setSelectedLocationKey(choice.key)
+      setSelectedLocation(choice)
+      setCreateName('')
+      setCreateRoomName('')
+      moveTo('review')
+    } catch (creationError) {
+      setWorkflowError(creationError instanceof ApiRequestError ? `Location: ${creationError.message}` : creationError instanceof Error ? creationError.message : 'Location: the new location could not be created.')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  async function handleCreatePerson(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!selectedLocation) {
+      setWorkflowError('Review: return to the location step and choose a location.')
+      return
+    }
+    setSubmitting(true)
+    setWorkflowError('')
+    try {
+      const identity = await onCreatePerson(person, selectedLocation)
+      setWorkflowStatus(`${identity.displayName} was created at ${selectedLocation.label}.`)
+      setPerson(emptyGuidedPerson)
+      setSelectedLocationKey('')
+      setSelectedLocation(null)
+      setLocationMode('existing')
+      setCreateKind('site')
+      setCreateParentId('')
+      setCreateName('')
+      setCreateRoomName('')
+      setStep('intro')
+    } catch (creationError) {
+      setWorkflowError(creationError instanceof ApiRequestError ? `Review: ${creationError.message}` : creationError instanceof Error ? `Review: ${creationError.message}` : 'Review: the person could not be created.')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <section aria-labelledby="person-location-workflow-heading" className="rounded-xl border border-steward-blue/40 bg-steward-ink-950/40 p-4 sm:p-5" data-feature="experience.workspace" data-requirement="REQ-WORKSPACE-001">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="max-w-3xl">
+          <p className="text-sm font-semibold text-steward-blue">Guided People task</p>
+          <h3 className="mt-1 text-lg font-semibold" id="person-location-workflow-heading">Add a person with a location</h3>
+          <p className="mt-1 text-sm leading-6 text-steward-mist-muted">Keep the person draft in place while you select an existing location or create the missing site, building, or room.</p>
+        </div>
+        {step !== 'intro' && <p className="rounded-full border border-steward-ink-800 px-3 py-1 text-sm text-steward-mist-muted">Step {step === 'person' ? '1' : step === 'location' ? '2' : '3'} of 3</p>}
+      </div>
+
+      {workflowError && <div className="mt-4 rounded-lg border border-steward-danger/50 bg-steward-danger/15 p-3 text-[#ffccd1]" ref={workflowErrorRef} role="alert" tabIndex={-1}>{workflowError}</div>}
+      {workflowStatus && <div className="mt-4 rounded-lg border border-steward-teal/40 bg-steward-teal/10 p-3 text-steward-mist" role="status">{workflowStatus}</div>}
+
+      {!canWrite ? (
+        <div className="mt-4 rounded-lg border border-steward-ink-800 p-4 text-sm leading-6 text-steward-mist-muted">
+          <p>Your role can review the visible locations below but cannot add a person or create a missing location.</p>
+          <p className="mt-2">Ask an administrator for the <code>directory.write</code> permission, or send them the person and location details for completion.</p>
+        </div>
+      ) : step === 'intro' ? (
+        <div className="mt-4 flex flex-wrap items-center gap-3">
+          <button className={buttonClass} onClick={startWorkflow} type="button">Start person workflow</button>
+          <p className="text-sm text-steward-mist-muted">You can go back between steps without losing entered values.</p>
+        </div>
+      ) : step === 'person' ? (
+        <form className="mt-5 space-y-4" noValidate onSubmit={handlePersonNext}>
+          <h4 className="text-base font-semibold" ref={stepHeadingRef} tabIndex={-1}>Step 1 — Person details</h4>
+          <div className="grid gap-4 md:grid-cols-2">
+            <div><label className={labelClass} htmlFor="guided-person-name">Person display name</label><input autoComplete="name" className={inputClass} id="guided-person-name" maxLength={200} onChange={(event) => setPerson((current) => ({ ...current, displayName: event.target.value }))} required value={person.displayName} /></div>
+            <div><label className={labelClass} htmlFor="guided-person-email">Person email address</label><input autoComplete="email" className={inputClass} id="guided-person-email" maxLength={320} onChange={(event) => setPerson((current) => ({ ...current, email: event.target.value }))} required type="email" value={person.email} /></div>
+            <div className="md:col-span-2"><label className={labelClass} htmlFor="guided-person-department">Person department (optional)</label><select className={inputClass} id="guided-person-department" onChange={(event) => setPerson((current) => ({ ...current, departmentId: event.target.value }))} value={person.departmentId}><option value="">No department</option>{departments.map((department) => <option key={department.id} value={department.id}>{department.name}</option>)}</select></div>
+          </div>
+          <div className="flex flex-wrap gap-3"><button className={buttonClass} type="submit">Continue to location</button><button className={secondaryButtonClass} onClick={() => { setWorkflowError(''); setStep('intro') }} type="button">Cancel</button></div>
+        </form>
+      ) : step === 'location' ? (
+        <form className="mt-5 space-y-4" noValidate onSubmit={handleLocationNext}>
+          <h4 className="text-base font-semibold" ref={stepHeadingRef} tabIndex={-1}>Step 2 — Choose or create a location</h4>
+          <fieldset className="grid gap-3 sm:grid-cols-2">
+            <legend className="text-sm font-semibold text-steward-mist-muted">Location path</legend>
+            <label className="flex min-h-11 cursor-pointer items-center gap-3 rounded-lg border border-steward-ink-800 p-3"><input checked={locationMode === 'existing'} name="guidedLocationMode" onChange={() => setLocationMode('existing')} type="radio" /> Select a visible location</label>
+            <label className="flex min-h-11 cursor-pointer items-center gap-3 rounded-lg border border-steward-ink-800 p-3"><input checked={locationMode === 'create'} name="guidedLocationMode" onChange={() => setLocationMode('create')} type="radio" /> Create a missing location</label>
+          </fieldset>
+          {locationMode === 'existing' ? (
+            <div>
+              <label className={labelClass} htmlFor="guided-existing-location">Existing location</label>
+              <select className={inputClass} id="guided-existing-location" onChange={(event) => setSelectedLocationKey(event.target.value)} required value={selectedLocationKey}><option value="">Select a site, building, or room</option>{choices.map((choice) => <option key={choice.key} value={choice.key}>{choice.label}</option>)}</select>
+              {choices.length === 0 && <p className="mt-2 text-sm text-steward-mist-muted">No locations are visible. Choose “Create a missing location” to add the first site.</p>}
+            </div>
+          ) : (
+            <div className="grid gap-4 rounded-lg border border-steward-ink-800 p-4 md:grid-cols-2">
+              <div><label className={labelClass} htmlFor="guided-location-kind">New location type</label><select className={inputClass} id="guided-location-kind" onChange={(event) => { setCreateKind(event.target.value as GuidedLocationKind); setCreateParentId(''); setCreateName(''); setCreateRoomName('') }} value={createKind}><option value="site">Site</option><option disabled={sites.length === 0} value="building">Building</option><option disabled={buildings.length === 0} value="room">Room</option></select></div>
+              {createKind === 'building' && <div><label className={labelClass} htmlFor="guided-building-site">New building site</label><select className={inputClass} id="guided-building-site" onChange={(event) => setCreateParentId(event.target.value)} required value={createParentId}><option value="">Select a site</option>{sites.map((site) => <option key={site.id} value={site.id}>{site.name}</option>)}</select></div>}
+              {createKind === 'room' && <div><label className={labelClass} htmlFor="guided-room-building">New room building</label><select className={inputClass} id="guided-room-building" onChange={(event) => setCreateParentId(event.target.value)} required value={createParentId}><option value="">Select a building</option>{buildings.map((building) => <option key={building.id} value={building.id}>{building.name} · {sites.find((site) => site.id === building.siteId)?.name ?? 'Site not visible'}</option>)}</select></div>}
+              <div><label className={labelClass} htmlFor="guided-location-name">{createKind === 'room' ? 'New room number' : `New ${createKind} name`}</label><input className={inputClass} id="guided-location-name" maxLength={createKind === 'room' ? 100 : 200} onChange={(event) => setCreateName(event.target.value)} required value={createName} /></div>
+              {createKind === 'room' && <div><label className={labelClass} htmlFor="guided-room-name">New room name (optional)</label><input className={inputClass} id="guided-room-name" maxLength={200} onChange={(event) => setCreateRoomName(event.target.value)} value={createRoomName} /></div>}
+            </div>
+          )}
+          <div className="flex flex-wrap gap-3"><button className={buttonClass} disabled={submitting} type="submit">{submitting ? 'Creating location…' : locationMode === 'create' ? 'Create and review' : 'Continue to review'}</button><button className={secondaryButtonClass} disabled={submitting} onClick={() => moveTo('person')} type="button">Back to person details</button></div>
+        </form>
+      ) : (
+        <form className="mt-5 space-y-4" onSubmit={handleCreatePerson}>
+          <h4 className="text-base font-semibold" ref={stepHeadingRef} tabIndex={-1}>Step 3 — Review and create</h4>
+          <dl className="grid gap-4 rounded-lg border border-steward-ink-800 p-4 sm:grid-cols-2">
+            <div><dt className="text-sm font-semibold text-steward-mist-muted">Person</dt><dd className="mt-1 text-steward-mist">{person.displayName}</dd><dd className="mt-1 break-all text-sm text-steward-mist-muted">{person.email}</dd></div>
+            <div><dt className="text-sm font-semibold text-steward-mist-muted">Department</dt><dd className="mt-1 text-steward-mist">{person.departmentId ? departments.find((department) => department.id === person.departmentId)?.name ?? 'Department no longer visible' : 'No department'}</dd></div>
+            <div className="sm:col-span-2"><dt className="text-sm font-semibold text-steward-mist-muted">Selected location</dt><dd className="mt-1 text-steward-mist">{selectedLocation?.label}</dd><dd className="mt-1 text-sm text-steward-mist-muted">The person record will be linked to the containing site: {selectedLocation?.siteLabel}.</dd></div>
+          </dl>
+          <div className="flex flex-wrap gap-3"><button className={buttonClass} disabled={submitting} type="submit">{submitting ? 'Creating person…' : 'Create person'}</button><button className={secondaryButtonClass} disabled={submitting} onClick={() => moveTo('location')} type="button">Back to location</button><button className={secondaryButtonClass} disabled={submitting} onClick={() => moveTo('person')} type="button">Edit person details</button></div>
+        </form>
+      )}
+    </section>
+  )
+}
+
 export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissions, onOpenHelp, onReportIssue }: PeopleDirectoryProps) {
   const [sites, setSites] = useState<Site[]>([])
   const [buildings, setBuildings] = useState<Building[]>([])
@@ -396,6 +668,40 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
     }
   }
 
+  async function createSiteRecord(name: string, address?: SiteAddress) {
+    const body: { name: string; status: RecordStatus; address?: SiteAddress } = { name, status: 'active' }
+    if (address) body.address = address
+    return readRecord(await requestJSON('/api/v1/sites', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+      body: JSON.stringify(body),
+    }), isSite)
+  }
+
+  async function createBuildingRecord(siteId: string, name: string) {
+    return readRecord(await requestJSON('/api/v1/buildings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+      body: JSON.stringify({ siteId, name, status: 'active' }),
+    }), isBuilding)
+  }
+
+  async function createRoomRecord(building: Building, number: string, name: string) {
+    return readRecord(await requestJSON('/api/v1/rooms', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+      body: JSON.stringify({ siteId: building.siteId, buildingId: building.id, number, name, status: 'active' }),
+    }), isRoom)
+  }
+
+  async function createIdentityRecord(body: Record<string, string>) {
+    return readRecord(await requestJSON('/api/v1/identities', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+      body: JSON.stringify(body),
+    }), isIdentity)
+  }
+
   async function handleCreateSite(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const form = event.currentTarget
@@ -403,17 +709,8 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
     setBusy('site')
     setError('')
     try {
-      const body: { name: string; status: RecordStatus; address?: SiteAddress } = {
-        name: String(values.get('siteName') ?? ''),
-        status: 'active',
-      }
       const address = siteAddressFromForm(values)
-      if (address) body.address = address
-      readRecord(await requestJSON('/api/v1/sites', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
-        body: JSON.stringify(body),
-      }), isSite)
+      await createSiteRecord(String(values.get('siteName') ?? ''), address)
       form.reset()
       await refreshAfterMutation('Site created and available to buildings and departments.')
     } catch (mutationError) {
@@ -430,15 +727,7 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
     setBusy('building')
     setError('')
     try {
-      readRecord(await requestJSON('/api/v1/buildings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
-        body: JSON.stringify({
-          siteId: String(values.get('buildingSiteId') ?? ''),
-          name: String(values.get('buildingName') ?? ''),
-          status: 'active',
-        }),
-      }), isBuilding)
+      await createBuildingRecord(String(values.get('buildingSiteId') ?? ''), String(values.get('buildingName') ?? ''))
       form.reset()
       await refreshAfterMutation('Building created beneath its site.')
     } catch (mutationError) {
@@ -458,17 +747,7 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
       const buildingId = String(values.get('roomBuildingId') ?? '')
       const building = buildings.find((candidate) => candidate.id === buildingId)
       if (!building) throw new Error('Select a visible building for this room.')
-      readRecord(await requestJSON('/api/v1/rooms', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
-        body: JSON.stringify({
-          siteId: building.siteId,
-          buildingId: building.id,
-          number: String(values.get('roomNumber') ?? ''),
-          name: String(values.get('roomName') ?? ''),
-          status: 'active',
-        }),
-      }), isRoom)
+      await createRoomRecord(building, String(values.get('roomNumber') ?? ''), String(values.get('roomName') ?? ''))
       form.reset()
       await refreshAfterMutation('Room created beneath its building.')
     } catch (mutationError) {
@@ -523,11 +802,7 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
       if (email) body.email = email
       if (departmentId) body.departmentId = departmentId
       if (siteId) body.siteId = siteId
-      readRecord(await requestJSON('/api/v1/identities', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
-        body: JSON.stringify(body),
-      }), isIdentity)
+      await createIdentityRecord(body)
       form.reset()
       setIdentityKind('person')
       await refreshAfterMutation('Directory identity created.')
@@ -594,7 +869,7 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
   }
 
   return (
-    <section aria-labelledby="people-heading" className="space-y-6 rounded-xl border border-steward-ink-800 bg-steward-ink-900 p-6" data-feature="identity.directory" data-requirement="REQ-PEOPLE-001 REQ-DIRECTORY-EXPANSION-001">
+    <section aria-labelledby="people-heading" className="space-y-6 rounded-xl border border-steward-ink-800 bg-steward-ink-900 p-6" data-feature="identity.directory experience.workspace" data-requirement="REQ-PEOPLE-001 REQ-DIRECTORY-EXPANSION-001 REQ-WORKSPACE-001">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="max-w-3xl">
           <p className="text-sm font-semibold text-steward-teal">People — Users, locations, departments, and assignments</p>
@@ -613,9 +888,9 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
       <aside aria-labelledby="people-guide-heading" className="rounded-xl border border-steward-teal/20 bg-steward-ink-950/20 p-4">
         <h3 id="people-guide-heading" className="font-semibold text-steward-mist">Quick guide</h3>
         <ol className="mt-2 list-decimal space-y-1 pl-5 text-sm leading-6 text-steward-mist-muted">
-          <li>Create a site, then add its buildings and rooms.</li>
-          <li>Create departments that optionally belong to a site.</li>
-          <li>Add a person, shared identity, public-users group, or computer-lab group.</li>
+          <li>Use the guided task to add a person and resolve their location together.</li>
+          <li>Use the standalone controls for location hierarchies, departments, and shared-use identities.</li>
+          <li>Review the scoped directory and location inventory.</li>
           <li>Choose an asset to add primary, additional-user, and department assignments.</li>
         </ol>
       </aside>
@@ -751,6 +1026,47 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
         )}
       </section>
 
+      <PersonLocationWorkflow
+        buildings={buildings}
+        canWrite={canWriteDirectory}
+        departments={departments}
+        onCreateBuilding={async (siteId, name) => {
+          const building = await createBuildingRecord(siteId, name)
+          setBuildings((current) => [...current, building])
+          return building
+        }}
+        onCreatePerson={async (draft, location) => {
+          const body: Record<string, string> = {
+            kind: 'person',
+            displayName: draft.displayName,
+            email: draft.email,
+            siteId: location.siteId,
+            status: 'active',
+          }
+          if (draft.departmentId) body.departmentId = draft.departmentId
+          const identity = await createIdentityRecord(body)
+          try {
+            await loadDirectory(filters)
+          } catch {
+            setIdentities((current) => current.some((candidate) => candidate.id === identity.id) ? current : [identity, ...current])
+          }
+          setStatus('Person created from the guided location workflow.')
+          return identity
+        }}
+        onCreateRoom={async (building, number, name) => {
+          const room = await createRoomRecord(building, number, name)
+          setRooms((current) => [...current, room])
+          return room
+        }}
+        onCreateSite={async (name) => {
+          const site = await createSiteRecord(name)
+          setSites((current) => [...current, site])
+          return site
+        }}
+        rooms={rooms}
+        sites={sites}
+      />
+
       {canWriteDirectory ? (
         <div className="space-y-6">
           <section aria-labelledby="create-locations-heading" data-requirement="REQ-DIRECTORY-EXPANSION-001">
@@ -853,7 +1169,7 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
             </div>
           </section>
         </div>
-      ) : <p className="rounded-xl border border-steward-ink-800 p-4 text-sm text-steward-mist-muted">Your role can read this scoped directory and its locations but cannot create records.</p>}
+      ) : <p className="rounded-xl border border-steward-ink-800 p-4 text-sm text-steward-mist-muted">Directory creation controls remain unavailable until an administrator grants <code>directory.write</code>.</p>}
 
       <div className="border-t border-steward-ink-800 pt-6">
         <h3 className="text-lg font-semibold" id="assignment-history-heading">Asset assignment history</h3>

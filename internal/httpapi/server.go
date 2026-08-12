@@ -172,7 +172,9 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 	mux.Handle("GET /api/v1/organization", server.protected(guard.PermissionOrganizationRead, false, server.getOrganization))
 	mux.Handle("GET /api/v1/assets", server.protected(guard.PermissionAssetsRead, false, server.listAssets))
 	mux.Handle("POST /api/v1/assets", server.protected(guard.PermissionAssetsWrite, true, server.createAsset))
-	mux.Handle("GET /api/v1/assets/{assetID}", server.protected(guard.PermissionAssetsRead, false, server.getAsset))
+	// The handler authorizes the loaded asset so site-, department-, and
+	// resource-scoped readers can open assets discovered through Atlas Codes.
+	mux.Handle("GET /api/v1/assets/{assetID}", server.protected("", false, server.getAsset))
 	mux.Handle("PUT /api/v1/assets/{assetID}", server.protected(guard.PermissionAssetsWrite, true, server.updateAsset))
 	mux.Handle("GET /api/v1/assets/{assetID}/lifecycle", server.protected(guard.PermissionAssetsRead, false, server.listAssetLifecycle))
 	// Resolution authorizes the matched asset after lookup so site,
@@ -1295,7 +1297,7 @@ func (s *Server) listAssets(w http.ResponseWriter, r *http.Request, _ guard.Auth
 	writeJSON(w, http.StatusOK, map[string]any{"items": assets})
 }
 
-func (s *Server) getAsset(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+func (s *Server) getAsset(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
 	if s.atlas == nil {
 		writeError(w, r, http.StatusServiceUnavailable, "repository_unavailable", "asset repository unavailable")
 		return
@@ -1303,6 +1305,12 @@ func (s *Server) getAsset(w http.ResponseWriter, r *http.Request, _ guard.Authen
 	asset, err := s.atlas.GetAsset(r.Context(), r.PathValue("assetID"))
 	if err != nil {
 		writeAtlasError(w, r, err)
+		return
+	}
+	if !s.canReadAsset(r.Context(), authentication, asset) {
+		// A denied asset is intentionally indistinguishable from an unknown ID
+		// so direct reads do not become an asset-discovery oracle.
+		writeError(w, r, http.StatusNotFound, "not_found", "the requested asset was not found")
 		return
 	}
 	writeJSON(w, http.StatusOK, asset)

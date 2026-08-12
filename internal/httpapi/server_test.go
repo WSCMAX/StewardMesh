@@ -1024,6 +1024,19 @@ func TestAtlasCodesResolveHonorsScopedAssetReadWithoutDisclosingDeniedMatches(t 
 	if visible.Code != http.StatusOK || !strings.Contains(visible.Body.String(), `"assetId":"scoped-visible-asset"`) {
 		t.Fatalf("expected resource-scoped resolution, got %d: %s", visible.Code, visible.Body.String())
 	}
+	visibleAssetRequest := authenticatedRequest(http.MethodGet, "/api/v1/assets/scoped-visible-asset", nil, scopedSession)
+	visibleAssetResponse := httptest.NewRecorder()
+	handler.ServeHTTP(visibleAssetResponse, visibleAssetRequest)
+	if visibleAssetResponse.Code != http.StatusOK || !strings.Contains(visibleAssetResponse.Body.String(), `"id":"scoped-visible-asset"`) {
+		t.Fatalf("expected resource-scoped asset read after resolution, got %d: %s", visibleAssetResponse.Code, visibleAssetResponse.Body.String())
+	}
+	hiddenAssetRequest := authenticatedRequest(http.MethodGet, "/api/v1/assets/scoped-hidden-asset", nil, scopedSession)
+	hiddenAssetResponse := httptest.NewRecorder()
+	handler.ServeHTTP(hiddenAssetResponse, hiddenAssetRequest)
+	if hiddenAssetResponse.Code != http.StatusNotFound || !strings.Contains(hiddenAssetResponse.Body.String(), `"code":"not_found"`) ||
+		strings.Contains(hiddenAssetResponse.Body.String(), "scoped-hidden-asset") {
+		t.Fatalf("expected redacted not-found for unauthorized asset, got %d: %s", hiddenAssetResponse.Code, hiddenAssetResponse.Body.String())
+	}
 	for _, value := range []string{"SCOPED-HIDDEN-001", "SCOPED-UNKNOWN-001"} {
 		response := resolve(value)
 		if response.Code != http.StatusNotFound || !strings.Contains(response.Body.String(), `"code":"not_found"`) ||

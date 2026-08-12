@@ -21,5 +21,6 @@ The display format is **branded name — plain-language descriptor**. Canonical 
 | Guard | `authorization.security` | Authentication, roles, policies, and audit | v1 |
 | Bridge | `integrations.protocols` | REST, gRPC, integrations, and MCP | v1 |
 | Guide | `experience.help` | Help, walkthroughs, accessibility, and issue reporting | v1 |
+| Workspace | `experience.workspace` | Connected work view and responsive product navigation | v1 |
 | Beacon | `endpoint.agent` | Endpoint telemetry | post-v1 |
 | Forge | `automation.delivery` | Client deployment and machine automation | post-v1 |

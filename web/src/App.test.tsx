@@ -3,8 +3,9 @@ import { StrictMode } from 'react'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, expect, test, vi } from 'vitest'
 import App, { resolvePublicUrl } from './App'
+import { authenticationRequiredEventName } from './api'
 
-// Requirements: REQ-HORIZON-001, A11Y-001, DOC-001, DOC-002, SEC-GUARD-001, SEC-HTTP-001. Features: lifecycle.planning, experience.help.
+// Requirements: REQ-WORKSPACE-001, REQ-HORIZON-001, A11Y-001, DOC-001, DOC-002, SEC-GUARD-001, SEC-HTTP-001. Features: experience.workspace, lifecycle.planning, experience.help.
 
 const session = {
   principal: {
@@ -15,7 +16,11 @@ const session = {
     displayName: 'Example Administrator',
     roles: ['Administrator'],
   },
-  permissions: ['assets.read', 'assets.write', 'directory.read', 'directory.write'],
+  permissions: ['organization.read', 'assets.read', 'assets.write', 'directory.read', 'directory.write'],
+  grants: ['organization.read', 'assets.read', 'assets.write', 'directory.read', 'directory.write'].map((permission) => ({
+    permission,
+    scope: { kind: 'organization', resourceId: 'example-org' },
+  })),
   csrfToken: 'csrf-token-with-at-least-thirty-two-characters',
   expiresAt: '2030-01-01T00:00:00Z',
 }
@@ -27,12 +32,15 @@ function jsonResponse(body: unknown, status = 200) {
   })
 }
 
-function installAuthenticatedFetch() {
+function installAuthenticatedFetch(healthAvailable = true, sessionValue = session) {
   const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
     const path = String(input)
-    if (path === '/healthz') return jsonResponse({ status: 'ok' })
+    if (path === '/healthz') {
+      if (!healthAvailable) throw new Error('service unavailable')
+      return jsonResponse({ status: 'ok' })
+    }
     if (path === '/api/v1/auth/bootstrap') return jsonResponse({ required: false, tokenRequired: false, minimumPasswordCharacters: 15, oidcEnabled: false, samlEnabled: false })
-    if (path === '/api/v1/auth/session') return jsonResponse(session)
+    if (path === '/api/v1/auth/session') return jsonResponse(sessionValue)
     if (path === '/api/v1/organization') return jsonResponse({ id: 'example-org', name: 'Example Organization' })
     if (path === '/api/v1/assets') return jsonResponse({ items: [] })
     if (path === '/api/v1/sites' || path === '/api/v1/departments' || path.startsWith('/api/v1/identities?')) return jsonResponse({ items: [] })
@@ -54,23 +62,131 @@ test('restores a server-managed session and renders StewardMesh modules', async 
   render(<App />)
   expect(screen.getByRole('heading', { name: 'StewardMesh' })).toBeInTheDocument()
   expect(document.querySelector('img[src="/brand/stewardmesh-s-mark.svg"]')).toBeInTheDocument()
-  expect(await screen.findByText('Atlas — Asset inventory')).toBeInTheDocument()
+  expect(await screen.findByRole('heading', { name: 'Overview — Work queue and product areas' })).toBeInTheDocument()
+  expect(screen.getByRole('heading', { name: 'Atlas — Asset inventory' })).toBeInTheDocument()
   expect(screen.getByText('Signed in as', { exact: false })).toHaveTextContent('Example Administrator')
-  expect(screen.getByText('Guard role:', { exact: false })).toHaveTextContent('Administrator')
+  expect(screen.getByText('Your access').parentElement).toHaveTextContent('Administrator')
 })
 
 test('opens contextual Guide help and a sanitized issue report from the workspace', async () => {
   installAuthenticatedFetch()
   render(<App />)
-  await screen.findByText('Atlas — Asset inventory')
+  await screen.findByRole('heading', { name: 'Overview — Work queue and product areas' })
 
-  fireEvent.click(screen.getByRole('button', { name: 'Open Atlas help' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Open Atlas' }))
+  await waitFor(() => expect(document.getElementById('assets-heading')).toBeVisible())
+  fireEvent.click(screen.getByRole('button', { name: 'Help for Atlas' }))
   expect(screen.getByRole('heading', { name: 'What you can do here' })).toBeInTheDocument()
   expect(screen.queryByRole('heading', { name: 'Take a quick tour of your workspace' })).not.toBeInTheDocument()
   expect(screen.getByRole('link', { name: 'Read Atlas documentation' })).toBeInTheDocument()
   fireEvent.click(screen.getByRole('button', { name: 'Report issue' }))
   expect(screen.getByRole('heading', { name: 'Prepare technical context' })).toBeInTheDocument()
   expect(screen.getByRole('link', { name: 'Review issue before submitting' })).toHaveAttribute('href', expect.stringContaining('/issues/new'))
+})
+
+test('activates a focused work area before Guide follows its section link', async () => {
+  installAuthenticatedFetch()
+  render(<App />)
+  await screen.findByRole('heading', { name: 'Overview — Work queue and product areas' })
+  const atlasTarget = document.getElementById('guide-atlas') as HTMLElement
+  const scrollIntoView = vi.fn<(arg?: boolean | ScrollIntoViewOptions) => void>()
+  atlasTarget.scrollIntoView = scrollIntoView
+
+  fireEvent.click(screen.getAllByRole('button', { name: 'Open Guide' })[0])
+  fireEvent.change(screen.getByRole('combobox', { name: 'Help topic' }), { target: { value: 'atlas' } })
+  fireEvent.click(screen.getByRole('link', { name: 'Go to Atlas' }))
+
+  await waitFor(() => expect(document.getElementById('assets-heading')).toBeVisible())
+  expect(window.location.hash).toBe('#workspace-atlas')
+  expect(scrollIntoView).toHaveBeenCalledWith({ block: 'start' })
+})
+
+test('switches work areas, updates the deep link, and preserves in-progress Atlas context', async () => {
+  installAuthenticatedFetch()
+  render(<App />)
+  await screen.findByRole('heading', { name: 'Overview — Work queue and product areas' })
+
+  fireEvent.click(screen.getByRole('button', { name: 'Open Atlas' }))
+  const search = await screen.findByRole('searchbox', { name: 'Search' })
+  fireEvent.change(search, { target: { value: 'server awaiting deployment' } })
+  expect(window.location.hash).toBe('#workspace-atlas')
+
+  fireEvent.click(screen.getByRole('link', { name: 'Overview — Work queue and product areas' }))
+  expect(screen.getByRole('heading', { name: 'Overview — Work queue and product areas' })).toBeVisible()
+  fireEvent.click(screen.getByRole('link', { name: 'Atlas — Asset inventory' }))
+  expect(screen.getByRole('searchbox', { name: 'Search' })).toHaveValue('server awaiting deployment')
+  expect(document.getElementById('assets-heading')).toBeVisible()
+})
+
+test('renders the authenticated Workspace without automated accessibility violations', async () => {
+  installAuthenticatedFetch()
+  const { container } = render(<App />)
+  await screen.findByRole('heading', { name: 'Overview — Work queue and product areas' })
+  const results = await axe.run(container)
+  expect(results.violations).toEqual([])
+})
+
+test('explains permission-limited areas without mounting protected feature content', async () => {
+  installAuthenticatedFetch()
+  render(<App />)
+  await screen.findByRole('heading', { name: 'Overview — Work queue and product areas' })
+
+  fireEvent.click(screen.getByRole('button', { name: 'Open Horizon' }))
+  expect(await screen.findByRole('heading', { name: 'Horizon data is protected' })).toBeVisible()
+  expect(screen.getByText('planning.read')).toBeVisible()
+  expect(document.getElementById('horizon-heading')).not.toBeInTheDocument()
+})
+
+test('shows scoped access without requesting or mounting an organization-wide collection', async () => {
+  const scopedSession = {
+    ...session,
+    permissions: [],
+    grants: [{ permission: 'assets.read', scope: { kind: 'site', resourceId: 'site-one' } }],
+  }
+  const fetchMock = installAuthenticatedFetch(true, scopedSession)
+  render(<App />)
+  await screen.findByRole('heading', { name: 'Overview — Work queue and product areas' })
+
+  expect(screen.getByText('Scoped')).toBeVisible()
+  fireEvent.click(screen.getByRole('button', { name: 'Open Atlas' }))
+  expect(await screen.findByRole('heading', { name: 'Atlas access is limited to assigned records' })).toBeVisible()
+  expect(screen.getByText(/Organization-wide lists stay closed/)).toBeVisible()
+  expect(document.getElementById('assets-heading')).not.toBeInTheDocument()
+  expect(fetchMock.mock.calls.some(([path]) => path === '/api/v1/assets')).toBe(false)
+})
+
+test('labels organization-wide readers as read only and keeps mutation actions hidden', async () => {
+  const readOnlySession = {
+    ...session,
+    permissions: ['organization.read', 'assets.read'],
+    grants: ['organization.read', 'assets.read'].map((permission) => ({ permission, scope: { kind: 'organization', resourceId: 'example-org' } })),
+  }
+  installAuthenticatedFetch(true, readOnlySession)
+  render(<App />)
+  await screen.findByRole('heading', { name: 'Overview — Work queue and product areas' })
+
+  expect(screen.getByText('Read only')).toBeVisible()
+  fireEvent.click(screen.getByRole('button', { name: 'Open Atlas' }))
+  expect(await screen.findByText('Requires assets.write')).toBeVisible()
+  expect(screen.queryByRole('button', { name: 'Add asset' })).not.toBeInTheDocument()
+})
+
+test('returns to a recoverable login state when an authenticated request reports an expired session', async () => {
+  installAuthenticatedFetch()
+  render(<App />)
+  await screen.findByRole('heading', { name: 'Overview — Work queue and product areas' })
+
+  window.dispatchEvent(new CustomEvent(authenticationRequiredEventName))
+  expect(await screen.findByRole('heading', { name: 'Sign in to StewardMesh' })).toBeVisible()
+  expect(screen.getByRole('alert')).toHaveTextContent('Your session expired. Sign in again to continue')
+})
+
+test('marks retained work as potentially stale while the service is unavailable', async () => {
+  installAuthenticatedFetch(false)
+  render(<App />)
+  await screen.findByRole('heading', { name: 'Overview — Work queue and product areas' })
+  expect(await screen.findByText('Service unavailable.')).toBeVisible()
+  expect(screen.getByText(/Previously loaded context may be stale/)).toBeVisible()
 })
 
 test('renders an accessible one-time administrator setup and submits without browser token storage', async () => {

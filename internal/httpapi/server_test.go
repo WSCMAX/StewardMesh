@@ -1,8 +1,8 @@
 package httpapi
 
-// Requirements: REQ-FOUNDATION-001, REQ-ATLAS-001, REQ-ATLAS-CODES-001, REQ-PEOPLE-001,
+// Requirements: REQ-FOUNDATION-001, REQ-WORKSPACE-001, REQ-ATLAS-001, REQ-ATLAS-CODES-001, REQ-PEOPLE-001,
 // REQ-DIRECTORY-EXPANSION-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-HORIZON-001, REQ-PLATFORM-VALKEY-001,
-// SEC-GUARD-001, SEC-HTTP-001.
+// SEC-GUARD-001, SEC-HTTP-001. Features include experience.workspace.
 
 import (
 	"bytes"
@@ -1010,6 +1010,21 @@ func TestAtlasCodesResolveHonorsScopedAssetReadWithoutDisclosingDeniedMatches(t 
 	scopedSession := testSession{
 		cookie:    &http.Cookie{Name: localSessionName, Value: scopedCredentials.Token},
 		csrfToken: scopedCredentials.CSRFToken,
+	}
+	sessionRequest := authenticatedRequest(http.MethodGet, "/api/v1/auth/session", nil, scopedSession)
+	sessionResponse := httptest.NewRecorder()
+	handler.ServeHTTP(sessionResponse, sessionRequest)
+	if sessionResponse.Code != http.StatusOK || !strings.Contains(sessionResponse.Body.String(), `"permission":"assets.read"`) ||
+		!strings.Contains(sessionResponse.Body.String(), `"kind":"resource"`) ||
+		!strings.Contains(sessionResponse.Body.String(), `"resourceId":"scoped-visible-asset"`) ||
+		strings.Contains(sessionResponse.Body.String(), `"permissions":["assets.read"]`) {
+		t.Fatalf("expected scoped session hints without an organization-wide permission hint, got %d: %s", sessionResponse.Code, sessionResponse.Body.String())
+	}
+	listRequest := authenticatedRequest(http.MethodGet, "/api/v1/assets", nil, scopedSession)
+	listResponse := httptest.NewRecorder()
+	handler.ServeHTTP(listResponse, listRequest)
+	if listResponse.Code != http.StatusForbidden {
+		t.Fatalf("expected scoped UI hints not to widen the organization asset list, got %d: %s", listResponse.Code, listResponse.Body.String())
 	}
 
 	resolve := func(value string) *httptest.ResponseRecorder {

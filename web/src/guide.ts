@@ -1,4 +1,4 @@
-// Requirements: REQ-HORIZON-001, A11Y-001, DOC-001, DOC-002. Features: lifecycle.planning, experience.help.
+// Requirements: REQ-WORKSPACE-001, REQ-HORIZON-001, A11Y-001, DOC-001, DOC-002. Features: experience.workspace, lifecycle.planning, experience.help.
 
 export type GuideTopicID = 'workspace' | 'atlas' | 'horizon' | 'ledger' | 'threads' | 'vault' | 'people' | 'guard' | 'guide'
 export type GuideView = 'help' | 'walkthrough' | 'accessibility' | 'report'
@@ -16,7 +16,7 @@ export type GuideTopic = {
 }
 
 export const guideTopics: GuideTopic[] = [
-  { id: 'workspace', name: 'Workspace', descriptor: 'Connected work view', summary: 'Use the module cards and page sections to move from inventory context into people, evidence, goals, and financial planning.', example: 'Start in Atlas with an asset, then use People for stewardship, Vault for evidence, Threads for goals, and Ledger for financial records.', docsUrl: 'https://github.com/WSCMAX/StewardMesh/blob/main/README.md', anchor: 'main-content' },
+  { id: 'workspace', name: 'Workspace', descriptor: 'Connected work view', summary: 'Use persistent product navigation to open one focused area at a time while preserving work already in progress.', example: 'Filter Atlas inventory, open People to check stewardship, then return to the same Atlas filter from the navigation.', docsUrl: 'https://github.com/WSCMAX/StewardMesh/blob/main/docs/features/workspace.md', anchor: 'main-content' },
   { id: 'atlas', name: 'Atlas', descriptor: 'Asset inventory', summary: 'Register, search, filter, update, and inspect organization-owned assets and their lifecycle history.', example: 'Add a server, assign its location and department, then advance its lifecycle status when it is retired.', docsUrl: 'https://github.com/WSCMAX/StewardMesh/blob/main/docs/features/atlas.md', anchor: 'guide-atlas', permission: 'assets.read' },
   { id: 'horizon', name: 'Horizon', descriptor: 'Lifecycle planning', summary: 'Set effective-dated asset replacement assumptions, compare planning scenarios, and forecast needs using Atlas inventory, Ledger costs, and Threads dimensions.', example: 'Plan a server refresh, then group replacement needs by fiscal year, site, department, effective tag, linked goal, or asset class.', docsUrl: 'https://github.com/WSCMAX/StewardMesh/blob/main/docs/features/horizon.md', anchor: 'guide-horizon', permission: 'planning.read' },
   { id: 'ledger', name: 'Ledger', descriptor: 'Procurement and budgets', summary: 'Track vendors, purchase orders, contracts, commitments, budgets, reconciled costs, and variance in exact minor units.', example: 'Create a fiscal-year budget, reconcile a billed invoice, and review the resulting over-budget or remaining amount.', docsUrl: 'https://github.com/WSCMAX/StewardMesh/blob/main/docs/features/ledger.md', anchor: 'guide-ledger', permission: 'finance.read' },

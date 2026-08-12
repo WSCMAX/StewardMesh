@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, expect, test, vi } from 'vitest'
 import GuardAccessManager from './GuardAccessManager'
 
-// Requirements: SEC-GUARD-001, SEC-HTTP-001, A11Y-001.
+// Requirements: REQ-HORIZON-001, SEC-GUARD-001, SEC-HTTP-001, A11Y-001. Feature: lifecycle.planning.
 
 const accountId = '11111111111111111111111111111111'
 const roleId = '22222222222222222222222222222222'
@@ -47,7 +47,7 @@ const policyBundle = {
   description: 'Common organization permissions.',
   permissions: ['organization.read', 'assets.read'],
 }
-const availablePermissions = ['organization.read', 'assets.read', 'assets.write', 'directory.read', 'directory.write', 'goals.read', 'goals.write', 'storage.read', 'storage.write', 'guard.manage']
+const availablePermissions = ['organization.read', 'assets.read', 'assets.write', 'directory.read', 'directory.write', 'goals.read', 'goals.write', 'storage.read', 'storage.write', 'finance.read', 'finance.write', 'planning.read', 'planning.write', 'guard.manage']
 
 function accessResponse(assignments: typeof localAssignment[], roles = [role]) {
   return { accounts: [account], roles, policyBundles: [policyBundle], availablePermissions, assignments }
@@ -155,6 +155,7 @@ test('creates an accessible custom role from direct permissions and a policy bun
 
   await screen.findByText('Built in · protected')
   fireEvent.click(screen.getByText('Create a custom role'))
+  expect(screen.getByLabelText(/View Horizon lifecycle plans and forecasts/)).toBeInTheDocument()
   fireEvent.change(screen.getByLabelText('Role name'), { target: { value: 'Asset steward' } })
   fireEvent.change(screen.getByLabelText(/Description/), { target: { value: 'Maintains inventory records.' } })
   fireEvent.click(screen.getByLabelText(/Create and update assets/))

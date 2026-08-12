@@ -1,7 +1,7 @@
 package httpapi
 
 // Requirements: REQ-FOUNDATION-001, REQ-ATLAS-001, REQ-PEOPLE-001,
-// REQ-DIRECTORY-EXPANSION-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-PLATFORM-VALKEY-001,
+// REQ-DIRECTORY-EXPANSION-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-HORIZON-001, REQ-PLATFORM-VALKEY-001,
 // SEC-GUARD-001, SEC-HTTP-001.
 
 import (
@@ -23,6 +23,7 @@ import (
 	"github.com/maxlemke/stewardmesh/internal/directoryexpansion"
 	"github.com/maxlemke/stewardmesh/internal/foundation"
 	"github.com/maxlemke/stewardmesh/internal/guard"
+	"github.com/maxlemke/stewardmesh/internal/horizon"
 	"github.com/maxlemke/stewardmesh/internal/identity"
 	"github.com/maxlemke/stewardmesh/internal/ledger"
 	"github.com/maxlemke/stewardmesh/internal/people"
@@ -46,6 +47,7 @@ type Dependencies struct {
 	Threads             *threads.Service
 	Vault               *storage.Service
 	Ledger              *ledger.Service
+	Horizon             *horizon.Service
 	Guard               *guard.Service
 	OIDC                *identity.OIDCFlow
 	SAML                *identity.SAMLFlow
@@ -59,6 +61,7 @@ type Server struct {
 	threads             *threads.Service
 	vault               *storage.Service
 	ledger              *ledger.Service
+	horizon             *horizon.Service
 	guard               *guard.Service
 	oidc                *identity.OIDCFlow
 	saml                *identity.SAMLFlow
@@ -132,6 +135,7 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 		threads:             deps.Threads,
 		vault:               deps.Vault,
 		ledger:              deps.Ledger,
+		horizon:             deps.Horizon,
 		guard:               deps.Guard,
 		oidc:                deps.OIDC,
 		saml:                deps.SAML,
@@ -209,6 +213,12 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 	mux.Handle("POST /api/v1/ledger/costs/reconcile", server.protected(guard.PermissionFinanceWrite, true, server.reconcileLedgerCost))
 	mux.Handle("GET /api/v1/ledger/budget-variance", server.protected(guard.PermissionFinanceRead, false, server.getLedgerBudgetVariance))
 	mux.Handle("GET /api/v1/ledger/export.csv", server.protected(guard.PermissionFinanceRead, false, server.exportLedgerCSV))
+	mux.Handle("GET /api/v1/horizon/plans", server.protected(guard.PermissionPlanningRead, false, server.listHorizonPlans))
+	mux.Handle("POST /api/v1/horizon/plans", server.protected(guard.PermissionPlanningWrite, true, server.createHorizonPlan))
+	mux.Handle("PUT /api/v1/horizon/plans/{planID}", server.protected(guard.PermissionPlanningWrite, true, server.updateHorizonPlan))
+	mux.Handle("GET /api/v1/horizon/plans/{planID}/history", server.protected(guard.PermissionPlanningRead, false, server.listHorizonPlanHistory))
+	mux.Handle("GET /api/v1/horizon/forecast", server.protected(guard.PermissionPlanningRead, false, server.getHorizonForecast))
+	mux.Handle("GET /api/v1/horizon/export.csv", server.protected(guard.PermissionPlanningRead, false, server.exportHorizonCSV))
 	mux.Handle("GET /api/v1/graph", server.protected("", false, server.graphView))
 	return server.correlation(server.securityHeaders(server.cors(mux)))
 }
@@ -420,6 +430,168 @@ func writeLedgerError(w http.ResponseWriter, r *http.Request, err error) {
 		writeError(w, r, http.StatusConflict, "conflict", "this Ledger record conflicts with current data")
 	default:
 		writeError(w, r, http.StatusInternalServerError, "ledger_error", "the Ledger operation could not be completed")
+	}
+}
+
+// Horizon handlers implement REQ-HORIZON-001 / lifecycle.planning.
+func (s *Server) listHorizonPlans(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.horizon == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "horizon_unavailable", "Horizon planning is unavailable")
+		return
+	}
+	plans, err := s.horizon.ListPlans(r.Context(), horizon.ListPlansQuery{
+		AssetID: r.URL.Query().Get("assetId"), Scenario: r.URL.Query().Get("scenario"),
+	})
+	if err != nil {
+		writeHorizonError(w, r, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, map[string]any{"items": plans})
+}
+
+func (s *Server) createHorizonPlan(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.horizon == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "horizon_unavailable", "Horizon planning is unavailable")
+		return
+	}
+	var input horizon.CreatePlanInput
+	if err := decodeJSON(w, r, 32<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid Horizon plan payload")
+		return
+	}
+	created, err := s.horizon.CreatePlan(r.Context(), input)
+	if err != nil {
+		writeHorizonError(w, r, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusCreated, created)
+}
+
+func (s *Server) updateHorizonPlan(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.horizon == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "horizon_unavailable", "Horizon planning is unavailable")
+		return
+	}
+	var input horizon.UpdatePlanInput
+	if err := decodeJSON(w, r, 32<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid Horizon plan payload")
+		return
+	}
+	input.ID = r.PathValue("planID")
+	updated, err := s.horizon.UpdatePlan(r.Context(), input)
+	if err != nil {
+		writeHorizonError(w, r, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, updated)
+}
+
+func (s *Server) listHorizonPlanHistory(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.horizon == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "horizon_unavailable", "Horizon planning is unavailable")
+		return
+	}
+	items, err := s.horizon.ListPlanHistory(r.Context(), r.PathValue("planID"))
+	if err != nil {
+		writeHorizonError(w, r, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) getHorizonForecast(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.horizon == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "horizon_unavailable", "Horizon planning is unavailable")
+		return
+	}
+	query, err := horizonForecastQuery(r)
+	if err != nil {
+		writeHorizonError(w, r, err)
+		return
+	}
+	report, err := s.horizon.Forecast(r.Context(), query)
+	if err != nil {
+		writeHorizonError(w, r, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, report)
+}
+
+func (s *Server) exportHorizonCSV(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.horizon == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "horizon_unavailable", "Horizon planning is unavailable")
+		return
+	}
+	query, err := horizonForecastQuery(r)
+	if err != nil {
+		writeHorizonError(w, r, err)
+		return
+	}
+	content, err := s.horizon.ExportCSV(r.Context(), query)
+	if err != nil {
+		writeHorizonError(w, r, err)
+		return
+	}
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="stewardmesh-horizon-forecast.csv"`)
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(content)
+}
+
+func horizonForecastQuery(r *http.Request) (horizon.ForecastQuery, error) {
+	values := r.URL.Query()
+	query := horizon.ForecastQuery{GroupBy: values.Get("groupBy")}
+	if raw := strings.TrimSpace(values.Get("scenarios")); raw != "" {
+		query.Scenarios = strings.Split(raw, ",")
+	}
+	if raw := strings.TrimSpace(values.Get("asOf")); raw != "" {
+		parsed, err := time.Parse(time.RFC3339, raw)
+		if err != nil {
+			return horizon.ForecastQuery{}, horizon.ErrInvalidInput
+		}
+		query.AsOf = parsed
+	}
+	var err error
+	if query.FromYear, err = optionalQueryInt(values.Get("fromYear")); err != nil {
+		return horizon.ForecastQuery{}, horizon.ErrInvalidInput
+	}
+	if query.ToYear, err = optionalQueryInt(values.Get("toYear")); err != nil {
+		return horizon.ForecastQuery{}, horizon.ErrInvalidInput
+	}
+	if query.FiscalYearStartMonth, err = optionalQueryInt(values.Get("fiscalYearStartMonth")); err != nil {
+		return horizon.ForecastQuery{}, horizon.ErrInvalidInput
+	}
+	return query, nil
+}
+
+func optionalQueryInt(value string) (int, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, nil
+	}
+	return strconv.Atoi(value)
+}
+
+func writeHorizonError(w http.ResponseWriter, r *http.Request, err error) {
+	switch {
+	case errors.Is(err, horizon.ErrInvalidInput):
+		writeError(w, r, http.StatusBadRequest, "validation_failed", "Horizon planning details are invalid")
+	case errors.Is(err, horizon.ErrReferenceMissing):
+		writeError(w, r, http.StatusUnprocessableEntity, "reference_missing", "a referenced Horizon record is unavailable")
+	case errors.Is(err, horizon.ErrNotFound):
+		writeError(w, r, http.StatusNotFound, "not_found", "the requested Horizon plan was not found")
+	case errors.Is(err, horizon.ErrMixedCurrency):
+		writeError(w, r, http.StatusConflict, "mixed_currency", "Horizon cannot combine values with different currencies")
+	case errors.Is(err, horizon.ErrConflict):
+		writeError(w, r, http.StatusConflict, "conflict", "this Horizon plan conflicts with current data")
+	default:
+		writeError(w, r, http.StatusInternalServerError, "horizon_error", "the Horizon operation could not be completed")
 	}
 }
 

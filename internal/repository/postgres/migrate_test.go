@@ -6,14 +6,15 @@ import (
 )
 
 // Requirements: REQ-FOUNDATION-001, SEC-GUARD-001, REQ-PEOPLE-001,
-// REQ-DIRECTORY-EXPANSION-001, REQ-ATLAS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001.
+// REQ-DIRECTORY-EXPANSION-001, REQ-ATLAS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001,
+// REQ-HORIZON-001. Feature: lifecycle.planning.
 func TestEmbeddedMigrationsAreOrderedAndChecksummed(t *testing.T) {
 	migrations, err := loadMigrations()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(migrations) != 17 {
-		t.Fatalf("expected 17 platform migrations, got %d", len(migrations))
+	if len(migrations) != 20 {
+		t.Fatalf("expected 20 platform migrations, got %d", len(migrations))
 	}
 	for index, migration := range migrations {
 		expectedVersion := int64(index + 1)
@@ -22,6 +23,36 @@ func TestEmbeddedMigrationsAreOrderedAndChecksummed(t *testing.T) {
 		}
 		if len(migration.checksum) != 64 {
 			t.Fatalf("expected SHA-256 checksum for migration %d", migration.version)
+		}
+	}
+}
+
+func TestHorizonMigrationsAddVersionedPlansAndAdministratorPermissions(t *testing.T) {
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{
+		"REQ-HORIZON-001", "CREATE TABLE horizon_plans", "expected_useful_life_months",
+		"UNIQUE (organization_id, asset_id, scenario)", "CREATE TABLE horizon_plan_versions",
+		"effective_from DESC", "lifecycle.planning",
+	} {
+		if !strings.Contains(migrations[17].contents, expected) {
+			t.Fatalf("Horizon planning migration is missing %q", expected)
+		}
+	}
+	for _, expected := range []string{
+		"REQ-HORIZON-001", "'planning.read'", "'planning.write'", "r.source = 'builtin'", "ON CONFLICT",
+	} {
+		if !strings.Contains(migrations[18].contents, expected) {
+			t.Fatalf("Horizon permission migration is missing %q", expected)
+		}
+	}
+	for _, expected := range []string{
+		"REQ-HORIZON-001", "horizon_plans_exact_money_check", "horizon_plan_versions_exact_money_check", "9007199254740991",
+	} {
+		if !strings.Contains(migrations[19].contents, expected) {
+			t.Fatalf("Horizon exact-money migration is missing %q", expected)
 		}
 	}
 }

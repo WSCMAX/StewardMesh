@@ -1,7 +1,7 @@
 package httpapi
 
 // Requirements: REQ-FOUNDATION-001, REQ-ATLAS-001, REQ-PEOPLE-001,
-// REQ-DIRECTORY-EXPANSION-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-PLATFORM-VALKEY-001,
+// REQ-DIRECTORY-EXPANSION-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-HORIZON-001, REQ-PLATFORM-VALKEY-001,
 // SEC-GUARD-001, SEC-HTTP-001.
 
 import (
@@ -25,6 +25,7 @@ import (
 	"github.com/maxlemke/stewardmesh/internal/domain"
 	"github.com/maxlemke/stewardmesh/internal/foundation"
 	"github.com/maxlemke/stewardmesh/internal/guard"
+	"github.com/maxlemke/stewardmesh/internal/horizon"
 	"github.com/maxlemke/stewardmesh/internal/identity"
 	"github.com/maxlemke/stewardmesh/internal/ledger"
 	"github.com/maxlemke/stewardmesh/internal/people"
@@ -279,6 +280,56 @@ func TestLedgerFinanceWorkflowVarianceReconciliationAndExport(t *testing.T) {
 	handler.ServeHTTP(snapshotResponse, snapshotRequest)
 	if snapshotResponse.Code != http.StatusOK || !strings.Contains(snapshotResponse.Body.String(), "Managed service") || !strings.Contains(snapshotResponse.Body.String(), "Three-year managed service") {
 		t.Fatalf("unexpected Ledger snapshot %d: %s", snapshotResponse.Code, snapshotResponse.Body.String())
+	}
+}
+
+func TestHorizonLifecyclePlanForecastHistoryAndExport(t *testing.T) {
+	handler := newGuardServer(t)
+	session := bootstrapAdministrator(t, handler)
+	asset := createPeopleRecord[domain.Asset](t, handler, session, "/api/v1/assets", map[string]any{
+		"id": "horizon-server", "name": "Forecast server", "kind": "server", "status": "active",
+		"purchaseDate": "2024-01-31T00:00:00Z",
+	})
+	plan := createPeopleRecord[horizon.Plan](t, handler, session, "/api/v1/horizon/plans", map[string]any{
+		"assetId": asset.ID, "scenario": "baseline", "expectedUsefulLifeMonths": 36,
+		"lifecycleStage": "in_service", "replacementCostMinor": 240000, "currency": "USD",
+		"effectiveFrom": "2026-01-01T00:00:00Z",
+	})
+	if plan.DerivedReplacementDate == nil || plan.Revision != 1 {
+		t.Fatalf("unexpected Horizon plan %#v", plan)
+	}
+	updatePayload, _ := json.Marshal(map[string]any{
+		"assetId": asset.ID, "scenario": "baseline", "expectedUsefulLifeMonths": 36,
+		"replacementDate": "2027-06-30T00:00:00Z", "lifecycleStage": "approved",
+		"replacementCostMinor": 260000, "currency": "USD", "effectiveFrom": "2026-08-01T00:00:00Z", "revision": plan.Revision,
+	})
+	updateRequest := authenticatedRequest(http.MethodPut, "/api/v1/horizon/plans/"+plan.ID, bytes.NewReader(updatePayload), session)
+	updateResponse := httptest.NewRecorder()
+	handler.ServeHTTP(updateResponse, updateRequest)
+	if updateResponse.Code != http.StatusOK || !strings.Contains(updateResponse.Body.String(), `"revision":2`) || !strings.Contains(updateResponse.Body.String(), `"lifecycleStage":"approved"`) {
+		t.Fatalf("unexpected Horizon plan update %d: %s", updateResponse.Code, updateResponse.Body.String())
+	}
+	historyRequest := authenticatedRequest(http.MethodGet, "/api/v1/horizon/plans/"+plan.ID+"/history", nil, session)
+	historyResponse := httptest.NewRecorder()
+	handler.ServeHTTP(historyResponse, historyRequest)
+	if historyResponse.Code != http.StatusOK || !strings.Contains(historyResponse.Body.String(), `"revision":1`) ||
+		!strings.Contains(historyResponse.Body.String(), `"revision":2`) ||
+		!strings.Contains(historyResponse.Body.String(), `"derivedReplacementDate":"2027-01-31T00:00:00Z"`) {
+		t.Fatalf("unexpected Horizon history %d: %s", historyResponse.Code, historyResponse.Body.String())
+	}
+	forecastPath := "/api/v1/horizon/forecast?scenarios=baseline&asOf=2026-08-11T00%3A00%3A00Z&fromYear=2027&toYear=2027&fiscalYearStartMonth=1&groupBy=fiscal_year"
+	forecastRequest := authenticatedRequest(http.MethodGet, forecastPath, nil, session)
+	forecastResponse := httptest.NewRecorder()
+	handler.ServeHTTP(forecastResponse, forecastRequest)
+	if forecastResponse.Code != http.StatusOK || !strings.Contains(forecastResponse.Body.String(), `"plannedReplacementMinor":260000`) || !strings.Contains(forecastResponse.Body.String(), `"label":"FY2027"`) || forecastResponse.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("unexpected Horizon forecast %d headers=%v body=%s", forecastResponse.Code, forecastResponse.Header(), forecastResponse.Body.String())
+	}
+	exportRequest := authenticatedRequest(http.MethodGet, strings.Replace(forecastPath, "/forecast", "/export.csv", 1), nil, session)
+	exportResponse := httptest.NewRecorder()
+	handler.ServeHTTP(exportResponse, exportRequest)
+	if exportResponse.Code != http.StatusOK || !strings.HasPrefix(exportResponse.Header().Get("Content-Type"), "text/csv") ||
+		!strings.Contains(exportResponse.Header().Get("Content-Disposition"), "horizon-forecast") || !strings.Contains(exportResponse.Body.String(), "FY2027") {
+		t.Fatalf("unexpected Horizon export %d headers=%v body=%s", exportResponse.Code, exportResponse.Header(), exportResponse.Body.String())
 	}
 }
 
@@ -1106,12 +1157,17 @@ func newGuardServerWithIdentity(t *testing.T, limiter guard.AttemptLimiter, oidc
 	if err != nil {
 		t.Fatal(err)
 	}
+	horizonService, err := horizon.NewService(repository.NewMemoryHorizonStore(), atlasService, ledgerService, threadsService, foundation.NopAuditor{}, horizon.ServiceConfig{OrganizationID: organization.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
 	return NewServer(Dependencies{
 		Atlas:   atlasService,
 		People:  peopleService,
 		Threads: threadsService,
 		Vault:   vaultService,
 		Ledger:  ledgerService,
+		Horizon: horizonService,
 		Guard:   service,
 		OIDC:    oidcFlow,
 		SAML:    samlFlow,

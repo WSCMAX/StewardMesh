@@ -92,6 +92,17 @@ service VaultService {
   rpc AuthorizeDownload(AuthorizeBlobDownloadRequest) returns (VaultDownloadAuthorization);
 }
 
+// Organization-scoped lifecycle planning and replacement forecasting.
+// Requirement: REQ-HORIZON-001. Feature: lifecycle.planning.
+service HorizonService {
+  rpc ListPlans(ListHorizonPlansRequest) returns (ListHorizonPlansResponse);
+  rpc CreatePlan(CreateHorizonPlanRequest) returns (HorizonPlan);
+  rpc UpdatePlan(UpdateHorizonPlanRequest) returns (HorizonPlan);
+  rpc ListPlanHistory(ListHorizonPlanHistoryRequest) returns (ListHorizonPlanHistoryResponse);
+  rpc GetForecast(GetHorizonForecastRequest) returns (HorizonForecast);
+  rpc ExportCSV(ExportHorizonCSVRequest) returns (ExportHorizonCSVResponse);
+}
+
 // Organization-scoped procurement and financial planning.
 // Requirement: REQ-LEDGER-001. Feature: procurement.finance.
 service LedgerService {
@@ -774,6 +785,142 @@ message AuthorizeBlobDownloadRequest {
 message VaultDownloadAuthorization {
   string url = 1;
   google.protobuf.Timestamp expires_at = 2;
+}
+
+// Requirement: REQ-HORIZON-001. Feature: lifecycle.planning.
+message HorizonPlan {
+  string id = 1;
+  string organization_id = 2;
+  string asset_id = 3;
+  string scenario = 4;
+  int32 expected_useful_life_months = 5;
+  google.protobuf.Timestamp replacement_date = 6;
+  google.protobuf.Timestamp derived_replacement_date = 7;
+  // One of planned, in_service, refresh_due, approved, or retired.
+  string lifecycle_stage = 8;
+  // Exact minor units from 0 through 9007199254740991.
+  int64 replacement_cost_minor = 9;
+  string currency = 10;
+  google.protobuf.Timestamp effective_from = 11;
+  int64 revision = 12;
+  google.protobuf.Timestamp created_at = 13;
+  google.protobuf.Timestamp updated_at = 14;
+}
+
+message HorizonPlanVersion {
+  string plan_id = 1;
+  string organization_id = 2;
+  string asset_id = 3;
+  string scenario = 4;
+  int32 expected_useful_life_months = 5;
+  google.protobuf.Timestamp replacement_date = 6;
+  // One of planned, in_service, refresh_due, approved, or retired.
+  string lifecycle_stage = 7;
+  // Exact minor units from 0 through 9007199254740991.
+  int64 replacement_cost_minor = 8;
+  string currency = 9;
+  google.protobuf.Timestamp effective_from = 10;
+  int64 revision = 11;
+  string actor_id = 12;
+  google.protobuf.Timestamp recorded_at = 13;
+  google.protobuf.Timestamp derived_replacement_date = 14;
+}
+
+message ListHorizonPlansRequest {
+  string asset_id = 1;
+  string scenario = 2;
+}
+
+message ListHorizonPlansResponse {
+  repeated HorizonPlan items = 1;
+}
+
+message CreateHorizonPlanRequest {
+  // Optional caller-provided stable identifier.
+  string id = 1;
+  string asset_id = 2;
+  string scenario = 3;
+  int32 expected_useful_life_months = 4;
+  google.protobuf.Timestamp replacement_date = 5;
+  // One of planned, in_service, refresh_due, approved, or retired.
+  string lifecycle_stage = 6;
+  // Exact minor units from 0 through 9007199254740991.
+  int64 replacement_cost_minor = 7;
+  string currency = 8;
+  google.protobuf.Timestamp effective_from = 9;
+}
+
+message UpdateHorizonPlanRequest {
+  string plan_id = 1;
+  string asset_id = 2;
+  string scenario = 3;
+  int32 expected_useful_life_months = 4;
+  google.protobuf.Timestamp replacement_date = 5;
+  // One of planned, in_service, refresh_due, approved, or retired.
+  string lifecycle_stage = 6;
+  // Exact minor units from 0 through 9007199254740991.
+  int64 replacement_cost_minor = 7;
+  string currency = 8;
+  google.protobuf.Timestamp effective_from = 9;
+  int64 revision = 10;
+}
+
+message ListHorizonPlanHistoryRequest {
+  string plan_id = 1;
+}
+
+message ListHorizonPlanHistoryResponse {
+  repeated HorizonPlanVersion items = 1;
+}
+
+message GetHorizonForecastRequest {
+  repeated string scenarios = 1;
+  google.protobuf.Timestamp as_of = 2;
+  int32 from_year = 3;
+  int32 to_year = 4;
+  int32 fiscal_year_start_month = 5;
+  // One of fiscal_year, department, site, tag, goal, or asset_class.
+  string group_by = 6;
+}
+
+message HorizonForecastGroup {
+  string key = 1;
+  string label = 2;
+  string scenario = 3;
+  // Exact minor units from 0 through 9007199254740991.
+  int64 planned_replacement_minor = 4;
+  int32 asset_count = 5;
+  // Each value is exact minor units from 0 through 9007199254740991.
+  map<string, int64> amounts_by_kind_minor = 6;
+}
+
+message HorizonForecast {
+  google.protobuf.Timestamp as_of = 1;
+  string group_by = 2;
+  string currency = 3;
+  repeated string scenarios = 4;
+  // Exact minor units from 0 through 9007199254740991.
+  int64 planned_replacement_minor = 5;
+  int32 asset_count = 6;
+  // Each value is exact minor units from 0 through 9007199254740991.
+  map<string, int64> totals_by_kind_minor = 7;
+  repeated HorizonForecastGroup groups = 8;
+}
+
+message ExportHorizonCSVRequest {
+  repeated string scenarios = 1;
+  google.protobuf.Timestamp as_of = 2;
+  int32 from_year = 3;
+  int32 to_year = 4;
+  int32 fiscal_year_start_month = 5;
+  // One of fiscal_year, department, site, tag, goal, or asset_class.
+  string group_by = 6;
+}
+
+message ExportHorizonCSVResponse {
+  bytes content = 1;
+  string media_type = 2;
+  string filename = 3;
 }
 
 message GetLedgerSnapshotRequest {}

@@ -1,7 +1,8 @@
 package postgres
 
 // Requirements: REQ-FOUNDATION-001, SEC-GUARD-001, REQ-PEOPLE-001,
-// REQ-DIRECTORY-EXPANSION-001, REQ-ATLAS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001.
+// REQ-DIRECTORY-EXPANSION-001, REQ-ATLAS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001,
+// REQ-HORIZON-001. Feature: lifecycle.planning.
 
 import (
 	"context"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/maxlemke/stewardmesh/internal/bootstrap"
+	"github.com/maxlemke/stewardmesh/internal/domain"
 	"github.com/maxlemke/stewardmesh/internal/repository/contracttest"
 )
 
@@ -267,4 +269,56 @@ func TestLedgerStoreIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	contracttest.LedgerStore(t, store, organizationID, fmt.Sprintf("postgres-%d", time.Now().UnixNano()))
+}
+
+func TestHorizonStoreIntegration(t *testing.T) {
+	databaseURL := os.Getenv("STEWARDMESH_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("STEWARDMESH_TEST_DATABASE_URL is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	database, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := Migrate(ctx, database); err != nil {
+		t.Fatal(err)
+	}
+	organizations, err := NewOrganizationRepository(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	organizationID := fmt.Sprintf("horizon-integration-%d", time.Now().UnixNano())
+	organizationService, err := bootstrap.NewOrganizationService(organizations)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := organizationService.EnsureOrganization(ctx, organizationID, "Horizon Integration"); err != nil {
+		t.Fatal(err)
+	}
+	assetStore, err := NewAtlasStore(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	suffix := fmt.Sprintf("postgres-%d", time.Now().UnixNano())
+	assetID := "horizon-asset-" + suffix
+	now := time.Date(2026, time.August, 11, 12, 0, 0, 0, time.UTC)
+	asset := domain.Asset{
+		ID: assetID, OrganizationID: organizationID, Name: "Horizon Contract Asset", Kind: "server",
+		Status: "active", Revision: 1, CreatedAt: now, UpdatedAt: now,
+	}
+	lifecycle := domain.AssetLifecycleEvent{
+		ID: fmt.Sprintf("%032x", time.Now().UnixNano()), OrganizationID: organizationID, AssetID: assetID,
+		ToStatus: "active", Revision: 1, ActorID: "integration", OccurredAt: now,
+	}
+	if _, err := assetStore.CreateAsset(ctx, asset, lifecycle); err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewHorizonStore(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contracttest.HorizonStore(t, store, organizationID, assetID, suffix)
 }

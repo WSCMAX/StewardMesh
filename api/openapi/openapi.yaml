@@ -1,4 +1,4 @@
-# Requirements: REQ-ATLAS-001, REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
+# Requirements: REQ-ATLAS-001, REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-HORIZON-001, REQ-LEDGER-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
 openapi: 3.1.0
 info:
   title: StewardMesh API
@@ -1335,6 +1335,164 @@ paths:
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/horizon/plans:
+    get:
+      summary: List organization lifecycle plans
+      operationId: listHorizonPlans
+      tags: [Horizon]
+      x-requirement: REQ-HORIZON-001
+      description: Lists lifecycle.planning assumptions, optionally filtered by asset and scenario.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/HorizonAssetID'
+        - $ref: '#/components/parameters/HorizonScenario'
+      responses:
+        '200':
+          description: Organization-scoped lifecycle plans
+          headers:
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/HorizonPlanCollection'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+    post:
+      summary: Create a lifecycle plan
+      operationId: createHorizonPlan
+      tags: [Horizon]
+      x-requirement: REQ-HORIZON-001
+      description: Creates an effective-dated lifecycle.planning assumption for an organization asset.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateHorizonPlanRequest'}
+      responses:
+        '201':
+          description: Lifecycle plan created
+          headers:
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/HorizonPlan'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/UnprocessableEntity'}
+  /api/v1/horizon/plans/{planId}:
+    parameters:
+      - $ref: '#/components/parameters/HorizonPlanID'
+    put:
+      summary: Update a lifecycle plan
+      operationId: updateHorizonPlan
+      tags: [Horizon]
+      x-requirement: REQ-HORIZON-001
+      description: Updates lifecycle.planning assumptions using optimistic revision control.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/UpdateHorizonPlanRequest'}
+      responses:
+        '200':
+          description: Lifecycle plan updated
+          headers:
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/HorizonPlan'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/UnprocessableEntity'}
+  /api/v1/horizon/plans/{planId}/history:
+    parameters:
+      - $ref: '#/components/parameters/HorizonPlanID'
+    get:
+      summary: List lifecycle plan history
+      operationId: listHorizonPlanHistory
+      tags: [Horizon]
+      x-requirement: REQ-HORIZON-001
+      description: Returns the immutable version history for one lifecycle.planning plan.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200':
+          description: Recorded lifecycle plan versions
+          headers:
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/HorizonPlanHistoryCollection'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/horizon/forecast:
+    get:
+      summary: Get replacement forecast
+      operationId: getHorizonForecast
+      tags: [Horizon]
+      x-requirement: REQ-HORIZON-001
+      description: Forecasts lifecycle.planning replacement costs in integer minor units across up to five scenarios.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/HorizonScenarios'
+        - $ref: '#/components/parameters/HorizonAsOf'
+        - $ref: '#/components/parameters/HorizonFromYear'
+        - $ref: '#/components/parameters/HorizonToYear'
+        - $ref: '#/components/parameters/HorizonFiscalYearStartMonth'
+        - $ref: '#/components/parameters/HorizonGroupBy'
+      responses:
+        '200':
+          description: Scenario-based replacement forecast
+          headers:
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/HorizonForecast'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/horizon/export.csv:
+    get:
+      summary: Export replacement forecast as CSV
+      operationId: exportHorizonForecastCSV
+      tags: [Horizon]
+      x-requirement: REQ-HORIZON-001
+      description: Exports the same lifecycle.planning forecast query as RFC 4180-compatible CSV using integer minor units.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/HorizonScenarios'
+        - $ref: '#/components/parameters/HorizonAsOf'
+        - $ref: '#/components/parameters/HorizonFromYear'
+        - $ref: '#/components/parameters/HorizonToYear'
+        - $ref: '#/components/parameters/HorizonFiscalYearStartMonth'
+        - $ref: '#/components/parameters/HorizonGroupBy'
+      responses:
+        '200':
+          description: RFC 4180-compatible replacement forecast export
+          headers:
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+            Content-Disposition:
+              schema: {type: string, const: 'attachment; filename="stewardmesh-horizon-forecast.csv"'}
+          content:
+            text/csv:
+              schema: {type: string}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
   /api/v1/ledger:
     get:
       summary: List the organization Ledger snapshot
@@ -1566,6 +1724,10 @@ components:
       in: cookie
       name: __Host-stewardmesh_session
       description: Opaque, Secure, host-only server-side session identifier used by HTTPS deployments.
+  headers:
+    NoStore:
+      description: Horizon planning data is never stored by shared or browser caches.
+      schema: {type: string, const: no-store}
   parameters:
     AssetID:
       in: path
@@ -1593,6 +1755,58 @@ components:
       required: true
       description: Short-lived HMAC grant returned for local Vault content. S3-compatible authorizations use their provider URL instead.
       schema: {type: string, minLength: 40, maxLength: 160}
+    HorizonPlanID:
+      in: path
+      name: planId
+      required: true
+      schema: {$ref: '#/components/schemas/HorizonID'}
+    HorizonAssetID:
+      in: query
+      name: assetId
+      required: false
+      schema: {$ref: '#/components/schemas/HorizonID'}
+    HorizonScenario:
+      in: query
+      name: scenario
+      required: false
+      schema: {$ref: '#/components/schemas/HorizonScenario'}
+    HorizonScenarios:
+      in: query
+      name: scenarios
+      required: false
+      description: Comma-separated scenario identifiers. Values are trimmed, normalized to lowercase, deduplicated, and limited to five. Defaults to baseline.
+      schema: {type: string, minLength: 1, maxLength: 324, default: baseline}
+    HorizonAsOf:
+      in: query
+      name: asOf
+      required: false
+      description: Forecast cutoff. Defaults to the current time.
+      schema: {type: string, format: date-time}
+    HorizonFromYear:
+      in: query
+      name: fromYear
+      required: false
+      description: First forecast year. Defaults to the as-of year.
+      schema: {type: integer, minimum: 1970, maximum: 9999}
+    HorizonToYear:
+      in: query
+      name: toYear
+      required: false
+      description: Last forecast year, inclusive. Defaults to ten years after fromYear and may span at most 50 years.
+      schema: {type: integer, minimum: 1970, maximum: 9999}
+    HorizonFiscalYearStartMonth:
+      in: query
+      name: fiscalYearStartMonth
+      required: false
+      schema: {type: integer, minimum: 1, maximum: 12, default: 1}
+    HorizonGroupBy:
+      in: query
+      name: groupBy
+      required: false
+      schema:
+        type: string
+        enum: [fiscal_year, department, site, tag, goal, asset_class]
+        default: fiscal_year
     ThreadTargetType:
       in: path
       name: targetType
@@ -1650,6 +1864,11 @@ components:
           schema: {$ref: '#/components/schemas/Error'}
     Conflict:
       description: The requested change conflicts with existing or effective-dated data
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    UnprocessableEntity:
+      description: A referenced organization resource does not exist or cannot be used for this request
       content:
         application/json:
           schema: {$ref: '#/components/schemas/Error'}
@@ -2145,7 +2364,7 @@ components:
         assigneeKind: {type: string, enum: [identity, department]}
         assigneeId: {type: string, pattern: '^[a-f0-9]{32}$'}
         role: {type: string, enum: [primary, user, department]}
-        effectiveFrom: {type: string, format: date-time}
+        effectiveFrom: {type: string, format: date-time, description: Calendar-effective date represented at UTC midnight.}
         effectiveTo: {type: string, format: date-time}
         createdBy: {type: string, minLength: 1, maxLength: 128}
         createdAt: {type: string, format: date-time}
@@ -2160,7 +2379,7 @@ components:
           type: string
           enum: [primary, user, department]
           description: Identity assignees use primary or user; department assignees use department.
-        effectiveFrom: {type: string, format: date-time}
+        effectiveFrom: {type: string, format: date-time, description: Calendar-effective date represented at UTC midnight.}
     EndAssetAssignmentRequest:
       type: object
       additionalProperties: false
@@ -2224,6 +2443,153 @@ components:
           type: string
           description: Ephemeral HTTPS provider URL or same-origin authenticated path. Never store this value.
         expiresAt: {type: string, format: date-time}
+    HorizonID:
+      type: string
+      pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+    HorizonScenario:
+      type: string
+      pattern: '^[a-z0-9][a-z0-9._-]{0,63}$'
+    HorizonCurrency:
+      type: string
+      pattern: '^[A-Z]{3}$'
+    HorizonLifecycleStage:
+      type: string
+      enum: [planned, in_service, refresh_due, approved, retired]
+    HorizonGroupBy:
+      type: string
+      enum: [fiscal_year, department, site, tag, goal, asset_class]
+    HorizonPlan:
+      type: object
+      additionalProperties: false
+      description: Effective-dated lifecycle.planning assumptions for one asset and scenario.
+      required: [id, organizationId, assetId, scenario, expectedUsefulLifeMonths, lifecycleStage, replacementCostMinor, currency, effectiveFrom, revision, createdAt, updatedAt]
+      properties:
+        id: {$ref: '#/components/schemas/HorizonID'}
+        organizationId: {type: string, minLength: 1, maxLength: 128}
+        assetId: {$ref: '#/components/schemas/HorizonID'}
+        scenario: {$ref: '#/components/schemas/HorizonScenario'}
+        expectedUsefulLifeMonths: {type: integer, minimum: 1, maximum: 1200}
+        replacementDate: {type: string, format: date-time}
+        derivedReplacementDate:
+          type: string
+          format: date-time
+          readOnly: true
+          description: Explicit replacementDate when supplied, otherwise a date derived from the asset lifecycle and useful-life assumption.
+        lifecycleStage: {$ref: '#/components/schemas/HorizonLifecycleStage'}
+        replacementCostMinor: {type: integer, format: int64, minimum: 0, maximum: 9007199254740991}
+        currency: {$ref: '#/components/schemas/HorizonCurrency'}
+        effectiveFrom: {type: string, format: date-time, description: Calendar-effective date represented at UTC midnight.}
+        revision: {type: integer, format: int64, minimum: 1}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    HorizonPlanCollection:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/HorizonPlan'}}
+    CreateHorizonPlanRequest:
+      type: object
+      additionalProperties: false
+      required: [assetId, expectedUsefulLifeMonths, replacementCostMinor, currency, effectiveFrom]
+      properties:
+        id:
+          allOf: [{$ref: '#/components/schemas/HorizonID'}]
+          description: Optional caller-provided stable identifier.
+        assetId: {$ref: '#/components/schemas/HorizonID'}
+        scenario:
+          allOf: [{$ref: '#/components/schemas/HorizonScenario'}]
+          default: baseline
+        expectedUsefulLifeMonths: {type: integer, minimum: 1, maximum: 1200}
+        replacementDate: {type: string, format: date-time}
+        lifecycleStage:
+          allOf: [{$ref: '#/components/schemas/HorizonLifecycleStage'}]
+          default: planned
+        replacementCostMinor: {type: integer, format: int64, minimum: 0, maximum: 9007199254740991}
+        currency: {$ref: '#/components/schemas/HorizonCurrency'}
+        effectiveFrom: {type: string, format: date-time, description: Calendar-effective date represented at UTC midnight.}
+    UpdateHorizonPlanRequest:
+      type: object
+      additionalProperties: false
+      required: [assetId, scenario, expectedUsefulLifeMonths, lifecycleStage, replacementCostMinor, currency, effectiveFrom, revision]
+      properties:
+        assetId: {$ref: '#/components/schemas/HorizonID'}
+        scenario:
+          allOf: [{$ref: '#/components/schemas/HorizonScenario'}]
+          default: baseline
+        expectedUsefulLifeMonths: {type: integer, minimum: 1, maximum: 1200}
+        replacementDate: {type: string, format: date-time}
+        lifecycleStage:
+          allOf: [{$ref: '#/components/schemas/HorizonLifecycleStage'}]
+          default: planned
+        replacementCostMinor: {type: integer, format: int64, minimum: 0, maximum: 9007199254740991}
+        currency: {$ref: '#/components/schemas/HorizonCurrency'}
+        effectiveFrom: {type: string, format: date-time}
+        revision: {type: integer, format: int64, minimum: 1}
+    HorizonPlanVersion:
+      type: object
+      additionalProperties: false
+      description: Immutable lifecycle.planning snapshot recorded for a plan mutation.
+      required: [planId, organizationId, assetId, scenario, expectedUsefulLifeMonths, lifecycleStage, replacementCostMinor, currency, effectiveFrom, revision, actorId, recordedAt]
+      properties:
+        planId: {$ref: '#/components/schemas/HorizonID'}
+        organizationId: {type: string, minLength: 1, maxLength: 128}
+        assetId: {$ref: '#/components/schemas/HorizonID'}
+        scenario: {$ref: '#/components/schemas/HorizonScenario'}
+        expectedUsefulLifeMonths: {type: integer, minimum: 1, maximum: 1200}
+        replacementDate: {type: string, format: date-time}
+        derivedReplacementDate:
+          type: string
+          format: date-time
+          readOnly: true
+          description: Explicit replacementDate when supplied, otherwise a calendar date derived for this version from the Atlas purchase date and useful-life assumption.
+        lifecycleStage: {$ref: '#/components/schemas/HorizonLifecycleStage'}
+        replacementCostMinor: {type: integer, format: int64, minimum: 0, maximum: 9007199254740991}
+        currency: {$ref: '#/components/schemas/HorizonCurrency'}
+        effectiveFrom: {type: string, format: date-time, description: Calendar-effective date represented at UTC midnight.}
+        revision: {type: integer, format: int64, minimum: 1}
+        actorId: {type: string, minLength: 1, maxLength: 128}
+        recordedAt: {type: string, format: date-time}
+    HorizonPlanHistoryCollection:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/HorizonPlanVersion'}}
+    HorizonMoneyByKind:
+      type: object
+      description: Integer minor-unit totals keyed by actual, estimated, committed, normalized_real, or tco cost kind.
+      additionalProperties: {type: integer, format: int64, minimum: 0, maximum: 9007199254740991}
+    HorizonForecastGroup:
+      type: object
+      additionalProperties: false
+      required: [key, label, scenario, plannedReplacementMinor, assetCount, amountsByKindMinor]
+      properties:
+        key: {type: string}
+        label: {type: string}
+        scenario: {$ref: '#/components/schemas/HorizonScenario'}
+        plannedReplacementMinor: {type: integer, format: int64, minimum: 0, maximum: 9007199254740991}
+        assetCount: {type: integer, minimum: 0}
+        amountsByKindMinor: {$ref: '#/components/schemas/HorizonMoneyByKind'}
+    HorizonForecast:
+      type: object
+      additionalProperties: false
+      description: lifecycle.planning forecast totals and dimension groups. Currency is empty when no rows match the query.
+      required: [asOf, groupBy, currency, scenarios, plannedReplacementMinor, assetCount, totalsByKindMinor, groups]
+      properties:
+        asOf: {type: string, format: date-time}
+        groupBy: {$ref: '#/components/schemas/HorizonGroupBy'}
+        currency: {type: string, pattern: '^(?:[A-Z]{3})?$'}
+        scenarios:
+          type: array
+          minItems: 1
+          maxItems: 5
+          uniqueItems: true
+          items: {$ref: '#/components/schemas/HorizonScenario'}
+        plannedReplacementMinor: {type: integer, format: int64, minimum: 0, maximum: 9007199254740991}
+        assetCount: {type: integer, minimum: 0}
+        totalsByKindMinor: {$ref: '#/components/schemas/HorizonMoneyByKind'}
+        groups: {type: array, items: {$ref: '#/components/schemas/HorizonForecastGroup'}}
     LedgerID:
       type: string
       pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'

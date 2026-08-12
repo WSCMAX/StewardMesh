@@ -1,6 +1,6 @@
 // Package application constructs StewardMesh's transport-neutral HTTP
 // application and owns the lifecycle of its shared runtime dependencies.
-// Requirements: REQ-FOUNDATION-001, REQ-ATLAS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001.
+// Requirements: REQ-FOUNDATION-001, REQ-ATLAS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-HORIZON-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001.
 package application
 
 import (
@@ -18,6 +18,7 @@ import (
 	"github.com/maxlemke/stewardmesh/internal/config"
 	"github.com/maxlemke/stewardmesh/internal/foundation"
 	"github.com/maxlemke/stewardmesh/internal/guard"
+	"github.com/maxlemke/stewardmesh/internal/horizon"
 	"github.com/maxlemke/stewardmesh/internal/httpapi"
 	"github.com/maxlemke/stewardmesh/internal/identity"
 	"github.com/maxlemke/stewardmesh/internal/ledger"
@@ -175,6 +176,10 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 	if err != nil {
 		return fail(fmt.Errorf("initialize Ledger: %w", err))
 	}
+	horizonService, err := horizon.NewService(runtime.horizonStore, atlasService, ledgerService, threadsService, runtime.auditor, horizon.ServiceConfig{OrganizationID: cfg.OrganizationID})
+	if err != nil {
+		return fail(fmt.Errorf("initialize Horizon: %w", err))
+	}
 
 	application.handler = httpapi.NewServer(httpapi.Dependencies{
 		Atlas:               atlasService,
@@ -182,6 +187,7 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 		Threads:             threadsService,
 		Vault:               vaultService,
 		Ledger:              ledgerService,
+		Horizon:             horizonService,
 		Guard:               guardService,
 		OIDC:                oidcFlow,
 		SAML:                samlFlow,
@@ -231,6 +237,7 @@ type foundationRuntime struct {
 	threadsStore threads.Store
 	storageStore storage.MetadataStore
 	ledgerStore  ledger.Store
+	horizonStore horizon.Store
 	guardStore   guard.Store
 	peopleStore  people.Store
 	auditor      foundation.Auditor
@@ -294,6 +301,7 @@ func initializeFoundation(ctx context.Context, cfg config.Config, runMigrations 
 		threadsStore  threads.Store
 		storageStore  storage.MetadataStore
 		ledgerStore   ledger.Store
+		horizonStore  horizon.Store
 		guardStore    guard.Store
 		peopleStore   people.Store
 		auditor       foundation.Auditor = foundation.NopAuditor{}
@@ -308,6 +316,7 @@ func initializeFoundation(ctx context.Context, cfg config.Config, runMigrations 
 		threadsStore = repository.NewMemoryThreadsStore()
 		storageStore = repository.NewMemoryStorageStore()
 		ledgerStore = repository.NewMemoryLedgerStore()
+		horizonStore = repository.NewMemoryHorizonStore()
 	case config.RepositoryDriverPostgres:
 		database, err := postgresrepository.Open(ctx, cfg.DatabaseURL)
 		if err != nil {
@@ -356,6 +365,11 @@ func initializeFoundation(ctx context.Context, cfg config.Config, runMigrations 
 			return foundationRuntime{}, err
 		}
 		ledgerStore, err = postgresrepository.NewLedgerStore(database)
+		if err != nil {
+			_ = database.Close()
+			return foundationRuntime{}, err
+		}
+		horizonStore, err = postgresrepository.NewHorizonStore(database)
 		if err != nil {
 			_ = database.Close()
 			return foundationRuntime{}, err
@@ -412,6 +426,7 @@ func initializeFoundation(ctx context.Context, cfg config.Config, runMigrations 
 		threadsStore: threadsStore,
 		storageStore: storageStore,
 		ledgerStore:  ledgerStore,
+		horizonStore: horizonStore,
 		guardStore:   guardStore,
 		peopleStore:  peopleStore,
 		auditor:      auditor,

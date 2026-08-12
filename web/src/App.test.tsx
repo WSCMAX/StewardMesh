@@ -4,7 +4,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, expect, test, vi } from 'vitest'
 import App, { resolvePublicUrl } from './App'
 
-// Requirements: A11Y-001, DOC-001, DOC-002, SEC-GUARD-001, SEC-HTTP-001. Feature: experience.help.
+// Requirements: REQ-HORIZON-001, A11Y-001, DOC-001, DOC-002, SEC-GUARD-001, SEC-HTTP-001. Features: lifecycle.planning, experience.help.
 
 const session = {
   principal: {

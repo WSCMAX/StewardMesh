@@ -135,6 +135,8 @@ The initial Administrator role directly contains `guard.manage` and attaches the
 - `storage.write`
 - `finance.read`
 - `finance.write`
+- `planning.read`
+- `planning.write`
 
 Role assignments carry an explicit organization, site, department, or resource scope. Organization-scoped grants cover resources in that organization; narrower grants require an exact scope match. Every protected API enforces permissions on the server, and a disabled account is rejected even if one of its sessions has not expired. Frontend role display is user guidance, never the security boundary.
 

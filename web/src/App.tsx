@@ -1,6 +1,7 @@
 import { type CSSProperties, type FormEvent, type ReactNode, useEffect, useRef, useState } from 'react'
 import { ApiRequestError, authenticationRequiredEventName, requestJSON } from './api'
 import AtlasInventory, { isAsset, type Asset } from './AtlasInventory'
+import { documentationHref } from './documentation'
 import GuideExperience, { GuideInvitation, type GuideDestination } from './GuideExperience'
 import GuardAccessManager from './GuardAccessManager'
 import HorizonPlanner from './HorizonPlanner'
@@ -62,7 +63,7 @@ type AuthPhase = 'loading' | 'bootstrap' | 'login' | 'authenticated' | 'unavaila
 type ServiceHealth = 'checking' | 'connected' | 'unavailable'
 
 const defaultIssuesUrl = 'https://github.com/WSCMAX/StewardMesh/issues'
-const guardHelpUrl = 'https://github.com/WSCMAX/StewardMesh/blob/main/docs/features/guard.md'
+const guardHelpUrl = documentationHref('guard')
 
 const workspaceModules: readonly WorkspaceModule[] = [
   { id: 'atlas', name: 'Atlas', descriptor: 'Asset inventory', summary: 'Register, locate, and maintain the assets your organization stewards.', permission: 'assets.read', writePermission: 'assets.write' },

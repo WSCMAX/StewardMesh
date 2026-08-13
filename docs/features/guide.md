@@ -6,7 +6,7 @@
 
 ## Purpose
 
-Guide makes StewardMesh behavior discoverable without interrupting work. It combines module-level help, examples, direct documentation links, role- and permission-aware walkthroughs, public-branding accessibility checks, and a privacy-minimized issue-reporting handoff in one keyboard-operable panel.
+Guide makes StewardMesh behavior discoverable without interrupting work. It combines module-level help, examples, same-host product documentation, role- and permission-aware walkthroughs, public-branding accessibility checks, and a privacy-minimized issue-reporting handoff in one keyboard-operable panel.
 
 Every product name remains paired with a plain-language descriptor. The application header exposes Guide before and after authentication, module cards and implemented workspaces open their own contextual topic, and Guard setup and recovery views retain direct help and reporting access.
 
@@ -15,11 +15,19 @@ Every product name remains paired with a plain-language descriptor. The applicat
 Guide contains topics for Workspace, Atlas, Horizon, Ledger, Threads, Vault, People, Guard, and Guide itself. Each topic provides:
 
 - a plain-language summary and concrete example;
-- a direct link to the feature documentation or roadmap issue;
+- a direct same-host link to the matching local product documentation;
 - an in-page destination when the workspace is implemented and available;
 - an accessible control name such as **Open Atlas help**.
 
 Help text and topic selection are public product guidance, not an authorization boundary. The walkthrough omits permission-protected workspaces that the current session cannot read. Guard continues to enforce all permissions on the server.
+
+## Local documentation surface
+
+The web application includes a public, first-party documentation surface at fixed `#docs/{topic}` hashes for Overview, Workspace, Atlas, Horizon, Ledger, Threads, Vault, People, Guard, and Guide. Hash routing keeps documentation on the current host and avoids deployment-specific server rewrite requirements. Guide, Guard setup, and feature-owned fallback help actions link to these pages instead of GitHub.
+
+The documentation layout adapts the repository's licensed Tailwind documentation patterns to the StewardMesh design system: a searchable topic rail, focused article column, desktop table of contents, related-guide cards, previous/next navigation, and responsive single-column behavior. Links back to the live product use fixed `#workspace-{area}` hashes. Documentation is available before authentication and does not request protected APIs.
+
+Runtime product guidance lives in `web/src/documentation.ts` and is intentionally independent from repository Markdown. The Markdown feature, requirement, architecture, and operations documents remain engineering references and traceability artifacts; they are not fetched from GitHub or rendered into the deployed web application. Local documentation contains no GitHub links. The separately configured issue-reporting destination remains the only intentional external handoff and still requires user review.
 
 ## Walkthrough behavior
 
@@ -63,13 +71,14 @@ The shared same-origin API client captures only correlation IDs that match the b
 
 ## Interfaces and provider boundary
 
-Guide is a frontend feature and adds no database migration, REST endpoint, or gRPC method. `web/src/guide.ts` owns pure help, contrast, preference, browser classification, and sanitization contracts. `web/src/GuideExperience.tsx` renders the accessible experience. `web/src/api.ts` supplies the sanitized response correlation boundary.
+Guide is a frontend feature and adds no database migration, REST endpoint, or gRPC method. `web/src/guide.ts` owns pure help, contrast, preference, browser classification, and sanitization contracts. `web/src/documentation.ts` owns public documentation routes and product content, `web/src/DocumentationSite.tsx` renders the responsive documentation experience, and `web/src/Root.tsx` selects documentation without mounting authenticated application behavior. `web/src/GuideExperience.tsx` renders contextual help, while `web/src/api.ts` supplies the sanitized response correlation boundary.
 
 ## Validation
 
 - pure contrast, fallback, color guidance, sanitization, browser/system, and preference tests;
 - component tests for accessibility, focus restoration, permission-aware steps, skip/replay/completion, unsafe-brand warnings, and issue reports;
 - authenticated application tests for contextual module help and reporting;
+- local-route, search, public-access, same-host link, and documentation accessibility tests;
 - automated axe checks and TypeScript compilation;
 - keyboard, desktop, and 320-pixel browser validation with clean console output;
 - repository race tests, traceability checks, dependency/security scans, production build, and container build gates.

@@ -29,14 +29,14 @@ test('renders accessible contextual help with labels, examples, and documentatio
   const { container } = renderGuide({ destination: { view: 'help', topic: 'atlas' } })
   expect(screen.getByRole('heading', { name: 'What you can do here' })).toBeInTheDocument()
   expect(screen.getByText('Example')).toBeInTheDocument()
-  expect(screen.getByRole('link', { name: 'Read Atlas documentation' })).toHaveAttribute('href', expect.stringContaining('/docs/features/atlas.md'))
+  expect(screen.getByRole('link', { name: 'Read Atlas documentation' })).toHaveAttribute('href', '#docs/atlas')
   expect((await axe.run(container)).violations).toEqual([])
 })
 
 test('keeps public help discoverable before protected workspace access is available', () => {
   renderGuide({ destination: { view: 'help', topic: 'guard' }, permissions: [], roles: [] })
   expect(screen.getByRole('combobox', { name: 'Help topic' })).toHaveValue('guard')
-  expect(screen.getByRole('link', { name: 'Read Guard documentation' })).toBeInTheDocument()
+  expect(screen.getByRole('link', { name: 'Read Guard documentation' })).toHaveAttribute('href', '#docs/guard')
 })
 
 test('keeps walkthrough steps permission-aware, skippable, replayable, and completable', () => {

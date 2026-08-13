@@ -72,6 +72,12 @@ DynamoDB adapter and Exchange imports reuse the same validation and audit rules.
 See [Atlas](docs/features/atlas.md) for permissions, API behavior, the accessible
 workflow, migration details, and validation coverage.
 
+Atlas Models adds reusable product records plus exact import resolution and
+atomic bulk intake for up to 100 model-linked asset instances. Each instance
+retains its own identity, assignment, lifecycle, purchase, and deployment-note
+fields while memory and PostgreSQL providers enforce the same validation. See
+[Atlas Models](docs/features/atlas-models.md).
+
 Atlas Catalog (`REQ-ATLAS-CATALOG-001`, `inventory.catalog`) extends reusable
 Atlas Models with named configurations, effective-dated prices, and directed
 upgrade paths instead of creating a competing product record. Its foundation

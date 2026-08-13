@@ -257,7 +257,8 @@
           "internal/repository/postgres/atlas.go"
         ],
         "schema": [
-          "internal/repository/postgres/migrations/0023_atlas_models.sql"
+          "internal/repository/postgres/migrations/0023_atlas_models.sql",
+          "internal/repository/postgres/migrations/0025_atlas_model_bulk_intake.sql"
         ],
         "tests": [
           "internal/atlas/service_test.go",

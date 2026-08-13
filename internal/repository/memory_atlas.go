@@ -68,6 +68,21 @@ func (s *MemoryAtlasStore) GetModel(_ context.Context, organizationID, id string
 	return cloneAssetModel(model), nil
 }
 
+func (s *MemoryAtlasStore) ResolveModel(_ context.Context, organizationID string, identity atlas.ModelIdentity) (domain.AssetModel, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, model := range s.models {
+		if model.OrganizationID == organizationID &&
+			strings.EqualFold(model.Manufacturer, identity.Manufacturer) &&
+			strings.EqualFold(model.Name, identity.Name) &&
+			strings.EqualFold(model.ModelNumber, identity.ModelNumber) {
+			model.InstanceCount = s.modelInstanceCountLocked(organizationID, model.ID)
+			return cloneAssetModel(model), nil
+		}
+	}
+	return domain.AssetModel{}, atlas.ErrNotFound
+}
+
 func (s *MemoryAtlasStore) CreateModel(_ context.Context, model domain.AssetModel) (domain.AssetModel, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -150,22 +165,43 @@ func (s *MemoryAtlasStore) GetAsset(_ context.Context, organizationID, id string
 	return cloneAsset(asset), nil
 }
 
-func (s *MemoryAtlasStore) CreateAsset(_ context.Context, asset domain.Asset, initialEvent domain.AssetLifecycleEvent) (domain.Asset, error) {
+func (s *MemoryAtlasStore) CreateAsset(ctx context.Context, asset domain.Asset, initialEvent domain.AssetLifecycleEvent) (domain.Asset, error) {
+	created, err := s.CreateAssets(ctx, []domain.Asset{asset}, []domain.AssetLifecycleEvent{initialEvent})
+	if err != nil {
+		return domain.Asset{}, err
+	}
+	return created[0], nil
+}
+
+func (s *MemoryAtlasStore) CreateAssets(_ context.Context, assets []domain.Asset, initialEvents []domain.AssetLifecycleEvent) ([]domain.Asset, error) {
+	if len(assets) == 0 || len(assets) != len(initialEvents) {
+		return nil, atlas.ErrInvalidInput
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	key := atlasMemoryKey(asset.OrganizationID, asset.ID)
-	if asset.ModelID != "" {
-		model, exists := s.models[atlasMemoryKey(asset.OrganizationID, asset.ModelID)]
-		if !exists || model.Status != "active" {
-			return domain.Asset{}, atlas.ErrReferenceMissing
+	for index, asset := range assets {
+		key := atlasMemoryKey(asset.OrganizationID, asset.ID)
+		if asset.ModelID != "" {
+			model, exists := s.models[atlasMemoryKey(asset.OrganizationID, asset.ModelID)]
+			if !exists || model.Status != "active" {
+				return nil, atlas.ErrReferenceMissing
+			}
+		}
+		if initialEvents[index].OrganizationID != asset.OrganizationID || initialEvents[index].AssetID != asset.ID {
+			return nil, atlas.ErrInvalidInput
+		}
+		if _, exists := s.assets[key]; exists || s.assetIdentityConflict(asset, "") || batchAssetIdentityConflict(assets[:index], asset) {
+			return nil, atlas.ErrConflict
 		}
 	}
-	if _, exists := s.assets[key]; exists || s.assetIdentityConflict(asset, "") {
-		return domain.Asset{}, atlas.ErrConflict
+	created := make([]domain.Asset, len(assets))
+	for index, asset := range assets {
+		key := atlasMemoryKey(asset.OrganizationID, asset.ID)
+		s.assets[key] = cloneAsset(asset)
+		s.lifecycle[key] = []domain.AssetLifecycleEvent{initialEvents[index]}
+		created[index] = cloneAsset(asset)
 	}
-	s.assets[key] = cloneAsset(asset)
-	s.lifecycle[key] = []domain.AssetLifecycleEvent{initialEvent}
-	return cloneAsset(asset), nil
+	return created, nil
 }
 
 func (s *MemoryAtlasStore) UpdateAsset(_ context.Context, asset domain.Asset, expectedRevision int64, lifecycleEvent *domain.AssetLifecycleEvent) (domain.Asset, error) {
@@ -237,6 +273,19 @@ func (s *MemoryAtlasStore) assetIdentityConflict(candidate domain.Asset, excludi
 			return true
 		}
 		if candidate.SerialNumber != "" && strings.EqualFold(existing.SerialNumber, candidate.SerialNumber) {
+			return true
+		}
+	}
+	return false
+}
+
+func batchAssetIdentityConflict(existing []domain.Asset, candidate domain.Asset) bool {
+	for _, asset := range existing {
+		if asset.OrganizationID != candidate.OrganizationID {
+			continue
+		}
+		if asset.ID == candidate.ID || (candidate.AssetTag != "" && strings.EqualFold(asset.AssetTag, candidate.AssetTag)) ||
+			(candidate.SerialNumber != "" && strings.EqualFold(asset.SerialNumber, candidate.SerialNumber)) {
 			return true
 		}
 	}

@@ -1925,6 +1925,43 @@ func TestAtlasCodesIdentifierLifecycleHonorsTargetAssetScopes(t *testing.T) {
 	}
 }
 
+func TestAtlasCodesResolveRateLimitIsPrincipalScopedAndRedacted(t *testing.T) {
+	handler, guardService := newGuardServerWithIdentityAndGuard(t, nil, nil, nil)
+	administrator := bootstrapAdministrator(t, handler)
+	payload, _ := json.Marshal(map[string]string{"symbology": "code128", "value": "RATE-LIMIT-SECRET"})
+	for attempt := 0; attempt < atlasCodesResolveRequestLimit.Maximum; attempt++ {
+		request := authenticatedRequest(http.MethodPost, "/api/v1/asset-identifiers/resolve", bytes.NewReader(payload), administrator)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusNotFound {
+			t.Fatalf("allowed resolution attempt %d returned %d: %s", attempt+1, response.Code, response.Body.String())
+		}
+	}
+	limitedRequest := authenticatedRequest(http.MethodPost, "/api/v1/asset-identifiers/resolve", bytes.NewReader(payload), administrator)
+	limitedResponse := httptest.NewRecorder()
+	handler.ServeHTTP(limitedResponse, limitedRequest)
+	if limitedResponse.Code != http.StatusTooManyRequests || limitedResponse.Header().Get("Retry-After") != "60" ||
+		!strings.Contains(limitedResponse.Body.String(), `"code":"rate_limited"`) || strings.Contains(limitedResponse.Body.String(), "RATE-LIMIT-SECRET") ||
+		!strings.Contains(limitedResponse.Header().Get("Access-Control-Expose-Headers"), "Retry-After") {
+		t.Fatalf("unexpected rate-limit response %d headers=%#v body=%s", limitedResponse.Code, limitedResponse.Header(), limitedResponse.Body.String())
+	}
+
+	other, err := guardService.LoginOIDC(context.Background(), identity.OIDCPrincipal{
+		Issuer: "https://identity.example.test/atlas-code-rate-limit", Subject: "other-rate-principal",
+		Email: "other-rate-principal@example.test", EmailVerified: true, DisplayName: "Other rate principal",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherSession := testSession{cookie: &http.Cookie{Name: localSessionName, Value: other.Token}, csrfToken: other.CSRFToken}
+	otherRequest := authenticatedRequest(http.MethodPost, "/api/v1/asset-identifiers/resolve", bytes.NewReader(payload), otherSession)
+	otherResponse := httptest.NewRecorder()
+	handler.ServeHTTP(otherResponse, otherRequest)
+	if otherResponse.Code != http.StatusNotFound {
+		t.Fatalf("one principal's limit affected another principal: %d: %s", otherResponse.Code, otherResponse.Body.String())
+	}
+}
+
 func TestPeopleAndThreadsCollectionsRequireDirectoryGrants(t *testing.T) {
 	handler := newGuardServer(t)
 	session := bootstrapAdministrator(t, handler)

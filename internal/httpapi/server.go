@@ -52,10 +52,18 @@ const (
 
 var correlationIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
 
+var (
+	atlasCodesResolveRequestLimit  = atlascodes.RequestRateLimit{Maximum: 60, Window: time.Minute}
+	atlasCodesReadRequestLimit     = atlascodes.RequestRateLimit{Maximum: 240, Window: time.Minute}
+	atlasCodesMutationRequestLimit = atlascodes.RequestRateLimit{Maximum: 60, Window: time.Minute}
+	atlasCodesLabelRequestLimit    = atlascodes.RequestRateLimit{Maximum: 20, Window: time.Minute}
+)
+
 type Dependencies struct {
 	Atlas               *atlas.Service
 	AtlasCodes          *atlascodes.Service
 	AtlasLabels         *atlascodes.LabelService
+	AtlasCodesLimiter   atlascodes.RequestLimiter
 	People              *people.Service
 	DirectoryImports    *directoryexpansion.Service
 	Threads             *threads.Service
@@ -79,6 +87,7 @@ type Server struct {
 	atlas               *atlas.Service
 	atlasCodes          *atlascodes.Service
 	atlasLabels         *atlascodes.LabelService
+	atlasCodesLimiter   atlascodes.RequestLimiter
 	people              *people.Service
 	directoryImports    *directoryexpansion.Service
 	threads             *threads.Service
@@ -163,10 +172,15 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 	if len(organizations) > 0 {
 		organization = organizations[0]
 	}
+	atlasCodesLimiter := deps.AtlasCodesLimiter
+	if atlasCodesLimiter == nil {
+		atlasCodesLimiter = atlascodes.NewDefaultRequestLimiter()
+	}
 	server := &Server{
 		atlas:               deps.Atlas,
 		atlasCodes:          deps.AtlasCodes,
 		atlasLabels:         deps.AtlasLabels,
+		atlasCodesLimiter:   atlasCodesLimiter,
 		people:              deps.People,
 		directoryImports:    deps.DirectoryImports,
 		threads:             deps.Threads,
@@ -2843,6 +2857,9 @@ func (s *Server) resolveAssetIdentifier(w http.ResponseWriter, r *http.Request, 
 		writeError(w, r, http.StatusServiceUnavailable, "atlas_codes_unavailable", "Atlas Codes is unavailable")
 		return
 	}
+	if !s.allowAtlasCodesRequest(w, r, authentication, "resolve", atlasCodesResolveRequestLimit) {
+		return
+	}
 	var input struct {
 		Symbology atlascodes.Symbology `json:"symbology"`
 		Value     string               `json:"value"`
@@ -2927,6 +2944,9 @@ func (s *Server) listAssetIdentifiers(w http.ResponseWriter, r *http.Request, au
 		writeError(w, r, http.StatusServiceUnavailable, "atlas_codes_unavailable", "Atlas Codes is unavailable")
 		return
 	}
+	if !s.allowAtlasCodesRequest(w, r, authentication, "read", atlasCodesReadRequestLimit) {
+		return
+	}
 	assetID := r.PathValue("assetID")
 	if !s.authorizeAtlasCodeAsset(w, r, authentication, assetID, guard.PermissionAssetsRead) {
 		return
@@ -2942,6 +2962,9 @@ func (s *Server) listAssetIdentifiers(w http.ResponseWriter, r *http.Request, au
 func (s *Server) listAssetLabelTemplates(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
 	if s.atlasLabels == nil {
 		writeError(w, r, http.StatusServiceUnavailable, "atlas_labels_unavailable", "Atlas Codes label printing is unavailable")
+		return
+	}
+	if !s.allowAtlasCodesRequest(w, r, authentication, "read", atlasCodesReadRequestLimit) {
 		return
 	}
 	if !s.hasAnyAssetGrant(authentication, guard.PermissionAssetsRead) {
@@ -2963,6 +2986,9 @@ func (s *Server) listAssetLabelTemplates(w http.ResponseWriter, r *http.Request,
 func (s *Server) createAssetLabelBatch(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
 	if s.atlasLabels == nil {
 		writeError(w, r, http.StatusServiceUnavailable, "atlas_labels_unavailable", "Atlas Codes label printing is unavailable")
+		return
+	}
+	if !s.allowAtlasCodesRequest(w, r, authentication, "label", atlasCodesLabelRequestLimit) {
 		return
 	}
 	var input atlascodes.LabelBatchInput
@@ -3006,6 +3032,9 @@ func (s *Server) createAssetIdentifier(w http.ResponseWriter, r *http.Request, a
 		writeError(w, r, http.StatusServiceUnavailable, "atlas_codes_unavailable", "Atlas Codes is unavailable")
 		return
 	}
+	if !s.allowAtlasCodesRequest(w, r, authentication, "mutation", atlasCodesMutationRequestLimit) {
+		return
+	}
 	assetID := r.PathValue("assetID")
 	if !s.authorizeAtlasCodeAsset(w, r, authentication, assetID, guard.PermissionAssetsWrite) {
 		return
@@ -3036,6 +3065,9 @@ func (s *Server) replaceAssetIdentifier(w http.ResponseWriter, r *http.Request, 
 		writeError(w, r, http.StatusServiceUnavailable, "atlas_codes_unavailable", "Atlas Codes is unavailable")
 		return
 	}
+	if !s.allowAtlasCodesRequest(w, r, authentication, "mutation", atlasCodesMutationRequestLimit) {
+		return
+	}
 	assetID := r.PathValue("assetID")
 	if !s.authorizeAtlasCodeAsset(w, r, authentication, assetID, guard.PermissionAssetsWrite) {
 		return
@@ -3061,6 +3093,9 @@ func (s *Server) replaceAssetIdentifier(w http.ResponseWriter, r *http.Request, 
 func (s *Server) deactivateAssetIdentifier(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
 	if s.atlasCodes == nil || s.atlas == nil {
 		writeError(w, r, http.StatusServiceUnavailable, "atlas_codes_unavailable", "Atlas Codes is unavailable")
+		return
+	}
+	if !s.allowAtlasCodesRequest(w, r, authentication, "mutation", atlasCodesMutationRequestLimit) {
 		return
 	}
 	assetID := r.PathValue("assetID")
@@ -3113,6 +3148,22 @@ func (s *Server) authorizeAtlasCodeAsset(w http.ResponseWriter, r *http.Request,
 	// intentionally indistinguishable so history and mutation paths cannot be
 	// used as discovery oracles.
 	writeError(w, r, http.StatusNotFound, "not_found", "the requested asset identifier was not found")
+	return false
+}
+
+func (s *Server) allowAtlasCodesRequest(w http.ResponseWriter, r *http.Request, authentication guard.Authentication, operation string, limit atlascodes.RequestRateLimit) bool {
+	key := s.organization.ID + "\x00" + authentication.Principal.Subject + "\x00" + operation
+	allowed, err := s.atlasCodesLimiter.Allow(r.Context(), key, limit, time.Now().UTC())
+	if err != nil {
+		writeError(w, r, http.StatusServiceUnavailable, "rate_limiter_unavailable", "Atlas Codes request limiting is temporarily unavailable")
+		return false
+	}
+	if allowed {
+		return true
+	}
+	retryAfter := (limit.Window + time.Second - 1) / time.Second
+	w.Header().Set("Retry-After", strconv.FormatInt(int64(retryAfter), 10))
+	writeError(w, r, http.StatusTooManyRequests, "rate_limited", "too many Atlas Codes requests; retry later")
 	return false
 }
 
@@ -3515,7 +3566,7 @@ func (s *Server) cors(next http.Handler) http.Handler {
 		if originAllowed {
 			w.Header().Set("Access-Control-Allow-Origin", s.allowedOrigin)
 			w.Header().Set("Access-Control-Allow-Credentials", "true")
-			w.Header().Set("Access-Control-Expose-Headers", "X-Correlation-ID, Content-Disposition, X-Label-Batch-ID, X-Label-Template-Version, X-Label-Width-MM, X-Label-Height-MM, X-Label-Item-Count, X-Content-SHA256, X-Exchange-Package-ID, X-Idempotent-Replay")
+			w.Header().Set("Access-Control-Expose-Headers", "X-Correlation-ID, Content-Disposition, Retry-After, X-Label-Batch-ID, X-Label-Template-Version, X-Label-Width-MM, X-Label-Height-MM, X-Label-Item-Count, X-Content-SHA256, X-Exchange-Package-ID, X-Idempotent-Replay")
 		}
 		if r.Method == http.MethodOptions {
 			if !originAllowed {

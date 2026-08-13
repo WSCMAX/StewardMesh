@@ -276,6 +276,7 @@
           "internal/application/application.go",
           "internal/atlascodes/contracts.go",
           "internal/atlascodes/labels.go",
+          "internal/atlascodes/rate_limiter.go",
           "internal/atlascodes/service.go",
           "internal/httpapi/server.go",
           "internal/foundation/contracts.go",
@@ -290,6 +291,7 @@
         ],
         "tests": [
           "internal/atlascodes/labels_test.go",
+          "internal/atlascodes/rate_limiter_test.go",
           "internal/atlascodes/service_test.go",
           "internal/httpapi/server_test.go",
           "internal/repository/contracttest/atlascodes.go",

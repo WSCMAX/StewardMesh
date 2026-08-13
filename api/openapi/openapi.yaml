@@ -861,7 +861,7 @@ paths:
       operationId: resolveAssetIdentifier
       tags: [Atlas Codes]
       x-requirement: REQ-ATLAS-CODES-001
-      description: Resolves an active identifier without placing the encoded value in a URL or access log, including credential-free `/atlas/codes/{opaqueIdentifierId}` routes emitted by QR label templates. It then authorizes the matched asset against the caller's organization, site, department, or resource-scoped assets.read grants. Unknown and unauthorized values return the same not-found response.
+      description: Resolves an active identifier without placing the encoded value in a URL or access log, including credential-free `/atlas/codes/{opaqueIdentifierId}` routes emitted by QR label templates. It then authorizes the matched asset against the caller's organization, site, department, or resource-scoped assets.read grants. Unknown and unauthorized values return the same not-found response. Authenticated principals are rate limited in a bounded one-minute window without retaining raw codes in the limiter key or error.
       security: [{localCookieAuth: []}, {secureCookieAuth: []}]
       requestBody:
         required: true
@@ -877,6 +877,7 @@ paths:
         '400': {$ref: '#/components/responses/InvalidRequest'}
         '401': {$ref: '#/components/responses/Unauthorized'}
         '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
   /api/v1/asset-label-templates:
     get:
       summary: List versioned Atlas Codes label templates
@@ -893,6 +894,7 @@ paths:
               schema: {$ref: '#/components/schemas/AssetLabelTemplateCollection'}
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
         '503': {$ref: '#/components/responses/ServiceUnavailable'}
   /api/v1/asset-label-batches:
     post:
@@ -939,6 +941,7 @@ paths:
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
         '423': {$ref: '#/components/responses/Locked'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
         '503': {$ref: '#/components/responses/ServiceUnavailable'}
   /api/v1/asset-models:
     get:
@@ -1271,6 +1274,7 @@ paths:
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
     post:
       summary: Associate an identifier with an asset
       operationId: createAssetIdentifier
@@ -1306,6 +1310,7 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
         '423': {$ref: '#/components/responses/Locked'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
   /api/v1/assets/{assetId}/identifiers/{identifierId}/replace:
     parameters:
       - $ref: '#/components/parameters/AssetID'
@@ -1340,6 +1345,7 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
         '423': {$ref: '#/components/responses/Locked'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
   /api/v1/assets/{assetId}/identifiers/{identifierId}/deactivate:
     parameters:
       - $ref: '#/components/parameters/AssetID'
@@ -1370,6 +1376,7 @@ paths:
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
         '423': {$ref: '#/components/responses/Locked'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
   /api/v1/departments:
     get:
       summary: List departments
@@ -3746,6 +3753,15 @@ components:
           schema: {$ref: '#/components/schemas/Error'}
     Forbidden:
       description: CSRF, origin, bootstrap-token, or permission validation failed
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    TooManyRequests:
+      description: The authenticated principal exceeded a bounded request window
+      headers:
+        Retry-After:
+          description: Seconds until the current Atlas Codes request window expires.
+          schema: {type: integer, minimum: 1, maximum: 86400}
       content:
         application/json:
           schema: {$ref: '#/components/schemas/Error'}

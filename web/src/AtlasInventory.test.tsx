@@ -31,6 +31,7 @@ test('filters assets, loads lifecycle details, and has no automated accessibilit
   }))
   const { container } = render(<AtlasInventory assets={[asset]} csrfToken="csrf-token" onAssetsChange={() => undefined} permissions={['assets.read']} />)
   expect(screen.getByRole('heading', { name: 'Atlas — Asset inventory' })).toBeInTheDocument()
+  expect(screen.getByRole('region', { name: 'Atlas inventory workflow' })).toBeInTheDocument()
   fireEvent.change(screen.getByLabelText('Search'), { target: { value: 'missing' } })
   expect(screen.getByText('No assets match these filters.')).toBeInTheDocument()
   fireEvent.change(screen.getByLabelText('Search'), { target: { value: 'LAB-001' } })

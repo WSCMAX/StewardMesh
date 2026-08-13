@@ -637,7 +637,7 @@ export default function AtlasInventory({ assets, csrfToken, permissions, onAsset
   }
 
   return (
-    <section aria-labelledby="assets-heading" className={`${panelClass} p-5 sm:p-6`} data-feature="inventory.assets" data-requirement="REQ-ATLAS-001">
+    <section aria-label="Atlas inventory workflow" className={`${panelClass} p-5 sm:p-6`} data-feature="inventory.assets" data-requirement="REQ-ATLAS-001">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <p className="text-sm font-semibold text-steward-teal">Organization asset registry</p>

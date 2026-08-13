@@ -169,7 +169,8 @@
           "docs/features/atlas-codes.md",
           "docs/features/dictionary.md",
           "docs/requirements/initial.md",
-          "docs/validation/atlas-codes-label-printing.md"
+          "docs/validation/atlas-codes-label-printing.md",
+          "docs/validation/atlas-codes-release.md"
         ],
         "api": [
           "api/openapi/openapi.yaml",

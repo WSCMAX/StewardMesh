@@ -1,6 +1,6 @@
 import axe from 'axe-core'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { beforeEach, expect, test, vi } from 'vitest'
+import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import AtlasScanner from './AtlasScanner'
 
 // Requirements: REQ-ATLAS-CODES-001, A11Y-001. Feature: inventory.identifiers.
@@ -10,6 +10,11 @@ function jsonResponse(body: unknown, status = 200) {
 }
 
 beforeEach(() => {
+  vi.restoreAllMocks()
+  vi.unstubAllGlobals()
+})
+
+afterEach(() => {
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
 })
@@ -94,4 +99,42 @@ test('retains a failed value for an explicit retry and cancellation closes the a
   fireEvent.click(screen.getByRole('button', { name: 'Cancel scanning' }))
   await waitFor(() => expect(screen.queryByRole('form', { name: 'Scan an Atlas Code' })).not.toBeInTheDocument())
   expect(screen.getByText(/Scanning cancelled/)).toBeInTheDocument()
+})
+
+test('keeps camera frames local and stops every media track on stop, cancellation, and unmount', async () => {
+  const fetchMock = vi.fn()
+  vi.stubGlobal('fetch', fetchMock)
+  const firstStop = vi.fn()
+  const secondStop = vi.fn()
+  const thirdStop = vi.fn()
+  const streams = [firstStop, secondStop, thirdStop].map((stop) => ({ getTracks: () => [{ stop }] }))
+  const getUserMedia = vi.fn(async () => streams.shift() as unknown as MediaStream)
+  vi.stubGlobal('navigator', Object.assign(Object.create(navigator), { mediaDevices: { getUserMedia } }))
+  vi.stubGlobal('BarcodeDetector', class {
+    detect = vi.fn(async () => [])
+  })
+  vi.stubGlobal('requestAnimationFrame', vi.fn(() => 17))
+  vi.stubGlobal('cancelAnimationFrame', vi.fn())
+  vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined)
+
+  const rendered = render(<AtlasScanner canWrite csrfToken="csrf" onAssociated={vi.fn()} onResolveAsset={vi.fn(async () => undefined)} selectedAsset={null} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Open scanner' }))
+
+  fireEvent.click(screen.getByRole('button', { name: 'Use camera' }))
+  expect(await screen.findByText(/Frames stay in this browser/)).toBeInTheDocument()
+  expect(getUserMedia).toHaveBeenCalledWith({ video: { facingMode: { ideal: 'environment' } }, audio: false })
+  fireEvent.click(screen.getByRole('button', { name: 'Stop camera' }))
+  expect(firstStop).toHaveBeenCalledTimes(1)
+
+  fireEvent.click(screen.getByRole('button', { name: 'Use camera' }))
+  expect(await screen.findByText(/Frames stay in this browser/)).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel scanning' }))
+  expect(secondStop).toHaveBeenCalledTimes(1)
+
+  fireEvent.click(screen.getByRole('button', { name: 'Open scanner' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Use camera' }))
+  expect(await screen.findByText(/Frames stay in this browser/)).toBeInTheDocument()
+  rendered.unmount()
+  expect(thirdStop).toHaveBeenCalledTimes(1)
+  expect(fetchMock).not.toHaveBeenCalled()
 })

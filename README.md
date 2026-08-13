@@ -98,10 +98,12 @@ holding results, and a provider-neutral seam for Exchange packages. See
 
 Atlas Codes adds organization-scoped Code 128 and QR associations with visible
 provenance, active uniqueness, optimistic replacement and deactivation history,
-Guard ownership locks, and redacted audits. Memory and PostgreSQL providers,
-REST/OpenAPI and gRPC contracts, and the accessible manual management panel use
-the same `REQ-ATLAS-CODES-001` rules. Scanner workflows and label printing remain
-separate planned slices. See [Atlas Codes](docs/features/atlas-codes.md).
+Guard ownership locks, redacted audits, explicit scanner workflows, immutable
+physical label templates, and operator-confirmed SVG/PDF/ZPL output. Memory and
+PostgreSQL providers, REST/OpenAPI and gRPC contracts, camera/keyboard/manual
+fallbacks, and accessible 320-pixel management and printing panels use the same
+`REQ-ATLAS-CODES-001` rules. See [Atlas Codes](docs/features/atlas-codes.md) and
+its [release validation record](docs/validation/atlas-codes-release.md).
 
 Horizon provides effective-dated per-asset lifecycle plans, useful-life and
 replacement assumptions, scenario comparisons, and deterministic fiscal-year

@@ -3,7 +3,7 @@
 - **Canonical ID:** `inventory.identifiers`
 - **Requirement:** `REQ-ATLAS-CODES-001`
 - **Phase:** v1
-- **Delivery status:** Identifier associations and manual management are implemented by [#61](https://github.com/WSCMAX/StewardMesh/issues/61), explicit scanner workflows by [#64](https://github.com/WSCMAX/StewardMesh/issues/64), and versioned label preview/printing by [#62](https://github.com/WSCMAX/StewardMesh/issues/62). The final cross-device validation slice remains tracked in [#63](https://github.com/WSCMAX/StewardMesh/issues/63).
+- **Delivery status:** Implemented for v1. Identifier associations and manual management are delivered by [#61](https://github.com/WSCMAX/StewardMesh/issues/61), explicit scanner workflows by [#64](https://github.com/WSCMAX/StewardMesh/issues/64), versioned label preview/printing by [#62](https://github.com/WSCMAX/StewardMesh/issues/62), and the durable release validation by [#63](https://github.com/WSCMAX/StewardMesh/issues/63).
 - **GitHub roadmap issue:** [#60 — Atlas Codes](https://github.com/WSCMAX/StewardMesh/issues/60)
 - **Owning product area:** [Atlas](atlas.md)
 
@@ -95,11 +95,11 @@ The v1 delivery is split into four implementation slices:
 1. [#61](https://github.com/WSCMAX/StewardMesh/issues/61) — Identifier associations, normalization, conflicts, provenance, history, provider contracts, APIs, and audits.
 2. [#64](https://github.com/WSCMAX/StewardMesh/issues/64) — Keyboard-wedge, camera, paste, and manual scan-to-find/associate workflows (implemented).
 3. [#62](https://github.com/WSCMAX/StewardMesh/issues/62) — Versioned label templates, preview, batch generation, standard printing, and provider-neutral thermal-printer output (implemented).
-4. [#63](https://github.com/WSCMAX/StewardMesh/issues/63) — Security, accessibility, hardware/browser compatibility, documentation, traceability, and end-to-end validation.
+4. [#63](https://github.com/WSCMAX/StewardMesh/issues/63) — Security, accessibility, hardware/browser compatibility, documentation, traceability, and end-to-end validation (implemented; see the [release validation record](../validation/atlas-codes-release.md)).
 
 Validation must cover memory and PostgreSQL conformance, concurrent and stale associations, organization isolation, ownership locks, malformed and oversized input, duplicate bursts, camera permission states, scanner disconnects, keyboard timing, Code 128 and QR fixtures, print dimensions, batch bounds, PDF/vector output, any supported printer-language adapter, WCAG 2.2 AA, reduced motion, and 320-pixel layouts.
 
-The traceability manifest links `REQ-ATLAS-CODES-001` to association, scanning, label rendering/transport, UI, API contracts, memory/PostgreSQL providers, fixtures, migrations, and tests. The parent Atlas Codes roadmap still retains [#63](https://github.com/WSCMAX/StewardMesh/issues/63) for the final compatibility and end-to-end validation bundle.
+The traceability manifest links `REQ-ATLAS-CODES-001` to association, scanning, label rendering/transport, UI, API contracts, memory/PostgreSQL providers, fixtures, migrations, tests, and the complete [security, compatibility, accessibility, and end-to-end validation record](../validation/atlas-codes-release.md).
 
 ## Test coverage
 

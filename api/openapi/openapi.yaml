@@ -1084,13 +1084,13 @@ paths:
       operationId: getAssetModelInventory
       tags: [Atlas]
       x-requirement: REQ-ATLAS-MODELS-001
-      description: Returns uncapped total and filtered counts using the same filters as the Atlas asset repository. The limit caps only the returned asset details, not counts or groups.
+      description: Returns uncapped total and filtered counts using the same current instance fields as the Atlas asset repository. departmentId and userId match the asset's current Atlas references, not effective-dated People assignment history. The limit caps only the returned asset details, not counts or groups.
       security: [{localCookieAuth: []}, {secureCookieAuth: []}]
       parameters:
         - {in: query, name: status, schema: {$ref: '#/components/schemas/AssetStatus'}}
         - {in: query, name: siteId, schema: {$ref: '#/components/schemas/DirectoryReferenceID'}}
-        - {in: query, name: departmentId, schema: {$ref: '#/components/schemas/DirectoryReferenceID'}}
-        - {in: query, name: userId, schema: {$ref: '#/components/schemas/DirectoryReferenceID'}}
+        - {in: query, name: departmentId, description: Exact current Atlas asset department reference., schema: {$ref: '#/components/schemas/DirectoryReferenceID'}}
+        - {in: query, name: userId, description: Exact current Atlas asset primary-user reference., schema: {$ref: '#/components/schemas/DirectoryReferenceID'}}
         - {in: query, name: deploymentContext, description: Case-insensitive substring matched against hostname and deployment notes., schema: {type: string, maxLength: 200}}
         - {in: query, name: groupBy, schema: {$ref: '#/components/schemas/AssetModelInventoryGroupBy'}}
         - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 100, default: 50}}

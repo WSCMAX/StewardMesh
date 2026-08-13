@@ -21,6 +21,7 @@ const (
 	MaximumMessages     = 500
 	MaximumAttempts     = 8
 	DefaultMessageLimit = 100
+	DefaultClaimTTL     = 2 * time.Minute
 )
 
 var (
@@ -181,6 +182,8 @@ type Message struct {
 	Attempts       int         `json:"attempts"`
 	NextAttemptAt  *time.Time  `json:"nextAttemptAt,omitempty"`
 	LastErrorCode  string      `json:"lastErrorCode,omitempty"`
+	ClaimToken     string      `json:"-"`
+	ClaimedAt      *time.Time  `json:"-"`
 	CreatedBy      string      `json:"createdBy"`
 	CreatedAt      time.Time   `json:"createdAt"`
 	UpdatedAt      time.Time   `json:"updatedAt"`
@@ -277,6 +280,7 @@ type Store interface {
 	ListMessages(context.Context, string, int) ([]Message, error)
 	GetMessage(context.Context, string, string) (Message, error)
 	CreateMessage(context.Context, Message) (Message, bool, error)
+	ClaimMessage(context.Context, string, string, string, int, string, time.Time, time.Time) (Message, error)
 	RecordAttempt(context.Context, Message, int, DeliveryAttempt) (Message, error)
 	ListAttempts(context.Context, string, string) ([]DeliveryAttempt, error)
 

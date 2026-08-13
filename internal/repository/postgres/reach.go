@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/maxlemke/stewardmesh/internal/reach"
@@ -25,7 +26,7 @@ func NewReachStore(database *sql.DB) (*ReachStore, error) {
 const reachProviderColumns = `organization_id,id,name,kind,endpoint_id,sender,secret_ref,enabled,revision,created_by,updated_by,created_at,updated_at`
 const reachTemplateColumns = `organization_id,id,name,subject,body,revision,created_by,updated_by,created_at,updated_at`
 const reachGroupColumns = `organization_id,id,name,provider_id,template_id,recipients,revision,created_by,updated_by,created_at,updated_at`
-const reachMessageColumns = `organization_id,id,group_id,provider_id,template_id,source_kind,source_id,subject,body,recipients,status,attempts,next_attempt_at,last_error_code,created_by,created_at,updated_at`
+const reachMessageColumns = `organization_id,id,group_id,provider_id,template_id,source_kind,source_id,subject,body,recipients,status,attempts,next_attempt_at,last_error_code,claim_token,claimed_at,created_by,created_at,updated_at`
 const reachAttemptColumns = `organization_id,id,message_id,attempt,outcome,error_code,retryable,next_attempt_at,occurred_at`
 const reachProviderTestColumns = `organization_id,id,provider_id,outcome,error_code,tested_by,tested_at`
 
@@ -187,8 +188,8 @@ func (s *ReachStore) CreateMessage(ctx context.Context, item reach.Message) (rea
 	if err != nil {
 		return reach.Message{}, false, reach.ErrInvalidInput
 	}
-	created, err := scanReachMessage(s.database.QueryRowContext(ctx, `INSERT INTO reach_messages (organization_id,id,group_id,provider_id,template_id,source_kind,source_id,subject,body,recipients,status,attempts,next_attempt_at,last_error_code,created_by,created_at,updated_at)
-		SELECT $1,$2,NULLIF($3,''),$4,NULLIF($5,''),$6,NULLIF($7,''),$8,$9,$10,$11,$12,$13,NULLIF($14,''),$15,$16,$17
+	created, err := scanReachMessage(s.database.QueryRowContext(ctx, `INSERT INTO reach_messages (organization_id,id,group_id,provider_id,template_id,source_kind,source_id,subject,body,recipients,status,attempts,next_attempt_at,last_error_code,claim_token,claimed_at,created_by,created_at,updated_at)
+		SELECT $1,$2,NULLIF($3,''),$4,NULLIF($5,''),$6,NULLIF($7,''),$8,$9,$10,$11,$12,$13,NULLIF($14,''),NULL,NULL,$15,$16,$17
 		WHERE (SELECT count(*) FROM reach_messages WHERE organization_id=$1) < $18 ON CONFLICT (organization_id,id) DO NOTHING RETURNING `+reachMessageColumns,
 		item.OrganizationID, item.ID, item.GroupID, item.ProviderID, item.TemplateID, item.SourceKind, item.SourceID, item.Subject, item.Body, recipients,
 		item.Status, item.Attempts, item.NextAttemptAt, item.LastErrorCode, item.CreatedBy, item.CreatedAt, item.UpdatedAt, reach.MaximumMessages))
@@ -205,16 +206,34 @@ func (s *ReachStore) CreateMessage(ctx context.Context, item reach.Message) (rea
 	return created, err == nil, reachWriteError("create Reach message", err)
 }
 
+func (s *ReachStore) ClaimMessage(ctx context.Context, organizationID, id, expectedStatus string, expectedAttempts int, claimToken string, claimedAt, staleBefore time.Time) (reach.Message, error) {
+	claimed, err := scanReachMessage(s.database.QueryRowContext(ctx, `UPDATE reach_messages
+		SET claim_token=$5,claimed_at=$6,updated_at=$6
+		WHERE organization_id=$1 AND id=$2 AND status=$3 AND attempts=$4
+		  AND (claim_token IS NULL OR claimed_at <= $7)
+		RETURNING `+reachMessageColumns, organizationID, id, expectedStatus, expectedAttempts, claimToken, claimedAt, staleBefore))
+	if errors.Is(err, sql.ErrNoRows) {
+		if missing := reachMissingOrConflict(ctx, s.database, "reach_messages", organizationID, id); errors.Is(missing, reach.ErrNotFound) {
+			return reach.Message{}, missing
+		}
+		return reach.Message{}, reach.ErrConflict
+	}
+	return claimed, reachWriteError("claim Reach message", err)
+}
+
 func (s *ReachStore) RecordAttempt(ctx context.Context, item reach.Message, expectedAttempts int, attempt reach.DeliveryAttempt) (reach.Message, error) {
 	tx, err := s.database.BeginTx(ctx, nil)
 	if err != nil {
 		return reach.Message{}, err
 	}
 	defer tx.Rollback()
-	updated, err := scanReachMessage(tx.QueryRowContext(ctx, `UPDATE reach_messages SET status=$3,attempts=$4,next_attempt_at=$5,last_error_code=NULLIF($6,''),updated_at=$7 WHERE organization_id=$1 AND id=$2 AND attempts=$8 RETURNING `+reachMessageColumns,
-		item.OrganizationID, item.ID, item.Status, item.Attempts, item.NextAttemptAt, item.LastErrorCode, item.UpdatedAt, expectedAttempts))
+	updated, err := scanReachMessage(tx.QueryRowContext(ctx, `UPDATE reach_messages SET status=$3,attempts=$4,next_attempt_at=$5,last_error_code=NULLIF($6,''),claim_token=NULL,claimed_at=NULL,updated_at=$7 WHERE organization_id=$1 AND id=$2 AND attempts=$8 AND claim_token=$9 RETURNING `+reachMessageColumns,
+		item.OrganizationID, item.ID, item.Status, item.Attempts, item.NextAttemptAt, item.LastErrorCode, item.UpdatedAt, expectedAttempts, item.ClaimToken))
 	if errors.Is(err, sql.ErrNoRows) {
-		return reach.Message{}, reachMissingOrConflict(ctx, tx, "reach_messages", item.OrganizationID, item.ID)
+		if missing := reachMissingOrConflict(ctx, tx, "reach_messages", item.OrganizationID, item.ID); errors.Is(missing, reach.ErrNotFound) {
+			return reach.Message{}, missing
+		}
+		return reach.Message{}, reach.ErrConflict
 	}
 	if err != nil {
 		return reach.Message{}, reachWriteError("update Reach message attempt", err)
@@ -308,17 +327,20 @@ func scanReachGroup(row reachScanner) (reach.SubscriberGroup, error) {
 
 func scanReachMessage(row reachScanner) (reach.Message, error) {
 	var item reach.Message
-	var groupID, templateID, sourceID, errorCode sql.NullString
-	var next sql.NullTime
+	var groupID, templateID, sourceID, errorCode, claimToken sql.NullString
+	var next, claimed sql.NullTime
 	var recipients []byte
 	err := row.Scan(&item.OrganizationID, &item.ID, &groupID, &item.ProviderID, &templateID, &item.SourceKind, &sourceID, &item.Subject, &item.Body, &recipients,
-		&item.Status, &item.Attempts, &next, &errorCode, &item.CreatedBy, &item.CreatedAt, &item.UpdatedAt)
+		&item.Status, &item.Attempts, &next, &errorCode, &claimToken, &claimed, &item.CreatedBy, &item.CreatedAt, &item.UpdatedAt)
 	if err == nil {
 		err = json.Unmarshal(recipients, &item.Recipients)
 	}
-	item.GroupID, item.TemplateID, item.SourceID, item.LastErrorCode = groupID.String, templateID.String, sourceID.String, errorCode.String
+	item.GroupID, item.TemplateID, item.SourceID, item.LastErrorCode, item.ClaimToken = groupID.String, templateID.String, sourceID.String, errorCode.String, claimToken.String
 	if next.Valid {
 		item.NextAttemptAt = &next.Time
+	}
+	if claimed.Valid {
+		item.ClaimedAt = &claimed.Time
 	}
 	return item, err
 }

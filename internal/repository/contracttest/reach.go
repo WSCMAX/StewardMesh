@@ -75,11 +75,22 @@ func ReachStore(t *testing.T, store reach.Store, organizationID, suffix string) 
 	if replay, created, err := store.CreateMessage(ctx, message); err != nil || created || replay.ID != message.ID {
 		t.Fatalf("idempotent Reach message %#v created=%v: %v", replay, created, err)
 	}
+	claimed, err := store.ClaimMessage(ctx, organizationID, message.ID, "queued", 0, "claim-"+suffix, now.Add(time.Minute), now.Add(-time.Minute))
+	if err != nil || claimed.ClaimToken == "" || claimed.ClaimedAt == nil {
+		t.Fatalf("claim Reach message %#v: %v", claimed, err)
+	}
+	if _, err := store.ClaimMessage(ctx, organizationID, message.ID, "queued", 0, "claim-race-"+suffix, now.Add(time.Minute), now.Add(-time.Minute)); !errors.Is(err, reach.ErrConflict) {
+		t.Fatalf("expected concurrent Reach claim conflict, got %v", err)
+	}
+	message.ClaimToken, message.ClaimedAt = claimed.ClaimToken, claimed.ClaimedAt
 	message.Attempts, message.Status, message.UpdatedAt = 1, "delivered", now.Add(2*time.Minute)
 	attempt := reach.DeliveryAttempt{ID: "0123456789abcdef0123456789abcdef", OrganizationID: organizationID, MessageID: message.ID,
 		Attempt: 1, Outcome: "succeeded", OccurredAt: message.UpdatedAt}
 	if updated, err := store.RecordAttempt(ctx, message, 0, attempt); err != nil || updated.Status != "delivered" {
 		t.Fatalf("record Reach attempt %#v: %v", updated, err)
+	}
+	if loaded, err := store.GetMessage(ctx, organizationID, message.ID); err != nil || loaded.ClaimToken != "" || loaded.ClaimedAt != nil {
+		t.Fatalf("completed Reach attempt retained claim %#v: %v", loaded, err)
 	}
 	if _, err := store.RecordAttempt(ctx, message, 0, attempt); !errors.Is(err, reach.ErrConflict) {
 		t.Fatalf("expected stale attempt conflict, got %v", err)

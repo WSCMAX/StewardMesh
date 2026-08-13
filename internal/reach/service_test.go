@@ -31,6 +31,8 @@ type testTransport struct {
 	mu      sync.Mutex
 	results []reach.DeliveryResult
 	sent    []reach.Message
+	entered chan struct{}
+	release chan struct{}
 }
 
 func (t *testTransport) Test(context.Context, reach.Endpoint, reach.Provider, []byte) reach.DeliveryResult {
@@ -39,16 +41,31 @@ func (t *testTransport) Test(context.Context, reach.Endpoint, reach.Provider, []
 
 func (t *testTransport) Send(_ context.Context, _ reach.Endpoint, _ reach.Provider, message reach.Message, secret []byte) reach.DeliveryResult {
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	t.sent = append(t.sent, message)
+	entered, release := t.entered, t.release
+	if entered != nil {
+		select {
+		case entered <- struct{}{}:
+		default:
+		}
+	}
 	if string(secret) == "" {
+		t.mu.Unlock()
 		return reach.DeliveryResult{ErrorCode: "credential_invalid"}
 	}
 	if len(t.results) == 0 {
+		t.mu.Unlock()
+		if release != nil {
+			<-release
+		}
 		return reach.DeliveryResult{Succeeded: true}
 	}
 	result := t.results[0]
 	t.results = t.results[1:]
+	t.mu.Unlock()
+	if release != nil {
+		<-release
+	}
 	return result
 }
 
@@ -239,6 +256,74 @@ func TestSignalsRetryResultReplayDoesNotDuplicateExternalCallBeforeDueTime(t *te
 	}
 	if len(transport.sent) != 1 {
 		t.Fatalf("retry result replay made %d external calls", len(transport.sent))
+	}
+}
+
+func TestConcurrentRetriesClaimBeforeExternalDelivery(t *testing.T) {
+	now := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)
+	catalog, _ := reach.NewEndpointCatalog([]reach.Endpoint{{ID: "hook", Label: "Hook", Kind: reach.ProviderWebhook, URL: "https://hooks.example.test/reach"}})
+	transport := &testTransport{results: []reach.DeliveryResult{{Retryable: true, ErrorCode: "provider_unavailable"}}}
+	registry, _ := reach.NewTransportRegistry(map[reach.ProviderKind]reach.Transport{reach.ProviderWebhook: transport})
+	service, err := reach.NewService(repository.NewMemoryReachStore(), catalog, registry,
+		testSecrets{values: map[string][]byte{"external:hook": []byte("01234567890123456789012345678901")}}, nil,
+		foundation.NopAuditor{}, reach.ServiceConfig{OrganizationID: "concurrent-reach", Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider, err := service.CreateProvider(context.Background(), reach.CreateProviderInput{ID: "hook", Name: "Hook", Kind: reach.ProviderWebhook, EndpointID: "hook", SecretRef: "external:hook"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	template, err := service.CreateTemplate(context.Background(), reach.CreateTemplateInput{ID: "template", Name: "Template", Subject: "Alert", Body: "Body"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	group, err := service.CreateGroup(context.Background(), reach.CreateGroupInput{ID: "group", Name: "Group", ProviderID: provider.ID, TemplateID: template.ID,
+		Recipients: []reach.Recipient{{Kind: reach.RecipientEmail, Address: "owner@example.test"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	retrying, err := service.Send(context.Background(), reach.SendInput{GroupID: group.ID, Confirm: true, IdempotencyKey: "concurrent"})
+	if err != nil || retrying.Status != "retrying" {
+		t.Fatalf("prepare retrying message %#v: %v", retrying, err)
+	}
+	now = now.Add(10 * time.Minute)
+	transport.entered = make(chan struct{}, 1)
+	transport.release = make(chan struct{})
+	transport.results = []reach.DeliveryResult{{Succeeded: true}}
+
+	type outcome struct {
+		message reach.Message
+		err     error
+	}
+	results := make(chan outcome, 2)
+	go func() {
+		message, retryErr := service.Retry(context.Background(), retrying.ID, reach.RetryInput{Confirm: true})
+		results <- outcome{message: message, err: retryErr}
+	}()
+	select {
+	case <-transport.entered:
+	case <-time.After(time.Second):
+		t.Fatal("first retry did not reach transport")
+	}
+	go func() {
+		message, retryErr := service.Retry(context.Background(), retrying.ID, reach.RetryInput{Confirm: true})
+		results <- outcome{message: message, err: retryErr}
+	}()
+	second := <-results
+	if !errors.Is(second.err, reach.ErrConflict) {
+		t.Fatalf("concurrent retry was not rejected: %#v err=%v", second.message, second.err)
+	}
+	close(transport.release)
+	first := <-results
+	if first.err != nil || first.message.Status != "delivered" {
+		t.Fatalf("claimed retry failed: %#v err=%v", first.message, first.err)
+	}
+	transport.mu.Lock()
+	sends := len(transport.sent)
+	transport.mu.Unlock()
+	if sends != 2 { // initial retrying send plus exactly one concurrent retry.
+		t.Fatalf("concurrent retries made %d external calls; want 2 total", sends)
 	}
 }
 

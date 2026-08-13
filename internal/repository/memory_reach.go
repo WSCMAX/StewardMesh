@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/maxlemke/stewardmesh/internal/reach"
 )
@@ -225,6 +226,23 @@ func (s *MemoryReachStore) CreateMessage(_ context.Context, item reach.Message) 
 	return cloneReachMessage(item), true, nil
 }
 
+func (s *MemoryReachStore) ClaimMessage(_ context.Context, organizationID, id, expectedStatus string, expectedAttempts int, claimToken string, claimedAt, staleBefore time.Time) (reach.Message, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := reachKey(organizationID, id)
+	item, ok := s.messages[key]
+	if !ok {
+		return reach.Message{}, reach.ErrNotFound
+	}
+	if item.Status != expectedStatus || item.Attempts != expectedAttempts ||
+		(item.ClaimedAt != nil && item.ClaimedAt.After(staleBefore)) {
+		return reach.Message{}, reach.ErrConflict
+	}
+	item.ClaimToken, item.ClaimedAt, item.UpdatedAt = claimToken, &claimedAt, claimedAt
+	s.messages[key] = cloneReachMessage(item)
+	return cloneReachMessage(item), nil
+}
+
 func (s *MemoryReachStore) RecordAttempt(_ context.Context, item reach.Message, expectedAttempts int, attempt reach.DeliveryAttempt) (reach.Message, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -233,7 +251,7 @@ func (s *MemoryReachStore) RecordAttempt(_ context.Context, item reach.Message, 
 	if !ok {
 		return reach.Message{}, reach.ErrNotFound
 	}
-	if existing.Attempts != expectedAttempts || item.Attempts != expectedAttempts+1 {
+	if existing.Attempts != expectedAttempts || item.Attempts != expectedAttempts+1 || existing.ClaimToken == "" || item.ClaimToken != existing.ClaimToken {
 		return reach.Message{}, reach.ErrConflict
 	}
 	for _, current := range s.attempts[key] {
@@ -241,6 +259,7 @@ func (s *MemoryReachStore) RecordAttempt(_ context.Context, item reach.Message, 
 			return reach.Message{}, reach.ErrConflict
 		}
 	}
+	item.ClaimToken, item.ClaimedAt = "", nil
 	s.messages[key] = cloneReachMessage(item)
 	s.attempts[key] = append(s.attempts[key], attempt)
 	return cloneReachMessage(item), nil
@@ -339,6 +358,10 @@ func cloneReachMessage(item reach.Message) reach.Message {
 	if item.NextAttemptAt != nil {
 		next := *item.NextAttemptAt
 		item.NextAttemptAt = &next
+	}
+	if item.ClaimedAt != nil {
+		claimed := *item.ClaimedAt
+		item.ClaimedAt = &claimed
 	}
 	return item
 }

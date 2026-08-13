@@ -405,6 +405,9 @@ func (s *Service) Retry(ctx context.Context, id string, input RetryInput) (Messa
 	if !input.Confirm || message.Status == "delivered" || message.Attempts >= MaximumAttempts {
 		return Message{}, ErrConflict
 	}
+	if message.ClaimedAt != nil && message.ClaimedAt.After(s.now().UTC().Add(-DefaultClaimTTL)) {
+		return Message{}, ErrConflict
+	}
 	if err := s.audit(ctx, "reach.message.retry_requested", "reach_message", message.ID, map[string]string{"attempts": strconv.Itoa(message.Attempts)}); err != nil {
 		return Message{}, fmt.Errorf("audit Reach retry: %w", err)
 	}
@@ -412,12 +415,28 @@ func (s *Service) Retry(ctx context.Context, id string, input RetryInput) (Messa
 }
 
 func (s *Service) dispatch(ctx context.Context, message Message) (Message, error) {
+	recoveringUnknownOutcome := message.ClaimedAt != nil && !message.ClaimedAt.After(s.now().UTC().Add(-DefaultClaimTTL))
+	claimToken, err := foundation.NewCorrelationID()
+	if err != nil {
+		return Message{}, err
+	}
+	now := s.now().UTC()
+	claimed, err := s.store.ClaimMessage(ctx, s.organizationID, message.ID, message.Status, message.Attempts, claimToken, now, now.Add(-DefaultClaimTTL))
+	if err != nil {
+		return Message{}, err
+	}
+	message = claimed
 	provider, err := s.store.GetProvider(ctx, s.organizationID, message.ProviderID)
 	if err != nil {
 		return Message{}, err
 	}
 	result := DeliveryResult{}
 	switch {
+	case recoveringUnknownOutcome:
+		// A prior worker may have completed the external side effect and crashed
+		// before the durable result. Never resend automatically: preserve the
+		// ambiguity for an operator-confirmed Retry instead of risking a duplicate.
+		result = permanent("delivery_outcome_unknown")
 	case !provider.Enabled:
 		result = permanent("provider_disabled")
 	default:
@@ -567,7 +586,19 @@ func (s *Service) processSignal(ctx context.Context, delivery signals.Delivery) 
 
 func (s *Service) recordUndeliverableSignal(ctx context.Context, message Message, code string) (Message, DeliveryResult, error) {
 	message.ProviderID = "unresolved"
-	created, _, err := s.store.CreateMessage(ctx, message)
+	created, wasCreated, err := s.store.CreateMessage(ctx, message)
+	if err != nil {
+		return Message{}, DeliveryResult{}, err
+	}
+	if !wasCreated {
+		return created, resultFromMessage(created), nil
+	}
+	claimToken, err := foundation.NewCorrelationID()
+	if err != nil {
+		return Message{}, DeliveryResult{}, err
+	}
+	created, err = s.store.ClaimMessage(ctx, s.organizationID, created.ID, created.Status, created.Attempts, claimToken,
+		s.now().UTC(), s.now().UTC().Add(-DefaultClaimTTL))
 	if err != nil {
 		return Message{}, DeliveryResult{}, err
 	}

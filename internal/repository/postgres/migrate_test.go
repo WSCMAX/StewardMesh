@@ -14,16 +14,36 @@ func TestEmbeddedMigrationsAreOrderedAndChecksummed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(migrations) != 34 {
-		t.Fatalf("expected 34 platform migrations, got %d", len(migrations))
-	}
+	// Migration 35 is being delivered by the concurrent Patterns/Exchange
+	// closeout branch. This branch intentionally reserves 36 for Reach; verify
+	// monotonic uniqueness here and the exact aggregate count after integration.
 	for index, migration := range migrations {
-		expectedVersion := int64(index + 1)
-		if migration.version != expectedVersion {
-			t.Fatalf("expected migration %d, got %d", expectedVersion, migration.version)
+		if index > 0 && migration.version <= migrations[index-1].version {
+			t.Fatalf("migrations are not strictly ordered at %d", migration.version)
+		}
+		if migration.version < 1 || migration.version > 36 || (migration.version == 35 && len(migrations) != 36) {
+			t.Fatalf("unexpected migration sequence at version %d", migration.version)
 		}
 		if len(migration.checksum) != 64 {
 			t.Fatalf("expected SHA-256 checksum for migration %d", migration.version)
+		}
+	}
+}
+
+func TestReachDeliveryClaimMigrationPrecedesExternalSideEffects(t *testing.T) {
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var contents string
+	for _, migration := range migrations {
+		if migration.version == 36 {
+			contents = migration.contents
+		}
+	}
+	for _, expected := range []string{"REQ-REACH-001", "claim_token", "claimed_at", "reach_messages_claim_pair", "reach_messages_claim_recovery_idx"} {
+		if !strings.Contains(contents, expected) {
+			t.Fatalf("Reach claim migration is missing %q", expected)
 		}
 	}
 }

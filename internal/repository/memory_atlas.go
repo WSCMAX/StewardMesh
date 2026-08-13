@@ -207,6 +207,33 @@ func (s *MemoryAtlasStore) ListAssets(_ context.Context, organizationID string, 
 	return items, nil
 }
 
+func (s *MemoryAtlasStore) ListAuthorizedAssets(_ context.Context, organizationID string, query atlas.AuthorizedAssetQuery) ([]domain.Asset, error) {
+	if organizationID == "" || query.Limit < 1 || query.Limit > 100 || !query.Visibility.Valid() {
+		return nil, atlas.ErrInvalidInput
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	items := make([]domain.Asset, 0, query.Limit)
+	for _, asset := range s.assets {
+		if asset.OrganizationID != organizationID || asset.ID <= query.Cursor ||
+			!memoryAuthorizedAssetVisible(asset, query.Visibility) || !assetMatchesQuery(asset, atlas.Query{Search: query.Search}) {
+			continue
+		}
+		items = append(items, cloneAsset(asset))
+	}
+	sort.Slice(items, func(left, right int) bool { return items[left].ID < items[right].ID })
+	if len(items) > query.Limit {
+		items = items[:query.Limit]
+	}
+	return items, nil
+}
+
+func memoryAuthorizedAssetVisible(asset domain.Asset, visibility atlas.GraphAssetVisibility) bool {
+	return visibility.All || sliceContains(visibility.ResourceIDs, asset.ID) ||
+		(asset.SiteID != "" && sliceContains(visibility.SiteIDs, asset.SiteID)) ||
+		(asset.DepartmentID != "" && sliceContains(visibility.DepartmentIDs, asset.DepartmentID))
+}
+
 func (s *MemoryAtlasStore) ListGraphAssets(_ context.Context, organizationID string, query atlas.GraphAssetQuery) ([]domain.Asset, error) {
 	if organizationID == "" || !query.Valid() {
 		return nil, atlas.ErrInvalidInput

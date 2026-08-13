@@ -270,6 +270,60 @@ func (s *AtlasStore) ListAssets(ctx context.Context, organizationID string, quer
 	return listAtlasAssets(ctx, s.database, organizationID, query)
 }
 
+func (s *AtlasStore) ListAuthorizedAssets(ctx context.Context, organizationID string, filter atlas.AuthorizedAssetQuery) ([]domain.Asset, error) {
+	if organizationID == "" || filter.Limit < 1 || filter.Limit > 100 || !filter.Visibility.Valid() {
+		return nil, atlas.ErrInvalidInput
+	}
+	query := strings.Builder{}
+	query.WriteString("SELECT " + atlasAssetColumns + " FROM atlas_assets WHERE organization_id = $1")
+	arguments := []any{organizationID}
+	if filter.Search != "" {
+		arguments = append(arguments, strings.ToLower(filter.Search))
+		position := len(arguments)
+		query.WriteString(fmt.Sprintf(` AND (strpos(lower(name), $%d) > 0 OR strpos(normalized_asset_tag, $%d) > 0
+			OR strpos(normalized_serial_number, $%d) > 0 OR strpos(lower(hostname), $%d) > 0)`, position, position, position, position))
+	}
+	if filter.Cursor != "" {
+		arguments = append(arguments, filter.Cursor)
+		query.WriteString(fmt.Sprintf(" AND id > $%d", len(arguments)))
+	}
+	if !filter.Visibility.All {
+		visibility := make([]string, 0, 3)
+		if len(filter.Visibility.ResourceIDs) > 0 {
+			visibility = append(visibility, atlasInPredicate("id", filter.Visibility.ResourceIDs, &arguments))
+		}
+		if len(filter.Visibility.SiteIDs) > 0 {
+			visibility = append(visibility, atlasInPredicate("site_id", filter.Visibility.SiteIDs, &arguments))
+		}
+		if len(filter.Visibility.DepartmentIDs) > 0 {
+			visibility = append(visibility, atlasInPredicate("department_id", filter.Visibility.DepartmentIDs, &arguments))
+		}
+		if len(visibility) == 0 {
+			return nil, atlas.ErrInvalidInput
+		}
+		query.WriteString(" AND (" + strings.Join(visibility, " OR ") + ")")
+	}
+	arguments = append(arguments, filter.Limit)
+	query.WriteString(fmt.Sprintf(" ORDER BY id LIMIT $%d", len(arguments)))
+	rows, err := s.database.QueryContext(ctx, query.String(), arguments...)
+	if err != nil {
+		return nil, fmt.Errorf("list authorized Atlas assets: %w", err)
+	}
+	defer rows.Close()
+	items := make([]domain.Asset, 0, filter.Limit)
+	for rows.Next() {
+		asset, scanErr := scanAtlasAsset(rows)
+		if scanErr != nil {
+			return nil, fmt.Errorf("scan authorized Atlas asset: %w", scanErr)
+		}
+		items = append(items, asset)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate authorized Atlas assets: %w", err)
+	}
+	return items, nil
+}
+
 func (s *AtlasStore) ListGraphAssets(ctx context.Context, organizationID string, filter atlas.GraphAssetQuery) ([]domain.Asset, error) {
 	if organizationID == "" || !filter.Valid() {
 		return nil, atlas.ErrInvalidInput

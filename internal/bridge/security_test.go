@@ -6,7 +6,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"net/url"
 	"strings"
@@ -41,6 +43,7 @@ type mutableGuardStore struct {
 	guard.Store
 	removeIntegrations atomic.Bool
 	removeAssets       atomic.Bool
+	assetScopeSite     atomic.Value
 }
 
 func (s *mutableGuardStore) AccessForAccount(ctx context.Context, organizationID, accountID string) (guard.Access, error) {
@@ -54,7 +57,8 @@ func (s *mutableGuardStore) FindSessionByTokenHash(ctx context.Context, organiza
 }
 
 func (s *mutableGuardStore) current(access guard.Access) guard.Access {
-	if !s.removeIntegrations.Load() && !s.removeAssets.Load() {
+	site, _ := s.assetScopeSite.Load().(string)
+	if !s.removeIntegrations.Load() && !s.removeAssets.Load() && site == "" {
 		return access
 	}
 	grants := make([]guard.Grant, 0, len(access.Grants))
@@ -64,6 +68,9 @@ func (s *mutableGuardStore) current(access guard.Access) guard.Access {
 		}
 		if s.removeAssets.Load() && grant.Permission == guard.PermissionAssetsRead {
 			continue
+		}
+		if site != "" && grant.Permission == guard.PermissionAssetsRead {
+			grant.Scope = guard.Scope{Kind: guard.ScopeSite, OrganizationID: grant.Scope.OrganizationID, ResourceID: site}
 		}
 		grants = append(grants, grant)
 	}
@@ -128,6 +135,7 @@ func (emptySignalsEvaluator) Evaluate(context.Context, signals.Rule, time.Time) 
 
 type bridgeHarness struct {
 	service     *bridge.Service
+	atlas       *atlas.Service
 	guard       *guard.Service
 	store       *mutableGuardStore
 	auditor     *testAuditor
@@ -141,6 +149,7 @@ func newBridgeHarness(t *testing.T) *bridgeHarness {
 	clock := newTestClock(time.Date(2026, time.August, 13, 12, 0, 0, 0, time.UTC))
 	auditor := &testAuditor{}
 	guardStore := &mutableGuardStore{Store: repository.NewMemoryGuardStore()}
+	guardStore.assetScopeSite.Store("")
 	guardService, err := guard.NewService(guardStore, guard.NewArgon2idHasher(), auditor, nil, guard.ServiceConfig{OrganizationID: organizationID, SessionTTL: time.Hour, Now: clock.Now})
 	if err != nil {
 		t.Fatal(err)
@@ -166,7 +175,7 @@ func newBridgeHarness(t *testing.T) *bridgeHarness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &bridgeHarness{service: service, guard: guardService, store: guardStore, auditor: auditor, clock: clock, credentials: credentials}
+	return &bridgeHarness{service: service, atlas: atlasService, guard: guardService, store: guardStore, auditor: auditor, clock: clock, credentials: credentials}
 }
 
 func (h *bridgeHarness) oauthAccess(t *testing.T) (bridge.Access, string) {
@@ -329,6 +338,71 @@ func TestMCPOperationsAuditBoundedRedactedOutcomesAndFailClosed(t *testing.T) {
 	resource, err = session.ReadResource(t.Context(), &mcp.ReadResourceParams{URI: "stewardmesh://reports/inventory"})
 	if err == nil && resource != nil {
 		t.Fatalf("MCP resource succeeded when its required audit failed: %#v", resource)
+	}
+}
+
+func TestMCPAssetSearchAuthorizesBeforeLimitAndPaginatesEveryVisibleAsset(t *testing.T) {
+	harness := newBridgeHarness(t)
+	const visibleSite = "11111111111111111111111111111111"
+	const hiddenSite = "22222222222222222222222222222222"
+	for index := 0; index < 206; index++ {
+		visible := index >= 105
+		name, site := fmt.Sprintf("Alpha Hidden Asset %03d", index), hiddenSite
+		if visible {
+			name, site = fmt.Sprintf("Zeta Visible Asset %03d", index), visibleSite
+		}
+		if _, err := harness.atlas.CreateAsset(t.Context(), atlas.CreateAssetInput{
+			ID: fmt.Sprintf("mcp-asset-%03d", index), Name: name, Kind: "computer",
+			References: atlas.References{SiteID: site}, Status: "active",
+		}); err != nil {
+			t.Fatalf("create MCP asset %d: %v", index, err)
+		}
+	}
+	harness.store.assetScopeSite.Store(visibleSite)
+	access, err := harness.service.AuthenticateLocalSession(t.Context(), harness.credentials.Token, "mcp:resources assets:read")
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, stop := connectStdio(t, harness.service, access)
+	defer stop()
+
+	seen := make(map[string]struct{}, 101)
+	cursor := ""
+	for pageNumber := 0; pageNumber < 10; pageNumber++ {
+		result, callErr := session.CallTool(t.Context(), &mcp.CallToolParams{Name: "search_assets", Arguments: map[string]any{"limit": 25, "cursor": cursor}})
+		if callErr != nil || result == nil || result.IsError {
+			t.Fatalf("search authorized MCP assets page %d: result=%#v err=%v", pageNumber+1, result, callErr)
+		}
+		encoded, marshalErr := json.Marshal(result.StructuredContent)
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		var page struct {
+			Items []struct {
+				ID   string `json:"id"`
+				Name string `json:"name"`
+			} `json:"items"`
+			NextCursor string `json:"nextCursor"`
+		}
+		if err := json.Unmarshal(encoded, &page); err != nil {
+			t.Fatalf("decode MCP asset page: %v (%s)", err, encoded)
+		}
+		for _, item := range page.Items {
+			if !strings.HasPrefix(item.Name, "Zeta Visible") {
+				t.Fatalf("unauthorized asset escaped pre-limit visibility: %#v", item)
+			}
+			if _, duplicate := seen[item.ID]; duplicate {
+				t.Fatalf("duplicate MCP keyset item %q", item.ID)
+			}
+			seen[item.ID] = struct{}{}
+		}
+		if page.NextCursor == "" {
+			break
+		}
+		cursor = page.NextCursor
+	}
+	if len(seen) != 101 {
+		t.Fatalf("MCP keyset pagination returned %d of 101 authorized assets", len(seen))
 	}
 }
 

@@ -418,24 +418,19 @@ func (s *Service) assetPage(ctx context.Context, access Access, input pageInput)
 	if err != nil {
 		return page[assetView]{}, err
 	}
-	assets, err := s.atlas.ListAssets(ctx, atlas.Query{Search: input.Query, Limit: 100})
+	visibility := assetVisibility(access.Authentication, s.organization.ID)
+	if visibility.Empty() {
+		return page[assetView]{}, ErrPermissionDenied
+	}
+	assets, err := s.atlas.ListAuthorizedAssets(ctx, atlas.AuthorizedAssetQuery{
+		Search: input.Query, Cursor: input.Cursor, Limit: limit + 1, Visibility: visibility,
+	})
 	if err != nil {
 		return page[assetView]{}, err
 	}
 	visible := make([]assetView, 0, limit+1)
-	passed := input.Cursor == ""
 	for _, asset := range assets {
-		if !canReadAsset(access.Authentication, s.organization.ID, asset) {
-			continue
-		}
-		if !passed {
-			passed = asset.ID == input.Cursor
-			continue
-		}
 		visible = append(visible, viewAsset(asset))
-		if len(visible) == limit+1 {
-			break
-		}
 	}
 	return finishPage(visible, limit, func(value assetView) string { return value.ID }), nil
 }
@@ -665,6 +660,26 @@ func canReadAsset(authentication guard.Authentication, organizationID string, as
 		}
 	}
 	return false
+}
+
+func assetVisibility(authentication guard.Authentication, organizationID string) atlas.GraphAssetVisibility {
+	visibility := atlas.GraphAssetVisibility{}
+	for _, grant := range authentication.Grants {
+		if grant.Permission != guard.PermissionAssetsRead || grant.Scope.OrganizationID != organizationID {
+			continue
+		}
+		switch grant.Scope.Kind {
+		case guard.ScopeOrganization:
+			return atlas.GraphAssetVisibility{All: true}
+		case guard.ScopeResource:
+			visibility.ResourceIDs = append(visibility.ResourceIDs, grant.Scope.ResourceID)
+		case guard.ScopeSite:
+			visibility.SiteIDs = append(visibility.SiteIDs, grant.Scope.ResourceID)
+		case guard.ScopeDepartment:
+			visibility.DepartmentIDs = append(visibility.DepartmentIDs, grant.Scope.ResourceID)
+		}
+	}
+	return visibility
 }
 
 func directoryVisibility(authentication guard.Authentication, organizationID string) people.Visibility {

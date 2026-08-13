@@ -75,6 +75,30 @@ func (s *Service) ListAssets(ctx context.Context, query Query) ([]domain.Asset, 
 	return s.store.ListAssets(ctx, s.organizationID, query)
 }
 
+// ListAuthorizedAssets returns an ID-keyset page after applying the
+// authenticated visibility predicate in the authoritative store. It is kept
+// separate from the human-facing name-ordered Atlas list so MCP cursors remain
+// stable and callers outside HTTP cannot accidentally filter after LIMIT.
+func (s *Service) ListAuthorizedAssets(ctx context.Context, query AuthorizedAssetQuery) ([]domain.Asset, error) {
+	query.Search = strings.ToLower(strings.TrimSpace(query.Search))
+	query.Cursor = strings.TrimSpace(query.Cursor)
+	if !validText(query.Search, 200) || (query.Cursor != "" && !assetIDPattern.MatchString(query.Cursor)) ||
+		query.Limit < 1 || query.Limit > maximumListLimit || !query.Visibility.Valid() {
+		return nil, ErrInvalidInput
+	}
+	var err error
+	if query.Visibility.ResourceIDs, err = normalizedGraphIDs(query.Visibility.ResourceIDs, assetIDPattern); err != nil {
+		return nil, err
+	}
+	if query.Visibility.SiteIDs, err = normalizedGraphIDs(query.Visibility.SiteIDs, referencePattern); err != nil {
+		return nil, err
+	}
+	if query.Visibility.DepartmentIDs, err = normalizedGraphIDs(query.Visibility.DepartmentIDs, referencePattern); err != nil {
+		return nil, err
+	}
+	return s.store.ListAuthorizedAssets(ctx, s.organizationID, query)
+}
+
 // ListGraphAssets is the bounded label/reference read used only by the
 // relationship graph. Public Atlas search keeps its broader fields and
 // 100-record limit; graph search matches labels only and applies authenticated

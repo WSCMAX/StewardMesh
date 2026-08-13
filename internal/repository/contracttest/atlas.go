@@ -5,6 +5,7 @@ package contracttest
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -168,6 +169,7 @@ func AtlasStore(t testing.TB, subject atlas.Store, organizationID, suffix string
 	if _, err := subject.GetModelInventory(ctx, organizationID, "missing-model", atlas.ModelInventoryQuery{Limit: 10}); !errors.Is(err, atlas.ErrNotFound) {
 		t.Fatalf("expected missing Atlas model inventory, got %v", err)
 	}
+	assertAuthorizedAtlasKeyset(t, subject, organizationID, suffix, now)
 	asset.Name = "Updated Contract Server"
 	asset.Status = "active"
 	asset.Revision = 2
@@ -201,6 +203,65 @@ func AtlasStore(t testing.TB, subject atlas.Store, organizationID, suffix string
 	maintained, err := subject.UpdateAsset(ctx, asset, 2, nil)
 	if err != nil || maintained.Revision != 3 || maintained.ModelContext == nil || maintained.ModelContext.ModelRevision != 1 {
 		t.Fatalf("existing retired-model link prevented Atlas asset maintenance %#v err=%v", maintained, err)
+	}
+}
+
+func assertAuthorizedAtlasKeyset(t testing.TB, subject atlas.Store, organizationID, suffix string, now time.Time) {
+	t.Helper()
+	assets := make([]domain.Asset, 0, 206)
+	events := make([]domain.AssetLifecycleEvent, 0, 206)
+	authorizedIDs := make([]string, 0, 101)
+	for index := 0; index < 206; index++ {
+		authorized := index >= 105
+		prefix := "a"
+		if authorized {
+			prefix = "z"
+		}
+		id := fmt.Sprintf("mcp-%s-%03d-%s", prefix, index, suffix)
+		asset := domain.Asset{ID: id, OrganizationID: organizationID, Name: fmt.Sprintf("MCP authorized contract %03d", index),
+			Kind: "computer", Status: "active", Revision: 1, CreatedAt: now, UpdatedAt: now}
+		assets = append(assets, asset)
+		events = append(events, domain.AssetLifecycleEvent{ID: fmt.Sprintf("%032x", 1000+index), OrganizationID: organizationID,
+			AssetID: id, ToStatus: asset.Status, Revision: 1, ActorID: "contract-user", OccurredAt: now})
+		if authorized {
+			authorizedIDs = append(authorizedIDs, id)
+		}
+	}
+	if _, err := subject.CreateAssets(context.Background(), assets, events); err != nil {
+		t.Fatalf("create authorized Atlas keyset fixtures: %v", err)
+	}
+	visibility := atlas.GraphAssetVisibility{ResourceIDs: authorizedIDs}
+	first, err := subject.ListAuthorizedAssets(context.Background(), organizationID, atlas.AuthorizedAssetQuery{
+		Search: "authorized contract", Limit: 26, Visibility: visibility,
+	})
+	if err != nil || len(first) != 26 || first[0].ID != authorizedIDs[0] {
+		t.Fatalf("unauthorized assets crowded the authorized page: %#v err=%v", first, err)
+	}
+	seen := make(map[string]struct{}, len(authorizedIDs))
+	cursor := ""
+	for {
+		items, listErr := subject.ListAuthorizedAssets(context.Background(), organizationID, atlas.AuthorizedAssetQuery{
+			Search: "authorized contract", Cursor: cursor, Limit: 25, Visibility: visibility,
+		})
+		if listErr != nil {
+			t.Fatalf("page authorized Atlas keyset after %q: %v", cursor, listErr)
+		}
+		if len(items) == 0 {
+			break
+		}
+		for _, item := range items {
+			if _, duplicate := seen[item.ID]; duplicate || item.ID <= cursor {
+				t.Fatalf("unstable authorized Atlas keyset item %#v after %q", item, cursor)
+			}
+			seen[item.ID] = struct{}{}
+		}
+		cursor = items[len(items)-1].ID
+		if len(items) < 25 {
+			break
+		}
+	}
+	if len(seen) != len(authorizedIDs) {
+		t.Fatalf("authorized Atlas keyset lost records: got %d want %d", len(seen), len(authorizedIDs))
 	}
 }
 

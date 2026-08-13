@@ -39,6 +39,20 @@ type Query struct {
 	Limit             int
 }
 
+// AuthorizedAssetQuery is the bounded keyset query used by non-browser
+// integration transports. Visibility is an authenticated server-derived
+// predicate and is applied by the repository before ordering and limiting, so
+// records outside the caller's Guard grants cannot crowd visible assets out of
+// a page. Cursor is the last asset ID returned by the preceding ID-ordered
+// page; callers never supply authorization selectors.
+// Requirements: REQ-API-001, SEC-MCP-001. Feature: integrations.protocols.
+type AuthorizedAssetQuery struct {
+	Search     string
+	Cursor     string
+	Limit      int
+	Visibility GraphAssetVisibility
+}
+
 // GraphAssetVisibility and GraphAssetReferences are separate predicates: a
 // graph asset must satisfy one authenticated visibility selector and, when
 // supplied, one relationship-context selector. Keeping the predicates separate
@@ -277,6 +291,7 @@ type Store interface {
 	RetireModel(ctx context.Context, organizationID, id string, expectedRevision int64, retiredAt time.Time) (domain.AssetModel, error)
 	GetModelInventory(ctx context.Context, organizationID, modelID string, query ModelInventoryQuery) (ModelInventory, error)
 	ListAssets(ctx context.Context, organizationID string, query Query) ([]domain.Asset, error)
+	ListAuthorizedAssets(ctx context.Context, organizationID string, query AuthorizedAssetQuery) ([]domain.Asset, error)
 	ListGraphAssets(ctx context.Context, organizationID string, query GraphAssetQuery) ([]domain.Asset, error)
 	GetAsset(ctx context.Context, organizationID, id string) (domain.Asset, error)
 	CreateAsset(ctx context.Context, asset domain.Asset, initialEvent domain.AssetLifecycleEvent) (domain.Asset, error)

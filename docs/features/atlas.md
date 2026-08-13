@@ -4,6 +4,7 @@
 - **Requirement:** `REQ-ATLAS-001`
 - **GitHub issue:** [#2 — Atlas asset inventory](https://github.com/WSCMAX/StewardMesh/issues/2)
 - **Model catalog extension:** [Atlas Models](atlas-models.md) (`REQ-ATLAS-MODELS-001`, [GitHub #68](https://github.com/WSCMAX/StewardMesh/issues/68))
+- **Lifecycle catalog extension:** [Atlas Catalog](atlas-catalog.md) (`REQ-ATLAS-CATALOG-001`)
 - **Identification extension:** [Atlas Codes](atlas-codes.md) (`REQ-ATLAS-CODES-001`, [GitHub #60](https://github.com/WSCMAX/StewardMesh/issues/60))
 
 ## Purpose
@@ -32,6 +33,8 @@ Purchase dates are stored as calendar dates. Updates require the current revisio
 Shared product models are implemented through the separately traceable Atlas Models extension. An asset may reference one active model while retaining its own tag, serial, hostname, lifecycle, location, user, and override fields.
 
 Barcode and QR identifiers are implemented through the separately traceable Atlas Codes extension. Its association model supports multiple active or historical identifiers without overloading asset tags or serial numbers.
+
+Configurations, effective-dated prices, and upgrade paths extend Atlas Models through Atlas Catalog rather than creating a second product record. A later association slice will let an asset optionally select one configuration of its existing `modelId` while preserving item-specific identity, ownership, location, purchase facts, and lifecycle history in Atlas.
 
 ## Lifecycle history and audit
 

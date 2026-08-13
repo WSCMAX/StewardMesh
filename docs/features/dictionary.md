@@ -8,6 +8,7 @@ The display format is **branded name — plain-language descriptor**. Canonical 
 | Platform | `platform.runtime` | Valkey cache and distributed runtime readiness | v1 |
 | Atlas | `inventory.assets` | Asset inventory | v1 |
 | Atlas Models | `inventory.models` | Product model catalog and reusable defaults | v1 |
+| Atlas Catalog | `inventory.catalog` | Model configurations, effective pricing, and upgrade paths | v1 |
 | Atlas Codes | `inventory.identifiers` | Barcode and QR identifier associations | v1 |
 | Horizon | `lifecycle.planning` | Lifecycle planning and forecasting | v1 |
 | Ledger | `procurement.finance` | Procurement, budgets, and costs | v1 |

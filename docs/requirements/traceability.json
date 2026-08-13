@@ -123,6 +123,34 @@
       }
     },
     {
+      "requirementId": "REQ-ATLAS-CATALOG-001",
+      "featureId": "inventory.catalog",
+      "deliveryStatus": "foundation",
+      "artifacts": {
+        "documentation": [
+          "README.md",
+          "docs/features/atlas-catalog.md",
+          "docs/features/atlas.md",
+          "docs/features/dictionary.md",
+          "docs/features/horizon.md",
+          "docs/requirements/initial.md"
+        ],
+        "code": [
+          "internal/catalog/contracts.go",
+          "internal/catalog/service.go",
+          "internal/repository/memory_catalog.go"
+        ],
+        "schema": [
+          "internal/repository/postgres/migrations/0024_atlas_product_catalog.sql"
+        ],
+        "tests": [
+          "internal/catalog/service_test.go",
+          "internal/repository/postgres/migrate_test.go",
+          "internal/traceability/verify_test.go"
+        ]
+      }
+    },
+    {
       "requirementId": "REQ-ATLAS-CODES-001",
       "featureId": "inventory.identifiers",
       "artifacts": {

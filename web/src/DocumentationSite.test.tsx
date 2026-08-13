@@ -12,7 +12,7 @@ test('renders a complete local Atlas guide without GitHub documentation links', 
   expect(screen.getByRole('link', { name: /Open Atlas/ })).toHaveAttribute('href', '#workspace-atlas')
   expect(screen.getByRole('heading', { name: 'Reuse product models' })).toBeInTheDocument()
   expect(screen.getByRole('heading', { name: 'Associate barcodes and QR codes' })).toBeInTheDocument()
-  expect([...container.querySelectorAll('a')].every((link) => !link.href.includes('github.com'))).toBe(true)
+  expect([...container.querySelectorAll('a')].every((link) => new URL(link.href).origin === window.location.origin)).toBe(true)
   expect((await axe.run(container)).violations).toEqual([])
 })
 

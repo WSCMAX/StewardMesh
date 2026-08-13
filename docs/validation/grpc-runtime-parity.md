@@ -66,7 +66,7 @@ smaller limits.
 ## Automated evidence
 
 - `internal/grpcapi/server_test.go` compares descriptor and runtime registration
-  for all 16 services and 153 RPCs, and verifies exact Bearer parsing plus
+  for all 16 services and 154 RPCs, and verifies exact Bearer parsing plus
   client cookie/origin/CSRF stripping, pre-decode authentication, public-request
   limits, route/OpenAPI coverage, opaque Struct keys, and binary envelope edges.
 - `internal/application/grpc_runtime_test.go` invokes every declared RPC through

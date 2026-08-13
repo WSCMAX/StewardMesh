@@ -102,8 +102,8 @@ func TestGRPCRuntimeRegistersAndRoutesEveryAdvertisedRPC(t *testing.T) {
 			called++
 		}
 	}
-	if called != 152 {
-		t.Fatalf("called %d RPCs, want 152 before logout", called)
+	if called != 153 {
+		t.Fatalf("called %d RPCs, want 153 before logout", called)
 	}
 	if _, err := guardClient.Logout(authenticated, &stewardmeshv1.LogoutRequest{}); err != nil {
 		t.Fatalf("gRPC logout: %v", err)

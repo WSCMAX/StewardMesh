@@ -16,7 +16,7 @@ Reviewed 2026-08-13 for `REQ-API-001`, `SEC-MCP-001`, `integrations.protocols`, 
 
 ## Verified transport boundary
 
-- Generated Go protobuf and gRPC bindings are checked in with an explicit all-domain runtime adapter. Descriptor-driven tests prove all 16 services and 153 RPCs can be registered; real in-memory calls exercise every route plus Bridge, Atlas Codes, Patterns, Vault, and Exchange state/byte parity against the same application as REST. The production command remains on its narrower approved Bridge-only registration until all-domain activation receives explicit deployment approval.
+- Generated Go protobuf and gRPC bindings are checked in with an explicit all-domain runtime adapter. Descriptor-driven tests prove all 16 services and 154 RPCs can be registered; real in-memory calls exercise every route plus Bridge, Atlas Codes, Patterns, Vault, and Exchange state/byte parity against the same application as REST. The production command remains on its narrower approved Bridge-only registration until all-domain activation receives explicit deployment approval.
 - The standalone `stewardmesh-grpc` listener defaults to loopback. Non-loopback binding requires configured TLS certificate/key files and TLS 1.3 or newer. In the all-domain adapter, except for the three Guard bootstrap/login operations, every RPC revalidates exactly one bounded opaque Guard session bearer before decoding. Client cookies, origin, and CSRF metadata are stripped, while browser CSRF state and values are not exposed or rotated.
 
 ## Accepted phase-one limits

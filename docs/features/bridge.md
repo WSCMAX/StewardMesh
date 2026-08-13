@@ -38,7 +38,7 @@ Every resource read and tool call emits `bridge.mcp.operation` with bounded acto
 
 ## REST and gRPC parity
 
-The all-domain gRPC adapter covers all 16 domain services and all 153 unary
+The all-domain gRPC adapter covers all 16 domain services and all 154 unary
 RPCs declared by the checked-in descriptor, not only Bridge administration.
 Production registration remains approval-gated, so the standalone command
 continues to expose only Bridge administration in this change. A fixed

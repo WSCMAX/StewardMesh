@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -27,8 +28,25 @@ func BridgeStore(t testing.TB, subject bridge.Store, organizationID string) {
 	if err != nil || loaded.RedirectURIs[0] != "https://client.example/callback" {
 		t.Fatalf("Bridge client was not defensively persisted %#v err=%v", loaded, err)
 	}
-	if isolated, err := subject.ListClients(ctx, organizationID+"-other"); err != nil || len(isolated) != 0 {
+	if isolated, err := subject.ListClients(ctx, organizationID+"-other", bridge.PageRequest{Limit: 1}); err != nil || len(isolated) != 0 {
 		t.Fatalf("Bridge organization isolation failed %#v err=%v", isolated, err)
+	}
+	for index, name := range []string{"A contract client", "Z contract client"} {
+		id := fmt.Sprintf("%032x", index+2)
+		if _, err := subject.CreateClient(ctx, bridge.Client{ID: id, OrganizationID: organizationID, Name: name, RedirectURIs: []string{"https://client.example/" + id}, AllowedScopes: []bridge.Scope{bridge.ScopeMCPResources}, CreatedBy: "account-one", CreatedAt: now.Add(time.Duration(index+1) * time.Second)}); err != nil {
+			t.Fatalf("create paginated Bridge client: %v", err)
+		}
+	}
+	firstPage, err := subject.ListClients(ctx, organizationID, bridge.PageRequest{Limit: 1})
+	if err != nil || len(firstPage) != 2 {
+		t.Fatalf("bounded Bridge client first page %#v err=%v", firstPage, err)
+	}
+	secondPage, err := subject.ListClients(ctx, organizationID, bridge.PageRequest{Cursor: firstPage[0].ID, Limit: 1})
+	if err != nil || len(secondPage) != 2 || secondPage[0].ID == firstPage[0].ID {
+		t.Fatalf("bounded Bridge client continuation %#v err=%v", secondPage, err)
+	}
+	if _, err := subject.ListClients(ctx, organizationID, bridge.PageRequest{Cursor: "ffffffffffffffffffffffffffffffff", Limit: 1}); !errors.Is(err, bridge.ErrInvalidInput) {
+		t.Fatalf("invalid Bridge client cursor error=%v", err)
 	}
 
 	request := bridge.AuthorizationRequest{ID: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", OrganizationID: organizationID, ClientID: loaded.ID, ActorID: "account-one", RedirectURI: loaded.RedirectURIs[0], ResourceURI: "https://steward.example/mcp", Scopes: loaded.AllowedScopes, State: "opaque-state", CodeChallenge: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", CreatedAt: now, ExpiresAt: now.Add(5 * time.Minute)}
@@ -72,6 +90,17 @@ func BridgeStore(t testing.TB, subject bridge.Store, organizationID string) {
 	}
 	if authenticated, err := subject.AuthenticateAccessToken(ctx, organizationID, replacementAccessHash[:], request.ResourceURI, now.Add(5*time.Second)); err != nil || authenticated.ID != replacement.ID {
 		t.Fatalf("authenticate rotated Bridge access token %#v err=%v", authenticated, err)
+	}
+	grantPage, err := subject.ListGrants(ctx, organizationID, bridge.PageRequest{Limit: 1})
+	if err != nil || len(grantPage) != 2 {
+		t.Fatalf("bounded Bridge grant first page %#v err=%v", grantPage, err)
+	}
+	grantNext, err := subject.ListGrants(ctx, organizationID, bridge.PageRequest{Cursor: grantPage[0].ID, Limit: 1})
+	if err != nil || len(grantNext) != 1 || grantNext[0].ID == grantPage[0].ID {
+		t.Fatalf("bounded Bridge grant continuation %#v err=%v", grantNext, err)
+	}
+	if _, err := subject.ListGrants(ctx, organizationID, bridge.PageRequest{Limit: bridge.MaximumAdministrationPageSize + 1}); !errors.Is(err, bridge.ErrInvalidInput) {
+		t.Fatalf("unbounded Bridge grant page error=%v", err)
 	}
 
 	confirmationHash, tokenHash := sha256.Sum256([]byte("arguments")), sha256.Sum256([]byte("confirmation"))

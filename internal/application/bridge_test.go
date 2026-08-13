@@ -55,6 +55,16 @@ func TestBridgeOAuthPKCEAndRemoteMCPSmoke(t *testing.T) {
 	if err := json.Unmarshal(clientResponse.Body.Bytes(), &client); err != nil {
 		t.Fatal(err)
 	}
+	for _, path := range []string{
+		"/api/v1/bridge/clients?limit=0",
+		"/api/v1/bridge/clients?limit=101",
+		"/api/v1/bridge/clients?limit=1&limit=2",
+	} {
+		invalidPage := bridgeRequest(app.Handler(), cfg.AllowedOrigin, cookie, "", http.MethodGet, path, "", nil)
+		if invalidPage.Code != http.StatusBadRequest {
+			t.Fatalf("invalid administration page %q: %d %s", path, invalidPage.Code, invalidPage.Body.String())
+		}
+	}
 
 	verifier := strings.Repeat("A", 43)
 	digest := sha256.Sum256([]byte(verifier))

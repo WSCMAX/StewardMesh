@@ -2866,10 +2866,16 @@ message ReachProcessResult {
   int32 failed = 4;
 }
 
-message ListBridgeClientsRequest {}
+message ListBridgeClientsRequest {
+  // Stable client ID returned as next_cursor by the preceding page.
+  string cursor = 1;
+  // Zero defaults to 25; valid values are 1 through 100.
+  int32 limit = 2;
+}
 
 message ListBridgeClientsResponse {
   repeated BridgeClient items = 1;
+  string next_cursor = 2;
 }
 
 message CreateBridgeClientRequest {
@@ -2882,6 +2888,8 @@ message RevokeBridgeClientRequest {
   string client_id = 1;
 }
 
+// Provider-neutral Bridge administration record.
+// Requirements: REQ-API-001, SEC-MCP-001. Feature: integrations.protocols.
 message BridgeClient {
   string id = 1;
   string organization_id = 2;
@@ -2902,10 +2910,16 @@ enum BridgeScope {
   BRIDGE_SCOPE_SIGNALS_ACKNOWLEDGE = 5;
 }
 
-message ListBridgeGrantsRequest {}
+message ListBridgeGrantsRequest {
+  // Stable grant ID returned as next_cursor by the preceding page.
+  string cursor = 1;
+  // Zero defaults to 25; valid values are 1 through 100.
+  int32 limit = 2;
+}
 
 message ListBridgeGrantsResponse {
   repeated BridgeGrant items = 1;
+  string next_cursor = 2;
 }
 
 message RevokeBridgeGrantRequest {

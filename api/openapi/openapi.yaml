@@ -105,6 +105,9 @@ paths:
       tags: [Bridge]
       x-requirement: REQ-API-001
       security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - {name: cursor, in: query, required: false, schema: {$ref: '#/components/schemas/BridgePageCursor'}}
+        - {name: limit, in: query, required: false, schema: {type: integer, minimum: 1, maximum: 100, default: 25}}
       responses:
         '200': {description: OAuth clients, content: {application/json: {schema: {$ref: '#/components/schemas/BridgeClientCollection'}}}}
         '401': {$ref: '#/components/responses/Unauthorized'}
@@ -139,6 +142,9 @@ paths:
       tags: [Bridge]
       x-requirement: REQ-API-001
       security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - {name: cursor, in: query, required: false, schema: {$ref: '#/components/schemas/BridgePageCursor'}}
+        - {name: limit, in: query, required: false, schema: {type: integer, minimum: 1, maximum: 100, default: 25}}
       responses:
         '200': {description: OAuth grants, content: {application/json: {schema: {$ref: '#/components/schemas/BridgeGrantCollection'}}}}
   /api/v1/bridge/grants/{grantID}:
@@ -3858,7 +3864,9 @@ components:
     BridgeClientCollection:
       type: object
       required: [items]
-      properties: {items: {type: array, maxItems: 50, items: {$ref: '#/components/schemas/BridgeClient'}}}
+      properties:
+        items: {type: array, maxItems: 100, items: {$ref: '#/components/schemas/BridgeClient'}}
+        nextCursor: {$ref: '#/components/schemas/BridgePageCursor'}
     BridgeGrant:
       type: object
       additionalProperties: false
@@ -3879,7 +3887,10 @@ components:
     BridgeGrantCollection:
       type: object
       required: [items]
-      properties: {items: {type: array, maxItems: 1000, items: {$ref: '#/components/schemas/BridgeGrant'}}}
+      properties:
+        items: {type: array, maxItems: 100, items: {$ref: '#/components/schemas/BridgeGrant'}}
+        nextCursor: {$ref: '#/components/schemas/BridgePageCursor'}
+    BridgePageCursor: {type: string, pattern: '^[a-f0-9]{32}$'}
     BridgeConsent:
       type: object
       additionalProperties: false

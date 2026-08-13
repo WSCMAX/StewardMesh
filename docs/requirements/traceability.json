@@ -12,19 +12,29 @@
         ],
         "api": [
           "api/openapi/openapi.yaml",
-          "api/proto/stewardmesh.proto"
+          "api/proto/stewardmesh.proto",
+          "api/proto/stewardmesh.pb.go",
+          "api/proto/stewardmesh_grpc.pb.go"
         ],
         "code": [
+          "cmd/stewardmesh-grpc/main.go",
           "internal/application/application.go",
           "internal/bridge/contracts.go",
           "internal/bridge/service.go",
-          "internal/httpapi/bridge.go"
+          "internal/bridgegrpc/server.go",
+          "internal/httpapi/bridge.go",
+          "internal/repository/memory_bridge.go",
+          "internal/repository/postgres/bridge.go"
         ],
         "schema": [
           "internal/repository/postgres/migrations/0034_bridge_mcp.sql"
         ],
         "tests": [
+          "cmd/stewardmesh-grpc/main_test.go",
+          "internal/application/bridge_grpc_test.go",
+          "internal/application/bridge_rate_test.go",
           "internal/application/bridge_test.go",
+          "internal/bridge/security_test.go",
           "internal/repository/contracttest/bridge.go",
           "internal/repository/postgres/postgres_integration_test.go",
           "web/src/BridgeManager.test.tsx"
@@ -47,14 +57,18 @@
         ],
         "api": [
           "api/openapi/openapi.yaml",
-          "api/proto/stewardmesh.proto"
+          "api/proto/stewardmesh.proto",
+          "api/proto/stewardmesh.pb.go",
+          "api/proto/stewardmesh_grpc.pb.go"
         ],
         "code": [
+          "cmd/stewardmesh-grpc/main.go",
           "cmd/stewardmesh-mcp/main.go",
           "internal/bridge/canonical.go",
           "internal/bridge/contracts.go",
           "internal/bridge/mcp.go",
           "internal/bridge/service.go",
+          "internal/bridgegrpc/server.go",
           "internal/guard/service.go",
           "internal/httpapi/bridge.go",
           "internal/repository/memory_bridge.go",
@@ -64,7 +78,11 @@
           "internal/repository/postgres/migrations/0034_bridge_mcp.sql"
         ],
         "tests": [
+          "cmd/stewardmesh-grpc/main_test.go",
+          "internal/application/bridge_grpc_test.go",
+          "internal/application/bridge_rate_test.go",
           "internal/application/bridge_test.go",
+          "internal/bridge/security_test.go",
           "internal/repository/contracttest/bridge.go",
           "internal/repository/memory_bridge_test.go",
           "internal/repository/postgres/migrate_test.go",

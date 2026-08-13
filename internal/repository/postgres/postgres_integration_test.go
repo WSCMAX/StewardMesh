@@ -8,12 +8,15 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/maxlemke/stewardmesh/internal/bootstrap"
+	"github.com/maxlemke/stewardmesh/internal/bridge"
 	"github.com/maxlemke/stewardmesh/internal/domain"
 	"github.com/maxlemke/stewardmesh/internal/foundation"
 	"github.com/maxlemke/stewardmesh/internal/repository/contracttest"
@@ -758,4 +761,76 @@ func TestBridgeStoreIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	contracttest.BridgeStore(t, store, organizationID)
+}
+
+func TestBridgeStoreSerializesMaximumClients(t *testing.T) {
+	databaseURL := os.Getenv("STEWARDMESH_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("STEWARDMESH_TEST_DATABASE_URL is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	database, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := Migrate(ctx, database); err != nil {
+		t.Fatal(err)
+	}
+	organizationID := fmt.Sprintf("bridge-capacity-%d", time.Now().UnixNano())
+	organizations, err := NewOrganizationRepository(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	organizationService, err := bootstrap.NewOrganizationService(organizations)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := organizationService.EnsureOrganization(ctx, organizationID, "Bridge Capacity Integration"); err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewBridgeStore(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const attempts = bridge.MaximumClients + 25
+	start := make(chan struct{})
+	results := make(chan error, attempts)
+	var workers sync.WaitGroup
+	for index := 0; index < attempts; index++ {
+		workers.Add(1)
+		go func(index int) {
+			defer workers.Done()
+			<-start
+			_, err := store.CreateClient(ctx, bridge.Client{
+				ID: fmt.Sprintf("%032x", index+1), OrganizationID: organizationID, Name: fmt.Sprintf("Concurrent client %03d", index),
+				RedirectURIs: []string{fmt.Sprintf("https://client-%03d.example.test/callback", index)}, AllowedScopes: []bridge.Scope{bridge.ScopeMCPResources},
+				CreatedBy: "capacity-test", CreatedAt: time.Now().UTC(),
+			})
+			results <- err
+		}(index)
+	}
+	close(start)
+	workers.Wait()
+	close(results)
+	succeeded, rejected := 0, 0
+	for err := range results {
+		switch {
+		case err == nil:
+			succeeded++
+		case errors.Is(err, bridge.ErrConflict):
+			rejected++
+		default:
+			t.Fatalf("unexpected concurrent Bridge creation error: %v", err)
+		}
+	}
+	if succeeded != bridge.MaximumClients || rejected != attempts-bridge.MaximumClients {
+		t.Fatalf("capacity race succeeded=%d rejected=%d", succeeded, rejected)
+	}
+	items, err := store.ListClients(ctx, organizationID, bridge.PageRequest{Limit: bridge.MaximumAdministrationPageSize})
+	if err != nil || len(items) != bridge.MaximumClients {
+		t.Fatalf("persisted concurrent Bridge clients=%d err=%v", len(items), err)
+	}
 }

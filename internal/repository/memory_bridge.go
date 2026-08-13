@@ -59,9 +59,12 @@ func (s *MemoryBridgeStore) CreateClient(_ context.Context, client bridge.Client
 	return cloneBridgeClient(client), nil
 }
 
-func (s *MemoryBridgeStore) ListClients(_ context.Context, organizationID string) ([]bridge.Client, error) {
+func (s *MemoryBridgeStore) ListClients(_ context.Context, organizationID string, page bridge.PageRequest) ([]bridge.Client, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if page.Limit < 1 || page.Limit > bridge.MaximumAdministrationPageSize {
+		return nil, bridge.ErrInvalidInput
+	}
 	items := []bridge.Client{}
 	for _, client := range s.clients {
 		if client.OrganizationID == organizationID {
@@ -74,7 +77,7 @@ func (s *MemoryBridgeStore) ListClients(_ context.Context, organizationID string
 		}
 		return strings.ToLower(items[i].Name) < strings.ToLower(items[j].Name)
 	})
-	return items, nil
+	return bridgeClientPage(items, page)
 }
 
 func (s *MemoryBridgeStore) GetClient(_ context.Context, organizationID, clientID string) (bridge.Client, error) {
@@ -258,9 +261,12 @@ func (s *MemoryBridgeStore) AuthenticateAccessToken(_ context.Context, organizat
 	return bridge.Grant{}, bridge.ErrUnauthorized
 }
 
-func (s *MemoryBridgeStore) ListGrants(_ context.Context, organizationID string) ([]bridge.Grant, error) {
+func (s *MemoryBridgeStore) ListGrants(_ context.Context, organizationID string, page bridge.PageRequest) ([]bridge.Grant, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if page.Limit < 1 || page.Limit > bridge.MaximumAdministrationPageSize {
+		return nil, bridge.ErrInvalidInput
+	}
 	items := []bridge.Grant{}
 	for _, grant := range s.grants {
 		if grant.OrganizationID != organizationID {
@@ -275,7 +281,43 @@ func (s *MemoryBridgeStore) ListGrants(_ context.Context, organizationID string)
 		}
 		return items[i].CreatedAt.After(items[j].CreatedAt)
 	})
-	return items, nil
+	return bridgeGrantPage(items, page)
+}
+
+func bridgeClientPage(items []bridge.Client, page bridge.PageRequest) ([]bridge.Client, error) {
+	start := 0
+	if page.Cursor != "" {
+		start = -1
+		for index, item := range items {
+			if item.ID == page.Cursor {
+				start = index + 1
+				break
+			}
+		}
+		if start < 0 {
+			return nil, bridge.ErrInvalidInput
+		}
+	}
+	end := min(len(items), start+page.Limit+1)
+	return append([]bridge.Client(nil), items[start:end]...), nil
+}
+
+func bridgeGrantPage(items []bridge.Grant, page bridge.PageRequest) ([]bridge.Grant, error) {
+	start := 0
+	if page.Cursor != "" {
+		start = -1
+		for index, item := range items {
+			if item.ID == page.Cursor {
+				start = index + 1
+				break
+			}
+		}
+		if start < 0 {
+			return nil, bridge.ErrInvalidInput
+		}
+	}
+	end := min(len(items), start+page.Limit+1)
+	return append([]bridge.Grant(nil), items[start:end]...), nil
 }
 
 func (s *MemoryBridgeStore) RevokeGrant(_ context.Context, organizationID, grantID string, revokedAt time.Time) (bridge.Grant, error) {

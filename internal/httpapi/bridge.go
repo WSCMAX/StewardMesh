@@ -8,6 +8,7 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -151,12 +152,17 @@ func (s *Server) browserAuthentication(w http.ResponseWriter, r *http.Request) (
 }
 
 func (s *Server) listBridgeClients(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
-	items, err := s.bridge.ListClients(r.Context(), authentication)
+	page, err := bridgeAdministrationPage(r)
 	if err != nil {
 		writeBridgeError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	result, err := s.bridge.ListClients(r.Context(), authentication, page)
+	if err != nil {
+		writeBridgeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) createBridgeClient(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
@@ -183,12 +189,35 @@ func (s *Server) revokeBridgeClient(w http.ResponseWriter, r *http.Request, auth
 }
 
 func (s *Server) listBridgeGrants(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
-	items, err := s.bridge.ListGrants(r.Context(), authentication)
+	page, err := bridgeAdministrationPage(r)
 	if err != nil {
 		writeBridgeError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	result, err := s.bridge.ListGrants(r.Context(), authentication, page)
+	if err != nil {
+		writeBridgeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func bridgeAdministrationPage(r *http.Request) (bridge.PageRequest, error) {
+	query := r.URL.Query()
+	if len(query["cursor"]) > 1 || len(query["limit"]) > 1 {
+		return bridge.PageRequest{}, bridge.ErrInvalidInput
+	}
+	page := bridge.PageRequest{Cursor: query.Get("cursor")}
+	rawLimit := query.Get("limit")
+	if rawLimit == "" {
+		return page, nil
+	}
+	limit, err := strconv.Atoi(rawLimit)
+	if err != nil || limit < 1 || limit > bridge.MaximumAdministrationPageSize {
+		return bridge.PageRequest{}, bridge.ErrInvalidInput
+	}
+	page.Limit = limit
+	return page, nil
 }
 
 func (s *Server) revokeBridgeGrant(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
@@ -264,6 +293,7 @@ func writeBridgeError(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, bridge.ErrExpired):
 		writeError(w, r, http.StatusGone, "expired", "the Bridge request expired")
 	case errors.Is(err, bridge.ErrRateLimited):
+		w.Header().Set("Retry-After", "60")
 		writeError(w, r, http.StatusTooManyRequests, "rate_limited", "the Bridge rate limit was reached")
 	default:
 		writeError(w, r, http.StatusInternalServerError, "bridge_error", "the Bridge operation could not be completed")

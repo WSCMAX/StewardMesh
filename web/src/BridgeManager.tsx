@@ -29,9 +29,11 @@ function isConsent(value: unknown): value is Consent {
   return record(value) && typeof value.id === 'string' && idPattern.test(value.id) && typeof value.clientId === 'string' && idPattern.test(value.clientId)
     && typeof value.clientName === 'string' && value.clientName.length > 0 && value.clientName.length <= 120 && validScopes(value.scopes) && validDate(value.expiresAt)
 }
-function items<T>(value: unknown, validator: (item: unknown) => item is T): T[] {
-  if (!record(value) || !Array.isArray(value.items) || !value.items.every(validator)) throw new Error('invalid Bridge response')
-  return value.items
+function page<T>(value: unknown, validator: (item: unknown) => item is T): { items: T[]; nextCursor: string } {
+  if (!record(value) || !Array.isArray(value.items) || value.items.length > 25 || !value.items.every(validator)) throw new Error('invalid Bridge response')
+  const nextCursor = value.nextCursor === undefined ? '' : value.nextCursor
+  if (typeof nextCursor !== 'string' || (nextCursor !== '' && !idPattern.test(nextCursor))) throw new Error('invalid Bridge cursor')
+  return { items: value.items, nextCursor }
 }
 function redirectTarget(value: unknown) {
   if (!record(value) || typeof value.redirectTo !== 'string' || value.redirectTo.length > 4096) throw new Error('invalid consent redirect')
@@ -44,6 +46,8 @@ function redirectTarget(value: unknown) {
 export default function BridgeManager({ csrfToken, permissions }: { csrfToken: string; permissions: readonly string[] }) {
   const [clients, setClients] = useState<Client[]>([])
   const [grants, setGrants] = useState<Grant[]>([])
+  const [clientCursor, setClientCursor] = useState('')
+  const [grantCursor, setGrantCursor] = useState('')
   const [consent, setConsent] = useState<Consent | null>(null)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
@@ -53,8 +57,9 @@ export default function BridgeManager({ csrfToken, permissions }: { csrfToken: s
   const load = useCallback(async () => {
     setError('')
     try {
-      const [clientValue, grantValue] = await Promise.all([requestJSON('/api/v1/bridge/clients'), requestJSON('/api/v1/bridge/grants')])
-      setClients(items(clientValue, isClient)); setGrants(items(grantValue, isGrant))
+      const [clientValue, grantValue] = await Promise.all([requestJSON('/api/v1/bridge/clients?limit=25'), requestJSON('/api/v1/bridge/grants?limit=25')])
+      const clientPage = page(clientValue, isClient); const grantPage = page(grantValue, isGrant)
+      setClients(clientPage.items); setClientCursor(clientPage.nextCursor); setGrants(grantPage.items); setGrantCursor(grantPage.nextCursor)
       const consentID = new URL(window.location.href).searchParams.get('consent') ?? ''
       if (idPattern.test(consentID)) {
         const value = await requestJSON(`/api/v1/bridge/consents/${encodeURIComponent(consentID)}`)
@@ -65,6 +70,20 @@ export default function BridgeManager({ csrfToken, permissions }: { csrfToken: s
   }, [])
 
   useEffect(() => { void load() }, [load])
+
+  async function loadMore(kind: 'clients' | 'grants') {
+    const cursor = kind === 'clients' ? clientCursor : grantCursor
+    if (!cursor) return
+    setBusy(true); setError('')
+    try {
+      const value = await requestJSON(`/api/v1/bridge/${kind}?limit=25&cursor=${encodeURIComponent(cursor)}`)
+      if (kind === 'clients') {
+        const next = page(value, isClient); setClients((current) => [...current, ...next.items]); setClientCursor(next.nextCursor)
+      } else {
+        const next = page(value, isGrant); setGrants((current) => [...current, ...next.items]); setGrantCursor(next.nextCursor)
+      }
+    } catch (caught) { setError(caught instanceof ApiRequestError ? caught.message : 'More Bridge data could not be loaded.') } finally { setBusy(false) }
+  }
 
   async function createClient(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); if (!canWrite) return
@@ -113,7 +132,8 @@ export default function BridgeManager({ csrfToken, permissions }: { csrfToken: s
         <button className={buttonClass} disabled={busy} type="submit">Register public client</button>
       </form>}
       <ul className="mt-5 grid gap-3">{clients.map((client) => <li className={`${subpanelClass} p-4`} key={client.id}><div className="flex flex-wrap items-start justify-between gap-3"><div><h4 className="font-semibold text-white">{client.name}</h4><p className="mt-1 break-all font-mono text-xs text-steward-slate">{client.id}</p><p className="mt-2 break-all text-sm text-steward-mist-muted">{client.redirectUris.join(', ')}</p><p className="mt-2 text-xs text-steward-slate">{client.allowedScopes.join(' · ')}</p></div>{client.revokedAt ? <StatusBadge tone="neutral">Revoked</StatusBadge> : canWrite && <button className={dangerButtonClass} disabled={busy} onClick={() => void remove(`/api/v1/bridge/clients/${encodeURIComponent(client.id)}`, 'OAuth client revoked.')} type="button">Revoke client</button>}</div></li>)}</ul>
+      {clientCursor && <button className={`${secondaryButtonClass} mt-4`} disabled={busy} onClick={() => void loadMore('clients')} type="button">Load more clients</button>}
     </section>
-    <section aria-labelledby="bridge-grants-heading" className={`${panelClass} p-5 sm:p-7`}><h3 className="text-xl font-semibold" id="bridge-grants-heading">Active and historical grants</h3><ul className="mt-4 grid gap-3">{grants.length === 0 && <li className="text-sm text-steward-mist-muted">No OAuth grants yet.</li>}{grants.map((grant) => <li className={`${subpanelClass} flex flex-wrap items-start justify-between gap-3 p-4`} key={grant.id}><div><p className="font-semibold">{grant.clientName || grant.clientId}</p><p className="mt-1 text-xs text-steward-slate">{grant.scopes.join(' · ')}</p><p className="mt-2 text-xs text-steward-mist-muted">Access expires {new Date(grant.accessExpiresAt).toLocaleString()}</p></div>{grant.revokedAt ? <StatusBadge tone="neutral">Revoked</StatusBadge> : canWrite && <button className={dangerButtonClass} disabled={busy} onClick={() => void remove(`/api/v1/bridge/grants/${encodeURIComponent(grant.id)}`, 'OAuth grant revoked.')} type="button">Revoke grant</button>}</li>)}</ul></section>
+    <section aria-labelledby="bridge-grants-heading" className={`${panelClass} p-5 sm:p-7`}><h3 className="text-xl font-semibold" id="bridge-grants-heading">Active and historical grants</h3><ul className="mt-4 grid gap-3">{grants.length === 0 && <li className="text-sm text-steward-mist-muted">No OAuth grants yet.</li>}{grants.map((grant) => <li className={`${subpanelClass} flex flex-wrap items-start justify-between gap-3 p-4`} key={grant.id}><div><p className="font-semibold">{grant.clientName || grant.clientId}</p><p className="mt-1 text-xs text-steward-slate">{grant.scopes.join(' · ')}</p><p className="mt-2 text-xs text-steward-mist-muted">Access expires {new Date(grant.accessExpiresAt).toLocaleString()}</p></div>{grant.revokedAt ? <StatusBadge tone="neutral">Revoked</StatusBadge> : canWrite && <button className={dangerButtonClass} disabled={busy} onClick={() => void remove(`/api/v1/bridge/grants/${encodeURIComponent(grant.id)}`, 'OAuth grant revoked.')} type="button">Revoke grant</button>}</li>)}</ul>{grantCursor && <button className={`${secondaryButtonClass} mt-4`} disabled={busy} onClick={() => void loadMore('grants')} type="button">Load more grants</button>}</section>
   </div>
 }

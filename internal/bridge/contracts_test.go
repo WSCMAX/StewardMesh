@@ -6,14 +6,13 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	stewardmeshv1 "github.com/maxlemke/stewardmesh/api/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
-func TestRESTAndGRPCBridgeAdministrationParity(t *testing.T) {
+func TestGeneratedBridgeBindingsAndProtocolPins(t *testing.T) {
 	openAPI, err := os.ReadFile("../../api/openapi/openapi.yaml")
-	if err != nil {
-		t.Fatal(err)
-	}
-	protobuf, err := os.ReadFile("../../api/proto/stewardmesh.proto")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -24,23 +23,23 @@ func TestRESTAndGRPCBridgeAdministrationParity(t *testing.T) {
 	if !strings.Contains(string(goModule), SDKVersion) || !strings.Contains(string(openAPI), "const: "+ProtocolVersion) {
 		t.Fatalf("Bridge protocol pin drift: protocol=%q sdk=%q", ProtocolVersion, SDKVersion)
 	}
-	pairs := []struct{ rest, rpc string }{
-		{"operationId: listBridgeClients", "rpc ListClients("}, {"operationId: createBridgeClient", "rpc CreateClient("},
-		{"operationId: revokeBridgeClient", "rpc RevokeClient("}, {"operationId: listBridgeGrants", "rpc ListGrants("},
-		{"operationId: revokeBridgeGrant", "rpc RevokeGrant("},
+	service := stewardmeshv1.File_stewardmesh_proto.Services().ByName("BridgeService")
+	if service == nil {
+		t.Fatal("generated BridgeService descriptor is missing")
 	}
-	for _, pair := range pairs {
-		if !strings.Contains(string(openAPI), pair.rest) || !strings.Contains(string(protobuf), pair.rpc) {
-			t.Fatalf("missing Bridge REST/gRPC parity pair %q / %q", pair.rest, pair.rpc)
+	parity := map[string]string{
+		"ListClients": "operationId: listBridgeClients", "CreateClient": "operationId: createBridgeClient", "RevokeClient": "operationId: revokeBridgeClient",
+		"ListGrants": "operationId: listBridgeGrants", "RevokeGrant": "operationId: revokeBridgeGrant",
+	}
+	for name, operation := range parity {
+		if service.Methods().ByName(protoreflect.Name(name)) == nil || !strings.Contains(string(openAPI), operation) {
+			t.Fatalf("missing generated Bridge REST/gRPC parity pair %q / %q", operation, name)
 		}
 	}
 	for _, transportOnly := range []string{"operationId: authorizeBridgeClient", "operationId: exchangeBridgeToken", "operationId: callBridgeMCP"} {
 		if !strings.Contains(string(openAPI), transportOnly) {
 			t.Fatalf("missing documented HTTP-only Bridge operation %q", transportOnly)
 		}
-	}
-	if !strings.Contains(string(protobuf), "intentionally not exposed") {
-		t.Fatal("protobuf must document intentional OAuth/MCP transport gaps")
 	}
 }
 

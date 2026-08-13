@@ -19,12 +19,14 @@ const (
 	ProtocolVersion = "2026-07-28"
 	SDKVersion      = "github.com/modelcontextprotocol/go-sdk v1.7.0"
 
-	MaximumClients                  = 50
-	MaximumRedirectURIs             = 10
-	MaximumScopes                   = 5
-	MaximumMCPResults               = 25
-	MaximumMCPMessageBytes    int64 = 64 << 10
-	MaximumConcurrentMCPCalls       = 8
+	MaximumClients                      = 50
+	MaximumRedirectURIs                 = 10
+	MaximumScopes                       = 5
+	MaximumMCPResults                   = 25
+	MaximumMCPMessageBytes        int64 = 64 << 10
+	MaximumConcurrentMCPCalls           = 8
+	DefaultAdministrationPageSize       = 25
+	MaximumAdministrationPageSize       = 100
 )
 
 var (
@@ -70,6 +72,24 @@ type CreateClientInput struct {
 	Name          string   `json:"name"`
 	RedirectURIs  []string `json:"redirectUris"`
 	AllowedScopes []Scope  `json:"allowedScopes"`
+}
+
+// PageRequest is the common, bounded administration-list contract. Cursors
+// are stable record IDs from the immediately preceding page; repositories
+// resolve their ordering keys without exposing names or timestamps in URLs.
+type PageRequest struct {
+	Cursor string `json:"cursor,omitempty"`
+	Limit  int    `json:"limit,omitempty"`
+}
+
+type ClientPage struct {
+	Items      []Client `json:"items"`
+	NextCursor string   `json:"nextCursor,omitempty"`
+}
+
+type GrantPage struct {
+	Items      []Grant `json:"items"`
+	NextCursor string  `json:"nextCursor,omitempty"`
 }
 
 // AuthorizationRequest is the short-lived, server-owned consent transaction.
@@ -172,7 +192,7 @@ type RateWindow struct {
 // cannot be replayed under concurrency.
 type Store interface {
 	CreateClient(ctx context.Context, client Client) (Client, error)
-	ListClients(ctx context.Context, organizationID string) ([]Client, error)
+	ListClients(ctx context.Context, organizationID string, page PageRequest) ([]Client, error)
 	GetClient(ctx context.Context, organizationID, clientID string) (Client, error)
 	RevokeClient(ctx context.Context, organizationID, clientID string, revokedAt time.Time) (Client, error)
 
@@ -183,7 +203,7 @@ type Store interface {
 
 	RotateRefreshToken(ctx context.Context, organizationID string, refreshHash []byte, clientID, resourceURI string, now time.Time, replacement Grant) (Grant, error)
 	AuthenticateAccessToken(ctx context.Context, organizationID string, accessHash []byte, resourceURI string, now time.Time) (Grant, error)
-	ListGrants(ctx context.Context, organizationID string) ([]Grant, error)
+	ListGrants(ctx context.Context, organizationID string, page PageRequest) ([]Grant, error)
 	RevokeGrant(ctx context.Context, organizationID, grantID string, revokedAt time.Time) (Grant, error)
 	RevokeToken(ctx context.Context, organizationID string, tokenHash []byte, revokedAt time.Time) error
 

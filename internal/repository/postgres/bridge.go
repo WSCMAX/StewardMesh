@@ -35,17 +35,49 @@ func (s *BridgeStore) CreateClient(ctx context.Context, client bridge.Client) (b
 		return bridge.Client{}, bridge.ErrInvalidInput
 	}
 	scopes := scopeStrings(client.AllowedScopes)
-	created, err := scanBridgeClient(s.database.QueryRowContext(ctx, `INSERT INTO bridge_oauth_clients (organization_id,id,name,redirect_uris,allowed_scopes,created_by,created_at)
+	tx, err := s.database.BeginTx(ctx, nil)
+	if err != nil {
+		return bridge.Client{}, fmt.Errorf("begin Bridge OAuth client creation: %w", err)
+	}
+	defer tx.Rollback()
+	// Serialize the organization-local capacity check with an xact-scoped
+	// advisory lock. A plain count in INSERT ... SELECT is racy when concurrent
+	// registrations observe the same pre-insert total.
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 1414))`, client.OrganizationID); err != nil {
+		return bridge.Client{}, fmt.Errorf("lock Bridge OAuth client capacity: %w", err)
+	}
+	created, err := scanBridgeClient(tx.QueryRowContext(ctx, `INSERT INTO bridge_oauth_clients (organization_id,id,name,redirect_uris,allowed_scopes,created_by,created_at)
 		SELECT $1,$2,$3,$4::jsonb,$5,$6,$7 WHERE (SELECT count(*) FROM bridge_oauth_clients WHERE organization_id=$1 AND revoked_at IS NULL) < $8
 		RETURNING `+bridgeClientColumns, client.OrganizationID, client.ID, client.Name, string(redirects), scopes, client.CreatedBy, client.CreatedAt, bridge.MaximumClients))
 	if errors.Is(err, sql.ErrNoRows) {
 		return bridge.Client{}, bridge.ErrConflict
 	}
-	return created, bridgeWriteError("create Bridge OAuth client", err)
+	if err := bridgeWriteError("create Bridge OAuth client", err); err != nil {
+		return bridge.Client{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return bridge.Client{}, fmt.Errorf("commit Bridge OAuth client creation: %w", err)
+	}
+	return created, nil
 }
 
-func (s *BridgeStore) ListClients(ctx context.Context, organizationID string) ([]bridge.Client, error) {
-	rows, err := s.database.QueryContext(ctx, `SELECT `+bridgeClientColumns+` FROM bridge_oauth_clients WHERE organization_id=$1 ORDER BY lower(name),id`, organizationID)
+func (s *BridgeStore) ListClients(ctx context.Context, organizationID string, page bridge.PageRequest) ([]bridge.Client, error) {
+	if page.Limit < 1 || page.Limit > bridge.MaximumAdministrationPageSize {
+		return nil, bridge.ErrInvalidInput
+	}
+	if page.Cursor != "" {
+		var exists bool
+		if err := s.database.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM bridge_oauth_clients WHERE organization_id=$1 AND id=$2)`, organizationID, page.Cursor).Scan(&exists); err != nil {
+			return nil, fmt.Errorf("validate Bridge OAuth client cursor: %w", err)
+		}
+		if !exists {
+			return nil, bridge.ErrInvalidInput
+		}
+	}
+	rows, err := s.database.QueryContext(ctx, `SELECT `+bridgeClientColumns+` FROM bridge_oauth_clients
+		WHERE organization_id=$1 AND ($2='' OR (lower(name),id) > (
+			SELECT lower(cursor_client.name),cursor_client.id FROM bridge_oauth_clients cursor_client WHERE cursor_client.organization_id=$1 AND cursor_client.id=$2
+		)) ORDER BY lower(name),id LIMIT $3`, organizationID, page.Cursor, page.Limit+1)
 	if err != nil {
 		return nil, fmt.Errorf("list Bridge OAuth clients: %w", err)
 	}
@@ -210,9 +242,25 @@ func (s *BridgeStore) AuthenticateAccessToken(ctx context.Context, organizationI
 	return grant, bridgeReadError("authenticate Bridge access token", err)
 }
 
-func (s *BridgeStore) ListGrants(ctx context.Context, organizationID string) ([]bridge.Grant, error) {
+func (s *BridgeStore) ListGrants(ctx context.Context, organizationID string, page bridge.PageRequest) ([]bridge.Grant, error) {
+	if page.Limit < 1 || page.Limit > bridge.MaximumAdministrationPageSize {
+		return nil, bridge.ErrInvalidInput
+	}
+	if page.Cursor != "" {
+		var exists bool
+		if err := s.database.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM bridge_oauth_grants WHERE organization_id=$1 AND id=$2)`, organizationID, page.Cursor).Scan(&exists); err != nil {
+			return nil, fmt.Errorf("validate Bridge OAuth grant cursor: %w", err)
+		}
+		if !exists {
+			return nil, bridge.ErrInvalidInput
+		}
+	}
 	rows, err := s.database.QueryContext(ctx, `SELECT `+bridgeGrantColumns+` FROM bridge_oauth_grants g JOIN bridge_oauth_clients c ON c.organization_id=g.organization_id AND c.id=g.client_id
-		WHERE g.organization_id=$1 ORDER BY g.created_at DESC,g.id`, organizationID)
+		WHERE g.organization_id=$1 AND ($2='' OR (g.created_at < (
+			SELECT cursor_grant.created_at FROM bridge_oauth_grants cursor_grant WHERE cursor_grant.organization_id=$1 AND cursor_grant.id=$2
+		) OR (g.created_at = (
+			SELECT cursor_grant.created_at FROM bridge_oauth_grants cursor_grant WHERE cursor_grant.organization_id=$1 AND cursor_grant.id=$2
+		) AND g.id > $2))) ORDER BY g.created_at DESC,g.id LIMIT $3`, organizationID, page.Cursor, page.Limit+1)
 	if err != nil {
 		return nil, fmt.Errorf("list Bridge OAuth grants: %w", err)
 	}

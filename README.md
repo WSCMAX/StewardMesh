@@ -224,6 +224,20 @@ Signals alert acknowledgement, requires a short-lived argument-bound one-use
 confirmation. See [Bridge](docs/features/bridge.md) and its
 [security review](docs/validation/bridge-security-review.md).
 
+Bridge administration also has a generated, executable gRPC adapter. It uses
+the same repositories and service authorization as REST, and revalidates the
+opaque Guard session bearer from gRPC `authorization` metadata on every RPC:
+
+```sh
+STEWARDMESH_GRPC_ADDR=127.0.0.1:9090 \
+go run ./cmd/stewardmesh-grpc
+```
+
+Loopback plaintext is for local adapters only. A non-loopback address requires
+both `STEWARDMESH_GRPC_TLS_CERT_FILE` and `STEWARDMESH_GRPC_TLS_KEY_FILE`; the
+listener enforces TLS 1.3 or newer. OAuth and MCP retain their native HTTP and
+stdio protocols rather than being wrapped in gRPC.
+
 For a local stdio client, first sign in through Guard and supply the current
 opaque session and explicit scopes only to the child process. PostgreSQL is
 required so the command sees the same Guard session as the web server:

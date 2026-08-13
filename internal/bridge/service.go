@@ -94,8 +94,9 @@ type TokenInput struct {
 }
 
 type Access struct {
-	Grant          Grant
-	Authentication guard.Authentication
+	Grant             Grant
+	Authentication    guard.Authentication
+	localSessionToken string
 }
 
 func NewService(store Store, guardService *guard.Service, atlasService *atlas.Service, peopleService *people.Service, signalsService *signals.Service, auditor foundation.Auditor, organization domain.Organization, configuration ServiceConfig) (*Service, error) {
@@ -204,11 +205,24 @@ func (s *Service) CreateClient(ctx context.Context, authentication guard.Authent
 	return created, nil
 }
 
-func (s *Service) ListClients(ctx context.Context, authentication guard.Authentication) ([]Client, error) {
+func (s *Service) ListClients(ctx context.Context, authentication guard.Authentication, requested PageRequest) (ClientPage, error) {
 	if err := s.requirePermission(ctx, authentication, guard.PermissionIntegrationsRead); err != nil {
-		return nil, err
+		return ClientPage{}, err
 	}
-	return s.store.ListClients(ctx, s.organization.ID)
+	page, err := normalizeAdministrationPage(requested)
+	if err != nil {
+		return ClientPage{}, err
+	}
+	items, err := s.store.ListClients(ctx, s.organization.ID, page)
+	if err != nil {
+		return ClientPage{}, err
+	}
+	result := ClientPage{Items: items}
+	if len(result.Items) > page.Limit {
+		result.Items = result.Items[:page.Limit]
+		result.NextCursor = result.Items[len(result.Items)-1].ID
+	}
+	return result, nil
 }
 
 func (s *Service) RevokeClient(ctx context.Context, authentication guard.Authentication, clientID string) (Client, error) {
@@ -228,11 +242,24 @@ func (s *Service) RevokeClient(ctx context.Context, authentication guard.Authent
 	return revoked, nil
 }
 
-func (s *Service) ListGrants(ctx context.Context, authentication guard.Authentication) ([]Grant, error) {
+func (s *Service) ListGrants(ctx context.Context, authentication guard.Authentication, requested PageRequest) (GrantPage, error) {
 	if err := s.requirePermission(ctx, authentication, guard.PermissionIntegrationsRead); err != nil {
-		return nil, err
+		return GrantPage{}, err
 	}
-	return s.store.ListGrants(ctx, s.organization.ID)
+	page, err := normalizeAdministrationPage(requested)
+	if err != nil {
+		return GrantPage{}, err
+	}
+	items, err := s.store.ListGrants(ctx, s.organization.ID, page)
+	if err != nil {
+		return GrantPage{}, err
+	}
+	result := GrantPage{Items: items}
+	if len(result.Items) > page.Limit {
+		result.Items = result.Items[:page.Limit]
+		result.NextCursor = result.Items[len(result.Items)-1].ID
+	}
+	return result, nil
 }
 
 func (s *Service) RevokeGrant(ctx context.Context, authentication guard.Authentication, grantID string) (Grant, error) {
@@ -451,6 +478,12 @@ func (s *Service) AuthenticateAccessToken(ctx context.Context, rawToken string) 
 	if err != nil || authentication.Principal.OrganizationID != s.organization.ID {
 		return Access{}, ErrUnauthorized
 	}
+	// integrations.read is the revocable gateway permission for every Bridge
+	// bearer operation, independent of the domain permission represented by a
+	// token scope.
+	if err := s.requirePermission(ctx, authentication, guard.PermissionIntegrationsRead); err != nil {
+		return Access{}, err
+	}
 	return Access{Grant: grant, Authentication: authentication}, nil
 }
 
@@ -487,7 +520,21 @@ func (s *Service) AuthenticateLocalSession(ctx context.Context, rawSessionToken,
 		ActorID: authentication.Principal.Subject, ResourceURI: s.resourceURI, Scopes: scopes,
 		CreatedAt: authentication.Session.CreatedAt, AccessExpiresAt: authentication.Session.ExpiresAt,
 		RefreshExpiresAt: authentication.Session.ExpiresAt}
-	return Access{Grant: grant, Authentication: authentication}, nil
+	return Access{Grant: grant, Authentication: authentication, localSessionToken: rawSessionToken}, nil
+}
+
+// AuthenticateAdministrationSession authenticates the opaque Guard session
+// bearer used by the gRPC transport. The raw bearer remains in gRPC metadata
+// only and is not persisted or returned from this method.
+func (s *Service) AuthenticateAdministrationSession(ctx context.Context, rawSessionToken string) (guard.Authentication, error) {
+	if rawSessionToken == "" || len(rawSessionToken) > 512 {
+		return guard.Authentication{}, ErrUnauthorized
+	}
+	authentication, err := s.guard.AuthenticateSession(ctx, rawSessionToken)
+	if err != nil || authentication.Principal.OrganizationID != s.organization.ID {
+		return guard.Authentication{}, ErrUnauthorized
+	}
+	return authentication, nil
 }
 
 func (s *Service) RevokeToken(ctx context.Context, rawToken string) error {
@@ -582,6 +629,9 @@ func (s *Service) RequireScopePermission(ctx context.Context, access Access, sco
 	if !hasScope(access.Grant.Scopes, scope) {
 		return ErrPermissionDenied
 	}
+	if err := s.requirePermission(ctx, access.Authentication, guard.PermissionIntegrationsRead); err != nil {
+		return err
+	}
 	// Signals currently has no site/department relationship that Bridge can
 	// safely project. Keep it organization-scoped, matching the REST surface,
 	// until that domain has an explicit visibility model.
@@ -607,9 +657,50 @@ func (s *Service) CheckResourceWrite(ctx context.Context, authentication guard.A
 	return s.guard.CheckResourceWrite(ctx, authentication, resourceType, resourceID)
 }
 
-func (s *Service) ContextForAccess(ctx context.Context, access Access) (context.Context, error) {
-	scoped, _, err := s.scopedContext(ctx, access.Authentication.Principal.Subject)
-	return scoped, err
+func (s *Service) ContextForAccess(ctx context.Context, access Access) (context.Context, Access, error) {
+	now := s.now().UTC()
+	if access.Grant.OrganizationID != s.organization.ID || access.Grant.ActorID == "" || !access.Grant.AccessExpiresAt.After(now) || access.Grant.RevokedAt != nil {
+		return nil, Access{}, ErrUnauthorized
+	}
+	var authentication guard.Authentication
+	var err error
+	if access.Grant.ClientID == "local-stdio" {
+		if access.localSessionToken == "" || access.Authentication.Session.ID == "" {
+			return nil, Access{}, ErrUnauthorized
+		}
+		authentication, err = s.guard.AuthenticateSession(ctx, access.localSessionToken)
+		if err != nil || authentication.Session.ID != access.Authentication.Session.ID ||
+			authentication.Principal.Subject != access.Grant.ActorID || authentication.Principal.OrganizationID != s.organization.ID ||
+			!authentication.Session.ExpiresAt.After(now) {
+			return nil, Access{}, ErrUnauthorized
+		}
+	} else {
+		authentication, err = s.guard.AuthenticateAccount(ctx, access.Grant.ActorID)
+		if err != nil || authentication.Principal.OrganizationID != s.organization.ID {
+			return nil, Access{}, ErrUnauthorized
+		}
+	}
+	if err := s.requirePermission(ctx, authentication, guard.PermissionIntegrationsRead); err != nil {
+		return nil, Access{}, err
+	}
+	refreshed := access
+	refreshed.Authentication = authentication
+	scoped, _, err := s.scopedContext(ctx, authentication.Principal.Subject)
+	return scoped, refreshed, err
+}
+
+func normalizeAdministrationPage(requested PageRequest) (PageRequest, error) {
+	requested.Cursor = strings.TrimSpace(requested.Cursor)
+	if requested.Cursor != "" && !bridgeIDPattern.MatchString(requested.Cursor) {
+		return PageRequest{}, ErrInvalidInput
+	}
+	if requested.Limit == 0 {
+		requested.Limit = DefaultAdministrationPageSize
+	}
+	if requested.Limit < 1 || requested.Limit > MaximumAdministrationPageSize {
+		return PageRequest{}, ErrInvalidInput
+	}
+	return requested, nil
 }
 
 func permissionsForScopes(scopes []Scope) []guard.Permission {

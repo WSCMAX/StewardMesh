@@ -1,8 +1,9 @@
 package httpapi
 
 // Requirements: REQ-FOUNDATION-001, REQ-WORKSPACE-001, REQ-ATLAS-001, REQ-ATLAS-CODES-001, REQ-PEOPLE-001,
-// REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-STACK-001, REQ-HORIZON-001, REQ-SIGNALS-001, REQ-PLATFORM-VALKEY-001,
+// REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-STACK-001, REQ-HORIZON-001, REQ-SIGNALS-001, REQ-EXCHANGE-001, REQ-PLATFORM-VALKEY-001,
 // SEC-GUARD-001, SEC-HTTP-001. Features include experience.workspace and inventory.models.
+// Feature: migration.packages.
 
 import (
 	"context"
@@ -25,6 +26,7 @@ import (
 	"github.com/maxlemke/stewardmesh/internal/bootstrap"
 	"github.com/maxlemke/stewardmesh/internal/directoryexpansion"
 	"github.com/maxlemke/stewardmesh/internal/domain"
+	"github.com/maxlemke/stewardmesh/internal/exchange"
 	"github.com/maxlemke/stewardmesh/internal/foundation"
 	"github.com/maxlemke/stewardmesh/internal/guard"
 	"github.com/maxlemke/stewardmesh/internal/horizon"
@@ -62,6 +64,7 @@ type Dependencies struct {
 	Horizon             *horizon.Service
 	Patterns            *patterns.Service
 	Signals             *signals.Service
+	Exchange            *exchange.Service
 	Guard               *guard.Service
 	OIDC                *identity.OIDCFlow
 	SAML                *identity.SAMLFlow
@@ -82,6 +85,7 @@ type Server struct {
 	horizon             *horizon.Service
 	patterns            *patterns.Service
 	signals             *signals.Service
+	exchange            *exchange.Service
 	guard               *guard.Service
 	oidc                *identity.OIDCFlow
 	saml                *identity.SAMLFlow
@@ -167,6 +171,7 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 		horizon:             deps.Horizon,
 		patterns:            deps.Patterns,
 		signals:             deps.Signals,
+		exchange:            deps.Exchange,
 		guard:               deps.Guard,
 		oidc:                deps.OIDC,
 		saml:                deps.SAML,
@@ -193,6 +198,10 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 	mux.Handle("POST /api/v1/directory-imports/preview", server.protected(guard.PermissionIntegrationsWrite, true, server.previewDirectoryImport))
 	mux.Handle("POST /api/v1/directory-imports/{batchID}/apply", server.protected(guard.PermissionIntegrationsWrite, true, server.applyDirectoryImport))
 	mux.Handle("POST /api/v1/directory-imports/{batchID}/retry", server.protected(guard.PermissionIntegrationsWrite, true, server.retryDirectoryImport))
+	mux.Handle("GET /api/v1/exchange/records", server.protected(guard.PermissionIntegrationsRead, false, server.listExchangeRecords))
+	mux.Handle("GET /api/v1/exchange/packages", server.protected(guard.PermissionIntegrationsRead, false, server.listExchangePackages))
+	mux.Handle("POST /api/v1/exchange/export", server.protected(guard.PermissionIntegrationsWrite, true, server.exportExchangePackage))
+	mux.Handle("POST /api/v1/exchange/import", server.protected(guard.PermissionIntegrationsWrite, true, server.importExchangePackage))
 	mux.Handle("GET /api/v1/guard/access", server.protected(guard.PermissionGuardManage, false, server.listGuardAccess))
 	mux.Handle("POST /api/v1/guard/roles", server.protected(guard.PermissionGuardManage, true, server.createGuardRole))
 	mux.Handle("POST /api/v1/guard/role-assignments", server.protected(guard.PermissionGuardManage, true, server.createGuardRoleAssignment))
@@ -894,9 +903,12 @@ func (s *Server) createStackVersion(w http.ResponseWriter, r *http.Request, _ gu
 	writeJSON(w, http.StatusCreated, created)
 }
 
-func (s *Server) updateStackProductStatus(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+func (s *Server) updateStackProductStatus(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
 	if s.stack == nil {
 		writeError(w, r, http.StatusServiceUnavailable, "stack_unavailable", "Stack software inventory is unavailable")
+		return
+	}
+	if !s.requireResourceWrite(w, r, authentication, "stack.product", r.PathValue("productID")) {
 		return
 	}
 	var input stack.UpdateProductStatusInput
@@ -914,9 +926,12 @@ func (s *Server) updateStackProductStatus(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, updated)
 }
 
-func (s *Server) updateStackVersionStatus(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+func (s *Server) updateStackVersionStatus(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
 	if s.stack == nil {
 		writeError(w, r, http.StatusServiceUnavailable, "stack_unavailable", "Stack software inventory is unavailable")
+		return
+	}
+	if !s.requireResourceWrite(w, r, authentication, "stack.version", r.PathValue("versionID")) {
 		return
 	}
 	var input stack.UpdateVersionStatusInput
@@ -972,9 +987,12 @@ func (s *Server) createStackLicense(w http.ResponseWriter, r *http.Request, _ gu
 	writeJSON(w, http.StatusCreated, created)
 }
 
-func (s *Server) updateStackInstallationState(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+func (s *Server) updateStackInstallationState(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
 	if s.stack == nil {
 		writeError(w, r, http.StatusServiceUnavailable, "stack_unavailable", "Stack software inventory is unavailable")
+		return
+	}
+	if !s.requireResourceWrite(w, r, authentication, "stack.installation", r.PathValue("installationID")) {
 		return
 	}
 	var input stack.UpdateInstallationStateInput
@@ -992,9 +1010,12 @@ func (s *Server) updateStackInstallationState(w http.ResponseWriter, r *http.Req
 	writeJSON(w, http.StatusOK, updated)
 }
 
-func (s *Server) updateStackLicenseEntitlement(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+func (s *Server) updateStackLicenseEntitlement(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
 	if s.stack == nil {
 		writeError(w, r, http.StatusServiceUnavailable, "stack_unavailable", "Stack software inventory is unavailable")
+		return
+	}
+	if !s.requireResourceWrite(w, r, authentication, "stack.license", r.PathValue("licenseID")) {
 		return
 	}
 	var input stack.UpdateLicenseEntitlementInput
@@ -1031,9 +1052,12 @@ func (s *Server) createStackAssignment(w http.ResponseWriter, r *http.Request, _
 	writeJSON(w, http.StatusCreated, created)
 }
 
-func (s *Server) updateStackAssignmentUsage(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+func (s *Server) updateStackAssignmentUsage(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
 	if s.stack == nil {
 		writeError(w, r, http.StatusServiceUnavailable, "stack_unavailable", "Stack software inventory is unavailable")
+		return
+	}
+	if !s.requireResourceWrite(w, r, authentication, "stack.assignment", r.PathValue("assignmentID")) {
 		return
 	}
 	var input stack.UpdateAssignmentUsageInput
@@ -1051,9 +1075,12 @@ func (s *Server) updateStackAssignmentUsage(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, updated)
 }
 
-func (s *Server) endStackAssignment(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+func (s *Server) endStackAssignment(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
 	if s.stack == nil {
 		writeError(w, r, http.StatusServiceUnavailable, "stack_unavailable", "Stack software inventory is unavailable")
+		return
+	}
+	if !s.requireResourceWrite(w, r, authentication, "stack.assignment", r.PathValue("assignmentID")) {
 		return
 	}
 	var input stack.EndAssignmentInput
@@ -3366,7 +3393,7 @@ func (s *Server) cors(next http.Handler) http.Handler {
 		if originAllowed {
 			w.Header().Set("Access-Control-Allow-Origin", s.allowedOrigin)
 			w.Header().Set("Access-Control-Allow-Credentials", "true")
-			w.Header().Set("Access-Control-Expose-Headers", "X-Correlation-ID, Content-Disposition, X-Label-Batch-ID, X-Label-Template-Version, X-Label-Width-MM, X-Label-Height-MM, X-Label-Item-Count, X-Content-SHA256, X-Idempotent-Replay")
+			w.Header().Set("Access-Control-Expose-Headers", "X-Correlation-ID, Content-Disposition, X-Label-Batch-ID, X-Label-Template-Version, X-Label-Width-MM, X-Label-Height-MM, X-Label-Item-Count, X-Content-SHA256, X-Exchange-Package-ID, X-Idempotent-Replay")
 		}
 		if r.Method == http.MethodOptions {
 			if !originAllowed {

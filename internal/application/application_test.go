@@ -333,5 +333,6 @@ func memoryConfiguration(t *testing.T) config.Config {
 	cfg.GrouperMaximumResponseBytes = directoryexpansion.DefaultGrouperResponseBytes
 	cfg.GrouperTimeout = directoryexpansion.DefaultGrouperTimeout
 	cfg.GrouperAllowPrivateNetwork = false
+	cfg.ExchangeSourceSystemID = "application-test"
 	return cfg
 }

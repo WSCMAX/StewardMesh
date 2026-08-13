@@ -40,7 +40,7 @@ test('retrieves print artifacts with the same-origin session and requested media
   expect(await response.text()).toBe('%PDF-1.4')
   expect(fetchMock).toHaveBeenCalledWith('/api/v1/asset-label-batches', expect.objectContaining({
     credentials: 'same-origin',
-    headers: expect.objectContaining({ Accept: 'image/svg+xml, application/pdf, application/vnd.zebra-zpl', 'X-CSRF-Token': 'csrf' }),
+    headers: expect.objectContaining({ Accept: 'image/svg+xml, application/pdf, application/vnd.zebra-zpl, application/vnd.stewardmesh.openinventory+zip', 'X-CSRF-Token': 'csrf' }),
   }))
   await expect(requestArtifact('https://printer.example/labels')).rejects.toThrow('same-origin')
 })

@@ -1,6 +1,6 @@
 package stack
 
-// Requirement: REQ-STACK-001. Feature: software.licenses.
+// Requirements: REQ-STACK-001, REQ-EXCHANGE-001. Features: software.licenses, migration.packages.
 
 import (
 	"bytes"
@@ -722,7 +722,14 @@ func (s *Service) ExportRecords(ctx context.Context) ([]ExchangeRecord, error) {
 		if dependencies == nil {
 			dependencies = []string{}
 		}
-		records = append(records, ExchangeRecord{Type: recordType, ID: id, Revision: revision, Dependencies: dependencies, Payload: payload})
+		sourceSystemID, sourceRecordID, ok := portableProvenance(value)
+		if !ok {
+			return ErrInvalidInput
+		}
+		records = append(records, ExchangeRecord{
+			Type: recordType, ID: id, Revision: revision, Dependencies: dependencies,
+			SourceSystemID: sourceSystemID, SourceRecordID: sourceRecordID, Payload: payload,
+		})
 		return nil
 	}
 	for _, product := range snapshot.Products {
@@ -736,10 +743,7 @@ func (s *Service) ExportRecords(ctx context.Context) ([]ExchangeRecord, error) {
 		}
 	}
 	for _, license := range snapshot.Licenses {
-		dependencies := []string{"stack.product:" + license.ProductID}
-		if license.VersionID != "" {
-			dependencies = append(dependencies, "stack.version:"+license.VersionID)
-		}
+		dependencies := portableLicenseDependencies(license)
 		if err := appendRecord("stack.license", license.ID, license.Revision, dependencies, license); err != nil {
 			return nil, err
 		}
@@ -750,7 +754,7 @@ func (s *Service) ExportRecords(ctx context.Context) ([]ExchangeRecord, error) {
 		}
 	}
 	for _, assignment := range snapshot.Assignments {
-		if err := appendRecord("stack.assignment", assignment.ID, assignment.Revision, []string{"stack.license:" + assignment.LicenseID, assignment.AssigneeKind + ":" + assignment.AssigneeID}, assignment); err != nil {
+		if err := appendRecord("stack.assignment", assignment.ID, assignment.Revision, portableAssignmentDependencies(assignment), assignment); err != nil {
 			return nil, err
 		}
 	}
@@ -766,7 +770,8 @@ func (s *Service) ImportRecords(ctx context.Context, sourceSystemID string, reco
 	prepared := make([]portableRecord, 0, len(records))
 	seen := make(map[string]struct{}, len(records))
 	for _, record := range records {
-		if _, ok := order[record.Type]; !ok || !stableIDPattern.MatchString(record.ID) || record.Revision < 1 || record.Dependencies == nil || len(record.Payload) == 0 || len(record.Payload) > 1<<20 {
+		if _, ok := order[record.Type]; !ok || !stableIDPattern.MatchString(record.ID) || record.Revision < 1 || record.Dependencies == nil ||
+			len(record.Payload) == 0 || len(record.Payload) > 1<<20 || !validSource(record.SourceSystemID, record.SourceRecordID) {
 			return ImportResult{}, ErrInvalidInput
 		}
 		key := record.Type + "\x00" + record.ID
@@ -774,7 +779,7 @@ func (s *Service) ImportRecords(ctx context.Context, sourceSystemID string, reco
 			return ImportResult{}, ErrInvalidInput
 		}
 		seen[key] = struct{}{}
-		value, err := preparePortableRecord(record)
+		value, err := preparePortableRecord(record, sourceSystemID)
 		if err != nil {
 			return ImportResult{}, err
 		}
@@ -784,7 +789,6 @@ func (s *Service) ImportRecords(ctx context.Context, sourceSystemID string, reco
 	result := ImportResult{}
 	for _, preparedRecord := range prepared {
 		record := preparedRecord.record
-		sourceRecordID := record.Type + ":" + record.ID
 		existed, err := s.recordExists(ctx, record.Type, record.ID)
 		if err != nil {
 			return result, err
@@ -792,19 +796,19 @@ func (s *Service) ImportRecords(ctx context.Context, sourceSystemID string, reco
 		switch record.Type {
 		case "stack.product":
 			value := preparedRecord.value.(Product)
-			_, err = s.CreateProduct(ctx, CreateProductInput{ID: value.ID, Name: value.Name, Publisher: value.Publisher, Category: value.Category, Status: value.Status, SourceSystemID: sourceSystemID, SourceRecordID: sourceRecordID})
+			_, err = s.CreateProduct(ctx, CreateProductInput{ID: value.ID, Name: value.Name, Publisher: value.Publisher, Category: value.Category, Status: value.Status, SourceSystemID: preparedRecord.sourceSystemID, SourceRecordID: preparedRecord.sourceRecordID})
 		case "stack.version":
 			value := preparedRecord.value.(Version)
-			_, err = s.CreateVersion(ctx, CreateVersionInput{ID: value.ID, ProductID: value.ProductID, Name: value.Name, ReleasedOn: value.ReleasedOn, Status: value.Status, SourceSystemID: sourceSystemID, SourceRecordID: sourceRecordID})
+			_, err = s.CreateVersion(ctx, CreateVersionInput{ID: value.ID, ProductID: value.ProductID, Name: value.Name, ReleasedOn: value.ReleasedOn, Status: value.Status, SourceSystemID: preparedRecord.sourceSystemID, SourceRecordID: preparedRecord.sourceRecordID})
 		case "stack.license":
 			value := preparedRecord.value.(License)
-			_, err = s.CreateLicense(ctx, CreateLicenseInput{ID: value.ID, ProductID: value.ProductID, VersionID: value.VersionID, Name: value.Name, EntitlementMetric: value.EntitlementMetric, Quantity: value.Quantity, Status: value.Status, StartsOn: value.StartsOn, ExpiresOn: value.ExpiresOn, VendorID: value.VendorID, PurchaseOrderID: value.PurchaseOrderID, ContractID: value.ContractID, CostRecordID: value.CostRecordID, DocumentIDs: value.DocumentIDs, SourceSystemID: sourceSystemID, SourceRecordID: sourceRecordID})
+			_, err = s.CreateLicense(ctx, CreateLicenseInput{ID: value.ID, ProductID: value.ProductID, VersionID: value.VersionID, Name: value.Name, EntitlementMetric: value.EntitlementMetric, Quantity: value.Quantity, Status: value.Status, StartsOn: value.StartsOn, ExpiresOn: value.ExpiresOn, VendorID: value.VendorID, PurchaseOrderID: value.PurchaseOrderID, ContractID: value.ContractID, CostRecordID: value.CostRecordID, DocumentIDs: value.DocumentIDs, SourceSystemID: preparedRecord.sourceSystemID, SourceRecordID: preparedRecord.sourceRecordID})
 		case "stack.installation":
 			value := preparedRecord.value.(Installation)
-			_, err = s.RecordInstallation(ctx, RecordInstallationInput{ID: value.ID, VersionID: value.VersionID, AssetID: value.AssetID, Status: value.Status, UsageState: value.UsageState, InstalledAt: value.InstalledAt, LastUsedAt: value.LastUsedAt, RemovedAt: value.RemovedAt, SourceSystemID: sourceSystemID, SourceRecordID: sourceRecordID})
+			_, err = s.RecordInstallation(ctx, RecordInstallationInput{ID: value.ID, VersionID: value.VersionID, AssetID: value.AssetID, Status: value.Status, UsageState: value.UsageState, InstalledAt: value.InstalledAt, LastUsedAt: value.LastUsedAt, RemovedAt: value.RemovedAt, SourceSystemID: preparedRecord.sourceSystemID, SourceRecordID: preparedRecord.sourceRecordID})
 		case "stack.assignment":
 			value := preparedRecord.value.(Assignment)
-			_, err = s.CreateAssignment(ctx, CreateAssignmentInput{ID: value.ID, LicenseID: value.LicenseID, AssigneeKind: value.AssigneeKind, AssigneeID: value.AssigneeID, Seats: value.Seats, UsageState: value.UsageState, AssignedAt: value.AssignedAt, LastUsedAt: value.LastUsedAt, EndedAt: value.EndedAt, SourceSystemID: sourceSystemID, SourceRecordID: sourceRecordID})
+			_, err = s.CreateAssignment(ctx, CreateAssignmentInput{ID: value.ID, LicenseID: value.LicenseID, AssigneeKind: value.AssigneeKind, AssigneeID: value.AssigneeID, Seats: value.Seats, UsageState: value.UsageState, AssignedAt: value.AssignedAt, LastUsedAt: value.LastUsedAt, EndedAt: value.EndedAt, SourceSystemID: preparedRecord.sourceSystemID, SourceRecordID: preparedRecord.sourceRecordID})
 		}
 		if err != nil {
 			return result, err
@@ -819,11 +823,13 @@ func (s *Service) ImportRecords(ctx context.Context, sourceSystemID string, reco
 }
 
 type portableRecord struct {
-	record ExchangeRecord
-	value  any
+	record         ExchangeRecord
+	value          any
+	sourceSystemID string
+	sourceRecordID string
 }
 
-func preparePortableRecord(record ExchangeRecord) (portableRecord, error) {
+func preparePortableRecord(record ExchangeRecord, fallbackSourceSystemID string) (portableRecord, error) {
 	var value any
 	var dependencies []string
 	switch record.Type {
@@ -844,10 +850,7 @@ func preparePortableRecord(record ExchangeRecord) (portableRecord, error) {
 		if err != nil {
 			return portableRecord{}, err
 		}
-		dependencies = []string{"stack.product:" + decoded.ProductID}
-		if decoded.VersionID != "" {
-			dependencies = append(dependencies, "stack.version:"+decoded.VersionID)
-		}
+		dependencies = portableLicenseDependencies(decoded)
 		value = decoded
 	case "stack.installation":
 		decoded, err := decodePortablePayload[Installation](record.Payload)
@@ -860,7 +863,7 @@ func preparePortableRecord(record ExchangeRecord) (portableRecord, error) {
 		if err != nil {
 			return portableRecord{}, err
 		}
-		value, dependencies = decoded, []string{"stack.license:" + decoded.LicenseID, decoded.AssigneeKind + ":" + decoded.AssigneeID}
+		value, dependencies = decoded, portableAssignmentDependencies(decoded)
 	default:
 		return portableRecord{}, ErrInvalidInput
 	}
@@ -872,7 +875,122 @@ func preparePortableRecord(record ExchangeRecord) (portableRecord, error) {
 	if id != record.ID || revision != record.Revision || hasDuplicates(actualDependencies) || !slices.Equal(actualDependencies, dependencies) {
 		return portableRecord{}, ErrInvalidInput
 	}
-	return portableRecord{record: record, value: value}, nil
+	payloadSourceSystemID, payloadSourceRecordID, ok := portableProvenance(value)
+	if !ok {
+		return portableRecord{}, ErrInvalidInput
+	}
+	if record.SourceSystemID != "" && payloadSourceSystemID != "" &&
+		(record.SourceSystemID != payloadSourceSystemID || record.SourceRecordID != payloadSourceRecordID) {
+		return portableRecord{}, ErrInvalidInput
+	}
+	effectiveSourceSystemID, effectiveSourceRecordID := record.SourceSystemID, record.SourceRecordID
+	if effectiveSourceSystemID == "" {
+		effectiveSourceSystemID, effectiveSourceRecordID = payloadSourceSystemID, payloadSourceRecordID
+	}
+	if effectiveSourceSystemID == "" {
+		effectiveSourceSystemID, effectiveSourceRecordID = fallbackSourceSystemID, record.Type+":"+record.ID
+	}
+	if !validSource(effectiveSourceSystemID, effectiveSourceRecordID) {
+		return portableRecord{}, ErrInvalidInput
+	}
+	return portableRecord{
+		record: record, value: value, sourceSystemID: effectiveSourceSystemID, sourceRecordID: effectiveSourceRecordID,
+	}, nil
+}
+
+func portableLicenseDependencies(value License) []string {
+	dependencies := []string{"stack.product:" + value.ProductID}
+	for _, optional := range []struct{ recordType, id string }{
+		{"stack.version", value.VersionID},
+		{"ledger.vendor", value.VendorID},
+		{"ledger.purchase_order", value.PurchaseOrderID},
+		{"ledger.contract", value.ContractID},
+		{"ledger.cost", value.CostRecordID},
+	} {
+		if optional.id != "" {
+			dependencies = append(dependencies, optional.recordType+":"+optional.id)
+		}
+	}
+	for _, documentID := range value.DocumentIDs {
+		dependencies = append(dependencies, "vault.blob:"+documentID)
+	}
+	sort.Strings(dependencies)
+	return dependencies
+}
+
+func portableAssignmentDependencies(value Assignment) []string {
+	recordType := map[string]string{
+		"asset": "atlas.asset", "identity": "people.identity", "department": "people.department", "site": "people.site",
+	}[value.AssigneeKind]
+	dependencies := []string{"stack.license:" + value.LicenseID, recordType + ":" + value.AssigneeID}
+	sort.Strings(dependencies)
+	return dependencies
+}
+
+// ExchangeDependencyExists verifies a canonical cross-domain relationship
+// through Stack's existing read-only validators. It never creates or mutates
+// the dependency and reports unhandled types explicitly.
+func (s *Service) ExchangeDependencyExists(ctx context.Context, recordType, id string) (handled bool, exists bool, err error) {
+	if !stableIDPattern.MatchString(id) {
+		return true, false, ErrInvalidInput
+	}
+	switch recordType {
+	case "atlas.asset":
+		asset, err := s.references.ResolveAsset(ctx, id)
+		if err == nil {
+			return true, asset.ID == id, nil
+		}
+		return exchangeDependencyResult(err)
+	case "people.identity":
+		err = s.references.ValidateAssignee(ctx, "identity", id)
+	case "people.department":
+		err = s.references.ValidateAssignee(ctx, "department", id)
+	case "people.site":
+		err = s.references.ValidateAssignee(ctx, "site", id)
+	case "ledger.vendor":
+		err = s.references.ValidateFinancialReferences(ctx, id, "", "", "")
+	case "ledger.purchase_order":
+		err = s.references.ValidateFinancialReferences(ctx, "", id, "", "")
+	case "ledger.contract":
+		err = s.references.ValidateFinancialReferences(ctx, "", "", id, "")
+	case "ledger.cost":
+		err = s.references.ValidateFinancialReferences(ctx, "", "", "", id)
+	case "vault.blob":
+		err = s.references.ValidateDocuments(ctx, []string{id})
+	default:
+		return false, false, nil
+	}
+	return exchangeDependencyResult(err)
+}
+
+func exchangeDependencyResult(err error) (bool, bool, error) {
+	switch {
+	case err == nil:
+		return true, true, nil
+	case errors.Is(err, ErrNotFound), errors.Is(err, ErrReferenceMissing):
+		return true, false, nil
+	default:
+		return true, false, err
+	}
+}
+
+func portableProvenance(value any) (string, string, bool) {
+	var sourceSystemID, sourceRecordID string
+	switch typed := value.(type) {
+	case Product:
+		sourceSystemID, sourceRecordID = typed.SourceSystemID, typed.SourceRecordID
+	case Version:
+		sourceSystemID, sourceRecordID = typed.SourceSystemID, typed.SourceRecordID
+	case License:
+		sourceSystemID, sourceRecordID = typed.SourceSystemID, typed.SourceRecordID
+	case Installation:
+		sourceSystemID, sourceRecordID = typed.SourceSystemID, typed.SourceRecordID
+	case Assignment:
+		sourceSystemID, sourceRecordID = typed.SourceSystemID, typed.SourceRecordID
+	default:
+		return "", "", false
+	}
+	return sourceSystemID, sourceRecordID, validSource(sourceSystemID, sourceRecordID)
 }
 
 func decodePortablePayload[T any](payload json.RawMessage) (T, error) {

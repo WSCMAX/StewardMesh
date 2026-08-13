@@ -19,10 +19,10 @@ export const plainButtonClass = 'inline-flex min-h-11 items-center justify-cente
 export const sectionKickerClass = 'text-xs font-semibold uppercase tracking-[0.18em] text-steward-teal'
 export const sectionTitleClass = 'mt-2 text-2xl font-semibold tracking-tight text-steward-mist sm:text-[1.75rem]'
 export const sectionDescriptionClass = 'mt-2 max-w-3xl text-sm leading-6 text-steward-mist-muted sm:text-base sm:leading-7'
-export const tableWrapClass = 'overflow-x-auto rounded-xl border border-white/[0.08] bg-steward-ink-950/25'
+export const tableWrapClass = 'min-w-0 max-w-full overflow-x-auto rounded-xl border border-white/[0.08] bg-steward-ink-950/25'
 export const emptyStateClass = 'rounded-xl border border-dashed border-white/15 bg-white/[0.02] px-5 py-8 text-center text-sm leading-6 text-steward-mist-muted'
 
-export type AreaIconName = 'overview' | 'atlas' | 'horizon' | 'ledger' | 'stack' | 'signals' | 'threads' | 'vault' | 'people' | 'guard'
+export type AreaIconName = 'overview' | 'atlas' | 'horizon' | 'ledger' | 'stack' | 'signals' | 'threads' | 'vault' | 'exchange' | 'people' | 'guard'
 
 const iconPaths: Record<AreaIconName, ReactNode> = {
   overview: <><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /></>,
@@ -33,6 +33,7 @@ const iconPaths: Record<AreaIconName, ReactNode> = {
   signals: <><path d="M4 17h16M6 13l3-3 3 2 5-6 2 2" /><path d="M5 21h14" /><circle cx="6" cy="13" r="1" /><circle cx="17" cy="6" r="1" /></>,
   threads: <><path d="M9.5 14.5 14.5 9.5" /><path d="M7.2 17.8 5.4 19.6a3.5 3.5 0 0 1-5-5l4-4a3.5 3.5 0 0 1 5 0" transform="translate(2 -1)" /><path d="m14.8 6.2 1.8-1.8a3.5 3.5 0 0 1 5 5l-4 4a3.5 3.5 0 0 1-5 0" transform="translate(-2 1)" /></>,
   vault: <><rect x="3" y="5" width="18" height="15" rx="2" /><circle cx="12" cy="12.5" r="3" /><path d="M12 9.5V5M12 15.5V20M9 12.5H3M15 12.5h6" /></>,
+  exchange: <><path d="M4 7h13M14 4l3 3-3 3M20 17H7M10 14l-3 3 3 3" /><rect x="3" y="3" width="18" height="18" rx="3" /></>,
   people: <><path d="M16 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2" /><circle cx="9.5" cy="7" r="4" /><path d="M17 11a3.5 3.5 0 0 0 0-7M21 21v-2a4 4 0 0 0-3-3.7" /></>,
   guard: <><path d="M12 3 20 6v5c0 5.2-3.3 8.5-8 10-4.7-1.5-8-4.8-8-10V6l8-3Z" /><path d="m8.5 12 2.2 2.2 4.8-5" /></>,
 }

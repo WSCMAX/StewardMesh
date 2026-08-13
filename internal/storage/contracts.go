@@ -59,6 +59,21 @@ type CreateBlobInput struct {
 	Content        io.Reader
 }
 
+// ImportBlobInput is Exchange's narrow integrity-preserving seam. IDs and
+// checksums come from a verified package; object keys and credentials never do.
+type ImportBlobInput struct {
+	ID             string
+	Name           string
+	MediaType      string
+	SizeBytes      int64
+	SHA256         string
+	SourceSystemID string
+	SourceRecordID string
+	ResourceType   string
+	ResourceID     string
+	Content        io.Reader
+}
+
 type DownloadAuthorization struct {
 	URL       string    `json:"url"`
 	ExpiresAt time.Time `json:"expiresAt"`

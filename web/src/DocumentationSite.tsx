@@ -28,6 +28,7 @@ const iconForPage: Record<DocumentationTopicID, AreaIconName> = {
   signals: 'signals',
   threads: 'threads',
   vault: 'vault',
+  exchange: 'exchange',
   people: 'people',
   guard: 'guard',
   guide: 'overview',

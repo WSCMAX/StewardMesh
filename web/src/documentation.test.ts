@@ -1,7 +1,7 @@
 import { expect, test } from 'vitest'
 import { documentationByID, documentationHref, documentationPages, documentationTopicFromHash, searchDocumentation } from './documentation'
 
-// Requirements: A11Y-001, DOC-001, REQ-DIRECTORY-EXPANSION-005. Features: experience.help, integrations.protocols.
+// Requirements: A11Y-001, DOC-001, REQ-DIRECTORY-EXPANSION-005, REQ-EXCHANGE-001. Features: experience.help, integrations.protocols, migration.packages.
 
 test('creates fixed same-host documentation deep links', () => {
   expect(documentationHref('atlas')).toBe('#docs/atlas')
@@ -11,7 +11,7 @@ test('creates fixed same-host documentation deep links', () => {
 })
 
 test('keeps every local documentation page complete and connected', () => {
-  expect(documentationPages).toHaveLength(12)
+  expect(documentationPages).toHaveLength(13)
   for (const page of documentationPages) {
     expect(page.sections.length).toBeGreaterThan(0)
     expect(page.related.length).toBeGreaterThan(0)
@@ -32,5 +32,6 @@ test('searches titles, summaries, and product vocabulary', () => {
   expect(searchDocumentation('renewal').map((page) => page.id)).toContain('signals')
   expect(searchDocumentation('barcode').map((page) => page.id)).toEqual(['atlas'])
   expect(searchDocumentation('scoped grants').map((page) => page.id)).toContain('guard')
+  expect(searchDocumentation('openinventory').map((page) => page.id)).toContain('exchange')
   expect(searchDocumentation('')).toEqual(documentationPages)
 })

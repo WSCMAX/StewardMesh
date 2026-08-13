@@ -90,6 +90,7 @@ type Config struct {
 	AllowedOrigin               string
 	OrganizationID              string
 	OrganizationName            string
+	ExchangeSourceSystemID      string
 	BootstrapToken              string
 	SessionCookieSecure         bool
 	SessionTTL                  time.Duration
@@ -117,6 +118,7 @@ func Load() (Config, error) {
 
 func FromEnv() Config {
 	allowedOrigin := envOr("STEWARDMESH_ALLOWED_ORIGIN", "http://localhost:5173")
+	organizationID := envOr("STEWARDMESH_ORGANIZATION_ID", "local-organization")
 	storageDriver := StorageDriver(envOr("STEWARDMESH_STORAGE_DRIVER", string(StorageDriverLocal)))
 	sessionCookieSecure, secureErr := envBool(
 		"STEWARDMESH_SESSION_COOKIE_SECURE",
@@ -193,8 +195,9 @@ func FromEnv() Config {
 		SailPointClientID:           os.Getenv("STEWARDMESH_SAILPOINT_CLIENT_ID"),
 		SailPointClientSecret:       os.Getenv("STEWARDMESH_SAILPOINT_CLIENT_SECRET"),
 		AllowedOrigin:               allowedOrigin,
-		OrganizationID:              envOr("STEWARDMESH_ORGANIZATION_ID", "local-organization"),
+		OrganizationID:              organizationID,
 		OrganizationName:            envOr("STEWARDMESH_ORGANIZATION_NAME", "StewardMesh Local Organization"),
+		ExchangeSourceSystemID:      envOr("STEWARDMESH_EXCHANGE_SOURCE_SYSTEM_ID", organizationID),
 		BootstrapToken:              os.Getenv("STEWARDMESH_BOOTSTRAP_TOKEN"),
 		SessionCookieSecure:         sessionCookieSecure,
 		SessionTTL:                  sessionTTL,
@@ -233,6 +236,9 @@ func (c Config) Validate() error {
 	}
 	if strings.TrimSpace(c.OrganizationName) == "" {
 		return errors.New("STEWARDMESH_ORGANIZATION_NAME is required")
+	}
+	if !stableConfigurationID(c.ExchangeSourceSystemID) {
+		return errors.New("STEWARDMESH_EXCHANGE_SOURCE_SYSTEM_ID must be a stable identifier")
 	}
 	switch c.RepositoryDriver {
 	case RepositoryDriverPostgres:
@@ -355,6 +361,20 @@ func (c Config) validateGrouper() error {
 		return errors.New("Grouper connector settings are invalid")
 	}
 	return nil
+}
+
+func stableConfigurationID(value string) bool {
+	if strings.TrimSpace(value) != value || len(value) == 0 || len(value) > 128 {
+		return false
+	}
+	for index, character := range value {
+		if (character >= 'A' && character <= 'Z') || (character >= 'a' && character <= 'z') ||
+			(character >= '0' && character <= '9') || (index > 0 && strings.ContainsRune("._:-", character)) {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func (c Config) OIDCEnabled() bool {

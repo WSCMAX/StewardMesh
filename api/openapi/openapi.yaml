@@ -1,8 +1,8 @@
-# Requirements: REQ-ATLAS-001, REQ-ATLAS-MODELS-001, REQ-ATLAS-CODES-001, REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-HORIZON-001, REQ-LEDGER-001, REQ-STACK-001, REQ-SIGNALS-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
+# Requirements: REQ-ATLAS-001, REQ-ATLAS-MODELS-001, REQ-ATLAS-CODES-001, REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-HORIZON-001, REQ-LEDGER-001, REQ-STACK-001, REQ-SIGNALS-001, REQ-EXCHANGE-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
 openapi: 3.1.0
 info:
   title: StewardMesh API
-  version: 0.11.0
+  version: 0.12.0
   description: Requirements-driven inventory, lifecycle, and secure organization management API.
   license:
     name: Apache License 2.0
@@ -2937,6 +2937,149 @@ paths:
         '400': {$ref: '#/components/responses/InvalidRequest'}
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
+  /api/v1/exchange/records:
+    get:
+      summary: List records available for an Exchange package
+      description: Returns the bounded, provider-neutral record catalog for the authenticated organization. Requires organization-scoped `integrations.read`; package payloads and file bytes are not returned.
+      operationId: listExchangeRecords
+      tags: [Exchange]
+      x-requirement: REQ-EXCHANGE-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200':
+          description: Portable record descriptors and server-enforced package limits
+          headers:
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ExchangeRecordCollection'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '500': {$ref: '#/components/responses/InternalError'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+  /api/v1/exchange/packages:
+    get:
+      summary: List Exchange package receipts
+      description: Returns bounded export and import receipts without archive payloads, file bytes, credentials, signed URLs, object keys, or operator identity. Requires organization-scoped `integrations.read`.
+      operationId: listExchangePackages
+      tags: [Exchange]
+      x-requirement: REQ-EXCHANGE-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - in: query
+          name: limit
+          required: false
+          description: Maximum recent receipts to return. Defaults to 25.
+          schema: {type: integer, minimum: 1, maximum: 100, default: 25}
+      responses:
+        '200':
+          description: Most recent durable package receipts
+          headers:
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ExchangePackageCollection'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '500': {$ref: '#/components/responses/InternalError'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+  /api/v1/exchange/export:
+    post:
+      summary: Export a dependency-aware .openinventory package
+      description: Selects up to 1,000 organization records, optionally closes over available dependencies, and returns one checksummed ZIP package. Requires organization-scoped `integrations.write` and synchronized CSRF validation. Vault records explicitly choose metadata-only or included bytes; credentials, signed URLs, private object keys, and session material are never package fields.
+      operationId: exportExchangePackage
+      tags: [Exchange]
+      x-requirement: REQ-EXCHANGE-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ExchangeExportRequest'}
+      responses:
+        '200':
+          description: A bounded, compressed package with a durable export receipt
+          headers:
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+            Content-Disposition:
+              description: Fixed server-generated attachment filename ending in `.openinventory`.
+              schema: {type: string, pattern: '^attachment; filename="stewardmesh-[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\\.openinventory"$'}
+            X-Content-SHA256:
+              description: Lowercase SHA-256 digest of the complete archive bytes.
+              schema: {$ref: '#/components/schemas/ExchangeSHA256'}
+            X-Exchange-Package-ID:
+              description: Server-generated package identity also stored in the manifest and receipt.
+              schema: {$ref: '#/components/schemas/ExchangeStableID'}
+          content:
+            application/vnd.stewardmesh.openinventory+zip:
+              schema:
+                type: string
+                format: binary
+                minLength: 1
+                maxLength: 33554432
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '413': {$ref: '#/components/responses/ExchangePayloadTooLarge'}
+        '500': {$ref: '#/components/responses/InternalError'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+  /api/v1/exchange/import:
+    post:
+      summary: Verify and import a .openinventory package
+      description: Strictly verifies the bounded ZIP structure, manifest schema, checksums, payload safety, dependency order, source provenance, and exact package replay before writing through registered domain providers. New or unchanged imported records are readable and Guard write-locked until explicit ownership claim; unresolved records remain in holding and are not written. Requires organization-scoped `integrations.write` and synchronized CSRF validation.
+      operationId: importExchangePackage
+      tags: [Exchange]
+      x-requirement: REQ-EXCHANGE-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/vnd.stewardmesh.openinventory+zip:
+            schema:
+              type: string
+              format: binary
+              minLength: 1
+              maxLength: 33554432
+      responses:
+        '200':
+          description: Exact completed package replay; no duplicate domain writes occurred
+          headers:
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+            X-Idempotent-Replay:
+              schema: {type: string, const: 'true'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ExchangeImportResult'}
+        '201':
+          description: Package import completed or produced explicit holding outcomes
+          headers:
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+            X-Idempotent-Replay:
+              schema: {type: string, const: 'false'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ExchangeImportResult'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '413': {$ref: '#/components/responses/ExchangePayloadTooLarge'}
+        '415':
+          description: The request is not an unencoded StewardMesh .openinventory package
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '422': {$ref: '#/components/responses/ExchangeUnprocessableEntity'}
+        '500': {$ref: '#/components/responses/InternalError'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+
 components:
   securitySchemes:
     localCookieAuth:
@@ -3141,6 +3284,16 @@ components:
           schema: {$ref: '#/components/schemas/Error'}
     PayloadTooLarge:
       description: The uploaded file exceeds the configured Vault size limit
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    ExchangePayloadTooLarge:
+      description: The compressed archive, expanded archive, manifest, record payloads, file bytes, selection, or record count exceeds an Exchange limit
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    ExchangeUnprocessableEntity:
+      description: The archive is corrupt, a checksum failed, or a dependency cannot be safely processed
       content:
         application/json:
           schema: {$ref: '#/components/schemas/Error'}
@@ -5158,7 +5311,14 @@ components:
         id: {$ref: '#/components/schemas/StackID'}
         revision: {type: integer, format: int64, minimum: 1}
         dependencies: {type: array, maxItems: 102, uniqueItems: true, items: {type: string, minLength: 3, maxLength: 256}}
+        sourceSystemId:
+          allOf: [{$ref: '#/components/schemas/StackID'}]
+          description: Earliest known source system identity when this record was imported.
+        sourceRecordId:
+          allOf: [{$ref: '#/components/schemas/StackSourceRecordID'}]
+          description: Earliest known source record identity paired with sourceSystemId.
         payload: {type: object}
+      dependentRequired: {sourceSystemId: [sourceRecordId], sourceRecordId: [sourceSystemId]}
     StackExchangeExport:
       type: object
       additionalProperties: false
@@ -5353,6 +5513,149 @@ components:
         targetId:
           allOf: [{$ref: '#/components/schemas/SignalID'}]
           description: Stable configured target reference, never a URL or provider credential.
+    ExchangeStableID:
+      type: string
+      pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+    ExchangeRecordType:
+      type: string
+      pattern: '^[a-z][a-z0-9._-]{0,63}$'
+    ExchangeSHA256:
+      type: string
+      pattern: '^[a-f0-9]{64}$'
+    ExchangeReference:
+      type: object
+      additionalProperties: false
+      required: [type, id]
+      properties:
+        type: {$ref: '#/components/schemas/ExchangeRecordType'}
+        id: {$ref: '#/components/schemas/ExchangeStableID'}
+    ExchangeRecordDescriptor:
+      type: object
+      additionalProperties: false
+      required: [type, id, revision, dependencies, hasFile]
+      properties:
+        type: {$ref: '#/components/schemas/ExchangeRecordType'}
+        id: {$ref: '#/components/schemas/ExchangeStableID'}
+        revision: {type: integer, format: int64, minimum: 1}
+        dependencies:
+          type: array
+          maxItems: 128
+          uniqueItems: true
+          items: {$ref: '#/components/schemas/ExchangeReference'}
+        hasFile:
+          type: boolean
+          description: True when the domain provider can contribute portable file metadata; included bytes still require fileMode `include`.
+    ExchangeLimits:
+      type: object
+      additionalProperties: false
+      required: [maximumArchiveBytes, maximumSelections]
+      properties:
+        maximumArchiveBytes: {type: integer, format: int64, const: 33554432}
+        maximumSelections: {type: integer, const: 1000}
+    ExchangeRecordCollection:
+      type: object
+      additionalProperties: false
+      required: [items, limits]
+      properties:
+        items:
+          type: array
+          maxItems: 10000
+          items: {$ref: '#/components/schemas/ExchangeRecordDescriptor'}
+        limits: {$ref: '#/components/schemas/ExchangeLimits'}
+    ExchangeFileMode:
+      type: string
+      enum: [metadata, include]
+      description: "metadata keeps names, media types, sizes, checksums, provider metadata, provenance, and relationships without bytes; include adds checksummed package-internal file entries."
+    ExchangePackageDirection:
+      type: string
+      enum: [export, import]
+    ExchangePackageStatus:
+      type: string
+      enum: [processing, completed, holding, failed]
+    ExchangeOutcomeStatus:
+      type: string
+      enum: [created, unchanged, holding]
+    ExchangeRecordOutcome:
+      type: object
+      additionalProperties: false
+      required: [type, id, revision, checksum, status, missingDependencies, writeLocked]
+      properties:
+        type: {$ref: '#/components/schemas/ExchangeRecordType'}
+        id: {$ref: '#/components/schemas/ExchangeStableID'}
+        revision: {type: integer, format: int64, minimum: 1}
+        checksum: {$ref: '#/components/schemas/ExchangeSHA256'}
+        status: {$ref: '#/components/schemas/ExchangeOutcomeStatus'}
+        missingDependencies:
+          type: array
+          maxItems: 130
+          uniqueItems: true
+          description: Stable unresolved relationships or bounded provider/file diagnostics. Empty for created and unchanged records.
+          items: {$ref: '#/components/schemas/ExchangeReference'}
+        writeLocked:
+          type: boolean
+          description: True when an imported record is readable but Guard blocks writes until explicit ownership claim. Holding records are not written.
+    ExchangePackage:
+      type: object
+      additionalProperties: false
+      description: Durable organization-scoped receipt. Completed and holding receipts contain exactly recordCount outcomes; holdingCount is nonzero only for holding status and errorCode is present only for failed status.
+      required: [packageId, direction, schemaVersion, sourceSystemId, archiveSha256, sizeBytes, fileMode, status, recordCount, fileCount, createdCount, unchangedCount, holdingCount, records, createdAt, updatedAt]
+      properties:
+        packageId: {$ref: '#/components/schemas/ExchangeStableID'}
+        direction: {$ref: '#/components/schemas/ExchangePackageDirection'}
+        schemaVersion: {type: string, const: '1.0'}
+        sourceSystemId: {$ref: '#/components/schemas/ExchangeStableID'}
+        archiveSha256: {$ref: '#/components/schemas/ExchangeSHA256'}
+        sizeBytes: {type: integer, format: int64, minimum: 1, maximum: 33554432}
+        fileMode: {$ref: '#/components/schemas/ExchangeFileMode'}
+        status: {$ref: '#/components/schemas/ExchangePackageStatus'}
+        recordCount: {type: integer, minimum: 1, maximum: 10000}
+        fileCount: {type: integer, minimum: 0, maximum: 1000}
+        createdCount: {type: integer, minimum: 0, maximum: 10000}
+        unchangedCount: {type: integer, minimum: 0, maximum: 10000}
+        holdingCount: {type: integer, minimum: 0, maximum: 10000}
+        records:
+          type: array
+          maxItems: 10000
+          items: {$ref: '#/components/schemas/ExchangeRecordOutcome'}
+        errorCode: {type: string, pattern: '^[a-z][a-z0-9_]{0,63}$'}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    ExchangePackageCollection:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          maxItems: 100
+          items: {$ref: '#/components/schemas/ExchangePackage'}
+    ExchangeExportRequest:
+      type: object
+      additionalProperties: false
+      required: [selection, includeDependencies, fileMode]
+      properties:
+        selection:
+          type: array
+          minItems: 1
+          maxItems: 1000
+          uniqueItems: true
+          description: Explicit organization records. The dependency closure may contain up to 10,000 total records.
+          items: {$ref: '#/components/schemas/ExchangeReference'}
+        includeDependencies:
+          type: boolean
+          description: Includes every available transitive dependency and orders it before records that consume it. Missing external relationships remain visible on import.
+        fileMode: {$ref: '#/components/schemas/ExchangeFileMode'}
+    ExchangeImportResult:
+      type: object
+      additionalProperties: false
+      required: [package, replay]
+      properties:
+        package:
+          allOf: [{$ref: '#/components/schemas/ExchangePackage'}]
+          description: Import-direction receipt containing created, unchanged, holding, and write-lock outcomes.
+        replay:
+          type: boolean
+          description: True only for the exact package ID and archive digest after an earlier completed import. Holding and failed receipts may safely retry the exact archive after dependencies or transient errors are resolved.
     Tag:
       type: object
       additionalProperties: false

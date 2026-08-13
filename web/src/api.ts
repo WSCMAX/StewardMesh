@@ -1,4 +1,4 @@
-// Requirements: SEC-HTTP-001, SEC-GUARD-001, REQ-PEOPLE-001, REQ-THREADS-001, REQ-WORKSPACE-001, A11Y-001, DOC-001, DOC-002.
+// Requirements: SEC-HTTP-001, SEC-GUARD-001, REQ-PEOPLE-001, REQ-THREADS-001, REQ-EXCHANGE-001, REQ-WORKSPACE-001, A11Y-001, DOC-001, DOC-002.
 
 const httpNoContent = 204
 const correlationPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
@@ -68,7 +68,7 @@ export async function requestJSON(path: string, init?: RequestInit): Promise<unk
 }
 
 // requestArtifact preserves the same correlation, session-expiry, CSRF, and
-// same-origin behavior while leaving vector/PDF/printer-language bytes intact.
+// same-origin behavior while leaving vector/PDF/printer-language/package bytes intact.
 export async function requestArtifact(path: string, init?: RequestInit): Promise<Response> {
-  return requestAPI(path, init, 'image/svg+xml, application/pdf, application/vnd.zebra-zpl')
+  return requestAPI(path, init, 'image/svg+xml, application/pdf, application/vnd.zebra-zpl, application/vnd.stewardmesh.openinventory+zip')
 }

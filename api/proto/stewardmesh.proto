@@ -216,6 +216,21 @@ service SignalsService {
   rpc ExportCSV(ExportSignalsCSVRequest) returns (ExportSignalsCSVResponse);
 }
 
+// Bounded, dependency-aware, provider-neutral migration packages.
+// Requirement: REQ-EXCHANGE-001. Feature: migration.packages.
+// Every RPC is scoped to the authenticated Guard organization; organization
+// identity is never accepted from a request body. List RPCs require
+// integrations.read. ExportExchangePackage and ImportExchangePackage require
+// integrations.write. The transport rejects archives larger than 32 MiB and
+// the decoder rejects more than 64 MiB uncompressed. Package metadata and
+// payloads never contain credentials, object-store keys, or signed URLs.
+service ExchangeService {
+  rpc ListExchangeRecords(ListExchangeRecordsRequest) returns (ListExchangeRecordsResponse);
+  rpc ListExchangePackages(ListExchangePackagesRequest) returns (ListExchangePackagesResponse);
+  rpc ExportExchangePackage(ExportExchangePackageRequest) returns (ExchangeExportArtifact);
+  rpc ImportExchangePackage(ImportExchangePackageRequest) returns (ImportExchangePackageResponse);
+}
+
 message GetOrganizationRequest {}
 
 message Organization {
@@ -2127,6 +2142,10 @@ message StackExchangeRecord {
   int64 revision = 3;
   repeated string dependencies = 4;
   google.protobuf.Struct payload = 5;
+  // Optional paired earliest-known provenance. source_system_id is a stable
+  // identifier of at most 128 characters and source_record_id is at most 255.
+  string source_system_id = 6;
+  string source_record_id = 7;
 }
 
 message ExportStackRecordsRequest {}
@@ -2348,4 +2367,160 @@ message ExportSignalsCSVResponse {
   bytes content = 1;
   string media_type = 2;
   string filename = 3;
+}
+
+// Stable provider-neutral identity used for selections and relationships.
+message ExchangeReference {
+  string type = 1;
+  string id = 2;
+}
+
+// Earliest known source identity. Import preserves these values instead of
+// replacing them with a transport filename or an object-store location.
+message ExchangeProvenance {
+  string source_system_id = 1;
+  string source_record_id = 2;
+}
+
+// Ownership state is portable, but operator/account identifiers are not.
+message ExchangeOwnershipMetadata {
+  string state = 1;
+  string source_system_id = 2;
+  string source_record_id = 3;
+  google.protobuf.Timestamp claimed_at = 4;
+}
+
+// File metadata never contains an object key, credential, token, or URL.
+// entry is a fixed package-internal path and is populated only when mode is
+// "include"; each included file is limited to 16 MiB.
+message ExchangeFileMetadata {
+  // "metadata" or "include".
+  string mode = 1;
+  string name = 2;
+  string media_type = 3;
+  int64 size_bytes = 4;
+  string sha256 = 5;
+  string entry = 6;
+}
+
+// Portable record stored in the manifest. A package contains at most 10,000
+// records, each record contains at most 128 dependencies, and a JSON payload is
+// limited to 1 MiB (24 MiB across the package).
+message ExchangeRecord {
+  string type = 1;
+  string id = 2;
+  int64 revision = 3;
+  string checksum = 4;
+  repeated ExchangeReference dependencies = 5;
+  ExchangeProvenance provenance = 6;
+  ExchangeOwnershipMetadata ownership = 7;
+  ExchangeFileMetadata file = 8;
+  google.protobuf.Struct payload = 9;
+}
+
+// Canonical manifest encoded as manifest.json inside the .openinventory ZIP.
+message ExchangeManifest {
+  string schema_version = 1;
+  string package_id = 2;
+  string source_system_id = 3;
+  google.protobuf.Timestamp exported_at = 4;
+  // "metadata" or "include".
+  string file_mode = 5;
+  repeated ExchangeRecord records = 6;
+}
+
+message ExchangeRecordDescriptor {
+  string type = 1;
+  string id = 2;
+  int64 revision = 3;
+  // At most 128 direct relationships.
+  repeated ExchangeReference dependencies = 4;
+  bool has_file = 5;
+}
+
+message ListExchangeRecordsRequest {}
+
+message ListExchangeRecordsResponse {
+  // At most 10,000 provider-neutral records visible to the organization.
+  repeated ExchangeRecordDescriptor items = 1;
+}
+
+message ListExchangePackagesRequest {
+  // Zero uses the server default; otherwise this must be between 1 and 100.
+  int32 limit = 1;
+}
+
+message ListExchangePackagesResponse {
+  // Newest first and never more than 100 package receipts.
+  repeated ExchangePackage items = 1;
+}
+
+message ExportExchangePackageRequest {
+  // Between 1 and 1,000 unique provider-neutral record identities. Dependency
+  // expansion may produce no more than 10,000 records in the final package.
+  repeated ExchangeReference selection = 1;
+  bool include_dependencies = 2;
+  // "metadata" includes portable file metadata only; "include" also embeds
+  // bounded file bytes. Neither mode exports credentials or signed URLs.
+  string file_mode = 3;
+}
+
+message ExchangeExportArtifact {
+  string package_id = 1;
+  string sha256 = 2;
+  // application/vnd.stewardmesh.openinventory+zip, at most 32 MiB.
+  bytes archive = 3;
+}
+
+message ImportExchangePackageRequest {
+  // A complete application/vnd.stewardmesh.openinventory+zip archive, at most
+  // 32 MiB compressed and 64 MiB after bounded decompression.
+  bytes archive = 1;
+}
+
+message ExchangeRecordOutcome {
+  string type = 1;
+  string id = 2;
+  int64 revision = 3;
+  string checksum = 4;
+  // "created", "unchanged", or "holding".
+  string status = 5;
+  // At most 130 entries: the record's 128 relationships plus bounded provider
+  // diagnostics. Holding outcomes remain readable and write-locked.
+  repeated ExchangeReference missing_dependencies = 6;
+  bool write_locked = 7;
+}
+
+// Durable organization-scoped import/export receipt. Imported records remain
+// readable but write-protected until an explicit Guard ownership claim.
+message ExchangePackage {
+  string package_id = 1;
+  // "export" or "import".
+  string direction = 2;
+  string schema_version = 3;
+  string source_system_id = 4;
+  string archive_sha256 = 5;
+  int64 size_bytes = 6;
+  // "metadata" or "include".
+  string file_mode = 7;
+  // "processing", "completed", "holding", or "failed".
+  string status = 8;
+  int32 record_count = 9;
+  int32 file_count = 10;
+  int32 created_count = 11;
+  int32 unchanged_count = 12;
+  int32 holding_count = 13;
+  // At most 10,000 results; list history itself is bounded to 100 packages.
+  repeated ExchangeRecordOutcome records = 14;
+  string error_code = 15;
+  google.protobuf.Timestamp created_at = 16;
+  google.protobuf.Timestamp updated_at = 17;
+}
+
+message ImportExchangePackageResponse {
+  ExchangePackage package = 1;
+  // True only when the same package ID and archive checksum were previously
+  // completed; no provider writes are repeated. Holding and failed receipts
+  // may safely retry the exact archive after their blocker is resolved.
+  bool replay = 2;
 }

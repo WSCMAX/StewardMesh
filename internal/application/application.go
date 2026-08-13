@@ -1,6 +1,7 @@
 // Package application constructs StewardMesh's transport-neutral HTTP
 // application and owns the lifecycle of its shared runtime dependencies.
-// Requirements: REQ-FOUNDATION-001, REQ-ATLAS-001, REQ-ATLAS-CODES-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-STACK-001, REQ-HORIZON-001, REQ-SIGNALS-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001.
+// Requirements: REQ-FOUNDATION-001, REQ-ATLAS-001, REQ-ATLAS-CODES-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-STACK-001, REQ-HORIZON-001, REQ-SIGNALS-001, REQ-EXCHANGE-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001.
+// Feature: migration.packages.
 package application
 
 import (
@@ -20,6 +21,7 @@ import (
 	"github.com/maxlemke/stewardmesh/internal/directoryexpansion"
 	"github.com/maxlemke/stewardmesh/internal/directoryexpansion/entra"
 	"github.com/maxlemke/stewardmesh/internal/directoryexpansion/sailpoint"
+	"github.com/maxlemke/stewardmesh/internal/exchange"
 	"github.com/maxlemke/stewardmesh/internal/foundation"
 	"github.com/maxlemke/stewardmesh/internal/guard"
 	"github.com/maxlemke/stewardmesh/internal/horizon"
@@ -268,6 +270,21 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 	if err != nil {
 		return fail(fmt.Errorf("initialize Atlas Codes labels: %w", err))
 	}
+	stackExchangeProvider, err := exchange.NewStackProvider(stackService)
+	if err != nil {
+		return fail(fmt.Errorf("initialize Exchange Stack provider: %w", err))
+	}
+	vaultExchangeProvider, err := exchange.NewVaultProvider(vaultService)
+	if err != nil {
+		return fail(fmt.Errorf("initialize Exchange Vault provider: %w", err))
+	}
+	exchangeService, err := exchange.NewService(runtime.exchangeStore, runtime.auditor, guardService, exchange.ServiceConfig{
+		OrganizationID: cfg.OrganizationID,
+		SourceSystemID: cfg.ExchangeSourceSystemID,
+	}, stackExchangeProvider, vaultExchangeProvider)
+	if err != nil {
+		return fail(fmt.Errorf("initialize Exchange: %w", err))
+	}
 
 	application.handler = httpapi.NewServer(httpapi.Dependencies{
 		Atlas:               atlasService,
@@ -283,6 +300,7 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 		Horizon:             horizonService,
 		Signals:             signalsService,
 		Patterns:            patternsService,
+		Exchange:            exchangeService,
 		Guard:               guardService,
 		OIDC:                oidcFlow,
 		SAML:                samlFlow,
@@ -340,6 +358,7 @@ type foundationRuntime struct {
 	guardStore           guard.Store
 	peopleStore          people.Store
 	directoryImportStore directoryStore
+	exchangeStore        exchange.Store
 	auditor              foundation.Auditor
 	close                func() error
 }
@@ -414,6 +433,7 @@ func initializeFoundation(ctx context.Context, cfg config.Config, runMigrations 
 		guardStore           guard.Store
 		peopleStore          people.Store
 		directoryImportStore directoryStore
+		exchangeStore        exchange.Store
 		auditor              foundation.Auditor = foundation.NopAuditor{}
 		closeRuntime                            = func() error { return nil }
 	)
@@ -423,6 +443,7 @@ func initializeFoundation(ctx context.Context, cfg config.Config, runMigrations 
 		guardStore = repository.NewMemoryGuardStore()
 		peopleStore = repository.NewMemoryPeopleStore()
 		directoryImportStore = repository.NewMemoryDirectoryImportStore()
+		exchangeStore = repository.NewMemoryExchangeStore()
 		assetStore = repository.NewMemoryAtlasStore()
 		atlasCodesStore = repository.NewMemoryAtlasCodesStore()
 		threadsStore = repository.NewMemoryThreadsStore()
@@ -465,6 +486,11 @@ func initializeFoundation(ctx context.Context, cfg config.Config, runMigrations 
 			return foundationRuntime{}, err
 		}
 		directoryImportStore, err = postgresrepository.NewDirectoryImportStore(database)
+		if err != nil {
+			_ = database.Close()
+			return foundationRuntime{}, err
+		}
+		exchangeStore, err = postgresrepository.NewExchangeStore(database)
 		if err != nil {
 			_ = database.Close()
 			return foundationRuntime{}, err
@@ -574,6 +600,7 @@ func initializeFoundation(ctx context.Context, cfg config.Config, runMigrations 
 		guardStore:           guardStore,
 		peopleStore:          peopleStore,
 		directoryImportStore: directoryImportStore,
+		exchangeStore:        exchangeStore,
 		auditor:              auditor,
 		close:                closeRuntime,
 	}, nil

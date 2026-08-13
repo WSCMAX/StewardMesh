@@ -20,6 +20,24 @@ func TestLoadSupportsMemoryDevelopmentMode(t *testing.T) {
 	if configuration.RepositoryDriver != RepositoryDriverMemory {
 		t.Fatalf("expected memory driver, got %q", configuration.RepositoryDriver)
 	}
+	if configuration.ExchangeSourceSystemID != "test-organization" {
+		t.Fatalf("expected Exchange source identity to follow the organization by default, got %q", configuration.ExchangeSourceSystemID)
+	}
+}
+
+func TestExchangeSourceSystemIdentityIsExplicitAndValidated(t *testing.T) {
+	t.Setenv("STEWARDMESH_REPOSITORY_DRIVER", "memory")
+	t.Setenv("STEWARDMESH_EXCHANGE_SOURCE_SYSTEM_ID", "source.inventory:v2")
+	configuration, err := Load()
+	if err != nil || configuration.ExchangeSourceSystemID != "source.inventory:v2" {
+		t.Fatalf("unexpected Exchange source identity %#v err=%v", configuration, err)
+	}
+	for _, invalid := range []string{"", " source", "source/path", strings.Repeat("x", 129)} {
+		configuration.ExchangeSourceSystemID = invalid
+		if err := configuration.Validate(); err == nil || !strings.Contains(err.Error(), "EXCHANGE_SOURCE_SYSTEM_ID") {
+			t.Fatalf("expected invalid Exchange source identity %q to fail, got %v", invalid, err)
+		}
+	}
 }
 
 func TestLoadSupportsOptionalGrouperConnector(t *testing.T) {

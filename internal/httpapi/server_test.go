@@ -25,6 +25,7 @@ import (
 	"github.com/maxlemke/stewardmesh/internal/bootstrap"
 	"github.com/maxlemke/stewardmesh/internal/directoryexpansion"
 	"github.com/maxlemke/stewardmesh/internal/domain"
+	"github.com/maxlemke/stewardmesh/internal/exchange"
 	"github.com/maxlemke/stewardmesh/internal/foundation"
 	"github.com/maxlemke/stewardmesh/internal/guard"
 	"github.com/maxlemke/stewardmesh/internal/horizon"
@@ -2248,6 +2249,24 @@ func newGuardServerWithDirectory(t *testing.T, limiter guard.AttemptLimiter, oid
 	if err != nil {
 		t.Fatal(err)
 	}
+	stackExchangeProvider, err := exchange.NewStackProvider(stackService)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vaultExchangeProvider, err := exchange.NewVaultProvider(vaultService)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exchangeService, err := exchange.NewService(repository.NewMemoryExchangeStore(), foundation.NopAuditor{}, service, exchange.ServiceConfig{
+		OrganizationID: organization.ID,
+		SourceSystemID: "http-test-system",
+		Now: func() time.Time {
+			return time.Date(2026, time.August, 13, 0, 0, 0, 0, time.UTC)
+		},
+	}, stackExchangeProvider, vaultExchangeProvider)
+	if err != nil {
+		t.Fatal(err)
+	}
 	handler := NewServer(Dependencies{
 		Atlas:            atlasService,
 		AtlasCodes:       atlasCodesService,
@@ -2261,6 +2280,7 @@ func newGuardServerWithDirectory(t *testing.T, limiter guard.AttemptLimiter, oid
 		Horizon:          horizonService,
 		Patterns:         patternsService,
 		Signals:          signalsService,
+		Exchange:         exchangeService,
 		Guard:            service,
 		OIDC:             oidcFlow,
 		SAML:             samlFlow,

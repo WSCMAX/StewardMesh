@@ -1,6 +1,6 @@
 package storage
 
-// Requirement: REQ-STORAGE-001. Feature: storage.blobs.
+// Requirements: REQ-STORAGE-001, REQ-EXCHANGE-001. Features: storage.blobs, migration.packages.
 
 import (
 	"context"
@@ -20,6 +20,7 @@ import (
 
 var (
 	recordIDPattern  = regexp.MustCompile(`^[a-f0-9]{32}$`)
+	sha256Pattern    = regexp.MustCompile(`^[a-f0-9]{64}$`)
 	referencePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
 	resourcePattern  = regexp.MustCompile(`^[a-z][a-z0-9._-]{0,63}$`)
 )
@@ -123,6 +124,97 @@ func (s *Service) CreateBlob(ctx context.Context, input CreateBlobInput) (Blob, 
 		return Blob{}, fmt.Errorf("audit Vault blob creation: %w", err)
 	}
 	return created, nil
+}
+
+// ImportBlob creates a blob under its portable ID after independently
+// verifying the package checksum. Exact replays are unchanged; conflicting
+// bytes or metadata never overwrite an existing object.
+func (s *Service) ImportBlob(ctx context.Context, input ImportBlobInput) (Blob, bool, error) {
+	input.ID = strings.TrimSpace(input.ID)
+	input.SHA256 = strings.TrimSpace(input.SHA256)
+	createInput := CreateBlobInput{
+		Name: strings.TrimSpace(input.Name), MediaType: strings.TrimSpace(input.MediaType),
+		SourceSystemID: strings.TrimSpace(input.SourceSystemID), SourceRecordID: strings.TrimSpace(input.SourceRecordID),
+		ResourceType: strings.TrimSpace(input.ResourceType), ResourceID: strings.TrimSpace(input.ResourceID), Content: input.Content,
+	}
+	if !recordIDPattern.MatchString(input.ID) || !sha256Pattern.MatchString(input.SHA256) ||
+		input.SizeBytes < 0 || input.SizeBytes > s.objects.MaximumBytes() || validateCreateBlobInput(createInput) != nil {
+		return Blob{}, false, ErrInvalidInput
+	}
+	if existing, err := s.metadata.GetBlob(ctx, s.organizationID, input.ID); err == nil {
+		if sameImportedBlob(existing, input) {
+			return existing, false, nil
+		}
+		return Blob{}, false, ErrConflict
+	} else if !errors.Is(err, ErrNotFound) {
+		return Blob{}, false, err
+	}
+	organizationHash := sha256.Sum256([]byte(s.organizationID))
+	key := hex.EncodeToString(organizationHash[:16]) + "/" + input.ID
+	stored, err := s.objects.Put(ctx, key, createInput.MediaType, createInput.Content)
+	objectCreated := err == nil
+	if errors.Is(err, ErrConflict) {
+		stored, err = s.verifyStoredObject(ctx, key)
+	}
+	if err != nil {
+		return Blob{}, false, err
+	}
+	if stored.SizeBytes != input.SizeBytes || stored.SHA256 != input.SHA256 {
+		if objectCreated {
+			_ = s.objects.Delete(ctx, key)
+		}
+		return Blob{}, false, ErrIntegrity
+	}
+	createdAt := s.now().UTC()
+	blob := Blob{
+		ID: input.ID, OrganizationID: s.organizationID, Name: createInput.Name, MediaType: createInput.MediaType,
+		SizeBytes: stored.SizeBytes, SHA256: stored.SHA256, Provider: s.objects.Provider(),
+		SourceSystemID: createInput.SourceSystemID, SourceRecordID: createInput.SourceRecordID,
+		ResourceType: createInput.ResourceType, ResourceID: createInput.ResourceID,
+		CreatedBy: actorFromContext(ctx), CreatedAt: createdAt, objectKey: key,
+	}
+	created, err := s.metadata.CreateBlob(ctx, blob)
+	if err != nil {
+		if existing, getErr := s.metadata.GetBlob(ctx, s.organizationID, input.ID); getErr == nil && sameImportedBlob(existing, input) {
+			return existing, false, nil
+		}
+		if objectCreated {
+			_ = s.objects.Delete(ctx, key)
+		}
+		return Blob{}, false, err
+	}
+	if err := s.audit(ctx, "vault.blob.imported", created, map[string]string{
+		"provider": created.Provider, "mediaType": created.MediaType, "sizeBytes": fmt.Sprint(created.SizeBytes),
+		"sha256": created.SHA256, "sourceSystemId": created.SourceSystemID,
+		"resourceType": created.ResourceType, "resourceId": created.ResourceID,
+	}); err != nil {
+		return Blob{}, false, fmt.Errorf("audit Vault blob import: %w", err)
+	}
+	return created, true, nil
+}
+
+func (s *Service) verifyStoredObject(ctx context.Context, key string) (StoredObject, error) {
+	content, err := s.objects.Open(ctx, key)
+	if err != nil {
+		return StoredObject{}, err
+	}
+	defer content.Close()
+	hash := sha256.New()
+	written, err := io.Copy(hash, io.LimitReader(content, s.objects.MaximumBytes()+1))
+	if err != nil {
+		return StoredObject{}, err
+	}
+	if written > s.objects.MaximumBytes() {
+		return StoredObject{}, ErrTooLarge
+	}
+	return StoredObject{SizeBytes: written, SHA256: hex.EncodeToString(hash.Sum(nil))}, nil
+}
+
+func sameImportedBlob(existing Blob, input ImportBlobInput) bool {
+	return existing.ID == input.ID && existing.Name == strings.TrimSpace(input.Name) && existing.MediaType == strings.TrimSpace(input.MediaType) &&
+		existing.SizeBytes == input.SizeBytes && existing.SHA256 == strings.TrimSpace(input.SHA256) &&
+		existing.SourceSystemID == strings.TrimSpace(input.SourceSystemID) && existing.SourceRecordID == strings.TrimSpace(input.SourceRecordID) &&
+		existing.ResourceType == strings.TrimSpace(input.ResourceType) && existing.ResourceID == strings.TrimSpace(input.ResourceID)
 }
 
 func (s *Service) OpenBlob(ctx context.Context, id string) (Blob, io.ReadCloser, error) {

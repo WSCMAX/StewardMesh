@@ -3,7 +3,8 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, expect, test, vi } from 'vitest'
 import GuardAccessManager from './GuardAccessManager'
 
-// Requirements: REQ-HORIZON-001, SEC-GUARD-001, SEC-HTTP-001, A11Y-001. Feature: lifecycle.planning.
+// Requirements: REQ-HORIZON-001, REQ-EXCHANGE-001, SEC-GUARD-001, SEC-HTTP-001, A11Y-001.
+// Features: lifecycle.planning, migration.packages.
 
 const accountId = '11111111111111111111111111111111'
 const roleId = '22222222222222222222222222222222'
@@ -48,6 +49,14 @@ const policyBundle = {
   permissions: ['organization.read', 'assets.read'],
 }
 const availablePermissions = ['organization.read', 'assets.read', 'assets.write', 'directory.read', 'directory.write', 'goals.read', 'goals.write', 'storage.read', 'storage.write', 'finance.read', 'finance.write', 'planning.read', 'planning.write', 'guard.manage']
+const importedOwnership = {
+  resourceType: 'stack.product',
+  resourceId: 'exchange-product',
+  sourceSystemId: 'source-stewardmesh',
+  sourceRecordId: 'source-product',
+  writeLocked: true,
+  registeredAt: '2026-08-09T12:15:00Z',
+}
 
 function accessResponse(assignments: typeof localAssignment[], roles = [role]) {
   return { accounts: [account], roles, policyBundles: [policyBundle], availablePermissions, assignments }
@@ -64,6 +73,7 @@ beforeEach(() => {
 
 test('creates and removes local scoped assignments while keeping provider assignments read only', async () => {
   let assignments = [localAssignment, managedAssignment]
+  let ownership = [importedOwnership]
   const createdAssignment = {
     ...localAssignment,
     id: '66666666666666666666666666666666',
@@ -73,6 +83,12 @@ test('creates and removes local scoped assignments while keeping provider assign
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input)
     if (path === '/api/v1/guard/access') return jsonResponse(accessResponse(assignments))
+    if (path === '/api/v1/guard/resource-ownership') return jsonResponse({ items: ownership })
+    if (path === '/api/v1/guard/resource-ownership/stack.product/exchange-product/claim' && init?.method === 'POST') {
+      const claimed = { ...importedOwnership, writeLocked: false, claimedBy: accountId, claimedAt: '2026-08-09T12:20:00Z' }
+      ownership = [claimed]
+      return jsonResponse(claimed)
+    }
     if (path === '/api/v1/guard/role-assignments' && init?.method === 'POST') {
       assignments = [...assignments, createdAssignment]
       return jsonResponse(createdAssignment, 201)
@@ -89,8 +105,15 @@ test('creates and removes local scoped assignments while keeping provider assign
   expect(await screen.findByRole('heading', { name: 'Build roles and assign the right access' })).toBeInTheDocument()
   expect(screen.getByText('Identity provider')).toBeInTheDocument()
   expect(screen.getByText('Read only')).toBeInTheDocument()
+  expect(screen.getByText('Write locked')).toBeInTheDocument()
   const results = await axe.run(container)
   expect(results.violations).toEqual([])
+
+  fireEvent.click(screen.getByRole('button', { name: 'Claim local ownership' }))
+  expect(await screen.findByText(/Local ownership claimed for stack.product exchange-product/)).toBeInTheDocument()
+  expect(screen.getByText('Locally managed')).toBeInTheDocument()
+  const claimCall = fetchMock.mock.calls.find(([path, init]) => path === '/api/v1/guard/resource-ownership/stack.product/exchange-product/claim' && init?.method === 'POST')
+  expect(claimCall?.[1]?.headers).toMatchObject({ 'X-CSRF-Token': 'csrf-value' })
 
   fireEvent.click(screen.getByText('Add a scoped role assignment'))
   fireEvent.change(screen.getByLabelText('Access scope'), { target: { value: 'department' } })
@@ -115,6 +138,7 @@ test('announces the server protection when removal would lock out the last admin
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input)
     if (path === '/api/v1/guard/access') return jsonResponse(accessResponse([localAssignment]))
+    if (path === '/api/v1/guard/resource-ownership') return jsonResponse({ items: [] })
     if (path.endsWith(localAssignment.id) && init?.method === 'DELETE') {
       return jsonResponse({ error: { message: 'Assign another organization administrator before removing this assignment.' } }, 409)
     }
@@ -144,6 +168,7 @@ test('creates an accessible custom role from direct permissions and a policy bun
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input)
     if (path === '/api/v1/guard/access') return jsonResponse(accessResponse([localAssignment], roles))
+    if (path === '/api/v1/guard/resource-ownership') return jsonResponse({ items: [] })
     if (path === '/api/v1/guard/roles' && init?.method === 'POST') {
       roles = [...roles, customRole]
       return jsonResponse(customRole, 201)

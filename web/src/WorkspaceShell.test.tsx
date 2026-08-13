@@ -8,6 +8,7 @@ test('accepts only fixed Workspace deep links', () => {
   expect(workspaceAreaFromHash('#workspace-atlas')).toBe('atlas')
   expect(workspaceAreaFromHash('#workspace-guard')).toBe('guard')
   expect(workspaceAreaFromHash('#workspace-signals')).toBe('signals')
+  expect(workspaceAreaFromHash('#workspace-exchange')).toBe('exchange')
   expect(workspaceAreaFromHash('#workspace-unknown')).toBe('overview')
   expect(workspaceAreaFromHash('#guide-atlas')).toBe('overview')
   expect(workspaceHash('people')).toBe('#workspace-people')

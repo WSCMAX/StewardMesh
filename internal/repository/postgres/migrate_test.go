@@ -7,15 +7,15 @@ import (
 
 // Requirements: REQ-FOUNDATION-001, SEC-GUARD-001, REQ-PEOPLE-001,
 // REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-005, REQ-ATLAS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001,
-// REQ-HORIZON-001, REQ-ATLAS-CODES-001, REQ-ATLAS-MODELS-001, REQ-ATLAS-CATALOG-001, REQ-PATTERNS-001, REQ-STACK-001, REQ-SIGNALS-001.
-// Features: lifecycle.planning, inventory.identifiers, inventory.models, inventory.catalog, templates.schemas, software.licenses, alerts.rules.
+// REQ-HORIZON-001, REQ-ATLAS-CODES-001, REQ-ATLAS-MODELS-001, REQ-ATLAS-CATALOG-001, REQ-PATTERNS-001, REQ-STACK-001, REQ-SIGNALS-001, REQ-EXCHANGE-001.
+// Features: lifecycle.planning, inventory.identifiers, inventory.models, inventory.catalog, templates.schemas, software.licenses, alerts.rules, migration.packages.
 func TestEmbeddedMigrationsAreOrderedAndChecksummed(t *testing.T) {
 	migrations, err := loadMigrations()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(migrations) != 31 {
-		t.Fatalf("expected 31 platform migrations, got %d", len(migrations))
+	if len(migrations) != 32 {
+		t.Fatalf("expected 32 platform migrations, got %d", len(migrations))
 	}
 	for index, migration := range migrations {
 		expectedVersion := int64(index + 1)
@@ -60,6 +60,28 @@ func TestGrouperMigrationAddsDurableNormalizedGroupGraph(t *testing.T) {
 	} {
 		if !strings.Contains(contents, expected) {
 			t.Fatalf("Grouper directory graph migration is missing %q", expected)
+		}
+	}
+}
+
+func TestExchangeMigrationAddsBoundedPackageReceiptsWithoutExpandingRoles(t *testing.T) {
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents := migrations[31].contents
+	for _, expected := range []string{
+		"REQ-EXCHANGE-001", "migration.packages", "GitHub: #9", "CREATE TABLE exchange_packages",
+		"archive_sha256", "size_bytes BETWEEN 1 AND 33554432", "jsonb_array_length(records) <= 10000",
+		"status IN ('processing', 'completed', 'holding', 'failed')", "exchange_packages_history_idx",
+	} {
+		if !strings.Contains(contents, expected) {
+			t.Fatalf("Exchange migration is missing %q", expected)
+		}
+	}
+	for _, forbidden := range []string{"guard_policy_bundle_permissions", "migration.read", "migration.write"} {
+		if strings.Contains(contents, forbidden) {
+			t.Fatalf("Exchange migration must not silently expand deployed role permissions with %q", forbidden)
 		}
 	}
 }

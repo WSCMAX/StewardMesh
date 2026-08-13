@@ -1,0 +1,598 @@
+package exchange
+
+// Requirement: REQ-EXCHANGE-001. Feature: migration.packages. GitHub: #9.
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/maxlemke/stewardmesh/internal/foundation"
+	"github.com/maxlemke/stewardmesh/internal/guard"
+)
+
+type ServiceConfig struct {
+	OrganizationID string
+	SourceSystemID string
+	Now            func() time.Time
+}
+
+type ownershipManager interface {
+	ImportedResourceOwnership(ctx context.Context, organizationID, resourceType, resourceID string) (guard.ResourceOwnership, error)
+	RegisterImportedResourceOwnership(ctx context.Context, actorID string, input guard.ResourceOwnershipInput) (guard.ResourceOwnership, bool, error)
+	DeleteImportedResourceOwnership(ctx context.Context, ownership guard.ResourceOwnership) error
+}
+
+type Service struct {
+	store          Store
+	auditor        foundation.Auditor
+	guard          ownershipManager
+	organizationID string
+	sourceSystemID string
+	now            func() time.Time
+	providers      map[string]Provider
+	providerList   []Provider
+}
+
+func NewService(store Store, auditor foundation.Auditor, ownership ownershipManager, configuration ServiceConfig, providers ...Provider) (*Service, error) {
+	configuration.OrganizationID = strings.TrimSpace(configuration.OrganizationID)
+	configuration.SourceSystemID = strings.TrimSpace(configuration.SourceSystemID)
+	if store == nil || auditor == nil || ownership == nil || !stableIDPattern.MatchString(configuration.OrganizationID) || !stableIDPattern.MatchString(configuration.SourceSystemID) {
+		return nil, errors.New("Exchange store, auditor, ownership service, organization, and source system are required")
+	}
+	if configuration.Now == nil {
+		configuration.Now = func() time.Time { return time.Now().UTC() }
+	}
+	service := &Service{
+		store: store, auditor: auditor, guard: ownership, organizationID: configuration.OrganizationID,
+		sourceSystemID: configuration.SourceSystemID, now: configuration.Now, providers: make(map[string]Provider),
+	}
+	for _, provider := range providers {
+		if provider == nil || len(provider.Types()) == 0 {
+			return nil, errors.New("Exchange providers must expose at least one record type")
+		}
+		seen := make(map[string]struct{})
+		service.providerList = append(service.providerList, provider)
+		for _, recordType := range provider.Types() {
+			if !resourceTypePattern.MatchString(recordType) {
+				return nil, fmt.Errorf("%w: provider record type is invalid", ErrInvalidInput)
+			}
+			if _, duplicate := seen[recordType]; duplicate {
+				return nil, fmt.Errorf("%w: provider repeats record type", ErrInvalidInput)
+			}
+			seen[recordType] = struct{}{}
+			if _, duplicate := service.providers[recordType]; duplicate {
+				return nil, fmt.Errorf("%w: record type has multiple providers", ErrConflict)
+			}
+			service.providers[recordType] = provider
+		}
+	}
+	if len(service.providers) == 0 {
+		return nil, errors.New("at least one Exchange provider is required")
+	}
+	return service, nil
+}
+
+func (s *Service) SourceSystemID() string { return s.sourceSystemID }
+
+func (s *Service) ListRecords(ctx context.Context) ([]RecordDescriptor, error) {
+	records, _, err := s.catalog(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]RecordDescriptor, 0, len(records))
+	keys := sortedRecordKeys(records)
+	for _, key := range keys {
+		record := records[key]
+		result = append(result, RecordDescriptor{
+			Type: record.Type, ID: record.ID, Revision: record.Revision,
+			Dependencies: append([]Reference{}, record.Dependencies...), HasFile: record.File != nil,
+		})
+	}
+	return result, nil
+}
+
+func (s *Service) ListPackages(ctx context.Context, limit int) ([]Package, error) {
+	if limit == 0 {
+		limit = 25
+	}
+	if limit < 1 || limit > MaximumHistory {
+		return nil, ErrInvalidInput
+	}
+	items, err := s.store.ListPackages(ctx, s.organizationID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list Exchange packages: %w", err)
+	}
+	if items == nil {
+		items = []Package{}
+	}
+	return items, nil
+}
+
+func (s *Service) Export(ctx context.Context, actorID string, request ExportRequest) (ExportArtifact, error) {
+	actorID = strings.TrimSpace(actorID)
+	if actorID == "" || len(actorID) > 128 || len(request.Selection) == 0 || len(request.Selection) > MaximumSelections ||
+		(request.FileMode != FileModeMetadata && request.FileMode != FileModeInclude) {
+		return ExportArtifact{}, ErrInvalidInput
+	}
+	records, owners, err := s.catalog(ctx)
+	if err != nil {
+		return ExportArtifact{}, err
+	}
+	selected := make(map[string]Record)
+	explicit := make(map[string]struct{}, len(request.Selection))
+	for _, reference := range request.Selection {
+		if _, duplicate := explicit[reference.Key()]; duplicate {
+			return ExportArtifact{}, ErrInvalidInput
+		}
+		explicit[reference.Key()] = struct{}{}
+	}
+	queue := append([]Reference(nil), request.Selection...)
+	for len(queue) > 0 {
+		reference := queue[0]
+		queue = queue[1:]
+		if !resourceTypePattern.MatchString(reference.Type) || !stableIDPattern.MatchString(reference.ID) {
+			return ExportArtifact{}, ErrInvalidInput
+		}
+		key := reference.Key()
+		if _, duplicate := selected[key]; duplicate {
+			continue
+		}
+		record, ok := records[key]
+		if !ok {
+			return ExportArtifact{}, ErrNotFound
+		}
+		selected[key] = cloneRecord(record)
+		if request.IncludeDependencies {
+			for _, dependency := range record.Dependencies {
+				if _, available := records[dependency.Key()]; available {
+					queue = append(queue, dependency)
+				}
+			}
+		}
+		if len(selected) > MaximumRecords {
+			return ExportArtifact{}, ErrTooLarge
+		}
+	}
+	ordered, err := topologicalRecords(selected)
+	if err != nil {
+		return ExportArtifact{}, err
+	}
+	files := make(map[string][]byte)
+	for index := range ordered {
+		record := &ordered[index]
+		if ownership, ok := owners[Reference{Type: record.Type, ID: record.ID}.Key()]; ok {
+			record.Ownership = ownership
+		}
+		if record.File == nil || request.FileMode != FileModeInclude {
+			continue
+		}
+		provider := s.providers[record.Type]
+		reader, ok := provider.(FileReader)
+		if !ok {
+			return ExportArtifact{}, ErrInvalidInput
+		}
+		content, err := reader.ReadRecordFile(ctx, *record)
+		if err != nil {
+			return ExportArtifact{}, fmt.Errorf("read Exchange file: %w", err)
+		}
+		if int64(len(content)) > MaximumFileBytes {
+			return ExportArtifact{}, ErrTooLarge
+		}
+		files[Reference{Type: record.Type, ID: record.ID}.Key()] = content
+	}
+	packageID, err := foundation.NewCorrelationID()
+	if err != nil {
+		return ExportArtifact{}, fmt.Errorf("create Exchange package id: %w", err)
+	}
+	now := normalizedNow(s.now())
+	artifact, sealed, err := encodeArchive(Manifest{
+		SchemaVersion: SchemaVersion, PackageID: packageID, SourceSystemID: s.sourceSystemID,
+		ExportedAt: now, FileMode: request.FileMode, Records: ordered,
+	}, files)
+	if err != nil {
+		return ExportArtifact{}, err
+	}
+	outcomes := make([]RecordOutcome, 0, len(sealed.Records))
+	for _, record := range sealed.Records {
+		outcomes = append(outcomes, RecordOutcome{
+			Type: record.Type, ID: record.ID, Revision: record.Revision, Checksum: record.Checksum,
+			Status: OutcomeUnchanged, MissingDependencies: []Reference{},
+		})
+	}
+	receipt := Package{
+		OrganizationID: s.organizationID, PackageID: packageID, Direction: DirectionExport,
+		SchemaVersion: SchemaVersion, SourceSystemID: s.sourceSystemID, ArchiveSHA256: artifact.SHA256,
+		SizeBytes: int64(len(artifact.Bytes)), FileMode: request.FileMode, Status: StatusCompleted,
+		RecordCount: len(sealed.Records), FileCount: countManifestFiles(sealed), UnchangedCount: len(sealed.Records),
+		Records: outcomes, CreatedBy: actorID, CreatedAt: now, UpdatedAt: now,
+	}
+	if _, created, err := s.store.CreatePackage(ctx, receipt); err != nil || !created {
+		if err == nil {
+			err = ErrConflict
+		}
+		return ExportArtifact{}, fmt.Errorf("record Exchange export: %w", err)
+	}
+	if err := s.audit(ctx, actorID, "exchange.package.exported", receipt); err != nil {
+		return ExportArtifact{}, fmt.Errorf("audit Exchange export: %w", err)
+	}
+	return artifact, nil
+}
+
+func (s *Service) Import(ctx context.Context, actorID string, contents []byte) (ImportResult, error) {
+	actorID = strings.TrimSpace(actorID)
+	if actorID == "" || len(actorID) > 128 {
+		return ImportResult{}, ErrInvalidInput
+	}
+	decoded, archiveChecksum, err := decodeArchive(contents)
+	if err != nil {
+		return ImportResult{}, err
+	}
+	now := normalizedNow(s.now())
+	pending := Package{
+		OrganizationID: s.organizationID, PackageID: decoded.Manifest.PackageID, Direction: DirectionImport,
+		SchemaVersion: decoded.Manifest.SchemaVersion, SourceSystemID: decoded.Manifest.SourceSystemID,
+		ArchiveSHA256: archiveChecksum, SizeBytes: int64(len(contents)), FileMode: decoded.Manifest.FileMode,
+		Status: StatusProcessing, RecordCount: len(decoded.Manifest.Records), FileCount: countManifestFiles(decoded.Manifest),
+		Records: []RecordOutcome{}, CreatedBy: actorID, CreatedAt: now, UpdatedAt: now,
+	}
+	stored, created, err := s.store.CreatePackage(ctx, pending)
+	if err != nil {
+		return ImportResult{}, fmt.Errorf("reserve Exchange import: %w", err)
+	}
+	pending = stored
+	priorOutcomes := make(map[string]RecordOutcome)
+	if !created {
+		if stored.ArchiveSHA256 != archiveChecksum || stored.SourceSystemID != decoded.Manifest.SourceSystemID ||
+			stored.SchemaVersion != decoded.Manifest.SchemaVersion || stored.SizeBytes != int64(len(contents)) ||
+			stored.FileMode != decoded.Manifest.FileMode || stored.RecordCount != len(decoded.Manifest.Records) ||
+			stored.FileCount != countManifestFiles(decoded.Manifest) {
+			return ImportResult{}, ErrConflict
+		}
+		switch stored.Status {
+		case StatusCompleted:
+			return ImportResult{Package: stored, Replay: true}, nil
+		case StatusProcessing:
+			return ImportResult{}, ErrConflict
+		case StatusHolding, StatusFailed:
+			for _, outcome := range stored.Records {
+				priorOutcomes[Reference{Type: outcome.Type, ID: outcome.ID}.Key()] = outcome
+			}
+			pending.Status = StatusProcessing
+			pending.CreatedCount = 0
+			pending.UnchangedCount = 0
+			pending.HoldingCount = 0
+			pending.Records = []RecordOutcome{}
+			pending.ErrorCode = ""
+			pending.UpdatedAt = nextUpdatedAt(s.now(), stored.UpdatedAt)
+			stored, err = s.store.UpdatePackage(ctx, pending, stored.UpdatedAt)
+			if err != nil {
+				return ImportResult{}, fmt.Errorf("retry Exchange import: %w", err)
+			}
+			pending = stored
+		default:
+			return ImportResult{}, ErrConflict
+		}
+	}
+	recordMap := make(map[string]Record, len(decoded.Manifest.Records))
+	for _, record := range decoded.Manifest.Records {
+		recordMap[Reference{Type: record.Type, ID: record.ID}.Key()] = cloneRecord(record)
+	}
+	ordered, err := topologicalRecords(recordMap)
+	if err != nil {
+		return ImportResult{}, s.failImport(ctx, actorID, pending, err)
+	}
+	outcomesByKey := make(map[string]RecordOutcome, len(ordered))
+	outcomes := make([]RecordOutcome, 0, len(ordered))
+	for _, record := range ordered {
+		key := Reference{Type: record.Type, ID: record.ID}.Key()
+		missing, dependencyErr := s.missingDependencies(ctx, record, recordMap, outcomesByKey)
+		if dependencyErr != nil {
+			return ImportResult{}, s.failImport(ctx, actorID, pending, dependencyErr)
+		}
+		provider := s.providers[record.Type]
+		if provider == nil {
+			missing = append(missing, Reference{Type: "provider", ID: record.Type})
+		}
+		if record.File != nil && record.File.Entry == "" {
+			missing = append(missing, Reference{Type: "exchange.file", ID: record.File.SHA256})
+		}
+		missing = normalizeReferences(missing)
+		if len(missing) > 0 {
+			outcome := RecordOutcome{Type: record.Type, ID: record.ID, Revision: record.Revision, Checksum: record.Checksum, Status: OutcomeHolding, MissingDependencies: missing}
+			outcomesByKey[key] = outcome
+			outcomes = append(outcomes, outcome)
+			continue
+		}
+		provenance := record.Provenance
+		if provenance.SourceSystemID == "" {
+			provenance.SourceSystemID = decoded.Manifest.SourceSystemID
+		}
+		if provenance.SourceRecordID == "" {
+			provenance.SourceRecordID = key
+		}
+		ownership, ownershipCreated, lockErr := s.guard.RegisterImportedResourceOwnership(ctx, actorID, guard.ResourceOwnershipInput{
+			ResourceType: record.Type, ResourceID: record.ID,
+			SourceSystemID: provenance.SourceSystemID, SourceRecordID: provenance.SourceRecordID,
+		})
+		if lockErr != nil {
+			return ImportResult{}, s.failImport(ctx, actorID, pending, lockErr)
+		}
+		var file []byte
+		if record.File != nil {
+			file = decoded.Files[record.File.Entry]
+		}
+		wasCreated, importErr := provider.ImportRecord(ctx, decoded.Manifest.SourceSystemID, record, file)
+		if importErr != nil {
+			if ownershipCreated {
+				importErr = errors.Join(importErr, s.guard.DeleteImportedResourceOwnership(ctx, ownership))
+			}
+			if errors.Is(importErr, ErrDependencyMissing) {
+				outcome := RecordOutcome{Type: record.Type, ID: record.ID, Revision: record.Revision, Checksum: record.Checksum, Status: OutcomeHolding, MissingDependencies: append([]Reference(nil), record.Dependencies...)}
+				outcomesByKey[key] = outcome
+				outcomes = append(outcomes, outcome)
+				continue
+			}
+			return ImportResult{}, s.failImport(ctx, actorID, pending, importErr)
+		}
+		status := OutcomeUnchanged
+		if wasCreated {
+			status = OutcomeCreated
+		} else if prior, ok := priorOutcomes[key]; ok && prior.Status == OutcomeCreated {
+			status = OutcomeCreated
+		}
+		outcome := RecordOutcome{
+			Type: record.Type, ID: record.ID, Revision: record.Revision, Checksum: record.Checksum,
+			Status: status, MissingDependencies: []Reference{}, WriteLocked: ownership.WriteLocked,
+		}
+		outcomesByKey[key] = outcome
+		outcomes = append(outcomes, outcome)
+	}
+	expectedUpdatedAt := pending.UpdatedAt
+	pending.Records = outcomes
+	pending.Status = StatusCompleted
+	for _, outcome := range outcomes {
+		switch outcome.Status {
+		case OutcomeCreated:
+			pending.CreatedCount++
+		case OutcomeUnchanged:
+			pending.UnchangedCount++
+		case OutcomeHolding:
+			pending.HoldingCount++
+			pending.Status = StatusHolding
+		}
+	}
+	pending.UpdatedAt = nextUpdatedAt(s.now(), expectedUpdatedAt)
+	completed, err := s.store.UpdatePackage(ctx, pending, expectedUpdatedAt)
+	if err != nil {
+		return ImportResult{}, fmt.Errorf("complete Exchange import: %w", err)
+	}
+	if err := s.audit(ctx, actorID, "exchange.package.imported", completed); err != nil {
+		return ImportResult{}, fmt.Errorf("audit Exchange import: %w", err)
+	}
+	return ImportResult{Package: completed}, nil
+}
+
+func (s *Service) failImport(ctx context.Context, actorID string, pending Package, cause error) error {
+	expected := pending.UpdatedAt
+	pending.Status = StatusFailed
+	pending.ErrorCode = archiveErrorCode(cause)
+	pending.UpdatedAt = nextUpdatedAt(s.now(), expected)
+	failed, updateErr := s.store.UpdatePackage(ctx, pending, expected)
+	if updateErr == nil {
+		updateErr = s.audit(ctx, actorID, "exchange.package.import_failed", failed)
+	}
+	return errors.Join(cause, updateErr)
+}
+
+func (s *Service) missingDependencies(ctx context.Context, record Record, records map[string]Record, outcomes map[string]RecordOutcome) ([]Reference, error) {
+	missing := make([]Reference, 0)
+	for _, dependency := range record.Dependencies {
+		if _, packaged := records[dependency.Key()]; packaged {
+			outcome, completed := outcomes[dependency.Key()]
+			if !completed || outcome.Status == OutcomeHolding {
+				missing = append(missing, dependency)
+			}
+			continue
+		}
+		exists, handled, err := s.dependencyExists(ctx, dependency)
+		if err != nil {
+			return nil, err
+		}
+		if !handled || !exists {
+			missing = append(missing, dependency)
+		}
+	}
+	return missing, nil
+}
+
+func (s *Service) dependencyExists(ctx context.Context, dependency Reference) (exists bool, handled bool, err error) {
+	if provider := s.providers[dependency.Type]; provider != nil {
+		exists, err := provider.Exists(ctx, dependency)
+		return exists, true, err
+	}
+	for _, provider := range s.providerList {
+		resolver, ok := provider.(DependencyResolver)
+		if !ok {
+			continue
+		}
+		resolved, found, resolveErr := resolver.DependencyExists(ctx, dependency)
+		if resolveErr != nil {
+			return false, true, resolveErr
+		}
+		if !resolved {
+			continue
+		}
+		if handled {
+			return false, true, ErrConflict
+		}
+		handled, exists = true, found
+	}
+	return exists, handled, nil
+}
+
+func (s *Service) catalog(ctx context.Context) (map[string]Record, map[string]OwnershipMetadata, error) {
+	records := make(map[string]Record)
+	owners := make(map[string]OwnershipMetadata)
+	for _, provider := range s.providerList {
+		items, err := provider.ListRecords(ctx)
+		if err != nil {
+			return nil, nil, fmt.Errorf("list Exchange provider records: %w", err)
+		}
+		for _, item := range items {
+			item = cloneRecord(item)
+			item.Checksum = ""
+			if item.Dependencies == nil {
+				item.Dependencies = []Reference{}
+			}
+			sort.Slice(item.Dependencies, func(i, j int) bool { return item.Dependencies[i].Key() < item.Dependencies[j].Key() })
+			if item.Provenance.SourceSystemID == "" {
+				item.Provenance = Provenance{SourceSystemID: s.sourceSystemID, SourceRecordID: Reference{Type: item.Type, ID: item.ID}.Key()}
+			}
+			if item.Ownership.State == "" {
+				item.Ownership.State = "local"
+			}
+			if err := validateRecord(item); err != nil {
+				return nil, nil, fmt.Errorf("validate Exchange provider record: %w", err)
+			}
+			key := Reference{Type: item.Type, ID: item.ID}.Key()
+			if _, duplicate := records[key]; duplicate {
+				return nil, nil, ErrConflict
+			}
+			ownership, err := s.guard.ImportedResourceOwnership(ctx, s.organizationID, item.Type, item.ID)
+			switch {
+			case err == nil:
+				state := "claimed"
+				if ownership.WriteLocked {
+					state = "external_locked"
+				}
+				owners[key] = OwnershipMetadata{
+					State: state, SourceSystemID: ownership.SourceSystemID, SourceRecordID: ownership.SourceRecordID, ClaimedAt: ownership.ClaimedAt,
+				}
+				item.Provenance = Provenance{SourceSystemID: ownership.SourceSystemID, SourceRecordID: ownership.SourceRecordID}
+			case errors.Is(err, guard.ErrNotFound):
+				owners[key] = OwnershipMetadata{State: "local"}
+			default:
+				return nil, nil, fmt.Errorf("read Exchange ownership: %w", err)
+			}
+			records[key] = item
+			if len(records) > MaximumRecords {
+				return nil, nil, ErrTooLarge
+			}
+		}
+	}
+	return records, owners, nil
+}
+
+func topologicalRecords(records map[string]Record) ([]Record, error) {
+	visiting := make(map[string]bool, len(records))
+	visited := make(map[string]bool, len(records))
+	result := make([]Record, 0, len(records))
+	var visit func(string) error
+	visit = func(key string) error {
+		if visiting[key] {
+			return fmt.Errorf("%w: dependency cycle", ErrInvalidInput)
+		}
+		if visited[key] {
+			return nil
+		}
+		visiting[key] = true
+		record := records[key]
+		for _, dependency := range record.Dependencies {
+			if _, included := records[dependency.Key()]; included {
+				if err := visit(dependency.Key()); err != nil {
+					return err
+				}
+			}
+		}
+		visiting[key] = false
+		visited[key] = true
+		result = append(result, cloneRecord(record))
+		return nil
+	}
+	for _, key := range sortedRecordKeys(records) {
+		if err := visit(key); err != nil {
+			return nil, err
+		}
+	}
+	return result, nil
+}
+
+func normalizeReferences(values []Reference) []Reference {
+	byKey := make(map[string]Reference, len(values))
+	for _, value := range values {
+		byKey[value.Key()] = value
+	}
+	keys := make([]string, 0, len(byKey))
+	for key := range byKey {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	result := make([]Reference, 0, len(keys))
+	for _, key := range keys {
+		result = append(result, byKey[key])
+	}
+	return result
+}
+
+func sortedRecordKeys(records map[string]Record) []string {
+	keys := make([]string, 0, len(records))
+	for key := range records {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func cloneRecord(value Record) Record {
+	value.Dependencies = append([]Reference(nil), value.Dependencies...)
+	value.Payload = append([]byte(nil), value.Payload...)
+	if value.Ownership.ClaimedAt != nil {
+		claimedAt := *value.Ownership.ClaimedAt
+		value.Ownership.ClaimedAt = &claimedAt
+	}
+	if value.File != nil {
+		file := *value.File
+		value.File = &file
+	}
+	return value
+}
+
+func (s *Service) audit(ctx context.Context, actorID, action string, value Package) error {
+	scope, ok := foundation.ScopeFromContext(ctx)
+	if !ok || scope.CorrelationID == "" {
+		correlationID, err := foundation.NewCorrelationID()
+		if err != nil {
+			return err
+		}
+		scope = foundation.Scope{OrganizationID: s.organizationID, ActorID: actorID, CorrelationID: correlationID}
+		ctx = foundation.WithScope(ctx, scope)
+	}
+	eventID, err := foundation.NewCorrelationID()
+	if err != nil {
+		return err
+	}
+	metadata := map[string]string{
+		"requirementId": RequirementID, "featureId": FeatureID, "direction": string(value.Direction),
+		"schemaVersion": value.SchemaVersion, "status": string(value.Status), "archiveSha256": value.ArchiveSHA256,
+		"recordCount": fmt.Sprint(value.RecordCount), "fileCount": fmt.Sprint(value.FileCount),
+		"createdCount": fmt.Sprint(value.CreatedCount), "unchangedCount": fmt.Sprint(value.UnchangedCount),
+		"holdingCount": fmt.Sprint(value.HoldingCount),
+	}
+	return s.auditor.Record(ctx, foundation.AuditEvent{
+		ID: eventID, OrganizationID: s.organizationID, ActorID: actorID, CorrelationID: scope.CorrelationID,
+		Action: action, ResourceType: "exchange.package", ResourceID: value.PackageID,
+		OccurredAt: normalizedNow(s.now()), Metadata: metadata,
+	})
+}
+
+func nextUpdatedAt(now, previous time.Time) time.Time {
+	now = normalizedNow(now)
+	if !now.After(previous) {
+		return previous.Add(time.Microsecond)
+	}
+	return now
+}

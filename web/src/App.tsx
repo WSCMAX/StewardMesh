@@ -2,6 +2,7 @@ import { type CSSProperties, type FormEvent, type ReactNode, useEffect, useRef, 
 import { ApiRequestError, authenticationRequiredEventName, requestJSON } from './api'
 import AtlasInventory, { isAsset, type Asset } from './AtlasInventory'
 import { documentationHref } from './documentation'
+import ExchangeManager from './ExchangeManager'
 import GuideExperience, { GuideInvitation, type GuideDestination } from './GuideExperience'
 import GuardAccessManager from './GuardAccessManager'
 import HorizonPlanner from './HorizonPlanner'
@@ -17,7 +18,7 @@ import { brandingStyle, readWalkthroughStatus, resolveBranding, type Walkthrough
 import WorkspaceShell, { workspaceAreaFromHash, workspaceHash, type WorkspaceArea, type WorkspaceAreaID } from './WorkspaceShell'
 import { permissionAccess, type PermissionAccess, type SessionGrant } from './workspaceAccess'
 
-// Requirements include REQ-WORKSPACE-001, REQ-PATTERNS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-STACK-001, REQ-HORIZON-001, REQ-SIGNALS-001, A11Y-001, DOC-001, and DOC-002.
+// Requirements include REQ-WORKSPACE-001, REQ-PATTERNS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-STACK-001, REQ-HORIZON-001, REQ-SIGNALS-001, REQ-EXCHANGE-001, A11Y-001, DOC-001, and DOC-002.
 
 type WorkspaceModule = {
   id: Exclude<WorkspaceAreaID, 'overview'>
@@ -76,6 +77,7 @@ const workspaceModules: readonly WorkspaceModule[] = [
   { id: 'signals', name: 'Signals', descriptor: 'Alerts and action queue', summary: 'Evaluate operational and financial conditions, acknowledge alerts, assign ownership, and configure delivery subscriptions.', permission: 'signals.read', writePermission: 'signals.write' },
   { id: 'threads', name: 'Threads', descriptor: 'Tags and strategic goals', summary: 'Connect inventory to hierarchical tags, goals, and visible provenance.', permission: 'goals.read', writePermission: 'goals.write' },
   { id: 'vault', name: 'Vault', descriptor: 'Private files and evidence', summary: 'Store checksummed evidence and authorize private downloads.', permission: 'storage.read', writePermission: 'storage.write' },
+  { id: 'exchange', name: 'Exchange', descriptor: 'Migration packages', summary: 'Move selected records through bounded, checksummed, dependency-aware packages.', permission: 'integrations.read', writePermission: 'integrations.write' },
   { id: 'people', name: 'People', descriptor: 'Users and departments', summary: 'Organize locations, departments, identities, and asset assignments.', permission: 'directory.read', writePermission: 'directory.write' },
   { id: 'guard', name: 'Guard', descriptor: 'Authentication and authorization', summary: 'Manage roles, scoped assignments, ownership, and access policy.', permission: 'guard.manage' },
 ]
@@ -423,6 +425,7 @@ export default function App() {
     signals: <SignalsManager csrfToken={csrfToken} onOpenHelp={() => openGuide({ view: 'help', topic: 'signals' })} permissions={permissions} />,
     threads: <ThreadsManager assets={assets} csrfToken={csrfToken} onOpenHelp={() => openGuide({ view: 'help', topic: 'threads' })} permissions={permissions} />,
     vault: <VaultManager csrfToken={csrfToken} onOpenHelp={() => openGuide({ view: 'help', topic: 'vault' })} permissions={permissions} />,
+    exchange: <ExchangeManager csrfToken={csrfToken} onOpenHelp={() => openGuide({ view: 'help', topic: 'exchange' })} permissions={permissions} />,
     people: <PeopleDirectory assets={assets} csrfToken={csrfToken} issuesUrl={issuesUrl} onOpenHelp={() => openGuide({ view: 'help', topic: 'people' })} onReportIssue={() => openGuide({ view: 'report', topic: 'people' })} permissions={permissions} />,
     guard: <div className="grid gap-6"><GuardAccessManager csrfToken={csrfToken} onOpenHelp={() => openGuide({ view: 'help', topic: 'guard' })} /><PatternsManager csrfToken={csrfToken} /></div>,
   }

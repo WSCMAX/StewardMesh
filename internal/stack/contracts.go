@@ -261,11 +261,13 @@ type AssetContext struct {
 // package. Dependencies contain stable "type:id" references and Payload is
 // bounded canonical JSON produced from a typed Stack record.
 type ExchangeRecord struct {
-	Type         string          `json:"type"`
-	ID           string          `json:"id"`
-	Revision     int64           `json:"revision"`
-	Dependencies []string        `json:"dependencies"`
-	Payload      json.RawMessage `json:"payload"`
+	Type           string          `json:"type"`
+	ID             string          `json:"id"`
+	Revision       int64           `json:"revision"`
+	Dependencies   []string        `json:"dependencies"`
+	SourceSystemID string          `json:"sourceSystemId,omitempty"`
+	SourceRecordID string          `json:"sourceRecordId,omitempty"`
+	Payload        json.RawMessage `json:"payload"`
 }
 
 type ImportResult struct {

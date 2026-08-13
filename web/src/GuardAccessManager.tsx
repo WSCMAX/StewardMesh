@@ -2,8 +2,8 @@ import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } fro
 import { ApiRequestError, requestJSON } from './api'
 import { buttonClass, dangerButtonClass, inputClass, labelClass, panelClass, secondaryButtonClass, subpanelClass, tableWrapClass } from './ui'
 
-// Requirements: REQ-HORIZON-001, SEC-GUARD-001, SEC-HTTP-001, A11Y-001.
-// Features: lifecycle.planning, authorization.security.
+// Requirements: REQ-HORIZON-001, REQ-EXCHANGE-001, SEC-GUARD-001, SEC-HTTP-001, A11Y-001.
+// Features: lifecycle.planning, migration.packages, authorization.security.
 
 type ScopeKind = 'organization' | 'site' | 'department' | 'resource'
 
@@ -48,6 +48,17 @@ type AuthorizationDirectory = {
   policyBundles: PolicyBundle[]
   availablePermissions: string[]
   assignments: RoleAssignment[]
+}
+
+type ResourceOwnership = {
+  resourceType: string
+  resourceId: string
+  sourceSystemId: string
+  sourceRecordId: string
+  writeLocked: boolean
+  registeredAt: string
+  claimedBy?: string
+  claimedAt?: string
 }
 
 type GuardAccessManagerProps = {
@@ -126,6 +137,19 @@ function isAssignment(value: unknown): value is RoleAssignment {
     && isString(assignment.createdAt)
 }
 
+function isResourceOwnership(value: unknown): value is ResourceOwnership {
+  if (typeof value !== 'object' || value === null) return false
+  const ownership = value as Record<string, unknown>
+  return isString(ownership.resourceType) && ownership.resourceType.length > 0
+    && isString(ownership.resourceId) && ownership.resourceId.length > 0
+    && isString(ownership.sourceSystemId) && ownership.sourceSystemId.length > 0
+    && isString(ownership.sourceRecordId) && ownership.sourceRecordId.length > 0
+    && typeof ownership.writeLocked === 'boolean' && isString(ownership.registeredAt)
+    && (ownership.claimedBy === undefined || isString(ownership.claimedBy))
+    && (ownership.claimedAt === undefined || isString(ownership.claimedAt))
+    && (ownership.writeLocked ? ownership.claimedBy === undefined && ownership.claimedAt === undefined : Boolean(ownership.claimedBy && ownership.claimedAt))
+}
+
 function readDirectory(value: unknown): AuthorizationDirectory {
   if (typeof value !== 'object' || value === null) throw new Error('invalid Guard access response')
   const directory = value as Record<string, unknown>
@@ -145,6 +169,13 @@ function readDirectory(value: unknown): AuthorizationDirectory {
   }
 }
 
+function readResourceOwnership(value: unknown): ResourceOwnership[] {
+  if (typeof value !== 'object' || value === null) throw new Error('invalid Guard ownership response')
+  const response = value as Record<string, unknown>
+  if (!Array.isArray(response.items) || !response.items.every(isResourceOwnership)) throw new Error('invalid Guard ownership response')
+  return response.items
+}
+
 function formatScope(assignment: RoleAssignment) {
   if (assignment.scope.kind === 'organization') return scopeLabels.organization
   return `${scopeLabels[assignment.scope.kind]} · ${assignment.scope.resourceId}`
@@ -152,6 +183,7 @@ function formatScope(assignment: RoleAssignment) {
 
 export default function GuardAccessManager({ csrfToken, onOpenHelp }: GuardAccessManagerProps) {
   const [directory, setDirectory] = useState<AuthorizationDirectory>({ accounts: [], roles: [], policyBundles: [], availablePermissions: [], assignments: [] })
+  const [ownership, setOwnership] = useState<ResourceOwnership[]>([])
   const [scopeKind, setScopeKind] = useState<ScopeKind>('organization')
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState('')
@@ -167,8 +199,12 @@ export default function GuardAccessManager({ csrfToken, onOpenHelp }: GuardAcces
   }, [error])
 
   const loadAccess = useCallback(async (signal?: AbortSignal) => {
-    const response = await requestJSON('/api/v1/guard/access', { signal })
-    setDirectory(readDirectory(response))
+    const [accessResponse, ownershipResponse] = await Promise.all([
+      requestJSON('/api/v1/guard/access', { signal }),
+      requestJSON('/api/v1/guard/resource-ownership', { signal }),
+    ])
+    setDirectory(readDirectory(accessResponse))
+    setOwnership(readResourceOwnership(ownershipResponse))
   }, [])
 
   useEffect(() => {
@@ -275,10 +311,30 @@ export default function GuardAccessManager({ csrfToken, onOpenHelp }: GuardAcces
     }
   }
 
+  async function handleClaim(record: ResourceOwnership) {
+    const key = `claim:${record.resourceType}:${record.resourceId}`
+    setBusy(key)
+    setError('')
+    setStatus('')
+    try {
+      const response = await requestJSON(`/api/v1/guard/resource-ownership/${encodeURIComponent(record.resourceType)}/${encodeURIComponent(record.resourceId)}/claim`, {
+        method: 'POST',
+        headers: { 'X-CSRF-Token': csrfToken },
+      })
+      if (!isResourceOwnership(response) || response.writeLocked) throw new Error('invalid ownership claim response')
+      await loadAccess()
+      setStatus(`Local ownership claimed for ${record.resourceType} ${record.resourceId}.`)
+    } catch (mutationError) {
+      reportError(mutationError, 'The imported resource could not be claimed.')
+    } finally {
+      setBusy('')
+    }
+  }
+
   const activeAccounts = directory.accounts.filter((account) => account.status === 'active')
 
   return (
-    <section aria-labelledby="guard-access-heading" className={`${panelClass} border-steward-teal/25 p-5 sm:p-6`} data-feature="authorization.security" data-requirement="SEC-GUARD-001">
+    <section aria-labelledby="guard-access-heading" className={`${panelClass} min-w-0 max-w-full overflow-hidden border-steward-teal/25 p-5 sm:p-6`} data-feature="authorization.security" data-requirement="SEC-GUARD-001">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div><p className="text-sm font-semibold text-steward-teal">Guard · Access administration</p><h2 className="mt-2 text-2xl font-semibold" id="guard-access-heading">Build roles and assign the right access</h2><p className="mt-2 max-w-3xl leading-7 text-steward-mist-muted">Combine direct permissions with reusable policy bundles, then apply a role to the whole organization or limit it to a site, department, or resource. Built-in roles stay protected.</p></div>
         {onOpenHelp && <button className={secondaryButtonClass} onClick={onOpenHelp} type="button">Guard help</button>}
@@ -289,10 +345,11 @@ export default function GuardAccessManager({ csrfToken, onOpenHelp }: GuardAcces
 
       {loading ? <p className="mt-5 text-steward-mist-muted" role="status">Loading Guard access…</p> : (
         <>
-          <div className="mt-5 grid gap-3 sm:grid-cols-3">
+          <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <Summary label="Accounts" value={directory.accounts.length} />
             <Summary label="Roles" value={directory.roles.length} />
             <Summary label="Assignments" value={directory.assignments.length} />
+            <Summary label="Imported write locks" value={ownership.filter((record) => record.writeLocked).length} />
           </div>
 
           <details className={`${subpanelClass} mt-6 border-steward-teal/35 p-5`}>
@@ -407,6 +464,24 @@ export default function GuardAccessManager({ csrfToken, onOpenHelp }: GuardAcces
                         <td className="col-span-2 md:table-cell md:px-4 md:py-3 md:text-right">{assignment.managed ? <span className="text-xs text-steward-mist-muted">Read only</span> : <button aria-label={`Remove ${roleNames.get(assignment.roleId) ?? 'role'} assignment for ${accountNames.get(assignment.accountId) ?? 'account'}`} className={dangerButtonClass} disabled={busy !== ''} onClick={() => handleRevoke(assignment)} type="button">{busy === assignment.id ? 'Removing…' : 'Remove'}</button>}</td>
                       </tr>
                     ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          <div className="mt-6 min-w-0 max-w-full">
+            <h3 className="text-lg font-semibold">Imported resource ownership</h3>
+            <p className="mt-1 max-w-3xl text-sm leading-6 text-steward-mist-muted">Imported records stay readable while Guard blocks local changes. Claim only after confirming that this organization will manage the resource locally; an exact package replay will not restore the lock.</p>
+            {ownership.length === 0 ? <p className="mt-4 rounded-xl border border-dashed border-steward-ink-800 p-5 text-sm text-steward-mist-muted">No imported resource ownership records are available.</p> : (
+              <div aria-label="Imported resource ownership records" className={`${tableWrapClass} mt-4`} role="region" tabIndex={0}>
+                <table className="w-full min-w-[48rem] border-collapse text-left text-sm">
+                  <thead className="bg-steward-ink-800/60 text-steward-mist-muted"><tr><th className="px-4 py-3 font-semibold" scope="col">Resource</th><th className="px-4 py-3 font-semibold" scope="col">Earliest source</th><th className="px-4 py-3 font-semibold" scope="col">State</th><th className="px-4 py-3 font-semibold" scope="col"><span className="sr-only">Actions</span></th></tr></thead>
+                  <tbody className="divide-y divide-steward-ink-800">
+                    {ownership.map((record) => {
+                      const claimKey = `claim:${record.resourceType}:${record.resourceId}`
+                      return <tr key={`${record.resourceType}:${record.resourceId}`}><th className="px-4 py-3 align-top" scope="row"><span className="block font-semibold">{record.resourceType}</span><span className="mt-1 block break-all font-mono text-xs font-normal text-steward-mist-muted">{record.resourceId}</span></th><td className="px-4 py-3 align-top"><span className="block break-all">{record.sourceSystemId}</span><span className="mt-1 block break-all font-mono text-xs text-steward-mist-muted">{record.sourceRecordId}</span></td><td className="px-4 py-3 align-top">{record.writeLocked ? 'Write locked' : `Claimed ${record.claimedAt ? new Date(record.claimedAt).toLocaleString() : ''}`}</td><td className="px-4 py-3 text-right align-top">{record.writeLocked ? <button className={buttonClass} disabled={busy !== ''} onClick={() => handleClaim(record)} type="button">{busy === claimKey ? 'Claiming…' : 'Claim local ownership'}</button> : <span className="text-xs text-steward-mist-muted">Locally managed</span>}</td></tr>
+                    })}
                   </tbody>
                 </table>
               </div>

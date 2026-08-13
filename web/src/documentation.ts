@@ -1,6 +1,6 @@
-// Requirements: REQ-DIRECTORY-EXPANSION-005, REQ-SIGNALS-001, DOC-001. Features: integrations.protocols, alerts.rules, experience.help.
+// Requirements: REQ-DIRECTORY-EXPANSION-005, REQ-SIGNALS-001, REQ-EXCHANGE-001, DOC-001. Features: integrations.protocols, alerts.rules, migration.packages, experience.help.
 
-export type DocumentationTopicID = 'overview' | 'workspace' | 'atlas' | 'horizon' | 'ledger' | 'stack' | 'signals' | 'threads' | 'vault' | 'people' | 'guard' | 'guide'
+export type DocumentationTopicID = 'overview' | 'workspace' | 'atlas' | 'horizon' | 'ledger' | 'stack' | 'signals' | 'threads' | 'vault' | 'exchange' | 'people' | 'guard' | 'guide'
 
 export type DocumentationStep = {
   title: string
@@ -61,6 +61,7 @@ export const documentationPages: readonly DocumentationPage[] = [
           'Signals owns operational and financial alert rules, acknowledgment, assignment, and delivery handoffs.',
           'Threads owns hierarchical tags, strategic goals, links, and inheritance provenance.',
           'Vault owns private evidence metadata, integrity checks, and authorized downloads.',
+          'Exchange owns bounded migration package assembly, validation, import receipts, and holding outcomes.',
           'People owns sites, buildings, rooms, departments, identities, and assignments.',
           'Guard owns authentication, roles, scoped grants, ownership controls, and authorization policy.',
         ],
@@ -343,6 +344,45 @@ export const documentationPages: readonly DocumentationPage[] = [
       },
     ],
     related: ['ledger', 'atlas', 'guard'],
+  },
+  {
+    id: 'exchange',
+    group: 'Product areas',
+    kicker: 'Portable migration packages',
+    title: 'Exchange',
+    summary: 'Export and import bounded, dependency-aware .openinventory packages with checksums, provenance, ownership metadata, and visible holding outcomes.',
+    appHref: '#workspace-exchange',
+    appLabel: 'Open Exchange',
+    searchTerms: ['migration', 'import', 'export', 'openinventory', 'package', 'checksum', 'dependency', 'holding', 'ownership'],
+    sections: [
+      {
+        id: 'export',
+        title: 'Build a complete export',
+        steps: [
+          { title: 'Select explicit records', body: 'Choose only the records the receiving organization needs. Exchange keeps stable record types, IDs, revisions, provenance, and relationships.' },
+          { title: 'Include required dependencies', body: 'Leave dependency inclusion enabled for a complete round trip. The package orders dependencies before the records that use them.' },
+          { title: 'Choose file handling', body: 'Metadata mode carries checksums and relationships without file bytes. Include mode embeds bounded, checksummed Vault content.' },
+        ],
+        callout: { title: 'No cloud secrets in packages', body: 'Exchange never exports credentials, access tokens, private keys, object-store credentials, or signed download URLs.', tone: 'success' },
+      },
+      {
+        id: 'import',
+        title: 'Verify before writing',
+        paragraphs: ['Exchange accepts only bounded .openinventory archives. It validates the schema version, archive structure, package identity, record and file checksums, typed relationships, duplicate identity, and dependency graph before importing records through their owning domain service.'],
+        bullets: ['Exact replays are idempotent and report unchanged records.', 'The same package identity with changed bytes is rejected as a conflict.', 'Corrupt archives, failed checksums, unsafe metadata, and oversized content are rejected.', 'Missing external references and unavailable file bytes produce visible holding outcomes instead of partial records.'],
+      },
+      {
+        id: 'ownership',
+        title: 'Claim ownership explicitly',
+        paragraphs: ['Successfully imported records preserve their original source identity and are readable but write-protected. An authorized administrator must explicitly claim each record in Guard before local updates are allowed. A holding record has not been written and lists the dependencies that need resolution.'],
+      },
+      {
+        id: 'history',
+        title: 'Use receipts for review and recovery',
+        paragraphs: ['Package history shows direction, checksum, source system, record and file counts, created and unchanged totals, holding outcomes, and write-lock state. It intentionally excludes package payloads, credentials, signed URLs, and operator identity.'],
+      },
+    ],
+    related: ['vault', 'guard', 'stack'],
   },
   {
     id: 'people',

@@ -297,6 +297,17 @@ func cloneAsset(asset domain.Asset) domain.Asset {
 		value := *asset.PurchaseDate
 		asset.PurchaseDate = &value
 	}
+	if asset.ModelContext != nil {
+		context := *asset.ModelContext
+		if len(context.Specifications) > 0 {
+			context.Specifications = make(map[string]string, len(asset.ModelContext.Specifications))
+			for key, value := range asset.ModelContext.Specifications {
+				context.Specifications[key] = value
+			}
+		}
+		context.Overrides = append([]string{}, asset.ModelContext.Overrides...)
+		asset.ModelContext = &context
+	}
 	return asset
 }
 

@@ -30,7 +30,7 @@ func NewAtlasStore(database *sql.DB) (*AtlasStore, error) {
 }
 
 const atlasAssetColumns = `
-	organization_id, id, model_id, name, kind, asset_tag, serial_number, hostname,
+	organization_id, id, model_id, model_context, name, kind, asset_tag, serial_number, hostname,
 	deployment_notes, site_id, building_id, room_id, department_id, user_id, status,
 	purchase_date, revision, created_at, updated_at`
 
@@ -110,7 +110,7 @@ func (s *AtlasStore) ResolveModel(ctx context.Context, organizationID string, id
 }
 
 func (s *AtlasStore) CreateModel(ctx context.Context, model domain.AssetModel) (domain.AssetModel, error) {
-	specifications, err := json.Marshal(model.Specifications)
+	specifications, err := marshalAtlasSpecifications(model.Specifications)
 	if err != nil {
 		return domain.AssetModel{}, fmt.Errorf("marshal Atlas model specifications: %w", err)
 	}
@@ -135,7 +135,7 @@ func (s *AtlasStore) CreateModel(ctx context.Context, model domain.AssetModel) (
 }
 
 func (s *AtlasStore) UpdateModel(ctx context.Context, model domain.AssetModel, expectedRevision int64) (domain.AssetModel, error) {
-	specifications, err := json.Marshal(model.Specifications)
+	specifications, err := marshalAtlasSpecifications(model.Specifications)
 	if err != nil {
 		return domain.AssetModel{}, fmt.Errorf("marshal Atlas model specifications: %w", err)
 	}
@@ -263,18 +263,22 @@ func (s *AtlasStore) CreateAssets(ctx context.Context, assets []domain.Asset, in
 		if initialEvents[index].OrganizationID != asset.OrganizationID || initialEvents[index].AssetID != asset.ID {
 			return nil, atlas.ErrInvalidInput
 		}
+		modelContext, marshalErr := marshalAtlasModelContext(asset.ModelContext)
+		if marshalErr != nil {
+			return nil, marshalErr
+		}
 		item, createErr := scanAtlasAsset(transaction.QueryRowContext(ctx, `
 		INSERT INTO atlas_assets (
-			organization_id, id, model_id, name, kind, asset_tag, normalized_asset_tag,
+			organization_id, id, model_id, model_context, name, kind, asset_tag, normalized_asset_tag,
 			serial_number, normalized_serial_number, hostname, deployment_notes, site_id, building_id,
 			room_id, department_id, user_id, status, purchase_date, revision, created_at, updated_at
 		) VALUES (
-			$1, $2, NULLIF($3, ''), $4, $5, $6, lower(btrim($6)), $7, lower(btrim($7)), $8,
-			$9, NULLIF($10, ''), NULLIF($11, ''), NULLIF($12, ''), NULLIF($13, ''), NULLIF($14, ''),
-			$15, $16, $17, $18, $19
+			$1, $2, NULLIF($3, ''), $4, $5, $6, $7, lower(btrim($7)), $8, lower(btrim($8)), $9,
+			$10, NULLIF($11, ''), NULLIF($12, ''), NULLIF($13, ''), NULLIF($14, ''), NULLIF($15, ''),
+			$16, $17, $18, $19, $20
 		)
 		RETURNING `+atlasAssetColumns,
-			asset.OrganizationID, asset.ID, asset.ModelID, asset.Name, asset.Kind, asset.AssetTag, asset.SerialNumber,
+			asset.OrganizationID, asset.ID, asset.ModelID, modelContext, asset.Name, asset.Kind, asset.AssetTag, asset.SerialNumber,
 			asset.Hostname, asset.DeploymentNotes, asset.SiteID, asset.BuildingID, asset.RoomID, asset.DepartmentID, asset.UserID,
 			asset.Status, asset.PurchaseDate, asset.Revision, asset.CreatedAt, asset.UpdatedAt,
 		))
@@ -298,16 +302,21 @@ func (s *AtlasStore) UpdateAsset(ctx context.Context, asset domain.Asset, expect
 		return domain.Asset{}, fmt.Errorf("begin Atlas asset update: %w", err)
 	}
 	defer transaction.Rollback()
+	modelContext, err := marshalAtlasModelContext(asset.ModelContext)
+	if err != nil {
+		return domain.Asset{}, err
+	}
 	updated, err := scanAtlasAsset(transaction.QueryRowContext(ctx, `
 		UPDATE atlas_assets
-		SET model_id = NULLIF($3, ''), name = $4, kind = $5, asset_tag = $6, normalized_asset_tag = lower(btrim($6)),
-			serial_number = $7, normalized_serial_number = lower(btrim($7)), hostname = $8, deployment_notes = $9,
-			site_id = NULLIF($10, ''), building_id = NULLIF($11, ''), room_id = NULLIF($12, ''),
-			department_id = NULLIF($13, ''), user_id = NULLIF($14, ''), status = $15,
-			purchase_date = $16, revision = revision + 1, updated_at = $17
-		WHERE organization_id = $1 AND id = $2 AND revision = $18
+		SET model_id = NULLIF($3, ''), model_context = $4, name = $5, kind = $6,
+			asset_tag = $7, normalized_asset_tag = lower(btrim($7)), serial_number = $8,
+			normalized_serial_number = lower(btrim($8)), hostname = $9, deployment_notes = $10,
+			site_id = NULLIF($11, ''), building_id = NULLIF($12, ''), room_id = NULLIF($13, ''),
+			department_id = NULLIF($14, ''), user_id = NULLIF($15, ''), status = $16,
+			purchase_date = $17, revision = revision + 1, updated_at = $18
+		WHERE organization_id = $1 AND id = $2 AND revision = $19
 		RETURNING `+atlasAssetColumns,
-		asset.OrganizationID, asset.ID, asset.ModelID, asset.Name, asset.Kind, asset.AssetTag, asset.SerialNumber,
+		asset.OrganizationID, asset.ID, asset.ModelID, modelContext, asset.Name, asset.Kind, asset.AssetTag, asset.SerialNumber,
 		asset.Hostname, asset.DeploymentNotes, asset.SiteID, asset.BuildingID, asset.RoomID, asset.DepartmentID, asset.UserID,
 		asset.Status, asset.PurchaseDate, asset.UpdatedAt, expectedRevision,
 	))
@@ -370,15 +379,22 @@ type atlasScanner interface {
 func scanAtlasAsset(scanner atlasScanner) (domain.Asset, error) {
 	var asset domain.Asset
 	var modelID, siteID, buildingID, roomID, departmentID, userID sql.NullString
+	var rawModelContext []byte
 	var purchaseDate sql.NullTime
 	if err := scanner.Scan(
-		&asset.OrganizationID, &asset.ID, &modelID, &asset.Name, &asset.Kind, &asset.AssetTag,
+		&asset.OrganizationID, &asset.ID, &modelID, &rawModelContext, &asset.Name, &asset.Kind, &asset.AssetTag,
 		&asset.SerialNumber, &asset.Hostname, &asset.DeploymentNotes, &siteID, &buildingID, &roomID, &departmentID,
 		&userID, &asset.Status, &purchaseDate, &asset.Revision, &asset.CreatedAt, &asset.UpdatedAt,
 	); err != nil {
 		return domain.Asset{}, err
 	}
 	asset.ModelID = modelID.String
+	if len(rawModelContext) > 0 && string(rawModelContext) != "{}" {
+		asset.ModelContext = &domain.AssetModelContext{}
+		if err := json.Unmarshal(rawModelContext, asset.ModelContext); err != nil {
+			return domain.Asset{}, fmt.Errorf("decode Atlas asset model context: %w", err)
+		}
+	}
 	asset.SiteID, asset.BuildingID, asset.RoomID = siteID.String, buildingID.String, roomID.String
 	asset.DepartmentID, asset.UserID = departmentID.String, userID.String
 	if purchaseDate.Valid {
@@ -386,6 +402,24 @@ func scanAtlasAsset(scanner atlasScanner) (domain.Asset, error) {
 		asset.PurchaseDate = &value
 	}
 	return asset, nil
+}
+
+func marshalAtlasModelContext(value *domain.AssetModelContext) ([]byte, error) {
+	if value == nil {
+		return []byte(`{}`), nil
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return nil, fmt.Errorf("marshal Atlas asset model context: %w", err)
+	}
+	return encoded, nil
+}
+
+func marshalAtlasSpecifications(value map[string]string) ([]byte, error) {
+	if len(value) == 0 {
+		return []byte(`{}`), nil
+	}
+	return json.Marshal(value)
 }
 
 func scanAtlasModel(scanner atlasScanner, withCount bool) (domain.AssetModel, error) {

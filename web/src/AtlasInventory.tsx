@@ -9,6 +9,7 @@ export type Asset = {
   id: string
   organizationId: string
   modelId?: string
+  modelContext?: AssetModelContext
   name: string
   kind: string
   assetTag?: string
@@ -25,6 +26,24 @@ export type Asset = {
   revision: number
   createdAt: string
   updatedAt: string
+}
+
+export type AssetModelContext = {
+  manufacturer: string
+  name: string
+  modelNumber?: string
+  kind: string
+  vendorIdentifier?: string
+  specifications?: Record<string, string>
+  supportUrl?: string
+  warrantyMonths?: number
+  usefulLifeMonths?: number
+  sourceSystemId?: string
+  sourceRecordId?: string
+  modelRevision: number
+  defaultsEffectiveAt: string
+  appliedAt: string
+  overrides: string[]
 }
 
 export type AssetModel = {
@@ -138,6 +157,15 @@ function assetValue(asset: Asset | null, key: keyof Asset) {
 
 function modelLabel(model: AssetModel) {
   return `${model.manufacturer} ${model.name}${model.modelNumber ? ` ${model.modelNumber}` : ''}`.trim()
+}
+
+function modelContextLabel(context: AssetModelContext) {
+  return `${context.manufacturer} ${context.name}${context.modelNumber ? ` ${context.modelNumber}` : ''}`.trim()
+}
+
+function formatTimestamp(value: string) {
+  const date = new Date(value)
+  return Number.isNaN(date.valueOf()) ? value : date.toLocaleString()
 }
 
 export default function AtlasInventory({ assets, csrfToken, permissions, onAssetsChange, onOpenHelp }: AtlasInventoryProps) {
@@ -599,7 +627,9 @@ export default function AtlasInventory({ assets, csrfToken, permissions, onAsset
         <aside aria-labelledby="asset-detail-heading" className={`${subpanelClass} p-5`}>
           <h3 className="text-lg font-semibold" id="asset-detail-heading">Asset details</h3>
           {!selected ? <p className="mt-3 text-sm text-steward-mist-muted">Choose an asset to inspect its current record and lifecycle.</p> : <>
-            <dl className="mt-4 grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm"><Detail label="Name" value={selected.name} /><Detail label="Model" value={models.find((model) => model.id === selected.modelId) ? modelLabel(models.find((model) => model.id === selected.modelId) as AssetModel) : selected.modelId} /><Detail label="Kind" value={selected.kind} /><Detail label="Status" value={selected.status} /><Detail label="Asset tag" value={selected.assetTag} /><Detail label="Serial" value={selected.serialNumber} /><Detail label="Hostname" value={selected.hostname} /><Detail label="Deployment notes" value={selected.deploymentNotes} /><Detail label="Site" value={selected.siteId} /><Detail label="Building" value={selected.buildingId} /><Detail label="Room" value={selected.roomId} /><Detail label="Department" value={selected.departmentId} /><Detail label="User" value={selected.userId} /><Detail label="Revision" value={String(selected.revision)} /></dl>
+            <h4 className="mt-4 font-semibold">Instance-specific record</h4>
+            <dl className="mt-3 grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2 text-sm"><Detail label="Name" value={selected.name} /><Detail label="Model ID" value={selected.modelId} /><Detail label="Kind" value={selected.kind} /><Detail label="Status" value={selected.status} /><Detail label="Asset tag" value={selected.assetTag} /><Detail label="Serial" value={selected.serialNumber} /><Detail label="Hostname" value={selected.hostname} /><Detail label="Deployment notes" value={selected.deploymentNotes} /><Detail label="Site" value={selected.siteId} /><Detail label="Building" value={selected.buildingId} /><Detail label="Room" value={selected.roomId} /><Detail label="Department" value={selected.departmentId} /><Detail label="User" value={selected.userId} /><Detail label="Revision" value={String(selected.revision)} /></dl>
+            {selected.modelContext && <ModelContextDetails context={selected.modelContext} instanceKind={selected.kind} />}
             <h4 className="mt-6 font-semibold">Lifecycle history</h4>
             {busy === `history-${selected.id}` ? <p className="mt-2 text-sm text-steward-mist-muted" role="status">Loading lifecycle…</p> : lifecycle.length === 0 ? <p className="mt-2 text-sm text-steward-mist-muted">No lifecycle events loaded.</p> : <ol className="mt-3 space-y-3">{lifecycle.map((event) => <li className="border-l-2 border-steward-blue pl-3 text-sm" key={event.id}><p><strong>{event.fromStatus ? `${event.fromStatus} → ` : ''}{event.toStatus}</strong> · revision {event.revision}</p><p className="text-steward-mist-muted">{event.note || 'Status recorded'} · {new Date(event.occurredAt).toLocaleDateString()}</p></li>)}</ol>}
             <AtlasIdentifiers assetId={selected.id} assetName={selected.name} canWrite={canWrite} csrfToken={csrfToken} />
@@ -608,6 +638,34 @@ export default function AtlasInventory({ assets, csrfToken, permissions, onAsset
       </div>
     </section>
   )
+}
+
+function ModelContextDetails({ context, instanceKind }: { context: AssetModelContext; instanceKind: string }) {
+  const specifications = Object.entries(context.specifications ?? {}).sort(([left], [right]) => left.localeCompare(right))
+  const kindOverridden = context.overrides.includes('kind')
+  return <section aria-labelledby="asset-model-context-heading" className="mt-6 rounded-xl border border-steward-blue/25 bg-steward-blue/[0.06] p-4">
+    <h4 className="font-semibold" id="asset-model-context-heading">Model defaults when linked</h4>
+    <p className="mt-1 text-sm text-steward-mist-muted">This saved snapshot stays with the asset when the model record changes.</p>
+    <dl className="mt-3 grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2 text-sm">
+      <Detail label="Model" value={modelContextLabel(context)} />
+      <Detail label="Model revision" value={String(context.modelRevision)} />
+      <Detail label="Default kind" value={context.kind} />
+      <Detail label="Instance kind" value={`${instanceKind} (${kindOverridden ? `overrides ${context.kind}` : 'uses model default'})`} />
+      <Detail label="Vendor ID" value={context.vendorIdentifier} />
+      <Detail label="Warranty" value={context.warrantyMonths ? `${context.warrantyMonths} months` : undefined} />
+      <Detail label="Useful life" value={context.usefulLifeMonths ? `${context.usefulLifeMonths} months` : undefined} />
+      <Detail label="Support" value={context.supportUrl} />
+      <Detail label="Source system" value={context.sourceSystemId || 'Manual entry'} />
+      <Detail label="Source record" value={context.sourceRecordId} />
+      <Detail label="Defaults effective" value={formatTimestamp(context.defaultsEffectiveAt)} />
+      <Detail label="Applied to asset" value={formatTimestamp(context.appliedAt)} />
+    </dl>
+    {specifications.length > 0 && <>
+      <h5 className="mt-4 text-sm font-semibold">Shared specifications</h5>
+      <dl className="mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2 text-sm">{specifications.map(([key, value]) => <Detail key={key} label={key} value={value} />)}</dl>
+    </>}
+    <p className="mt-4 text-sm font-semibold">{context.overrides.length === 0 ? 'No instance overrides.' : `Overrides: ${context.overrides.map((value) => value.charAt(0).toUpperCase() + value.slice(1)).join(', ')}`}</p>
+  </section>
 }
 
 function TextField({ defaultValue, help, label, maxLength, name, required }: { defaultValue: string; help?: string; label: string; maxLength?: number; name: string; required?: boolean }) {

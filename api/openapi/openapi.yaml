@@ -2433,6 +2433,7 @@ components:
         id: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
         organizationId: {type: string}
         modelId: {$ref: '#/components/schemas/AssetModelID'}
+        modelContext: {$ref: '#/components/schemas/AssetModelContext'}
         name: {type: string, minLength: 1, maxLength: 200}
         kind: {$ref: '#/components/schemas/AssetKind'}
         assetTag: {type: string, maxLength: 128}
@@ -2449,6 +2450,33 @@ components:
         revision: {type: integer, format: int64, minimum: 1}
         createdAt: {type: string, format: date-time}
         updatedAt: {type: string, format: date-time}
+    AssetModelContext:
+      type: object
+      additionalProperties: false
+      description: Immutable model-default snapshot captured when the asset was linked. Later model updates do not rewrite it.
+      required: [manufacturer, name, kind, modelRevision, defaultsEffectiveAt, appliedAt, overrides]
+      properties:
+        manufacturer: {type: string, minLength: 1, maxLength: 120}
+        name: {type: string, minLength: 1, maxLength: 160}
+        modelNumber: {type: string, maxLength: 120}
+        kind: {$ref: '#/components/schemas/AssetKind'}
+        vendorIdentifier: {type: string, maxLength: 160}
+        specifications:
+          type: object
+          additionalProperties: {type: string, maxLength: 500}
+          maxProperties: 25
+        supportUrl: {type: string, format: uri, maxLength: 500}
+        warrantyMonths: {type: integer, minimum: 0, maximum: 1200}
+        usefulLifeMonths: {type: integer, minimum: 0, maximum: 1200}
+        sourceSystemId: {type: string, maxLength: 120}
+        sourceRecordId: {type: string, maxLength: 160}
+        modelRevision: {type: integer, format: int64, minimum: 1}
+        defaultsEffectiveAt: {type: string, format: date-time}
+        appliedAt: {type: string, format: date-time}
+        overrides:
+          type: array
+          uniqueItems: true
+          items: {type: string, enum: [kind]}
     ResolveAssetIdentifierRequest:
       type: object
       additionalProperties: false

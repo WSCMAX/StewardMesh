@@ -93,10 +93,11 @@ Workspace stores no credentials, grants, record identifiers, or form values in U
 - `web/src/App.test.tsx` covers authenticated rendering, read/write labels, scoped collection suppression, focused navigation, deep-link updates, session expiry, context preservation, Guide entry, and automated accessibility checks.
 - `web/src/PeopleDirectory.test.tsx` covers guided draft retention, existing room selection, inline missing-room creation, containing-site submission, step-specific validation, read-only alternatives, and automated accessibility checks.
 - `web/src/RelatedRecordWorkflow.test.tsx` covers preservation, validation, selection-only fallback, return, confirmation, explicit ownership/API boundaries, loading, failure, retry, cancellation, and reset behavior.
+- `web/src/WorkspaceAccessibility.test.tsx` runs axe-core against explicit populated, empty, permission-denied, and feature-error Workspace states. The state fixtures retain textual status or alert meaning and include long context values that must reflow rather than widen the document.
 - `web/src/WorkspaceShell.test.tsx` covers safe hash parsing and stable deep-link generation.
 - `web/src/workspaceAccess.test.ts` covers deterministic organization, scoped, and absent grant classification.
-- Browser validation covers desktop and 320-pixel layouts, keyboard navigation, state preservation, service and permission states, console errors, and document-level overflow.
+- Issue #38 browser validation used an authenticated PostgreSQL-backed application at 320 by 900 CSS pixels. Keyboard activation focused each workflow step heading, an empty submission focused its announced validation alert, cancellation returned focus to `Start person workflow`, and the People view remained exactly 320 CSS pixels wide with no document overflow. The clean validation session reported zero console errors and warnings. A local ignored screenshot is retained at `output/playwright/phase-one/issue-38/workspace-people-320.png`.
 
 ## Follow-up work
 
-Issue #38 owns the broader accessibility and mobile validation pass, and #39 owns final traceability and release evidence for the parent Workspace feature.
+Issue #38 completed the broader accessibility and mobile validation pass. Issue #39 owns final traceability and release evidence for the parent Workspace feature.

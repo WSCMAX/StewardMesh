@@ -108,6 +108,7 @@ test('switches work areas, updates the deep link, and preserves in-progress Atla
 
   fireEvent.click(screen.getByRole('button', { name: 'Open Atlas' }))
   const search = await screen.findByRole('searchbox', { name: 'Search' })
+  await waitFor(() => expect(document.getElementById('workspace-context-heading')).toHaveFocus())
   fireEvent.change(search, { target: { value: 'server awaiting deployment' } })
   expect(window.location.hash).toBe('#workspace-atlas')
 

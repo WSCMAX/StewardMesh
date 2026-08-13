@@ -350,6 +350,7 @@ function PersonLocationWorkflow({ buildings, canWrite, departments, rooms, sites
   const [createParentId, setCreateParentId] = useState('')
   const [createName, setCreateName] = useState('')
   const [createRoomName, setCreateRoomName] = useState('')
+  const startButtonRef = useRef<HTMLButtonElement>(null)
   const stepHeadingRef = useRef<HTMLHeadingElement>(null)
   const choices = useMemo(() => locationChoices(sites, buildings, rooms), [buildings, rooms, sites])
 
@@ -367,9 +368,17 @@ function PersonLocationWorkflow({ buildings, canWrite, departments, rooms, sites
     cancellationMessage: 'Person workflow cancelled and its draft was cleared. Any location already created remains available in People.',
     onReset: resetWorkflowDraft,
   })
+  const previousStepRef = useRef(workflow.step)
 
   useEffect(() => {
-    if (workflow.step !== 'intro' && !workflow.failure) stepHeadingRef.current?.focus()
+    const previousStep = previousStepRef.current
+    previousStepRef.current = workflow.step
+    if (workflow.failure) return
+    if (workflow.step === 'intro') {
+      if (previousStep !== 'intro') startButtonRef.current?.focus()
+      return
+    }
+    stepHeadingRef.current?.focus()
   }, [workflow.failure, workflow.step])
 
   function handlePersonNext(event: FormEvent<HTMLFormElement>) {
@@ -458,13 +467,13 @@ function PersonLocationWorkflow({ buildings, canWrite, departments, rooms, sites
       title="Add a person with a location"
     >
       {!canWrite ? (
-        <div className="mt-4 rounded-lg border border-steward-ink-800 p-4 text-sm leading-6 text-steward-mist-muted">
+        <div className="mt-4 rounded-lg border border-steward-ink-800 p-4 text-sm leading-6 text-steward-mist-muted" role="note">
           <p>Your role can review the visible locations below but cannot add a person or create a missing location.</p>
           <p className="mt-2">Ask an administrator for the <code>directory.write</code> permission, or send them the person and location details for completion.</p>
         </div>
       ) : workflow.step === 'intro' ? (
         <div className="mt-4 flex flex-wrap items-center gap-3">
-          <button className={buttonClass} onClick={workflow.start} type="button">Start person workflow</button>
+          <button className={buttonClass} onClick={workflow.start} ref={startButtonRef} type="button">Start person workflow</button>
           <p className="text-sm text-steward-mist-muted">You can go back between steps without losing entered values.</p>
         </div>
       ) : workflow.step === 'source' ? (

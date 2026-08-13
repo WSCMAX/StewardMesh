@@ -118,6 +118,7 @@ test('guides a person through an existing room without losing their draft', asyn
   await screen.findByRole('heading', { name: 'Innovation Hall' })
 
   fireEvent.click(screen.getByRole('button', { name: 'Start person workflow' }))
+  await waitFor(() => expect(screen.getByRole('heading', { name: 'Step 1 — Person details' })).toHaveFocus())
   fireEvent.change(screen.getByLabelText('Person display name'), { target: { value: 'Jordan Lee' } })
   fireEvent.change(screen.getByLabelText('Person email address'), { target: { value: 'jordan@example.test' } })
   fireEvent.change(screen.getByLabelText('Person department (optional)'), { target: { value: department.id } })
@@ -138,6 +139,7 @@ test('guides a person through an existing room without losing their draft', asyn
 
   fireEvent.click(screen.getByRole('button', { name: 'Create person' }))
   expect(await screen.findByText(/Jordan Lee was created at Room 101/)).toBeInTheDocument()
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Start person workflow' })).toHaveFocus())
   const createCall = fetchMock.mock.calls.find(([path, init]) => path === '/api/v1/identities' && init?.method === 'POST')
   expect(JSON.parse(String(createCall?.[1]?.body))).toEqual({
     kind: 'person',
@@ -157,7 +159,9 @@ test('identifies the failing step and creates a missing room before the person',
   fireEvent.click(screen.getByRole('button', { name: 'Start person workflow' }))
   fireEvent.change(screen.getByLabelText('Person display name'), { target: { value: 'Morgan Chen' } })
   fireEvent.click(screen.getByRole('button', { name: 'Continue to location' }))
-  expect(await screen.findByRole('alert')).toHaveTextContent('Person details: enter a valid email address')
+  const validationAlert = await screen.findByRole('alert')
+  expect(validationAlert).toHaveTextContent('Person details: enter a valid email address')
+  await waitFor(() => expect(validationAlert).toHaveFocus())
   expect(screen.getByLabelText('Person display name')).toHaveValue('Morgan Chen')
 
   fireEvent.change(screen.getByLabelText('Person email address'), { target: { value: 'morgan@example.test' } })
@@ -215,7 +219,9 @@ test('cancels the reusable workflow explicitly and clears its temporary draft', 
   fireEvent.change(screen.getByLabelText('Person display name'), { target: { value: 'Discarded draft' } })
   fireEvent.click(screen.getByRole('button', { name: 'Cancel workflow' }))
   expect(screen.getByText('Person workflow cancelled and its draft was cleared. Any location already created remains available in People.')).toHaveAttribute('role', 'status')
-  fireEvent.click(screen.getByRole('button', { name: 'Start person workflow' }))
+  const restart = screen.getByRole('button', { name: 'Start person workflow' })
+  await waitFor(() => expect(restart).toHaveFocus())
+  fireEvent.click(restart)
   expect(screen.getByLabelText('Person display name')).toHaveValue('')
 })
 

@@ -76,6 +76,7 @@
           "web/src/GuideExperience.test.tsx",
           "web/src/PeopleDirectory.test.tsx",
           "web/src/RelatedRecordWorkflow.test.tsx",
+          "web/src/WorkspaceAccessibility.test.tsx",
           "web/src/WorkspaceShell.test.tsx",
           "web/src/workspaceAccess.test.ts"
         ],

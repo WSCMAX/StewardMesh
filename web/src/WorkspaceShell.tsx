@@ -93,7 +93,7 @@ export default function WorkspaceShell({ activeArea, areas, assetCount, healthLa
   const navigation = <WorkspaceNavigation active={active} areas={areas} onNavigate={navigate} onOpenHelp={onOpenHelp} onReportIssue={onReportIssue} />
 
   return (
-    <section className="lg:grid lg:grid-cols-[17.5rem_minmax(0,1fr)] lg:items-start lg:gap-7" data-feature="experience.workspace" data-requirement="REQ-WORKSPACE-001">
+    <section className="min-w-0 max-w-full lg:grid lg:grid-cols-[17.5rem_minmax(0,1fr)] lg:items-start lg:gap-7" data-feature="experience.workspace" data-requirement="REQ-WORKSPACE-001">
       <aside aria-label="Workspace navigation" className={`${panelClass} steward-scrollbar sticky top-[5.75rem] hidden max-h-[calc(100vh-7rem)] overflow-y-auto p-3 lg:block`}>
         {navigation}
       </aside>
@@ -194,5 +194,5 @@ function WorkspaceNavigation({ active, areas, onNavigate, onOpenHelp, onReportIs
 }
 
 function ContextItem({ label, value }: { label: string; value: string }) {
-  return <div className="min-w-0 border-b border-white/[0.07] px-4 py-3 last:col-span-2 last:border-b-0 lg:col-span-1 lg:border-b-0 lg:last:col-span-1"><dt className="text-[0.6875rem] font-semibold uppercase tracking-wide text-steward-slate">{label}</dt><dd className="mt-1 text-sm font-semibold leading-5 text-steward-mist">{value}</dd></div>
+  return <div className="min-w-0 border-b border-white/[0.07] px-4 py-3 last:col-span-2 last:border-b-0 lg:col-span-1 lg:border-b-0 lg:last:col-span-1"><dt className="text-[0.6875rem] font-semibold uppercase tracking-wide text-steward-slate">{label}</dt><dd className="mt-1 break-words text-sm font-semibold leading-5 text-steward-mist">{value}</dd></div>
 }

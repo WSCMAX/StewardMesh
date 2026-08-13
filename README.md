@@ -1,4 +1,4 @@
-<!-- REQ-DIRECTORY-EXPANSION-005 / integrations.protocols; REQ-DIRECTORY-EXPANSION-007 / platform.foundation -->
+<!-- REQ-DIRECTORY-EXPANSION-005 / integrations.protocols; REQ-DIRECTORY-EXPANSION-007 / platform.foundation; REQ-DIRECTORY-EXPANSION-009 / experience.help -->
 # StewardMesh
 
 **StewardMesh by Binary Cornfield** is an open-source inventory and lifecycle management platform for everything an organization owns, funds, and operates.
@@ -181,7 +181,13 @@ cross-provider conflicts and no provider write path.
 See [People](docs/features/people.md) and
 [Directory Expansion](docs/features/directory-expansion.md) for permissions,
 privacy boundaries, provider contracts, location behavior, assignments, and
-the guided accessible workflow.
+the guided accessible workflow. Operators should use the
+[directory connector deployment runbook](docs/deployment/directory-connectors.md)
+for least-privilege setup and secret rotation. The
+[phase-one release validation record](docs/validation/directory-expansion-release.md)
+defines the security, traceability, container, integration, browser, and
+accessibility gates for `REQ-DIRECTORY-EXPANSION-001` through
+`REQ-DIRECTORY-EXPANSION-009`.
 
 Bridge can optionally reconcile Internet2 Grouper groups, nested groups, and
 memberships through its read-only SCIM v2 adapter. The default runtime does not

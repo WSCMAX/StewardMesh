@@ -3,7 +3,8 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, expect, test, vi } from 'vitest'
 import DirectoryImportManager from './DirectoryImportManager'
 
-// Requirements: REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005, REQ-DIRECTORY-EXPANSION-006, A11Y-001, SEC-GUARD-001.
+// Requirements: REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005, REQ-DIRECTORY-EXPANSION-006, REQ-DIRECTORY-EXPANSION-009, A11Y-001, SEC-GUARD-001.
+// Features: integrations.protocols, experience.help.
 
 const batchID = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
 const itemID = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
@@ -61,6 +62,7 @@ test('previews and applies the exact Entra plan with CSRF, idempotency, audit de
   const { container } = render(<DirectoryImportManager csrfToken="csrf-token" onApplied={onApplied} permissions={['integrations.read', 'integrations.write']} />)
 
   expect(await screen.findByRole('option', { name: 'entra-primary · Microsoft Entra ID' })).toBeInTheDocument()
+  expect(container.querySelector('[data-feature="integrations.protocols"]')).not.toBeNull()
   expect(screen.getByRole('option', { name: 'sailpoint-primary · SailPoint Identity Security Cloud' })).toBeInTheDocument()
   expect(screen.getByRole('option', { name: 'campus-solutions · PeopleSoft Campus Solutions' })).toBeInTheDocument()
   fireEvent.click(screen.getByRole('button', { name: 'Preview import' }))
@@ -110,7 +112,31 @@ test('keeps the import panel permission-aware and rejects malformed API response
     return jsonResponse({ batches: [] })
   }))
   rerender(<DirectoryImportManager csrfToken="csrf-token" permissions={['integrations.read']} />)
-  expect(await screen.findByRole('alert')).toHaveTextContent('Directory import sources and audit history could not be loaded.')
+  const alert = await screen.findByRole('alert')
+  expect(alert).toHaveTextContent('Directory import sources and audit history could not be loaded.')
+  await waitFor(() => expect(alert).toHaveFocus())
+})
+
+test('names scrollable import tables and makes them keyboard focusable', async () => {
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    const path = String(input)
+    if (path === '/api/v1/directory-import-sources') return jsonResponse({ items: [source] })
+    if (path === '/api/v1/directory-imports?limit=50') return jsonResponse({ batches: [previewedBatch] })
+    if (path === `/api/v1/directory-imports/${batchID}`) return jsonResponse({ batch: previewedBatch, items: [item], attempts: [attempt] })
+    throw new Error(`unexpected request ${path}`)
+  }))
+  render(<DirectoryImportManager csrfToken="csrf-token" permissions={['integrations.read']} />)
+
+  const history = await screen.findByRole('region', { name: 'Recent directory imports' })
+  expect(history).toHaveAttribute('tabindex', '0')
+  history.focus()
+  expect(history).toHaveFocus()
+
+  fireEvent.click(screen.getByRole('button', { name: 'View audit' }))
+  const records = await screen.findByRole('region', { name: 'Directory import records' })
+  expect(records).toHaveAttribute('tabindex', '0')
+  records.focus()
+  expect(records).toHaveFocus()
 })
 
 test('renders SailPoint governance groups and memberships from bounded audit detail', async () => {

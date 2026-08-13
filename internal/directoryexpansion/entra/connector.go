@@ -1,6 +1,7 @@
 // Package entra provides StewardMesh's optional read-only Microsoft Entra ID
 // directory connector.
-// Requirement: REQ-DIRECTORY-EXPANSION-003. Feature: identity.directory.
+// Requirements: REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-009.
+// Features: identity.directory, experience.help.
 package entra
 
 import (
@@ -110,7 +111,16 @@ func NewConnector(configuration Config, options Options) (*Connector, error) {
 	}
 	transport := client.Transport
 	if transport == nil {
-		transport = http.DefaultTransport
+		defaultTransport, ok := http.DefaultTransport.(*http.Transport)
+		if !ok {
+			return nil, errors.New("Microsoft Entra HTTP transport is unavailable")
+		}
+		transport = defaultTransport.Clone()
+		// Directory credentials and access tokens must not inherit HTTP(S)_PROXY.
+		// The tenant token endpoint and Microsoft Graph hosts are fixed by
+		// validated server configuration, so there is no legitimate ambient
+		// proxy destination in the production path.
+		transport.(*http.Transport).Proxy = nil
 	}
 	client.Transport = boundedResponseTransport{base: transport}
 	// OAuth and Graph redirects are never followed. This keeps bearer tokens

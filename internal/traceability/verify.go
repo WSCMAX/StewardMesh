@@ -1,6 +1,7 @@
 // Package traceability verifies that implementation artifacts remain linked
 // to their requirements and canonical feature IDs.
-// Requirement: REQ-FOUNDATION-001.
+// Requirements: REQ-FOUNDATION-001, REQ-DIRECTORY-EXPANSION-009.
+// Feature: experience.help.
 package traceability
 
 import (
@@ -19,6 +20,18 @@ import (
 var requirementIDPattern = regexp.MustCompile(`^((REQ|SEC)-[A-Z0-9]+(?:-[A-Z0-9]+)*-[0-9]{3}|(A11Y|DOC)-[0-9]{3})$`)
 
 var requiredArtifactKinds = []string{"api", "code", "documentation", "schema", "tests", "ui"}
+
+var directoryExpansionPhaseOneRequirements = []string{
+	"REQ-DIRECTORY-EXPANSION-001",
+	"REQ-DIRECTORY-EXPANSION-002",
+	"REQ-DIRECTORY-EXPANSION-003",
+	"REQ-DIRECTORY-EXPANSION-004",
+	"REQ-DIRECTORY-EXPANSION-005",
+	"REQ-DIRECTORY-EXPANSION-006",
+	"REQ-DIRECTORY-EXPANSION-007",
+	"REQ-DIRECTORY-EXPANSION-008",
+	"REQ-DIRECTORY-EXPANSION-009",
+}
 
 type Manifest struct {
 	Entries []Entry `json:"entries"`
@@ -118,7 +131,27 @@ func Verify(root, manifestPath string) error {
 			}
 		}
 	}
+	problems = append(problems, verifyDeclaredSeriesCompleteness(requirementsData, seenRequirements, directoryExpansionPhaseOneRequirements)...)
 	return errors.Join(problems...)
+}
+
+// verifyDeclaredSeriesCompleteness activates once a requirement series is fully
+// present in the catalog. This lets feature branches add requirements in order
+// without claiming missing delivery, while making the integrated release fail
+// if any cataloged phase-one requirement is absent from traceability.
+func verifyDeclaredSeriesCompleteness(catalog []byte, seen map[string]struct{}, requirementIDs []string) []error {
+	for _, requirementID := range requirementIDs {
+		if !bytes.Contains(catalog, []byte(requirementID)) {
+			return nil
+		}
+	}
+	var problems []error
+	for _, requirementID := range requirementIDs {
+		if _, ok := seen[requirementID]; !ok {
+			problems = append(problems, fmt.Errorf("%s is missing from the traceability manifest", requirementID))
+		}
+	}
+	return problems
 }
 
 func artifactKindsForStatus(status string) ([]string, error) {

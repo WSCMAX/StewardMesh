@@ -1,4 +1,4 @@
-# REQ-PLATFORM-VALKEY-001 / platform.runtime; REQ-DIRECTORY-EXPANSION-005 / integrations.protocols; REQ-DIRECTORY-EXPANSION-007 / platform.foundation
+# REQ-PLATFORM-VALKEY-001 / platform.runtime; REQ-DIRECTORY-EXPANSION-005 / integrations.protocols; REQ-DIRECTORY-EXPANSION-007 / platform.foundation; REQ-DIRECTORY-EXPANSION-009 / experience.help
 services:
   postgres:
     image: postgres:18.4-alpine

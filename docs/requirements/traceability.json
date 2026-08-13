@@ -920,7 +920,6 @@
     {
       "requirementId": "REQ-DIRECTORY-EXPANSION-002",
       "featureId": "integrations.protocols",
-      "deliveryStatus": "foundation",
       "artifacts": {
         "documentation": [
           "docs/features/dictionary.md",
@@ -956,7 +955,11 @@
           "internal/repository/contracttest/people.go",
           "internal/repository/memory_directory_import_test.go",
           "internal/repository/postgres/migrate_test.go",
-          "internal/repository/postgres/postgres_integration_test.go"
+          "internal/repository/postgres/postgres_integration_test.go",
+          "web/src/DirectoryImportManager.test.tsx"
+        ],
+        "ui": [
+          "web/src/DirectoryImportManager.tsx"
         ]
       }
     },
@@ -1223,6 +1226,41 @@
           "web/src/PeopleDirectory.tsx",
           "web/src/RelationshipGraphView.tsx",
           "web/src/documentation.ts"
+        ]
+      }
+    },
+    {
+      "requirementId": "REQ-DIRECTORY-EXPANSION-009",
+      "featureId": "experience.help",
+      "artifacts": {
+        "documentation": [
+          "README.md",
+          "docs/deployment/directory-connectors.md",
+          "docs/features/dictionary.md",
+          "docs/features/directory-expansion.md",
+          "docs/requirements/initial.md",
+          "docs/validation/directory-expansion-release.md"
+        ],
+        "api": [
+          "api/openapi/openapi.yaml",
+          "api/proto/stewardmesh.proto"
+        ],
+        "code": [
+          "internal/directoryexpansion/entra/connector.go",
+          "internal/traceability/verify.go"
+        ],
+        "schema": [
+          ".env.example",
+          "deploy/docker-compose.yml"
+        ],
+        "tests": [
+          ".github/workflows/ci.yml",
+          "internal/directoryexpansion/entra/connector_test.go",
+          "internal/traceability/verify_test.go",
+          "web/src/DirectoryImportManager.test.tsx"
+        ],
+        "ui": [
+          "web/src/DirectoryImportManager.tsx"
         ]
       }
     },

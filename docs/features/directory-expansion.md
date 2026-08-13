@@ -2,18 +2,24 @@
 
 - **Canonical IDs:** `identity.directory` for locations,
   `integrations.protocols` for directory imports, and
-  `threads.relationships` for the cross-record graph
-- **Current requirements:** `REQ-DIRECTORY-EXPANSION-001` through
-  `REQ-DIRECTORY-EXPANSION-006`, plus `REQ-DIRECTORY-EXPANSION-007` and
-  `REQ-DIRECTORY-EXPANSION-008`
+  `threads.relationships` for the cross-record graph, and `experience.help`
+  for phase-one security, accessibility, and operational closeout
+- **Phase-one requirements:** `REQ-DIRECTORY-EXPANSION-001` through
+  `REQ-DIRECTORY-EXPANSION-009`
+- **Trace IDs:** `REQ-DIRECTORY-EXPANSION-001`,
+  `REQ-DIRECTORY-EXPANSION-002`, `REQ-DIRECTORY-EXPANSION-003`,
+  `REQ-DIRECTORY-EXPANSION-004`, `REQ-DIRECTORY-EXPANSION-005`,
+  `REQ-DIRECTORY-EXPANSION-006`, `REQ-DIRECTORY-EXPANSION-007`,
+  `REQ-DIRECTORY-EXPANSION-008`, and `REQ-DIRECTORY-EXPANSION-009`
 - **Roadmap issues:** [#24](https://github.com/WSCMAX/StewardMesh/issues/24),
   [#25](https://github.com/WSCMAX/StewardMesh/issues/25),
   [#26](https://github.com/WSCMAX/StewardMesh/issues/26),
   [#27](https://github.com/WSCMAX/StewardMesh/issues/27),
   [#28](https://github.com/WSCMAX/StewardMesh/issues/28),
   [#29](https://github.com/WSCMAX/StewardMesh/issues/29),
-  [#30](https://github.com/WSCMAX/StewardMesh/issues/30), and
-  [#31](https://github.com/WSCMAX/StewardMesh/issues/31)
+  [#30](https://github.com/WSCMAX/StewardMesh/issues/30),
+  [#31](https://github.com/WSCMAX/StewardMesh/issues/31), and
+  [#32](https://github.com/WSCMAX/StewardMesh/issues/32)
 
 Directory Expansion extends People with hierarchical locations, optional
 read-only institutional provider connectors, synthetic demo data, and a
@@ -137,6 +143,32 @@ repository, and HTTP tests additionally cover dry-run non-mutation, complete
 snapshots, exact-plan apply/retry, source identity retention, idempotency,
 conflicts, durable attempts, authorization, CSRF, audit redaction, bounds,
 `no-store`, and operation with Valkey disabled.
+
+## Phase-one release closeout
+
+`REQ-DIRECTORY-EXPANSION-009` (`experience.help`) closes the slice with one
+operator-facing [connector deployment runbook](../deployment/directory-connectors.md)
+and one [release validation record](../validation/directory-expansion-release.md).
+The runbook keeps endpoints and secrets server-owned, documents exact read-only
+provider access and credential rotation, and distinguishes the opt-in Grouper
+fixture and synthetic data from deployable production configuration.
+
+The release gate covers every Directory Expansion requirement from 001 through
+009 and requires documentation, REST/protobuf contracts, code, schema, tests,
+and UI evidence for each complete trace entry. Automated checks include the
+PostgreSQL-backed Go race suite, vet, vulnerability analysis, OpenAPI lint,
+protobuf compilation, React type/test/build, every Compose profile, application
+and fixture images, and trace verification. Real-browser checks cover
+administrator and read-only import flows, sanitized error focus, named
+keyboard-focusable table regions, the graph table alternative, axe, and a
+320-pixel no-overflow pass.
+
+The security review treats provider credentials, network destinations,
+upstream write access, partial snapshots, cross-provider ownership, resource
+bounds, Guard scopes, and demo/fixture isolation as explicit release
+boundaries. In particular, the default Microsoft Entra transport does not
+inherit ambient proxy configuration; injected test transports remain available
+without weakening production endpoint validation.
 
 ## Microsoft Entra ID read-only synchronization
 

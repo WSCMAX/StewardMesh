@@ -2,8 +2,8 @@ import { type FormEvent, useCallback, useEffect, useRef, useState } from 'react'
 import { ApiRequestError, requestJSON } from './api'
 import { buttonClass, inputClass, labelClass, secondaryButtonClass, subpanelClass } from './ui'
 
-// Requirements: REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005, REQ-DIRECTORY-EXPANSION-006, A11Y-001.
-// Feature: identity.directory.
+// Requirements: REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005, REQ-DIRECTORY-EXPANSION-006, REQ-DIRECTORY-EXPANSION-009, A11Y-001.
+// Features: integrations.protocols, identity.directory, experience.help.
 
 type Source = { id: string; provider: string; configRevision: string }
 type Counts = { created: number; updated: number; unchanged: number; deactivated: number; conflicts: number; failed: number }
@@ -183,7 +183,7 @@ export default function DirectoryImportManager({ csrfToken, permissions, onAppli
   }
 
   return (
-    <section aria-busy={loading || busy !== ''} aria-labelledby="directory-import-heading" className="border-t border-steward-ink-800 pt-6" data-feature="identity.directory" data-requirement="REQ-DIRECTORY-EXPANSION-002">
+    <section aria-busy={loading || busy !== ''} aria-labelledby="directory-import-heading" className="border-t border-steward-ink-800 pt-6" data-feature="integrations.protocols" data-requirement="REQ-DIRECTORY-EXPANSION-002">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h3 className="text-lg font-semibold" id="directory-import-heading">Directory import</h3>

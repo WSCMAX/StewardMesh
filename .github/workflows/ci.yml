@@ -1,4 +1,5 @@
-# Requirement: REQ-DIRECTORY-EXPANSION-007. Feature: platform.foundation.
+# Requirements: REQ-DIRECTORY-EXPANSION-007, REQ-DIRECTORY-EXPANSION-009.
+# Features: platform.foundation, experience.help.
 name: CI
 
 on:
@@ -64,6 +65,12 @@ jobs:
           go-version: '1.26.5'
       - name: Verify core documentation
         run: test -f README.md && test -f docs/features/dictionary.md && test -f docs/requirements/initial.md
+      - name: Install protobuf compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes protobuf-compiler
+      - name: Validate protobuf contract
+        run: protoc --proto_path=api/proto --descriptor_set_out=/tmp/stewardmesh.pb api/proto/stewardmesh.proto
       - name: Verify requirement traceability
         run: go run ./cmd/tracecheck
 
@@ -77,6 +84,12 @@ jobs:
         run: docker compose -f deploy/docker-compose.yml --profile cache config --quiet
       - name: Validate synthetic demo Compose profile
         run: docker compose -f deploy/docker-compose.yml --profile demo config --quiet
+      - name: Validate integrations Compose profile
+        run: docker compose -f deploy/docker-compose.yml --profile integrations config --quiet
+      - name: Build application container
+        run: docker build --file deploy/Dockerfile --target stewardmesh --tag stewardmesh:ci .
+      - name: Build Grouper fixture container
+        run: docker build --file deploy/Dockerfile --target grouper-fixture --tag stewardmesh-grouper-fixture:ci .
 
   security:
     runs-on: ubuntu-latest

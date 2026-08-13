@@ -1,3 +1,4 @@
+// Requirement: REQ-DIRECTORY-EXPANSION-009. Feature: experience.help.
 syntax = "proto3";
 
 package stewardmesh.v1;

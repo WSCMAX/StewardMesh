@@ -1,6 +1,7 @@
 package entra
 
-// Requirement: REQ-DIRECTORY-EXPANSION-003. Feature: identity.directory.
+// Requirements: REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-009.
+// Features: identity.directory, experience.help.
 
 import (
 	"context"
@@ -262,6 +263,26 @@ func TestConnectorValidatesTenantCredentialsAndDoesNotLeakSecrets(t *testing.T) 
 		} else if strings.Contains(err.Error(), secret) {
 			t.Fatalf("configuration error leaked a credential: %v", err)
 		}
+	}
+}
+
+func TestConnectorProductionTransportDisablesAmbientProxy(t *testing.T) {
+	connector, err := NewConnector(Config{
+		TenantID: testTenantID, ClientID: testClientID, ClientSecret: "0123456789abcdef",
+	}, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bounded, ok := connector.httpClient.Transport.(boundedResponseTransport)
+	if !ok {
+		t.Fatalf("unexpected bounded transport %T", connector.httpClient.Transport)
+	}
+	transport, ok := bounded.base.(*http.Transport)
+	if !ok {
+		t.Fatalf("unexpected production transport %T", bounded.base)
+	}
+	if transport.Proxy != nil {
+		t.Fatal("production connector inherited an ambient proxy resolver")
 	}
 }
 

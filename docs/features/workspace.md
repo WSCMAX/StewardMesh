@@ -7,6 +7,8 @@
 - Permission-aware panels and scoped access: #35
 - Guided person-plus-location delivery: #36
 - Reusable related-record workflow pattern: #37
+- Accessibility and mobile-density validation: #38
+- Traceability, documentation, and end-to-end validation: #39
 
 ## Purpose
 
@@ -108,6 +110,18 @@ Workspace is an orchestration surface, so it does not emit a second synthetic au
 - Issue #38 browser validation used an authenticated PostgreSQL-backed application at 320 by 900 CSS pixels. Keyboard activation focused each workflow step heading, an empty submission focused its announced validation alert, cancellation returned focus to `Start person workflow`, and the People view remained exactly 320 CSS pixels wide with no document overflow. The clean validation session reported zero console errors and warnings. A local ignored screenshot is retained at `output/playwright/phase-one/issue-38/workspace-people-320.png`.
 - Issue #39 browser validation used the PostgreSQL-backed application to navigate Atlas to People and back while preserving an Atlas filter, create a person through existing-location selection, create another person after authorized inline site creation, and render the read-only People alternative with all creation controls absent. The denied view remained exactly 320 CSS pixels wide, and both clean browser sessions reported zero console errors and warnings. Local ignored flow scripts and the denied-state screenshot are retained under `output/playwright/phase-one/issue-39/`.
 
-## Follow-up work
+## Parent acceptance evidence
 
-Issues #38 and #39 complete the Workspace accessibility, documentation, traceability, privacy, and end-to-end validation passes for parent issue #33.
+Parent issue #33 is complete through its six focused implementation issues. The evidence remains attached to the behavior it verifies instead of relying on a roadmap checkbox alone.
+
+| Parent acceptance criterion | Durable evidence |
+|---|---|
+| Move among major product areas in one coherent view | `WorkspaceShell`, fixed deep links, browser history restoration, and the navigation/state-preservation coverage in `App.test.tsx` |
+| Prioritize common actions without duplicating source-of-truth behavior | Workspace mounts each owning feature component directly; `PermissionLimitedArea` composes access guidance without introducing a second feature repository or write API |
+| Preserve linked-record input and return a created or selected record | The generic related-record state machine plus People tests for backward navigation, existing-location selection, inline creation, retry, review, confirmation, cancellation, and reset |
+| Respect organization scope and server-enforced permissions | Structured session grants compose the interface, while People endpoints independently enforce Guard authorization, organization scope, CSRF, validation, and audit |
+| Make loading, validation, inaccessible, and denied states explicit | `WorkspaceAccessibility.test.tsx`, `App.test.tsx`, `PeopleDirectory.test.tsx`, and the 320-pixel read-only browser scenario |
+| Meet the documented accessibility baseline | Semantic landmarks, native links and controls, managed focus, announced status/error states, reduced-motion CSS, axe-core matrices, keyboard browser checks, and exact 320-pixel containment |
+| Reuse the guided interaction for future linked workflows | `useRelatedRecordWorkflow`, `RelatedRecordWorkflowFrame`, `RelatedRecordModeChooser`, declared ownership boundaries, and the feature-neutral harness in `RelatedRecordWorkflow.test.tsx` |
+
+The parent closeout was revalidated on the integrated Phase One branch with the full 101-test frontend suite, TypeScript compilation, production build, requirement tracecheck, targeted PostgreSQL-backed HTTP/repository tests, and clean real-browser Workspace flows. No schema or new Workspace-owned API is needed for the parent closeout.

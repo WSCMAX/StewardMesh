@@ -4,6 +4,7 @@ package directoryexpansion_test
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,6 +23,22 @@ import (
 	"github.com/maxlemke/stewardmesh/internal/people"
 	"github.com/maxlemke/stewardmesh/internal/repository"
 )
+
+type grouperSnapshotSafetyTarget struct{}
+
+func (grouperSnapshotSafetyTarget) Preview(_ context.Context, _ string, _ SourceSystem, record Record, _ *Mapping) (TargetPlan, error) {
+	digest := sha256.Sum256([]byte(record.SourceRecordID + "\x00" + record.Status))
+	encoded := fmt.Sprintf("%x", digest)
+	return TargetPlan{TargetID: encoded[:32], DesiredDigest: encoded}, nil
+}
+
+func (grouperSnapshotSafetyTarget) Apply(context.Context, guard.Authentication, SourceSystem, Item) (TargetResult, error) {
+	return TargetResult{}, errors.New("snapshot safety target apply is not supported")
+}
+
+func (grouperSnapshotSafetyTarget) Compensate(context.Context, guard.Authentication, SourceSystem, Item, TargetResult) error {
+	return nil
+}
 
 func TestGrouperConnectorPullsPaginatedGroupsNestedMembershipsAndMetadataReadOnly(t *testing.T) {
 	var mu sync.Mutex
@@ -58,6 +75,75 @@ func TestGrouperConnectorPullsPaginatedGroupsNestedMembershipsAndMetadataReadOnl
 	}
 	if fmt.Sprint(methods) != "[GET GET]" || fmt.Sprint(starts) != "[1 2]" || authorizations[0] != "Bearer redacted-test-token" {
 		t.Fatalf("connector was not GET-only or pagination/auth was wrong: %#v %#v %#v", methods, starts, authorizations)
+	}
+}
+
+func TestGrouperImporterDoesNotConfirmSnapshotWhenSameTotalPagesInsertDeleteAndReorder(t *testing.T) {
+	group := func(id string, active bool) map[string]any {
+		return map[string]any{"id": id, "name": "app:" + id, "displayName": strings.ToUpper(id), "active": active}
+	}
+	initial := []map[string]any{group("first", true), group("still-valid", true), group("third", true)}
+	stableAfterMutation := []map[string]any{group("still-valid", false), group("third", true), group("inserted", true)}
+	var mu sync.Mutex
+	traversal := 0
+	starts := make([]int, 0, 6)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := mustAtoi(r.URL.Query().Get("startIndex"))
+		mu.Lock()
+		if start == 1 {
+			traversal++
+		}
+		currentTraversal := traversal
+		starts = append(starts, start)
+		mu.Unlock()
+		// The first page is A from A,B,C. Before page two, A is deleted,
+		// D is inserted, and the same-size window becomes B,C,D. The first
+		// traversal sees A,C,D; the second independently sees B,C,D.
+		values := stableAfterMutation
+		if currentTraversal == 1 && start == 1 {
+			values = initial
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"totalResults": len(values), "startIndex": start, "itemsPerPage": 1,
+			"Resources": []any{values[start-1]},
+		})
+	}))
+	defer server.Close()
+
+	connector := newTestGrouperConnector(t, server.URL, GrouperConnectorConfig{SourceSystemID: "grouper-snapshot-safety", PageSize: 1,
+		HTTPClient: &http.Client{Timeout: time.Second}})
+	registry, err := NewRegistry(connector)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := repository.NewMemoryDirectoryImportStore()
+	service, err := NewService(store, grouperSnapshotSafetyTarget{}, foundation.NopAuditor{}, registry, ServiceConfig{OrganizationID: "example-org"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	preview, err := service.Preview(context.Background(), contractAuthentication(), PreviewRequest{SourceSystemID: "grouper-snapshot-safety"}, "grouper-snapshot-safety")
+	if err != nil || preview.Batch.CompleteSnapshot || preview.Batch.Counts.Deactivated != 0 {
+		t.Fatalf("changing Grouper traversal was trusted as complete: %#v err=%v", preview, err)
+	}
+	detail, err := service.Get(context.Background(), preview.Batch.ID)
+	if err != nil || len(detail.Items) != 3 {
+		t.Fatalf("latest safe Grouper traversal was not planned: %#v err=%v", detail, err)
+	}
+	byID := make(map[string]Item, len(detail.Items))
+	for _, item := range detail.Items {
+		byID[item.Record.SourceRecordID] = item
+	}
+	if item := byID["still-valid"]; item.Record.Status != "inactive" || item.Action != ActionCreate {
+		t.Fatalf("explicit inactive Grouper row was weakened in a partial snapshot: %#v", item)
+	}
+	if _, present := byID["first"]; present {
+		t.Fatalf("plan retained the stale first traversal instead of the confirmation traversal: %#v", detail.Items)
+	}
+	mu.Lock()
+	requestStarts := fmt.Sprint(starts)
+	mu.Unlock()
+	if requestStarts != "[1 2 3 1 2 3]" {
+		t.Fatalf("Grouper snapshot was not independently traversed twice: %s", requestStarts)
 	}
 }
 

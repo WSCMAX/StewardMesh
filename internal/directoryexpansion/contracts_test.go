@@ -31,6 +31,18 @@ type contractConnector struct {
 	calls  []string
 }
 
+type scriptedPage struct {
+	cursor string
+	page   Page
+}
+
+type scriptedConnector struct {
+	system SourceSystem
+	mu     sync.Mutex
+	pages  []scriptedPage
+	calls  []string
+}
+
 type contractPasswordHasher struct{}
 
 func (contractPasswordHasher) Hash(string) (string, error)               { return "test-hash", nil }
@@ -45,6 +57,18 @@ func (c *contractConnector) PullPage(_ context.Context, cursor string) (Page, er
 		return Page{}, err
 	}
 	return c.pages[cursor], nil
+}
+
+func (c *scriptedConnector) SourceSystem() SourceSystem { return c.system }
+func (c *scriptedConnector) PullPage(_ context.Context, cursor string) (Page, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.calls = append(c.calls, cursor)
+	index := len(c.calls) - 1
+	if index >= len(c.pages) || c.pages[index].cursor != cursor {
+		return Page{}, fmt.Errorf("unexpected scripted connector cursor %q at call %d", cursor, index+1)
+	}
+	return c.pages[index].page, nil
 }
 
 type contractTarget struct {
@@ -296,7 +320,7 @@ func TestPreviewPersistsExactBoundedPlanWithoutTargetMutation(t *testing.T) {
 		t.Fatalf("exact preview plan was not retained: %#v", detail)
 	}
 	replay, err := service.Preview(context.Background(), auth, PreviewRequest{SourceSystemID: "hr-primary"}, "preview-key-0001")
-	if err != nil || !replay.Replay || replay.Batch.ID != result.Batch.ID || len(connector.calls) != 2 {
+	if err != nil || !replay.Replay || replay.Batch.ID != result.Batch.ID || len(connector.calls) != 4 {
 		t.Fatalf("exact preview did not replay: %#v %v calls=%#v", replay, err, connector.calls)
 	}
 	_, err = service.Preview(context.Background(), auth, PreviewRequest{SourceSystemID: "other"}, "preview-key-0001")
@@ -317,7 +341,7 @@ func TestApplyUsesPersistedPlanAndExactReplay(t *testing.T) {
 	}
 	connector.pages[""] = Page{Records: []Record{{SourceRecordID: "attacker", Kind: RecordIdentity, IdentityKind: "person", DisplayName: "Changed", Email: "changed@example.com", Status: "active"}}, CompleteSnapshot: true}
 	applied, err := service.Apply(context.Background(), auth, preview.Batch.ID, "apply-key-00001")
-	if err != nil || applied.Batch.Status != BatchApplied || len(target.apply) != 1 || target.apply[0] != "u-1" || len(connector.calls) != 1 {
+	if err != nil || applied.Batch.Status != BatchApplied || len(target.apply) != 1 || target.apply[0] != "u-1" || len(connector.calls) != 2 {
 		t.Fatalf("apply did not use persisted plan: %#v %v apply=%#v calls=%#v", applied, err, target.apply, connector.calls)
 	}
 	replay, err := service.Apply(context.Background(), auth, preview.Batch.ID, "apply-key-00001")
@@ -446,6 +470,70 @@ func TestCompleteSnapshotOnlyPlansDeactivation(t *testing.T) {
 	}
 }
 
+func TestChangingUnfencedTraversalIsPartialWithoutWeakeningExplicitInactiveRows(t *testing.T) {
+	activeA := Record{SourceRecordID: "u-a", Kind: RecordIdentity, IdentityKind: "person", DisplayName: "Active A", Email: "a@example.com", Status: "active"}
+	activeB := Record{SourceRecordID: "u-b", Kind: RecordIdentity, IdentityKind: "person", DisplayName: "Active B", Email: "b@example.com", Status: "active"}
+	inactiveB := activeB
+	inactiveB.Status = "inactive"
+	activeC := Record{SourceRecordID: "u-c", Kind: RecordIdentity, IdentityKind: "person", DisplayName: "Active C", Email: "c@example.com", Status: "active"}
+	connector := &scriptedConnector{system: SourceSystem{ID: "hr-primary", Provider: "example", ConfigRevision: "v1"}, pages: []scriptedPage{
+		// The initial import is stable across both complete traversals.
+		{cursor: "", page: Page{Records: []Record{activeA}, NextCursor: "next"}},
+		{cursor: "next", page: Page{Records: []Record{activeB}, CompleteSnapshot: true}},
+		{cursor: "", page: Page{Records: []Record{activeA}, NextCursor: "next"}},
+		{cursor: "next", page: Page{Records: []Record{activeB}, CompleteSnapshot: true}},
+		// A changing offset window first reports A,C and then B,C. B's
+		// explicit inactive status remains actionable, but A's absence is not.
+		{cursor: "", page: Page{Records: []Record{activeA}, NextCursor: "next"}},
+		{cursor: "next", page: Page{Records: []Record{activeC}, CompleteSnapshot: true}},
+		{cursor: "", page: Page{Records: []Record{inactiveB}, NextCursor: "next"}},
+		{cursor: "next", page: Page{Records: []Record{activeC}, CompleteSnapshot: true}},
+	}}
+	store := newContractMemoryStore()
+	target := &contractTarget{current: map[string]TargetPlan{}, results: map[string]TargetResult{}, errors: map[string]error{}}
+	service := newContractService(t, store, target, connector)
+	auth := contractAuthentication()
+
+	initial, err := service.Preview(context.Background(), auth, PreviewRequest{SourceSystemID: "hr-primary"}, "snapshot-seed-preview")
+	if err != nil || !initial.Batch.CompleteSnapshot {
+		t.Fatalf("stable seed snapshot was not confirmed: %#v err=%v", initial, err)
+	}
+	if _, err := service.Apply(context.Background(), auth, initial.Batch.ID, "snapshot-seed-apply"); err != nil {
+		t.Fatal(err)
+	}
+
+	changed, err := service.Preview(context.Background(), auth, PreviewRequest{SourceSystemID: "hr-primary"}, "snapshot-change-preview")
+	if err != nil || changed.Batch.CompleteSnapshot || changed.Batch.Counts.Deactivated != 0 || changed.Batch.Counts.Updated != 1 || changed.Batch.Counts.Created != 1 {
+		t.Fatalf("changing traversal was not retained as a non-destructive partial snapshot: %#v err=%v", changed, err)
+	}
+	detail, err := service.Get(context.Background(), changed.Batch.ID)
+	if err != nil || len(detail.Items) != 2 {
+		t.Fatalf("unexpected partial plan: %#v err=%v", detail, err)
+	}
+	for _, item := range detail.Items {
+		if item.Record.SourceRecordID == activeA.SourceRecordID || item.Action == ActionDeactivate {
+			t.Fatalf("partial traversal planned an implicit missing-source deactivation: %#v", detail.Items)
+		}
+		if item.Record.SourceRecordID == inactiveB.SourceRecordID && (item.Record.Status != "inactive" || item.Action != ActionUpdate) {
+			t.Fatalf("explicit inactive source row was weakened: %#v", item)
+		}
+	}
+	if _, err := service.Apply(context.Background(), auth, changed.Batch.ID, "snapshot-change-apply"); err != nil {
+		t.Fatal(err)
+	}
+	mappings, err := store.ListMappings(context.Background(), "example-org", "hr-primary")
+	if err != nil {
+		t.Fatal(err)
+	}
+	activeBySource := make(map[string]bool, len(mappings))
+	for _, mapping := range mappings {
+		activeBySource[mapping.SourceRecordID] = mapping.Active
+	}
+	if !activeBySource[activeA.SourceRecordID] || activeBySource[inactiveB.SourceRecordID] || !activeBySource[activeC.SourceRecordID] {
+		t.Fatalf("partial apply lost a valid mapping or ignored explicit inactivity: %#v", activeBySource)
+	}
+}
+
 func TestConnectorContractsRejectDuplicateRecordsAndCursorLoops(t *testing.T) {
 	for name, connector := range map[string]*contractConnector{
 		"duplicate": {system: SourceSystem{ID: "hr-primary", Provider: "example", ConfigRevision: "1"}, pages: map[string]Page{"": {Records: []Record{
@@ -481,7 +569,7 @@ func TestTransientPreviewFailureIsDurableAndRetryableWithoutStartingAnotherBatch
 	}
 	delete(connector.errors, "")
 	recovered, err := service.Retry(context.Background(), auth, failed.Batch.ID, "failed-preview-retry")
-	if err != nil || recovered.Batch.ID != failed.Batch.ID || recovered.Batch.Status != BatchPreviewed || recovered.Batch.Counts.Created != 1 || len(connector.calls) != 2 {
+	if err != nil || recovered.Batch.ID != failed.Batch.ID || recovered.Batch.Status != BatchPreviewed || recovered.Batch.Counts.Created != 1 || len(connector.calls) != 3 {
 		t.Fatalf("preview retry did not recover the same batch: %#v %v calls=%#v", recovered, err, connector.calls)
 	}
 	detail, err := service.Get(context.Background(), failed.Batch.ID)
@@ -505,7 +593,7 @@ func TestTransientTargetReadFailureUsesDurablePreviewRetry(t *testing.T) {
 	}
 	delete(target.previewErrors, "u-1")
 	recovered, err := service.Retry(context.Background(), contractAuthentication(), failed.Batch.ID, "target-retry-key")
-	if err != nil || recovered.Batch.Status != BatchPreviewed || recovered.Batch.Counts.Created != 1 || len(connector.calls) != 2 {
+	if err != nil || recovered.Batch.Status != BatchPreviewed || recovered.Batch.Counts.Created != 1 || len(connector.calls) != 4 {
 		t.Fatalf("target read retry did not recover preview: %#v %v calls=%#v", recovered, err, connector.calls)
 	}
 }
@@ -539,7 +627,7 @@ func TestRecoveredPreviewPlanSurvivesCrashBeforeBatchCompletion(t *testing.T) {
 	}
 	now = now.Add(2*time.Minute + time.Second)
 	recovered, err := service.Retry(context.Background(), auth, failed.Batch.ID, "crash-retry-key")
-	if err != nil || recovered.Batch.Status != BatchPreviewed || recovered.Batch.Counts.Created != 1 || len(connector.calls) != 2 {
+	if err != nil || recovered.Batch.Status != BatchPreviewed || recovered.Batch.Counts.Created != 1 || len(connector.calls) != 3 {
 		t.Fatalf("takeover did not finalize stored plan exactly: %#v %v calls=%#v", recovered, err, connector.calls)
 	}
 	if len(target.apply) != 0 {

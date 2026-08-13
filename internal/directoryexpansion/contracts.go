@@ -211,6 +211,9 @@ type GroupTargetStore interface {
 type Page struct {
 	Records          []Record
 	NextCursor       string
+	// CompleteSnapshot is a connector assertion that one traversal reached
+	// its end. The importer confirms unfenced assertions with a second
+	// identical normalized traversal before allowing missing-source actions.
 	CompleteSnapshot bool
 }
 

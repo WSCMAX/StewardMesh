@@ -267,6 +267,14 @@ memberships. Only safe GET requests retry HTTP 429 or transient 5xx responses,
 at most three attempts and with a two-second delay cap. Provider bodies and
 record values never appear in returned errors.
 
+SailPoint offset pages are not a provider-fenced snapshot. Even when every
+page reports the same total, concurrent insertion, deletion, or ordering can
+move a still-valid identity outside one traversal. The shared importer therefore
+collects the complete normalized result twice and marks it complete only when
+both bounded traversals are identical. A mismatch is a partial preview: its
+explicit inactive rows remain actionable, but absence alone cannot deactivate
+a previously mapped record.
+
 SailPoint identities become People person identities; accounts become
 deliberately non-person shared identities with allowlisted account-source,
 native-identity, owner, lock, and correlation metadata. Account sources,
@@ -478,6 +486,12 @@ Migration `0030_grouper_directory_graph.sql` widens the existing mapping kind
 constraint and stores normalized group and membership targets with
 organization/source uniqueness, optimistic revisions, typed member checks,
 parent-group integrity, and graph indexes.
+
+Grouper SCIM totals likewise do not fence a multi-page read. The importer runs
+two independent bounded traversals and requires identical normalized groups
+and memberships before planning any missing-source deactivation. A same-total
+insert, delete, or reorder that changes the observed record set produces a
+partial preview while preserving explicit `active: false` rows.
 
 Configuration is opt-in. Leave `STEWARDMESH_GROUPER_URL` empty for the default
 runtime. In a shared environment, inject either a bearer token or a Basic

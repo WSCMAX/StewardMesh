@@ -4,8 +4,10 @@ package sailpoint
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -30,6 +32,22 @@ const (
 	testWorkgroup   = "2c9180835d2e5168015d32f890ca1586"
 	testRole        = "2c9180835d2e5168015d32f890ca1587"
 )
+
+type snapshotSafetyTarget struct{}
+
+func (snapshotSafetyTarget) Preview(_ context.Context, _ string, _ directoryexpansion.SourceSystem, record directoryexpansion.Record, _ *directoryexpansion.Mapping) (directoryexpansion.TargetPlan, error) {
+	digest := sha256.Sum256([]byte(record.SourceRecordID + "\x00" + record.Status))
+	encoded := fmt.Sprintf("%x", digest)
+	return directoryexpansion.TargetPlan{TargetID: encoded[:32], DesiredDigest: encoded}, nil
+}
+
+func (snapshotSafetyTarget) Apply(context.Context, guard.Authentication, directoryexpansion.SourceSystem, directoryexpansion.Item) (directoryexpansion.TargetResult, error) {
+	return directoryexpansion.TargetResult{}, errors.New("snapshot safety target apply is not supported")
+}
+
+func (snapshotSafetyTarget) Compensate(context.Context, guard.Authentication, directoryexpansion.SourceSystem, directoryexpansion.Item, directoryexpansion.TargetResult) error {
+	return nil
+}
 
 func TestConnectorNormalizesPaginatedIdentitiesAccountsDepartmentsGroupsRolesAndMembershipsReadOnly(t *testing.T) {
 	var mu sync.Mutex
@@ -146,6 +164,91 @@ func TestConnectorNormalizesPaginatedIdentitiesAccountsDepartmentsGroupsRolesAnd
 		if method != "POST /oauth/token" && !strings.HasPrefix(method, "GET ") {
 			t.Fatalf("unexpected SailPoint write operation %q", method)
 		}
+	}
+}
+
+func TestImporterDoesNotConfirmSailPointSnapshotWhenSameTotalPagesInsertDeleteAndReorder(t *testing.T) {
+	const insertedIdentity = "2c9180835d2e5168015d32f890ca1588"
+	identity := func(id, name, email, status string) map[string]any {
+		return map[string]any{"id": id, "name": name, "emailAddress": email, "identityStatus": status, "attributes": map[string]any{}}
+	}
+	initial := []any{
+		identity(testIdentityOne, "First", "first@example.test", "ACTIVE"),
+		identity(testIdentityTwo, "Still valid", "still-valid@example.test", "ACTIVE"),
+		identity(testAccountOne, "Third", "third@example.test", "ACTIVE"),
+	}
+	stableAfterMutation := []any{
+		identity(testIdentityTwo, "Still valid", "still-valid@example.test", "DISABLED"),
+		identity(testAccountOne, "Third", "third@example.test", "ACTIVE"),
+		identity(insertedIdentity, "Inserted", "inserted@example.test", "ACTIVE"),
+	}
+	var mu sync.Mutex
+	traversal := 0
+	identityOffsets := make([]int, 0, 6)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/oauth/token" {
+			mu.Lock()
+			traversal++
+			mu.Unlock()
+			writeJSON(t, w, map[string]any{"access_token": "snapshot-token", "token_type": "bearer", "expires_in": 60})
+			return
+		}
+		if r.URL.Path != "/v2025/identities" {
+			writeCollection(t, w, []any{}, 0)
+			return
+		}
+		offset := mustOffset(t, r)
+		mu.Lock()
+		currentTraversal := traversal
+		identityOffsets = append(identityOffsets, offset)
+		mu.Unlock()
+		// The first offset is read from A,B,C. Before the next page, A is
+		// deleted, D is inserted, and B,C,D become the same-size ordering.
+		// One traversal therefore observes A,C,D while the confirmation sees
+		// B,C,D, even though every X-Total-Count remains three.
+		values := stableAfterMutation
+		if currentTraversal == 1 && offset == 0 {
+			values = initial
+		}
+		writeCollection(t, w, values, offset)
+	}))
+	defer server.Close()
+
+	connector := newTestConnector(t, server, Options{Sleep: noSleep, pageSize: 1})
+	registry, err := directoryexpansion.NewRegistry(connector)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := repository.NewMemoryDirectoryImportStore()
+	service, err := directoryexpansion.NewService(store, snapshotSafetyTarget{}, foundation.NopAuditor{}, registry,
+		directoryexpansion.ServiceConfig{OrganizationID: "example-org"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	preview, err := service.Preview(context.Background(), guard.Authentication{Principal: guard.Principal{Subject: "account:test-administrator"}},
+		directoryexpansion.PreviewRequest{SourceSystemID: "sailpoint-primary"}, "sailpoint-snapshot-safety")
+	if err != nil || preview.Batch.CompleteSnapshot || preview.Batch.Counts.Deactivated != 0 {
+		t.Fatalf("changing SailPoint traversal was trusted as complete: %#v err=%v", preview, err)
+	}
+	detail, err := service.Get(context.Background(), preview.Batch.ID)
+	if err != nil || len(detail.Items) != 3 {
+		t.Fatalf("latest safe SailPoint traversal was not planned: %#v err=%v", detail, err)
+	}
+	byID := make(map[string]directoryexpansion.Item, len(detail.Items))
+	for _, item := range detail.Items {
+		byID[item.Record.SourceRecordID] = item
+	}
+	if item := byID["identity:"+testIdentityTwo]; item.Record.Status != "inactive" || item.Action != directoryexpansion.ActionCreate {
+		t.Fatalf("explicit inactive SailPoint row was weakened in a partial snapshot: %#v", item)
+	}
+	if _, present := byID["identity:"+testIdentityOne]; present {
+		t.Fatalf("plan retained the stale first traversal instead of the confirmation traversal: %#v", detail.Items)
+	}
+	mu.Lock()
+	offsets := fmt.Sprint(identityOffsets)
+	mu.Unlock()
+	if offsets != "[0 1 2 0 1 2]" {
+		t.Fatalf("SailPoint snapshot was not independently traversed twice: %s", offsets)
 	}
 }
 

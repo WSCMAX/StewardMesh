@@ -2329,7 +2329,7 @@ func TestDirectoryImportHTTPRequiresIntegrationPermissionsCSRFAndNoStore(t *test
 	previewRequest.Header.Set(idempotencyHeader, "http-preview-key-1")
 	previewRes := httptest.NewRecorder()
 	handler.ServeHTTP(previewRes, previewRequest)
-	if previewRes.Code != http.StatusCreated || previewRes.Header().Get("Cache-Control") != "no-store" || connector.calls != 1 {
+	if previewRes.Code != http.StatusCreated || previewRes.Header().Get("Cache-Control") != "no-store" || connector.calls != 2 {
 		t.Fatalf("unexpected preview %d headers=%#v body=%s calls=%d", previewRes.Code, previewRes.Header(), previewRes.Body.String(), connector.calls)
 	}
 	var preview directoryexpansion.OperationResult

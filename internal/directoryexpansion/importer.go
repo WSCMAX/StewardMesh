@@ -495,6 +495,29 @@ func (s *Service) finishPreviewRetry(ctx context.Context, attempt Attempt, lease
 }
 
 func (s *Service) pull(ctx context.Context, connector Connector) ([]Record, bool, error) {
+	first, complete, err := s.pullTraversal(ctx, connector)
+	if err != nil || !complete {
+		return first, false, err
+	}
+
+	// Offset- and cursor-paginated provider APIs do not necessarily pin a
+	// traversal to one provider revision. A total count can remain unchanged
+	// while inserts, deletes, or reordering make a single traversal omit a
+	// still-valid record. Missing-source deactivation is destructive, so a
+	// connector's complete bit is treated only as a request for confirmation.
+	// Until providers expose a consistency token through this contract, require
+	// a second independently normalized traversal with identical content.
+	confirmed, confirmedComplete, err := s.pullTraversal(ctx, connector)
+	if err != nil {
+		return nil, false, err
+	}
+	if !confirmedComplete || !sameSnapshot(first, confirmed) {
+		return confirmed, false, nil
+	}
+	return confirmed, true, nil
+}
+
+func (s *Service) pullTraversal(ctx context.Context, connector Connector) ([]Record, bool, error) {
 	cursor := ""
 	seenCursors := map[string]struct{}{}
 	seenRecords := map[string]struct{}{}
@@ -522,6 +545,9 @@ func (s *Service) pull(ctx context.Context, connector Connector) ([]Record, bool
 		if next == "" {
 			return records, page.CompleteSnapshot, nil
 		}
+		if page.CompleteSnapshot {
+			return nil, false, fmt.Errorf("%w: connector marked an unfinished traversal complete", ErrConflict)
+		}
 		if len(next) > 1024 {
 			return nil, false, fmt.Errorf("%w: connector cursor exceeds limit", ErrInvalidInput)
 		}
@@ -532,6 +558,22 @@ func (s *Service) pull(ctx context.Context, connector Connector) ([]Record, bool
 		cursor = next
 	}
 	return nil, false, fmt.Errorf("%w: source exceeds page limit", ErrInvalidInput)
+}
+
+func sameSnapshot(left, right []Record) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	leftDigests := make(map[string]string, len(left))
+	for _, record := range left {
+		leftDigests[record.SourceRecordID] = digestJSON(record)
+	}
+	for _, record := range right {
+		if leftDigests[record.SourceRecordID] != digestJSON(record) {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Service) plan(ctx context.Context, batch Batch, system SourceSystem, records []Record) ([]Item, error) {

@@ -15,14 +15,20 @@ must never be entered in the browser or committed to source control.
 
 | Provider | Imported objects | Upstream operations | Minimum upstream access | Snapshot behavior |
 |---|---|---|---|---|
-| Microsoft Entra ID | Users, groups, direct memberships, departments, allowlisted attributes | OAuth client-credential token exchange, then fixed Microsoft Graph `GET` routes | Application permissions `User.Read.All` and `GroupMember.ReadBasic.All`; add `Member.Read.Hidden` only when hidden membership is in scope | Complete, bounded snapshot |
-| SailPoint ISC | Identities, accounts, account sources, departments, governance groups, roles, and memberships | OAuth token exchange, then fixed `/v2025` `GET` routes | Dedicated client or PAT limited to read access for the configured identity, account, workgroup, and role endpoints | Complete, bounded snapshot |
-| Internet2 Grouper | Groups, direct subjects, nested-group memberships | Fixed SCIM v2 `GET` routes | Dedicated bearer token or Basic account with read-only access to the selected SCIM groups and members | Complete, bounded snapshot |
+| Microsoft Entra ID | Users, groups, direct memberships, departments, allowlisted attributes | OAuth client-credential token exchange, then fixed Microsoft Graph `GET` routes | Application permissions `User.Read.All` and `GroupMember.ReadBasic.All`; add `Member.Read.Hidden` only when hidden membership is in scope | Complete only after two identical bounded traversals |
+| SailPoint ISC | Identities, accounts, account sources, departments, governance groups, roles, and memberships | OAuth token exchange, then fixed `/v2025` `GET` routes | Dedicated client or PAT limited to read access for the configured identity, account, workgroup, and role endpoints | Complete only after two identical bounded traversals |
+| Internet2 Grouper | Groups, direct subjects, nested-group memberships | Fixed SCIM v2 `GET` routes | Dedicated bearer token or Basic account with read-only access to the selected SCIM groups and members | Complete only after two identical bounded traversals |
 | PeopleSoft Campus Solutions | Organizations, locations, buildings, departments, and hierarchy links | Four fixed Query Access Service `GET` queries using `JSON/NONFILE` | Dedicated user with QAS execute access only to the four configured read queries; no query-save or Campus update services | Partial by design; missing rows never deactivate records |
 
 StewardMesh never writes to a configured directory provider. Preview stores an
 exact durable reconciliation plan. Apply and retry operate only on that plan,
 and a locally claimed record remains protected by an explicit conflict.
+Providers in the matrix do not expose a snapshot-consistency token through the
+connector contract, so the shared importer independently collects and
+normalizes a candidate snapshot twice. Only identical record sets permit
+missing-source deactivation. A changed second traversal is retained as a
+partial plan: explicit upstream inactive rows still reconcile, while omitted
+rows never cause an implicit deactivation.
 
 ## Shared deployment rules
 

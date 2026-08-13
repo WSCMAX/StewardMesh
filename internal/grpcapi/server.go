@@ -237,7 +237,7 @@ func (g *Gateway) invoke(ctx context.Context, fullMethod string, output protoref
 			return responseMessage(output, transportSession(authentication, token))
 		}
 	}
-	originalRequest := cloneValue(requestObject).(map[string]any)
+	responseContext := retainResponseContext(configured.responseKind, requestObject)
 
 	prepared, err := g.prepareRequest(ctx, configured, requestObject)
 	if err != nil {
@@ -251,7 +251,7 @@ func (g *Gateway) invoke(ctx context.Context, fullMethod string, output protoref
 		prepared.headers.Set("Origin", g.allowedOrigin)
 	}
 	if configured.responseKind == responseVaultDownload {
-		return g.downloadVault(ctx, output, prepared, originalRequest)
+		return g.downloadVault(ctx, output, prepared, responseContext)
 	}
 
 	result, err := g.perform(prepared)
@@ -261,7 +261,7 @@ func (g *Gateway) invoke(ctx context.Context, fullMethod string, output protoref
 	if result.status < 200 || result.status >= 300 {
 		return nil, httpStatusError(result)
 	}
-	value, err := responseValue(configured.responseKind, result, originalRequest)
+	value, err := responseValue(configured.responseKind, result, responseContext)
 	if err != nil {
 		return nil, status.Error(codes.Internal, "REST response could not be translated")
 	}
@@ -383,7 +383,7 @@ func (g *Gateway) prepareRequest(ctx context.Context, configured route, object m
 		if !ok || len(raw) == 0 {
 			return preparedRequest{}, fmt.Errorf("%s is required", configured.rawBodyField)
 		}
-		body = append([]byte(nil), raw...)
+		body = raw
 		headers.Set("Content-Type", configured.contentType)
 	case requestMultipart:
 		encoded, contentType, err := multipartBody(object)
@@ -588,7 +588,9 @@ func (g *Gateway) perform(prepared preparedRequest) (httpResult, error) {
 		request.RemoteAddr = unknownPeerAddress
 	}
 	recorder := httptest.NewRecorder()
-	g.handler.ServeHTTP(recorder, request)
+	if err := serveApplicationHTTP(g.handler, recorder, request); err != nil {
+		return httpResult{}, err
+	}
 	response := recorder.Result()
 	defer response.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(response.Body, maximumBodyBytes+1))
@@ -599,6 +601,16 @@ func (g *Gateway) perform(prepared preparedRequest) (httpResult, error) {
 		return httpResult{}, status.Error(codes.ResourceExhausted, "response exceeds the gRPC transport limit")
 	}
 	return httpResult{status: response.StatusCode, headers: response.Header.Clone(), body: body, cookies: response.Cookies()}, nil
+}
+
+func serveApplicationHTTP(handler http.Handler, writer http.ResponseWriter, request *http.Request) (err error) {
+	defer func() {
+		if recover() != nil {
+			err = status.Error(codes.Internal, "REST application failed")
+		}
+	}()
+	handler.ServeHTTP(writer, request)
+	return nil
 }
 
 func contextStatus(err error) error {
@@ -810,25 +822,23 @@ func nestedValue(object map[string]any, path string) (any, bool) {
 	return current, true
 }
 
-func cloneValue(value any) any {
-	switch item := value.(type) {
-	case map[string]any:
-		result := make(map[string]any, len(item))
-		for key, child := range item {
-			result[key] = cloneValue(child)
-		}
-		return result
-	case []any:
-		result := make([]any, len(item))
-		for index, child := range item {
-			result[index] = cloneValue(child)
-		}
-		return result
-	case []byte:
-		return append([]byte(nil), item...)
-	default:
-		return item
+func retainResponseContext(kind responseKind, object map[string]any) map[string]any {
+	fields := []string{}
+	switch kind {
+	case responseCSV:
+		fields = []string{"templateId", "sourceTemplateId", "version"}
+	case responseAssetLabel:
+		fields = []string{"output", "testPrint"}
+	case responseVaultDownload:
+		fields = []string{"blobId"}
 	}
+	result := make(map[string]any, len(fields))
+	for _, field := range fields {
+		if value, ok := object[field]; ok {
+			result[field] = value
+		}
+	}
+	return result
 }
 
 func containsDeclaredField(message protoreflect.Message, jsonName string) bool {

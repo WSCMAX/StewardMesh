@@ -130,6 +130,32 @@ func TestGatewayAcceptsOnlyBearerAndUsesNonBrowserProtection(t *testing.T) {
 	}
 }
 
+func TestGatewayContainsApplicationPanicAndServesNextCall(t *testing.T) {
+	requests := 0
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if requests == 1 {
+			panic("private handler failure")
+		}
+		writeTestJSON(w, http.StatusCreated, map[string]any{"id": "role-one", "name": "Operators", "permissions": []any{"assets.read"}})
+	})
+	gateway, err := New(handler, Options{AllowedOrigin: "https://stewardmesh.example.test", Guard: &fakeAuthenticator{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := stewardmeshv1.File_stewardmesh_proto.Services().ByName("GuardService")
+	method := service.Methods().ByName("CreateRole")
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer opaque-session"))
+	request := &stewardmeshv1.CreateRoleRequest{Name: "Operators", Permissions: []string{"assets.read"}}
+	if _, err := gateway.invoke(ctx, "/stewardmesh.v1.GuardService/CreateRole", method.Output(), request); status.Code(err) != codes.Internal || strings.Contains(status.Convert(err).Message(), "private handler failure") {
+		t.Fatalf("panic code=%s message=%q", status.Code(err), status.Convert(err).Message())
+	}
+	response, err := gateway.invoke(ctx, "/stewardmesh.v1.GuardService/CreateRole", method.Output(), request)
+	if err != nil || response == nil || requests != 2 {
+		t.Fatalf("subsequent call response=%v requests=%d err=%v", response, requests, err)
+	}
+}
+
 func TestTapHandleAuthenticatesProtectedRPCBeforeDecode(t *testing.T) {
 	authenticator := &fakeAuthenticator{}
 	gateway, err := New(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
@@ -315,6 +341,43 @@ func TestBinaryResponseBoundaries(t *testing.T) {
 				t.Fatalf("response over limit code=%s err=%v", status.Code(err), err)
 			}
 		})
+	}
+}
+
+func TestBinaryConvertersAvoidRedundantTransportCopies(t *testing.T) {
+	archive := make([]byte, 1024)
+	archive[0] = 0x42
+	request := &stewardmeshv1.ImportExchangePackageRequest{Archive: archive}
+	object, err := messageObject(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	converted, ok := object["archive"].([]byte)
+	if !ok || len(converted) != len(archive) || &converted[0] != &archive[0] {
+		t.Fatal("protobuf archive was copied before synchronous REST adaptation")
+	}
+	configured := routes()["/stewardmesh.v1.ExchangeService/ImportExchangePackage"]
+	responseContext := retainResponseContext(configured.responseKind, object)
+	if len(responseContext) != 0 {
+		t.Fatalf("binary request was retained for an unrelated JSON response: %#v", responseContext)
+	}
+	prepared, err := (&Gateway{}).prepareRequest(context.Background(), configured, object)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(prepared.body) != len(archive) || &prepared.body[0] != &archive[0] {
+		t.Fatal("raw Exchange adaptation copied the archive")
+	}
+
+	content := make([]byte, 1024)
+	content[0] = 0x24
+	response, err := responseMessage((&stewardmeshv1.VaultBlobContent{}).ProtoReflect().Descriptor(), map[string]any{"content": content})
+	if err != nil {
+		t.Fatal(err)
+	}
+	returned := response.(*dynamicpb.Message).Get(response.ProtoReflect().Descriptor().Fields().ByName("content")).Bytes()
+	if len(returned) != len(content) || &returned[0] != &content[0] {
+		t.Fatal("binary REST response was copied before synchronous protobuf framing")
 	}
 }
 

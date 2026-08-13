@@ -131,7 +131,7 @@ func singularValue(field protoreflect.FieldDescriptor, value protoreflect.Value)
 	case protoreflect.StringKind:
 		return value.String(), nil
 	case protoreflect.BytesKind:
-		return append([]byte(nil), value.Bytes()...), nil
+		return value.Bytes(), nil
 	case protoreflect.MessageKind, protoreflect.GroupKind:
 		return messageValue(value.Message())
 	default:
@@ -276,7 +276,7 @@ func responseSingularValue(field protoreflect.FieldDescriptor, value any) (proto
 	case protoreflect.BytesKind:
 		switch item := value.(type) {
 		case []byte:
-			return protoreflect.ValueOfBytes(append([]byte(nil), item...)), nil
+			return protoreflect.ValueOfBytes(item), nil
 		case string:
 			decoded, err := base64.StdEncoding.DecodeString(item)
 			if err != nil {

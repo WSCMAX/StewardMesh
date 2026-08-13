@@ -98,6 +98,18 @@ func (s *Service) GetModel(ctx context.Context, id string) (domain.AssetModel, e
 	return s.store.GetModel(ctx, s.organizationID, id)
 }
 
+func (s *Service) GetModelInventory(ctx context.Context, id string, query ModelInventoryQuery) (ModelInventory, error) {
+	id = strings.TrimSpace(id)
+	if !assetIDPattern.MatchString(id) {
+		return ModelInventory{}, ErrInvalidInput
+	}
+	normalized, err := normalizeModelInventoryQuery(query)
+	if err != nil {
+		return ModelInventory{}, err
+	}
+	return s.store.GetModelInventory(ctx, s.organizationID, id, normalized)
+}
+
 func (s *Service) ResolveModel(ctx context.Context, identity ModelIdentity) (domain.AssetModel, error) {
 	normalized, err := normalizeModelIdentity(identity)
 	if err != nil {
@@ -522,12 +534,14 @@ func normalizeQuery(query Query) (Query, error) {
 	query.SiteID = strings.TrimSpace(query.SiteID)
 	query.DepartmentID = strings.TrimSpace(query.DepartmentID)
 	query.UserID = strings.TrimSpace(query.UserID)
+	query.DeploymentContext = strings.ToLower(strings.TrimSpace(query.DeploymentContext))
 	if !validText(query.Search, 200) || (query.Kind != "" && !validKind(query.Kind)) ||
 		(query.Status != "" && !validStatus(query.Status)) ||
 		(query.ModelID != "" && !assetIDPattern.MatchString(query.ModelID)) ||
 		(query.SiteID != "" && !referencePattern.MatchString(query.SiteID)) ||
 		(query.DepartmentID != "" && !referencePattern.MatchString(query.DepartmentID)) ||
-		(query.UserID != "" && !referencePattern.MatchString(query.UserID)) {
+		(query.UserID != "" && !referencePattern.MatchString(query.UserID)) ||
+		!validText(query.DeploymentContext, 200) {
 		return Query{}, ErrInvalidInput
 	}
 	if query.Limit == 0 {
@@ -535,6 +549,26 @@ func normalizeQuery(query Query) (Query, error) {
 	}
 	if query.Limit < 1 || query.Limit > maximumListLimit {
 		return Query{}, ErrInvalidInput
+	}
+	return query, nil
+}
+
+func normalizeModelInventoryQuery(query ModelInventoryQuery) (ModelInventoryQuery, error) {
+	assets, err := normalizeQuery(Query{
+		Status: query.Status, SiteID: query.SiteID, DepartmentID: query.DepartmentID,
+		UserID: query.UserID, DeploymentContext: query.DeploymentContext, Limit: query.Limit,
+	})
+	if err != nil {
+		return ModelInventoryQuery{}, err
+	}
+	query.Status, query.SiteID, query.DepartmentID = assets.Status, assets.SiteID, assets.DepartmentID
+	query.UserID, query.DeploymentContext, query.Limit = assets.UserID, assets.DeploymentContext, assets.Limit
+	query.GroupBy = strings.ToLower(strings.TrimSpace(query.GroupBy))
+	switch query.GroupBy {
+	case "", ModelInventoryGroupStatus, ModelInventoryGroupSite, ModelInventoryGroupDepartment,
+		ModelInventoryGroupUser, ModelInventoryGroupDeployment:
+	default:
+		return ModelInventoryQuery{}, ErrInvalidInput
 	}
 	return query, nil
 }

@@ -179,6 +179,7 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 	mux.Handle("POST /api/v1/asset-models", server.protected(guard.PermissionAssetsWrite, true, server.createAssetModel))
 	mux.Handle("GET /api/v1/asset-models/resolve", server.protected(guard.PermissionAssetsRead, false, server.resolveAssetModel))
 	mux.Handle("GET /api/v1/asset-models/{modelID}", server.protected(guard.PermissionAssetsRead, false, server.getAssetModel))
+	mux.Handle("GET /api/v1/asset-models/{modelID}/inventory", server.protected(guard.PermissionAssetsRead, false, server.getAssetModelInventory))
 	mux.Handle("PUT /api/v1/asset-models/{modelID}", server.protected(guard.PermissionAssetsWrite, true, server.updateAssetModel))
 	mux.Handle("POST /api/v1/asset-models/{modelID}/retire", server.protected(guard.PermissionAssetsWrite, true, server.retireAssetModel))
 	mux.Handle("POST /api/v1/asset-models/{modelID}/assets/bulk", server.protected(guard.PermissionAssetsWrite, true, server.createAssetsFromModel))
@@ -1359,6 +1360,24 @@ func (s *Server) getAssetModel(w http.ResponseWriter, r *http.Request, _ guard.A
 	writeJSON(w, http.StatusOK, model)
 }
 
+func (s *Server) getAssetModelInventory(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.atlas == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "repository_unavailable", "asset repository unavailable")
+		return
+	}
+	query, err := assetModelInventoryQueryFromRequest(r)
+	if err != nil {
+		writeError(w, r, http.StatusBadRequest, "validation_failed", "model inventory filters are invalid")
+		return
+	}
+	inventory, err := s.atlas.GetModelInventory(r.Context(), r.PathValue("modelID"), query)
+	if err != nil {
+		writeAtlasError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, inventory)
+}
+
 func (s *Server) resolveAssetModel(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
 	if s.atlas == nil {
 		writeError(w, r, http.StatusServiceUnavailable, "repository_unavailable", "asset repository unavailable")
@@ -2225,7 +2244,24 @@ func assetQueryFromRequest(r *http.Request) (atlas.Query, error) {
 	return atlas.Query{
 		Search: values.Get("q"), Kind: values.Get("kind"), Status: values.Get("status"),
 		ModelID: values.Get("modelId"), SiteID: values.Get("siteId"), DepartmentID: values.Get("departmentId"), UserID: values.Get("userId"),
-		Limit: limit,
+		DeploymentContext: values.Get("deploymentContext"), Limit: limit,
+	}, nil
+}
+
+func assetModelInventoryQueryFromRequest(r *http.Request) (atlas.ModelInventoryQuery, error) {
+	values := r.URL.Query()
+	limit := 0
+	if rawLimit := strings.TrimSpace(values.Get("limit")); rawLimit != "" {
+		parsed, err := strconv.Atoi(rawLimit)
+		if err != nil {
+			return atlas.ModelInventoryQuery{}, err
+		}
+		limit = parsed
+	}
+	return atlas.ModelInventoryQuery{
+		Status: values.Get("status"), SiteID: values.Get("siteId"), DepartmentID: values.Get("departmentId"),
+		UserID: values.Get("userId"), DeploymentContext: values.Get("deploymentContext"),
+		GroupBy: values.Get("groupBy"), Limit: limit,
 	}, nil
 }
 

@@ -192,10 +192,7 @@ func (s *AtlasStore) RetireModel(ctx context.Context, organizationID, id string,
 	return retired, nil
 }
 
-func (s *AtlasStore) ListAssets(ctx context.Context, organizationID string, query atlas.Query) ([]domain.Asset, error) {
-	rows, err := s.database.QueryContext(ctx, `
-		SELECT `+atlasAssetColumns+`
-		FROM atlas_assets
+const atlasAssetFilterWhere = `
 		WHERE organization_id = $1
 		  AND ($2 = '' OR strpos(lower(name), $2) > 0 OR strpos(normalized_asset_tag, $2) > 0
 		       OR strpos(normalized_serial_number, $2) > 0 OR strpos(hostname, $2) > 0)
@@ -205,9 +202,85 @@ func (s *AtlasStore) ListAssets(ctx context.Context, organizationID string, quer
 		  AND ($6 = '' OR site_id = $6)
 		  AND ($7 = '' OR department_id = $7)
 		  AND ($8 = '' OR user_id = $8)
+		  AND ($9 = '' OR strpos(lower(hostname), $9) > 0 OR strpos(lower(deployment_notes), $9) > 0)`
+
+func (s *AtlasStore) GetModelInventory(ctx context.Context, organizationID, modelID string, query atlas.ModelInventoryQuery) (atlas.ModelInventory, error) {
+	tx, err := s.database.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	if err != nil {
+		return atlas.ModelInventory{}, fmt.Errorf("begin Atlas model inventory: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	var exists bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (
+		SELECT 1 FROM atlas_models WHERE organization_id = $1 AND id = $2
+	)`, organizationID, modelID).Scan(&exists); err != nil {
+		return atlas.ModelInventory{}, fmt.Errorf("check Atlas model inventory: %w", err)
+	}
+	if !exists {
+		return atlas.ModelInventory{}, atlas.ErrNotFound
+	}
+	assetQuery := atlas.Query{
+		Status: query.Status, ModelID: modelID, SiteID: query.SiteID, DepartmentID: query.DepartmentID,
+		UserID: query.UserID, DeploymentContext: query.DeploymentContext, Limit: query.Limit,
+	}
+	result := atlas.ModelInventory{
+		ModelID: modelID, GroupBy: query.GroupBy, Groups: []atlas.ModelInventoryGroup{}, Items: []domain.Asset{},
+	}
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM atlas_assets WHERE organization_id = $1 AND model_id = $2`, organizationID, modelID).Scan(&result.TotalCount); err != nil {
+		return atlas.ModelInventory{}, fmt.Errorf("count Atlas model instances: %w", err)
+	}
+	filterArguments := atlasAssetFilterArguments(organizationID, assetQuery)
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM atlas_assets `+atlasAssetFilterWhere, filterArguments...).Scan(&result.FilteredCount); err != nil {
+		return atlas.ModelInventory{}, fmt.Errorf("count filtered Atlas model instances: %w", err)
+	}
+	if query.GroupBy != "" {
+		expression := atlasModelInventoryGroupExpression(query.GroupBy)
+		rows, err := tx.QueryContext(ctx, `SELECT `+expression+`, count(*) FROM atlas_assets `+atlasAssetFilterWhere+
+			` GROUP BY `+expression+` ORDER BY count(*) DESC, lower(`+expression+`), `+expression, filterArguments...)
+		if err != nil {
+			return atlas.ModelInventory{}, fmt.Errorf("group Atlas model instances: %w", err)
+		}
+		for rows.Next() {
+			var group atlas.ModelInventoryGroup
+			if err := rows.Scan(&group.Key, &group.Count); err != nil {
+				_ = rows.Close()
+				return atlas.ModelInventory{}, fmt.Errorf("scan Atlas model inventory group: %w", err)
+			}
+			result.Groups = append(result.Groups, group)
+		}
+		if err := rows.Close(); err != nil {
+			return atlas.ModelInventory{}, fmt.Errorf("close Atlas model inventory groups: %w", err)
+		}
+		if err := rows.Err(); err != nil {
+			return atlas.ModelInventory{}, fmt.Errorf("iterate Atlas model inventory groups: %w", err)
+		}
+	}
+	result.Items, err = listAtlasAssets(ctx, tx, organizationID, assetQuery)
+	if err != nil {
+		return atlas.ModelInventory{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return atlas.ModelInventory{}, fmt.Errorf("complete Atlas model inventory: %w", err)
+	}
+	return result, nil
+}
+
+func (s *AtlasStore) ListAssets(ctx context.Context, organizationID string, query atlas.Query) ([]domain.Asset, error) {
+	return listAtlasAssets(ctx, s.database, organizationID, query)
+}
+
+type atlasRowsQueryer interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}
+
+func listAtlasAssets(ctx context.Context, queryer atlasRowsQueryer, organizationID string, query atlas.Query) ([]domain.Asset, error) {
+	arguments := append(atlasAssetFilterArguments(organizationID, query), query.Limit)
+	rows, err := queryer.QueryContext(ctx, `
+		SELECT `+atlasAssetColumns+`
+		FROM atlas_assets `+atlasAssetFilterWhere+`
 		ORDER BY lower(name), id
-		LIMIT $9
-	`, organizationID, strings.ToLower(query.Search), query.Kind, query.Status, query.ModelID, query.SiteID, query.DepartmentID, query.UserID, query.Limit)
+		LIMIT $10
+	`, arguments...)
 	if err != nil {
 		return nil, fmt.Errorf("list Atlas assets: %w", err)
 	}
@@ -224,6 +297,30 @@ func (s *AtlasStore) ListAssets(ctx context.Context, organizationID string, quer
 		return nil, fmt.Errorf("iterate Atlas assets: %w", err)
 	}
 	return items, nil
+}
+
+func atlasAssetFilterArguments(organizationID string, query atlas.Query) []any {
+	return []any{
+		organizationID, strings.ToLower(query.Search), query.Kind, query.Status, query.ModelID,
+		query.SiteID, query.DepartmentID, query.UserID, strings.ToLower(query.DeploymentContext),
+	}
+}
+
+func atlasModelInventoryGroupExpression(groupBy string) string {
+	switch groupBy {
+	case atlas.ModelInventoryGroupStatus:
+		return "status"
+	case atlas.ModelInventoryGroupSite:
+		return "COALESCE(site_id, '')"
+	case atlas.ModelInventoryGroupDepartment:
+		return "COALESCE(department_id, '')"
+	case atlas.ModelInventoryGroupUser:
+		return "COALESCE(user_id, '')"
+	case atlas.ModelInventoryGroupDeployment:
+		return "CASE WHEN btrim(deployment_notes) <> '' THEN deployment_notes ELSE hostname END"
+	default:
+		return "''"
+	}
 }
 
 func (s *AtlasStore) GetAsset(ctx context.Context, organizationID, id string) (domain.Asset, error) {

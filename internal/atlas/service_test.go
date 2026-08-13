@@ -238,6 +238,63 @@ func TestServiceResolvesModelsAndAtomicallyCreatesBulkInstances(t *testing.T) {
 	}
 }
 
+func TestServiceFiltersAndGroupsModelInventory(t *testing.T) {
+	service, err := atlas.NewService(repository.NewMemoryAtlasStore(), testReferenceValidator{}, foundation.NopAuditor{}, atlas.ServiceConfig{
+		OrganizationID: "example-org",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model, err := service.CreateModel(context.Background(), atlas.CreateModelInput{
+		ID: "inventory-model", Manufacturer: "Dell", Name: "PowerEdge", Kind: "server",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const (
+		siteOne       = "11111111111111111111111111111111"
+		siteTwo       = "22222222222222222222222222222222"
+		departmentOne = "33333333333333333333333333333333"
+		userOne       = "44444444444444444444444444444444"
+	)
+	for _, input := range []atlas.CreateAssetInput{
+		{ID: "inventory-one", ModelID: model.ID, Name: "Production one", Status: "active", Hostname: "prod-01.example.test", DeploymentNotes: "Rack 42", References: atlas.References{SiteID: siteOne, DepartmentID: departmentOne, UserID: userOne}},
+		{ID: "inventory-two", ModelID: model.ID, Name: "Production two", Status: "active", Hostname: "prod-02.example.test", DeploymentNotes: "Rack 42", References: atlas.References{SiteID: siteOne, DepartmentID: departmentOne}},
+		{ID: "inventory-three", ModelID: model.ID, Name: "Staging", Status: "draft", Hostname: "stage-01.example.test", References: atlas.References{SiteID: siteTwo}},
+	} {
+		if _, err := service.CreateAsset(context.Background(), input); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tests := []struct {
+		name       string
+		query      atlas.ModelInventoryQuery
+		filtered   int
+		groupKey   string
+		groupCount int
+	}{
+		{name: "lifecycle", query: atlas.ModelInventoryQuery{Status: "active", GroupBy: atlas.ModelInventoryGroupStatus}, filtered: 2, groupKey: "active", groupCount: 2},
+		{name: "site", query: atlas.ModelInventoryQuery{SiteID: siteOne, GroupBy: atlas.ModelInventoryGroupSite}, filtered: 2, groupKey: siteOne, groupCount: 2},
+		{name: "department", query: atlas.ModelInventoryQuery{DepartmentID: departmentOne, GroupBy: atlas.ModelInventoryGroupDepartment}, filtered: 2, groupKey: departmentOne, groupCount: 2},
+		{name: "user", query: atlas.ModelInventoryQuery{UserID: userOne, GroupBy: atlas.ModelInventoryGroupUser}, filtered: 1, groupKey: userOne, groupCount: 1},
+		{name: "deployment", query: atlas.ModelInventoryQuery{DeploymentContext: "RACK 42", GroupBy: atlas.ModelInventoryGroupDeployment}, filtered: 2, groupKey: "Rack 42", groupCount: 2},
+		{name: "bounded details keep exact counts", query: atlas.ModelInventoryQuery{Status: "active", GroupBy: atlas.ModelInventoryGroupStatus, Limit: 1}, filtered: 2, groupKey: "active", groupCount: 2},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			inventory, err := service.GetModelInventory(context.Background(), model.ID, test.query)
+			expectedItems := test.filtered
+			if test.query.Limit > 0 && expectedItems > test.query.Limit {
+				expectedItems = test.query.Limit
+			}
+			if err != nil || inventory.TotalCount != 3 || inventory.FilteredCount != test.filtered || len(inventory.Items) != expectedItems ||
+				len(inventory.Groups) != 1 || inventory.Groups[0].Key != test.groupKey || inventory.Groups[0].Count != test.groupCount {
+				t.Fatalf("unexpected model inventory %#v err=%v", inventory, err)
+			}
+		})
+	}
+}
+
 func TestServiceRejectsInvalidInputsAndMissingReferences(t *testing.T) {
 	service, err := atlas.NewService(repository.NewMemoryAtlasStore(), testReferenceValidator{reject: true}, foundation.NopAuditor{}, atlas.ServiceConfig{
 		OrganizationID: "example-org",
@@ -255,6 +312,9 @@ func TestServiceRejectsInvalidInputsAndMissingReferences(t *testing.T) {
 	}
 	if _, err := service.ListAssets(context.Background(), atlas.Query{Limit: 101}); !errors.Is(err, atlas.ErrInvalidInput) {
 		t.Fatalf("expected invalid limit, got %v", err)
+	}
+	if _, err := service.GetModelInventory(context.Background(), "model-one", atlas.ModelInventoryQuery{GroupBy: "building"}); !errors.Is(err, atlas.ErrInvalidInput) {
+		t.Fatalf("expected invalid model inventory grouping, got %v", err)
 	}
 }
 

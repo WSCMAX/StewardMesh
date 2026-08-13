@@ -144,6 +144,58 @@ test('creates a model and links a new asset to it', async () => {
   expect(onAssetsChange).toHaveBeenCalledWith([created])
 })
 
+test('opens model inventory with exact filters, grouped counts, and linked asset details', async () => {
+  const model = {
+    id: 'model-inventory', organizationId: 'example-org', manufacturer: 'Dell', name: 'PowerEdge R760',
+    kind: 'server', status: 'active', instanceCount: 2, revision: 1,
+    createdAt: '2026-08-12T12:00:00Z', updatedAt: '2026-08-12T12:00:00Z',
+  }
+  const linked = { ...asset, id: 'inventory-asset', modelId: model.id, name: 'Chicago rack server', siteId: 'site-one', departmentId: 'department-one', userId: 'user-one', deploymentNotes: 'Rack 42 production' }
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const path = String(input)
+    if (path === '/api/v1/asset-models?limit=100') return jsonResponse({ items: [model] })
+    if (path === '/api/v1/sites') return jsonResponse({ items: [{ id: 'site-one', name: 'Chicago' }] })
+    if (path === '/api/v1/departments') return jsonResponse({ items: [{ id: 'department-one', name: 'Infrastructure' }] })
+    if (path === '/api/v1/identities?limit=100') return jsonResponse({ items: [{ id: 'user-one', displayName: 'Alex Admin' }] })
+    if (path === '/api/v1/buildings' || path === '/api/v1/rooms') return jsonResponse({ items: [] })
+    if (path.startsWith('/api/v1/asset-models/model-inventory/inventory?')) return jsonResponse({
+      modelId: model.id, totalCount: 2, filteredCount: 1, groupBy: path.includes('groupBy=site') ? 'site' : '',
+      groups: path.includes('groupBy=site') ? [{ key: 'site-one', count: 1 }] : [], items: [linked],
+    })
+    if (path === '/api/v1/assets/inventory-asset/lifecycle') return jsonResponse({ items: [] })
+    if (path === '/api/v1/assets/inventory-asset/identifiers') return jsonResponse({ items: [] })
+    throw new Error(`unexpected request: ${path}`)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  const { container } = render(<AtlasInventory assets={[]} csrfToken="csrf-token" onAssetsChange={() => undefined} permissions={['assets.read', 'directory.read']} />)
+  const viewInventory = await screen.findByRole('link', { name: 'View inventory' })
+  expect(viewInventory).toHaveAttribute('href', '#workspace-atlas')
+  fireEvent.click(viewInventory)
+  const filterForm = await screen.findByRole('form', { name: 'Filter inventory for Dell PowerEdge R760' })
+  const filters = within(filterForm)
+  fireEvent.change(filters.getByLabelText('Lifecycle state'), { target: { value: 'active' } })
+  fireEvent.change(filters.getByLabelText('Site'), { target: { value: 'site-one' } })
+  fireEvent.change(filters.getByLabelText('Department'), { target: { value: 'department-one' } })
+  fireEvent.change(filters.getByLabelText('Assigned user'), { target: { value: 'user-one' } })
+  fireEvent.change(filters.getByLabelText('Deployment context'), { target: { value: 'Rack 42' } })
+  fireEvent.change(filters.getByLabelText('Group matching assets'), { target: { value: 'site' } })
+  fireEvent.click(filters.getByRole('button', { name: 'Apply filters' }))
+  expect(await screen.findByRole('heading', { name: 'Grouped counts' })).toBeInTheDocument()
+  expect(screen.getAllByText('Chicago').length).toBeGreaterThanOrEqual(2)
+  expect(screen.getByText('1 matching')).toBeInTheDocument()
+  const filteredRequest = fetchMock.mock.calls.map(([path]) => String(path)).find((path) => path.includes('groupBy=site')) || ''
+  expect(filteredRequest).toContain('status=active')
+  expect(filteredRequest).toContain('siteId=site-one')
+  expect(filteredRequest).toContain('departmentId=department-one')
+  expect(filteredRequest).toContain('userId=user-one')
+  expect(filteredRequest).toContain('deploymentContext=Rack+42')
+  const assetLink = screen.getByRole('link', { name: 'Chicago rack server' })
+  expect(assetLink).toHaveAttribute('href', '#workspace-atlas')
+  fireEvent.click(assetLink)
+  expect(await screen.findByText('Instance-specific record')).toBeInTheDocument()
+  expect((await axe.run(container)).violations).toEqual([])
+})
+
 test('bulk creates model instances with per-asset deployment fields and accessible repeatable rows', async () => {
   const model = {
     id: 'model-bulk', organizationId: 'example-org', manufacturer: 'Framework', name: 'Laptop 13',

@@ -39,6 +39,7 @@ service GuardService {
 service AssetService {
   rpc ListAssetModels(ListAssetModelsRequest) returns (ListAssetModelsResponse);
   rpc GetAssetModel(GetAssetModelRequest) returns (AssetModel);
+  rpc GetAssetModelInventory(GetAssetModelInventoryRequest) returns (AssetModelInventory);
   rpc ResolveAssetModel(ResolveAssetModelRequest) returns (AssetModel);
   rpc CreateAssetModel(CreateAssetModelRequest) returns (AssetModel);
   rpc UpdateAssetModel(UpdateAssetModelRequest) returns (AssetModel);
@@ -311,6 +312,7 @@ message ListAssetsRequest {
   string user_id = 6;
   int32 limit = 7;
   string model_id = 8;
+  string deployment_context = 9;
 }
 
 message ListAssetModelsRequest {
@@ -330,6 +332,31 @@ message CreateAssetModelRequest {
 
 message GetAssetModelRequest {
   string model_id = 1;
+}
+
+message GetAssetModelInventoryRequest {
+  string model_id = 1;
+  string status = 2;
+  string site_id = 3;
+  string department_id = 4;
+  string user_id = 5;
+  string deployment_context = 6;
+  string group_by = 7;
+  int32 limit = 8;
+}
+
+message AssetModelInventoryGroup {
+  string key = 1;
+  int32 count = 2;
+}
+
+message AssetModelInventory {
+  string model_id = 1;
+  int32 total_count = 2;
+  int32 filtered_count = 3;
+  string group_by = 4;
+  repeated AssetModelInventoryGroup groups = 5;
+  repeated Asset items = 6;
 }
 
 message ResolveAssetModelRequest {

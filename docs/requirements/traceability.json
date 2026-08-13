@@ -281,6 +281,7 @@
           "internal/repository/contracttest/atlas.go",
           "internal/repository/memory_atlas_test.go",
           "internal/repository/postgres/migrate_test.go",
+          "internal/repository/postgres/postgres_integration_test.go",
           "web/src/AtlasInventory.test.tsx"
         ],
         "ui": [

@@ -806,6 +806,20 @@ func TestCreateAndListAssetRequiresPermissionAndCSRF(t *testing.T) {
 	if listRes.Code != http.StatusOK || !strings.Contains(listRes.Body.String(), "asset-1") {
 		t.Fatalf("expected filtered asset, got %d: %s", listRes.Code, listRes.Body.String())
 	}
+	inventoryReq := authenticatedRequest(http.MethodGet, "/api/v1/asset-models/model-1/inventory?status=active&deploymentContext=LAB-SERVER&groupBy=status&limit=10", nil, session)
+	inventoryRes := httptest.NewRecorder()
+	handler.ServeHTTP(inventoryRes, inventoryReq)
+	if inventoryRes.Code != http.StatusOK || !strings.Contains(inventoryRes.Body.String(), `"totalCount":1`) ||
+		!strings.Contains(inventoryRes.Body.String(), `"filteredCount":1`) || !strings.Contains(inventoryRes.Body.String(), `"key":"active","count":1`) ||
+		!strings.Contains(inventoryRes.Body.String(), `"id":"asset-1"`) {
+		t.Fatalf("expected filtered and grouped model inventory, got %d: %s", inventoryRes.Code, inventoryRes.Body.String())
+	}
+	invalidInventoryReq := authenticatedRequest(http.MethodGet, "/api/v1/asset-models/model-1/inventory?groupBy=building", nil, session)
+	invalidInventoryRes := httptest.NewRecorder()
+	handler.ServeHTTP(invalidInventoryRes, invalidInventoryReq)
+	if invalidInventoryRes.Code != http.StatusBadRequest {
+		t.Fatalf("expected invalid model inventory grouping to fail, got %d: %s", invalidInventoryRes.Code, invalidInventoryRes.Body.String())
+	}
 	getReq := authenticatedRequest(http.MethodGet, "/api/v1/assets/asset-1", nil, session)
 	getRes := httptest.NewRecorder()
 	handler.ServeHTTP(getRes, getReq)

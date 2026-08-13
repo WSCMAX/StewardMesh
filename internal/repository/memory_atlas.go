@@ -4,6 +4,7 @@ package repository
 
 import (
 	"context"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -129,21 +130,60 @@ func (s *MemoryAtlasStore) RetireModel(_ context.Context, organizationID, id str
 	return cloneAssetModel(model), nil
 }
 
+func (s *MemoryAtlasStore) GetModelInventory(_ context.Context, organizationID, modelID string, query atlas.ModelInventoryQuery) (atlas.ModelInventory, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if _, exists := s.models[atlasMemoryKey(organizationID, modelID)]; !exists {
+		return atlas.ModelInventory{}, atlas.ErrNotFound
+	}
+	assetQuery := atlas.Query{
+		Status: query.Status, ModelID: modelID, SiteID: query.SiteID, DepartmentID: query.DepartmentID,
+		UserID: query.UserID, DeploymentContext: query.DeploymentContext, Limit: query.Limit,
+	}
+	result := atlas.ModelInventory{
+		ModelID: modelID, GroupBy: query.GroupBy, Groups: []atlas.ModelInventoryGroup{}, Items: []domain.Asset{},
+	}
+	groupCounts := make(map[string]int)
+	for _, asset := range s.assets {
+		if asset.OrganizationID != organizationID || asset.ModelID != modelID {
+			continue
+		}
+		result.TotalCount++
+		if !assetMatchesQuery(asset, assetQuery) {
+			continue
+		}
+		result.FilteredCount++
+		result.Items = append(result.Items, cloneAsset(asset))
+		if query.GroupBy != "" {
+			groupCounts[modelInventoryGroupKey(asset, query.GroupBy)]++
+		}
+	}
+	sortAssets(result.Items)
+	if len(result.Items) > query.Limit {
+		result.Items = result.Items[:query.Limit]
+	}
+	for key, count := range groupCounts {
+		result.Groups = append(result.Groups, atlas.ModelInventoryGroup{Key: key, Count: count})
+	}
+	sort.Slice(result.Groups, func(left, right int) bool {
+		if result.Groups[left].Count != result.Groups[right].Count {
+			return result.Groups[left].Count > result.Groups[right].Count
+		}
+		leftKey, rightKey := strings.ToLower(result.Groups[left].Key), strings.ToLower(result.Groups[right].Key)
+		if leftKey != rightKey {
+			return leftKey < rightKey
+		}
+		return result.Groups[left].Key < result.Groups[right].Key
+	})
+	return result, nil
+}
+
 func (s *MemoryAtlasStore) ListAssets(_ context.Context, organizationID string, query atlas.Query) ([]domain.Asset, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	search := strings.ToLower(query.Search)
 	items := make([]domain.Asset, 0)
 	for _, asset := range s.assets {
-		if asset.OrganizationID != organizationID || (query.Kind != "" && asset.Kind != query.Kind) ||
-			(query.Status != "" && asset.Status != query.Status) || (query.ModelID != "" && asset.ModelID != query.ModelID) ||
-			(query.SiteID != "" && asset.SiteID != query.SiteID) ||
-			(query.DepartmentID != "" && asset.DepartmentID != query.DepartmentID) || (query.UserID != "" && asset.UserID != query.UserID) {
-			continue
-		}
-		if search != "" && !strings.Contains(strings.ToLower(strings.Join([]string{
-			asset.Name, asset.AssetTag, asset.SerialNumber, asset.Hostname,
-		}, "\n")), search) {
+		if asset.OrganizationID != organizationID || !assetMatchesQuery(asset, query) {
 			continue
 		}
 		items = append(items, cloneAsset(asset))
@@ -153,6 +193,42 @@ func (s *MemoryAtlasStore) ListAssets(_ context.Context, organizationID string, 
 		items = items[:query.Limit]
 	}
 	return items, nil
+}
+
+func assetMatchesQuery(asset domain.Asset, query atlas.Query) bool {
+	if (query.Kind != "" && asset.Kind != query.Kind) || (query.Status != "" && asset.Status != query.Status) ||
+		(query.ModelID != "" && asset.ModelID != query.ModelID) || (query.SiteID != "" && asset.SiteID != query.SiteID) ||
+		(query.DepartmentID != "" && asset.DepartmentID != query.DepartmentID) || (query.UserID != "" && asset.UserID != query.UserID) {
+		return false
+	}
+	if query.Search != "" && !strings.Contains(strings.ToLower(strings.Join([]string{
+		asset.Name, asset.AssetTag, asset.SerialNumber, asset.Hostname,
+	}, "\n")), strings.ToLower(query.Search)) {
+		return false
+	}
+	return query.DeploymentContext == "" || strings.Contains(strings.ToLower(strings.Join([]string{
+		asset.Hostname, asset.DeploymentNotes,
+	}, "\n")), strings.ToLower(query.DeploymentContext))
+}
+
+func modelInventoryGroupKey(asset domain.Asset, groupBy string) string {
+	switch groupBy {
+	case atlas.ModelInventoryGroupStatus:
+		return asset.Status
+	case atlas.ModelInventoryGroupSite:
+		return asset.SiteID
+	case atlas.ModelInventoryGroupDepartment:
+		return asset.DepartmentID
+	case atlas.ModelInventoryGroupUser:
+		return asset.UserID
+	case atlas.ModelInventoryGroupDeployment:
+		if strings.TrimSpace(asset.DeploymentNotes) != "" {
+			return asset.DeploymentNotes
+		}
+		return asset.Hostname
+	default:
+		return ""
+	}
 }
 
 func (s *MemoryAtlasStore) GetAsset(_ context.Context, organizationID, id string) (domain.Asset, error) {

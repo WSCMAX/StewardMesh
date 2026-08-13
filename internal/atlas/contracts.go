@@ -25,14 +25,15 @@ var (
 )
 
 type Query struct {
-	Search       string
-	Kind         string
-	Status       string
-	ModelID      string
-	SiteID       string
-	DepartmentID string
-	UserID       string
-	Limit        int
+	Search            string
+	Kind              string
+	Status            string
+	ModelID           string
+	SiteID            string
+	DepartmentID      string
+	UserID            string
+	DeploymentContext string
+	Limit             int
 }
 
 type ModelQuery struct {
@@ -46,6 +47,40 @@ type ModelIdentity struct {
 	Manufacturer string `json:"manufacturer"`
 	Name         string `json:"name"`
 	ModelNumber  string `json:"modelNumber,omitempty"`
+}
+
+const (
+	ModelInventoryGroupStatus     = "status"
+	ModelInventoryGroupSite       = "site"
+	ModelInventoryGroupDepartment = "department"
+	ModelInventoryGroupUser       = "user"
+	ModelInventoryGroupDeployment = "deployment"
+)
+
+// ModelInventoryQuery applies the same instance filters as Atlas asset
+// listing while allowing model detail to request one explicit grouping.
+type ModelInventoryQuery struct {
+	Status            string
+	SiteID            string
+	DepartmentID      string
+	UserID            string
+	DeploymentContext string
+	GroupBy           string
+	Limit             int
+}
+
+type ModelInventoryGroup struct {
+	Key   string `json:"key"`
+	Count int    `json:"count"`
+}
+
+type ModelInventory struct {
+	ModelID       string                `json:"modelId"`
+	TotalCount    int                   `json:"totalCount"`
+	FilteredCount int                   `json:"filteredCount"`
+	GroupBy       string                `json:"groupBy,omitempty"`
+	Groups        []ModelInventoryGroup `json:"groups"`
+	Items         []domain.Asset        `json:"items"`
 }
 
 type References struct {
@@ -133,6 +168,7 @@ type Store interface {
 	CreateModel(ctx context.Context, model domain.AssetModel) (domain.AssetModel, error)
 	UpdateModel(ctx context.Context, model domain.AssetModel, expectedRevision int64) (domain.AssetModel, error)
 	RetireModel(ctx context.Context, organizationID, id string, expectedRevision int64, retiredAt time.Time) (domain.AssetModel, error)
+	GetModelInventory(ctx context.Context, organizationID, modelID string, query ModelInventoryQuery) (ModelInventory, error)
 	ListAssets(ctx context.Context, organizationID string, query Query) ([]domain.Asset, error)
 	GetAsset(ctx context.Context, organizationID, id string) (domain.Asset, error)
 	CreateAsset(ctx context.Context, asset domain.Asset, initialEvent domain.AssetLifecycleEvent) (domain.Asset, error)

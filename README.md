@@ -76,7 +76,9 @@ Atlas Models (`REQ-ATLAS-MODELS-001`, `inventory.models`) adds reusable product 
 atomic bulk intake for up to 100 model-linked asset instances. Each instance
 retains its own identity, assignment, lifecycle, purchase, and deployment-note
 fields plus an immutable snapshot of the applied defaults, source provenance,
-effective dates, and explicit overrides. Memory and PostgreSQL providers enforce the same validation. See
+effective dates, and explicit overrides. Model detail adds exact lifecycle,
+site, department, assigned-user, and deployment filters, optional grouped
+counts, and links back to matching Atlas asset detail. Memory and PostgreSQL providers enforce the same validation. See
 [Atlas Models](docs/features/atlas-models.md).
 
 Atlas Catalog (`REQ-ATLAS-CATALOG-001`, `inventory.catalog`) extends reusable

@@ -119,6 +119,20 @@ func AtlasStore(t testing.TB, subject atlas.Store, organizationID, suffix string
 	if err != nil || len(items) != 1 || items[0].ID != assetID {
 		t.Fatalf("unexpected Atlas search result %#v err=%v", items, err)
 	}
+	deploymentItems, err := subject.ListAssets(ctx, organizationID, atlas.Query{ModelID: model.ID, DeploymentContext: "RACK", Limit: 10})
+	if err != nil || len(deploymentItems) != 1 || deploymentItems[0].ID != bulkAssets[0].ID {
+		t.Fatalf("unexpected Atlas deployment search result %#v err=%v", deploymentItems, err)
+	}
+	inventory, err := subject.GetModelInventory(ctx, organizationID, model.ID, atlas.ModelInventoryQuery{
+		Status: "draft", DeploymentContext: "rack", GroupBy: atlas.ModelInventoryGroupDeployment, Limit: 10,
+	})
+	if err != nil || inventory.TotalCount != 3 || inventory.FilteredCount != 1 || len(inventory.Items) != 1 ||
+		len(inventory.Groups) != 1 || inventory.Groups[0].Key != "Rack staging" || inventory.Groups[0].Count != 1 {
+		t.Fatalf("unexpected Atlas model inventory %#v err=%v", inventory, err)
+	}
+	if _, err := subject.GetModelInventory(ctx, organizationID, "missing-model", atlas.ModelInventoryQuery{Limit: 10}); !errors.Is(err, atlas.ErrNotFound) {
+		t.Fatalf("expected missing Atlas model inventory, got %v", err)
+	}
 	asset.Name = "Updated Contract Server"
 	asset.Status = "active"
 	asset.Revision = 2

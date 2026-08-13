@@ -68,6 +68,29 @@ export type AssetModel = {
   updatedAt: string
 }
 
+type ModelInventoryGroup = {
+  key: string
+  count: number
+}
+
+type ModelInventory = {
+  modelId: string
+  totalCount: number
+  filteredCount: number
+  groupBy?: string
+  groups: ModelInventoryGroup[]
+  items: Asset[]
+}
+
+type ModelInventoryFilters = {
+  status: string
+  siteId: string
+  departmentId: string
+  userId: string
+  deploymentContext: string
+  groupBy: string
+}
+
 type LifecycleEvent = {
   id: string
   fromStatus?: string
@@ -110,6 +133,7 @@ type AtlasInventoryProps = {
 const kinds = ['server', 'computer', 'desktop', 'laptop', 'tablet', 'phone', 'network', 'peripheral', 'virtual', 'other']
 const statuses = ['draft', 'active', 'inactive', 'retired', 'disposed']
 const emptyReferences: ReferenceOptions = { sites: [], buildings: [], rooms: [], departments: [], identities: [] }
+const emptyModelInventoryFilters: ModelInventoryFilters = { status: '', siteId: '', departmentId: '', userId: '', deploymentContext: '', groupBy: '' }
 
 export function isAsset(value: unknown): value is Asset {
   if (typeof value !== 'object' || value === null) return false
@@ -145,6 +169,15 @@ function isAssetModel(value: unknown): value is AssetModel {
     && typeof item.kind === 'string' && typeof item.status === 'string'
     && typeof item.instanceCount === 'number' && typeof item.revision === 'number'
     && typeof item.createdAt === 'string' && typeof item.updatedAt === 'string'
+}
+
+function isModelInventory(value: unknown): value is ModelInventory {
+  if (typeof value !== 'object' || value === null) return false
+  const item = value as Record<string, unknown>
+  return typeof item.modelId === 'string' && typeof item.totalCount === 'number' && typeof item.filteredCount === 'number'
+    && Array.isArray(item.groups) && item.groups.every((group) => typeof group === 'object' && group !== null
+      && typeof (group as Record<string, unknown>).key === 'string' && typeof (group as Record<string, unknown>).count === 'number')
+    && Array.isArray(item.items) && item.items.every(isAsset)
 }
 
 function referenceLabel(reference: ReferenceRecord) {
@@ -184,6 +217,9 @@ export default function AtlasInventory({ assets, csrfToken, permissions, onAsset
   const [selected, setSelected] = useState<Asset | null>(null)
   const [lifecycle, setLifecycle] = useState<LifecycleEvent[]>([])
   const [models, setModels] = useState<AssetModel[]>([])
+  const [inventoryModel, setInventoryModel] = useState<AssetModel | null>(null)
+  const [modelInventory, setModelInventory] = useState<ModelInventory | null>(null)
+  const [modelInventoryFilters, setModelInventoryFilters] = useState<ModelInventoryFilters>(emptyModelInventoryFilters)
   const [references, setReferences] = useState<ReferenceOptions>(emptyReferences)
   const [referencesLoaded, setReferencesLoaded] = useState(false)
   const [busy, setBusy] = useState('')
@@ -207,6 +243,10 @@ export default function AtlasInventory({ assets, csrfToken, permissions, onAsset
   useEffect(() => {
     void loadModels()
   }, [loadModels])
+
+  useEffect(() => {
+    if (inventoryModel) document.getElementById('model-inventory-heading')?.focus()
+  }, [inventoryModel])
 
   const filteredAssets = useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase()
@@ -295,6 +335,44 @@ export default function AtlasInventory({ assets, csrfToken, permissions, onAsset
     setModelFormOpen(true)
     setError('')
     setMessage('')
+  }
+
+  async function loadModelInventory(model: AssetModel, filters: ModelInventoryFilters) {
+    setBusy(`inventory-${model.id}`)
+    setError('')
+    const query = new URLSearchParams({ limit: '100' })
+    Object.entries(filters).forEach(([key, value]) => {
+      if (value) query.set(key, value)
+    })
+    try {
+      const response = await requestJSON(`/api/v1/asset-models/${encodeURIComponent(model.id)}/inventory?${query.toString()}`)
+      if (!isModelInventory(response) || response.modelId !== model.id) throw new Error('invalid model inventory response')
+      setModelInventory(response)
+    } catch (requestError) {
+      setModelInventory(null)
+      setError(requestError instanceof ApiRequestError ? requestError.message : 'The model inventory could not be loaded.')
+      queueMicrotask(() => errorRef.current?.focus())
+    } finally {
+      setBusy('')
+    }
+  }
+
+  function openModelInventory(model: AssetModel) {
+    setInventoryModel(model)
+    setModelInventory(null)
+    setModelInventoryFilters(emptyModelInventoryFilters)
+    setMessage('')
+    void loadReferences()
+    void loadModelInventory(model, emptyModelInventoryFilters)
+  }
+
+  function handleModelInventorySubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (inventoryModel) void loadModelInventory(inventoryModel, modelInventoryFilters)
+  }
+
+  function setModelInventoryFilter(name: keyof ModelInventoryFilters, value: string) {
+    setModelInventoryFilters((current) => ({ ...current, [name]: value }))
   }
 
   async function selectAsset(asset: Asset) {
@@ -577,16 +655,47 @@ export default function AtlasInventory({ assets, csrfToken, permissions, onAsset
                   <p className="font-semibold text-steward-mist">{modelLabel(model)}</p>
                   <div className="mt-2 flex flex-wrap gap-2"><StatusBadge>{model.kind}</StatusBadge><StatusBadge tone={model.instanceCount > 0 ? 'success' : 'neutral'}>{model.instanceCount} asset{model.instanceCount === 1 ? '' : 's'}</StatusBadge>{Boolean(model.warrantyMonths) && <StatusBadge tone="info">{model.warrantyMonths} month warranty</StatusBadge>}</div>
                 </div>
-                {canWrite && <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap gap-2">
+                  <a className={secondaryButtonClass} href="#workspace-atlas" onClick={(event) => { event.preventDefault(); openModelInventory(model) }}>View inventory</a>
+                {canWrite && <>
                   <button className={secondaryButtonClass} onClick={() => openCreateFromModel(model)} type="button">Use</button>
                   <button className={secondaryButtonClass} onClick={() => openBulkCreateFromModel(model)} type="button">Bulk add</button>
                   <button className={secondaryButtonClass} onClick={() => openModelEdit(model)} type="button">Edit</button>
                   <button className={dangerButtonClass} disabled={busy === `retire-model-${model.id}`} onClick={() => void retireModel(model)} type="button">{busy === `retire-model-${model.id}` ? 'Retiring…' : 'Retire'}</button>
-                </div>}
+                </>}
+                </div>
               </div>
             </li>
           ))}</ul>
         )}
+        {inventoryModel && <section aria-labelledby="model-inventory-heading" className={`${subpanelClass} mt-5 border-steward-teal/35 p-4 sm:p-5`}>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-steward-teal">Model detail</p>
+              <h4 className="mt-1 break-words text-lg font-semibold outline-none focus-visible:ring-2 focus-visible:ring-steward-teal" id="model-inventory-heading" tabIndex={-1}>Inventory for {modelLabel(inventoryModel)}</h4>
+              <p className="mt-1 text-sm text-steward-mist-muted">Filter this model's linked Atlas assets, then group the matching instances.</p>
+            </div>
+            <button className={plainButtonClass} onClick={() => { setInventoryModel(null); setModelInventory(null) }} type="button">Close</button>
+          </div>
+          <form aria-label={`Filter inventory for ${modelLabel(inventoryModel)}`} className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-3" onSubmit={handleModelInventorySubmit}>
+            <label className={labelClass}>Lifecycle state<select className={inputClass} onChange={(event) => setModelInventoryFilter('status', event.target.value)} value={modelInventoryFilters.status}><option value="">All states</option>{statuses.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
+            <ModelInventoryReferenceFilter label="Site" onChange={(value) => setModelInventoryFilter('siteId', value)} options={references.sites} value={modelInventoryFilters.siteId} />
+            <ModelInventoryReferenceFilter label="Department" onChange={(value) => setModelInventoryFilter('departmentId', value)} options={references.departments} value={modelInventoryFilters.departmentId} />
+            <ModelInventoryReferenceFilter label="Assigned user" onChange={(value) => setModelInventoryFilter('userId', value)} options={references.identities} value={modelInventoryFilters.userId} />
+            <label className={labelClass}>Deployment context<input className={inputClass} maxLength={200} onChange={(event) => setModelInventoryFilter('deploymentContext', event.target.value)} placeholder="Hostname or deployment notes" type="search" value={modelInventoryFilters.deploymentContext} /></label>
+            <label className={labelClass}>Group matching assets<select className={inputClass} onChange={(event) => setModelInventoryFilter('groupBy', event.target.value)} value={modelInventoryFilters.groupBy}><option value="">No grouping</option><option value="status">Lifecycle state</option><option value="site">Site</option><option value="department">Department</option><option value="user">Assigned user</option><option value="deployment">Deployment context</option></select></label>
+            <div className="flex flex-wrap items-end gap-3 sm:col-span-2 lg:col-span-3">
+              <button className={buttonClass} disabled={busy === `inventory-${inventoryModel.id}`} type="submit">{busy === `inventory-${inventoryModel.id}` ? 'Applying…' : 'Apply filters'}</button>
+              <button className={secondaryButtonClass} onClick={() => { setModelInventoryFilters(emptyModelInventoryFilters); void loadModelInventory(inventoryModel, emptyModelInventoryFilters) }} type="button">Clear filters</button>
+            </div>
+          </form>
+          {!canReadDirectory && <p className="mt-3 text-sm text-steward-mist-muted">Site, department, and user choices require directory read access.</p>}
+          {busy === `inventory-${inventoryModel.id}` && !modelInventory ? <p className="mt-5 text-sm text-steward-mist-muted" role="status">Loading model inventory…</p> : modelInventory && <>
+            <div className="mt-5 flex flex-wrap gap-2" role="status"><StatusBadge tone="info">{modelInventory.filteredCount} matching</StatusBadge><StatusBadge>{modelInventory.totalCount} total</StatusBadge>{modelInventory.items.length < modelInventory.filteredCount && <span className="self-center text-sm text-steward-mist-muted">Showing the first {modelInventory.items.length} assets.</span>}</div>
+            {modelInventory.groupBy && <section aria-labelledby="model-inventory-groups-heading" className="mt-5"><h5 className="font-semibold" id="model-inventory-groups-heading">Grouped counts</h5>{modelInventory.groups.length === 0 ? <p className="mt-2 text-sm text-steward-mist-muted">No groups match these filters.</p> : <ul className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{modelInventory.groups.map((group) => <li className="flex min-w-0 items-center justify-between gap-3 rounded-lg border border-white/10 bg-white/[0.025] p-3 text-sm" key={group.key || 'unassigned'}><span className="min-w-0 break-words">{modelInventoryGroupLabel(modelInventory.groupBy || '', group.key, references)}</span><StatusBadge tone="info">{group.count}</StatusBadge></li>)}</ul>}</section>}
+            <section aria-labelledby="model-inventory-assets-heading" className="mt-5"><h5 className="font-semibold" id="model-inventory-assets-heading">Matching assets</h5>{modelInventory.items.length === 0 ? <p className={`${emptyStateClass} mt-3`}>No linked assets match these filters.</p> : <ul className="mt-3 grid gap-3 sm:grid-cols-2">{modelInventory.items.map((asset) => <li className="min-w-0 rounded-xl border border-white/10 bg-white/[0.025] p-4" key={asset.id}><a className="block min-h-11 break-words font-semibold text-steward-blue-light underline-offset-4 hover:underline focus-visible:underline" href="#workspace-atlas" onClick={(event) => { event.preventDefault(); void selectAsset(asset); window.setTimeout(() => document.getElementById('asset-detail-heading')?.focus(), 0) }}>{asset.name}</a><p className="mt-1 break-words text-sm text-steward-mist-muted">{asset.assetTag || asset.serialNumber || asset.hostname || 'No asset identifier'}</p><div className="mt-3 flex flex-wrap gap-2"><StatusBadge>{asset.status}</StatusBadge>{asset.siteId && <StatusBadge tone="info">{modelInventoryGroupLabel('site', asset.siteId, references)}</StatusBadge>}</div>{(asset.hostname || asset.deploymentNotes) && <p className="mt-3 break-words text-sm"><span className="font-semibold">Deployment:</span> {[asset.hostname, asset.deploymentNotes].filter(Boolean).join(' · ')}</p>}</li>)}</ul>}</section>
+          </>}
+        </section>}
         </div>
       </section>
 
@@ -640,7 +749,7 @@ export default function AtlasInventory({ assets, csrfToken, permissions, onAsset
           )}
         </div>
         <aside aria-labelledby="asset-detail-heading" className={`${subpanelClass} p-5`}>
-          <h3 className="text-lg font-semibold" id="asset-detail-heading">Asset details</h3>
+          <h3 className="text-lg font-semibold outline-none focus-visible:ring-2 focus-visible:ring-steward-teal" id="asset-detail-heading" tabIndex={-1}>Asset details</h3>
           {!selected ? <p className="mt-3 text-sm text-steward-mist-muted">Choose an asset to inspect its current record and lifecycle.</p> : <>
             <h4 className="mt-4 font-semibold">Instance-specific record</h4>
             <dl className="mt-3 grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2 text-sm"><Detail label="Name" value={selected.name} /><Detail label="Model ID" value={selected.modelId} /><Detail label="Kind" value={selected.kind} /><Detail label="Status" value={selected.status} /><Detail label="Asset tag" value={selected.assetTag} /><Detail label="Serial" value={selected.serialNumber} /><Detail label="Hostname" value={selected.hostname} /><Detail label="Deployment notes" value={selected.deploymentNotes} /><Detail label="Site" value={selected.siteId} /><Detail label="Building" value={selected.buildingId} /><Detail label="Room" value={selected.roomId} /><Detail label="Department" value={selected.departmentId} /><Detail label="User" value={selected.userId} /><Detail label="Revision" value={String(selected.revision)} /></dl>
@@ -708,6 +817,17 @@ function ModelSelect({ defaultValue, models }: { defaultValue: string; models: A
 function ReferenceSelect({ defaultValue, label, name, options }: { defaultValue: string; label: string; name: string; options: ReferenceRecord[] }) {
   const hasDefault = !defaultValue || options.some((option) => option.id === defaultValue)
   return <label className={labelClass}>{label}<select className={inputClass} defaultValue={defaultValue} name={name}><option value="">Not assigned</option>{!hasDefault && <option value={defaultValue}>{defaultValue} (current)</option>}{options.map((option) => <option key={option.id} value={option.id}>{referenceLabel(option)}</option>)}</select></label>
+}
+
+function ModelInventoryReferenceFilter({ label, onChange, options, value }: { label: string; onChange: (value: string) => void; options: ReferenceRecord[]; value: string }) {
+  return <label className={labelClass}>{label}<select className={inputClass} onChange={(event) => onChange(event.target.value)} value={value}><option value="">All {label.toLowerCase()}s</option>{options.map((option) => <option key={option.id} value={option.id}>{referenceLabel(option)}</option>)}</select></label>
+}
+
+function modelInventoryGroupLabel(groupBy: string, key: string, references: ReferenceOptions) {
+  if (!key) return groupBy === 'deployment' ? 'No deployment context' : 'Not assigned'
+  const options = groupBy === 'site' ? references.sites : groupBy === 'department' ? references.departments : groupBy === 'user' ? references.identities : []
+  const reference = options.find((option) => option.id === key)
+  return reference ? referenceLabel(reference) : key
 }
 
 function Detail({ label, value }: { label: string; value: string | undefined }) {

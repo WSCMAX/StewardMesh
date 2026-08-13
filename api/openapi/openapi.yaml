@@ -623,6 +623,34 @@ paths:
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/asset-models/{modelId}/inventory:
+    parameters:
+      - $ref: '#/components/parameters/AssetModelID'
+    get:
+      summary: Filter and group assets linked to an asset model
+      operationId: getAssetModelInventory
+      tags: [Atlas]
+      x-requirement: REQ-ATLAS-MODELS-001
+      description: Returns uncapped total and filtered counts using the same filters as the Atlas asset repository. The limit caps only the returned asset details, not counts or groups.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - {in: query, name: status, schema: {$ref: '#/components/schemas/AssetStatus'}}
+        - {in: query, name: siteId, schema: {$ref: '#/components/schemas/DirectoryReferenceID'}}
+        - {in: query, name: departmentId, schema: {$ref: '#/components/schemas/DirectoryReferenceID'}}
+        - {in: query, name: userId, schema: {$ref: '#/components/schemas/DirectoryReferenceID'}}
+        - {in: query, name: deploymentContext, description: Case-insensitive substring matched against hostname and deployment notes., schema: {type: string, maxLength: 200}}
+        - {in: query, name: groupBy, schema: {$ref: '#/components/schemas/AssetModelInventoryGroupBy'}}
+        - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 100, default: 50}}
+      responses:
+        '200':
+          description: Exact model inventory totals, optional groups, and a bounded asset detail list
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AssetModelInventory'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
   /api/v1/asset-models/{modelId}/assets/bulk:
     parameters:
       - $ref: '#/components/parameters/AssetModelID'
@@ -666,6 +694,7 @@ paths:
         - {in: query, name: siteId, schema: {$ref: '#/components/schemas/DirectoryReferenceID'}}
         - {in: query, name: departmentId, schema: {$ref: '#/components/schemas/DirectoryReferenceID'}}
         - {in: query, name: userId, schema: {$ref: '#/components/schemas/DirectoryReferenceID'}}
+        - {in: query, name: deploymentContext, description: Case-insensitive substring matched against hostname and deployment notes., schema: {type: string, maxLength: 200}}
         - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 100, default: 50}}
       responses:
         '200':
@@ -2700,6 +2729,34 @@ components:
         items:
           type: array
           items: {$ref: '#/components/schemas/AssetModel'}
+    AssetModelInventoryGroupBy:
+      type: string
+      enum: [status, site, department, user, deployment]
+    AssetModelInventoryGroup:
+      type: object
+      additionalProperties: false
+      required: [key, count]
+      properties:
+        key:
+          type: string
+          description: Group value. An empty value represents an unassigned reference or missing deployment context.
+        count: {type: integer, minimum: 1}
+    AssetModelInventory:
+      type: object
+      additionalProperties: false
+      required: [modelId, totalCount, filteredCount, groups, items]
+      properties:
+        modelId: {$ref: '#/components/schemas/AssetModelID'}
+        totalCount: {type: integer, minimum: 0}
+        filteredCount: {type: integer, minimum: 0}
+        groupBy: {$ref: '#/components/schemas/AssetModelInventoryGroupBy'}
+        groups:
+          type: array
+          items: {$ref: '#/components/schemas/AssetModelInventoryGroup'}
+        items:
+          type: array
+          maxItems: 100
+          items: {$ref: '#/components/schemas/Asset'}
     DirectoryReferenceID:
       type: string
       pattern: '^[a-f0-9]{32}$'

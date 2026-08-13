@@ -1,8 +1,9 @@
 package postgres
 
 // Requirements: REQ-FOUNDATION-001, SEC-GUARD-001, REQ-PEOPLE-001,
-// REQ-DIRECTORY-EXPANSION-001, REQ-ATLAS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001,
-// REQ-HORIZON-001, REQ-ATLAS-CODES-001. Features: lifecycle.planning, inventory.identifiers.
+// REQ-DIRECTORY-EXPANSION-001, REQ-ATLAS-001, REQ-ATLAS-MODELS-001, REQ-THREADS-001,
+// REQ-STORAGE-001, REQ-LEDGER-001, REQ-HORIZON-001, REQ-ATLAS-CODES-001.
+// Features: lifecycle.planning, inventory.models, inventory.identifiers.
 
 import (
 	"context"

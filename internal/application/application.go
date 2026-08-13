@@ -58,6 +58,8 @@ type Options struct {
 type Application struct {
 	handler         http.Handler
 	bridge          *bridge.Service
+	guard           *guard.Service
+	vault           *storage.Service
 	organization    bootstrap.Organization
 	closeCache      func() error
 	closeFoundation func() error
@@ -154,6 +156,7 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 	if err != nil {
 		return fail(fmt.Errorf("initialize Vault: %w", err))
 	}
+	application.vault = vaultService
 	guardService, err := guard.NewService(
 		runtime.guardStore,
 		guard.NewArgon2idHasher(),
@@ -169,6 +172,7 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 	if err != nil {
 		return fail(fmt.Errorf("initialize Guard: %w", err))
 	}
+	application.guard = guardService
 	atlasService, err := atlas.NewService(runtime.assetStore, peopleAssetReferenceValidator{store: runtime.peopleStore}, runtime.auditor, atlas.ServiceConfig{
 		OrganizationID: cfg.OrganizationID,
 	})
@@ -407,6 +411,25 @@ func (a *Application) Bridge() *bridge.Service {
 		return nil
 	}
 	return a.bridge
+}
+
+// Vault returns the organization-scoped storage service for transports that
+// need to stream protobuf bytes after the ordinary HTTP authorization and
+// audit path has approved a download.
+func (a *Application) Vault() *storage.Service {
+	if a == nil {
+		return nil
+	}
+	return a.vault
+}
+
+// Guard returns the authoritative session service for non-browser transports.
+// Domain authorization remains in the shared HTTP handlers.
+func (a *Application) Guard() *guard.Service {
+	if a == nil {
+		return nil
+	}
+	return a.guard
 }
 
 // Close releases the cache before the authoritative repository. It is safe to

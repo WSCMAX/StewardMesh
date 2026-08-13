@@ -15,7 +15,7 @@ import (
 	"testing"
 
 	stewardmeshv1 "github.com/maxlemke/stewardmesh/api/proto"
-	"github.com/maxlemke/stewardmesh/internal/bridgegrpc"
+	"github.com/maxlemke/stewardmesh/internal/grpcapi"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -49,12 +49,20 @@ func TestBridgeGRPCAdministrationHasAuthenticatedRESTParity(t *testing.T) {
 	cookie := bootstrapResponse.Result().Cookies()[0]
 
 	listener := bufconn.Listen(1 << 20)
-	grpcServer := grpc.NewServer(grpc.ChainUnaryInterceptor(bridgegrpc.UnaryAuthenticationInterceptor(app.Bridge())))
-	adapter, err := bridgegrpc.NewServer(app.Bridge())
+	adapter, err := grpcapi.New(app.Handler(), grpcapi.Options{
+		AllowedOrigin: cfg.AllowedOrigin, SessionCookieSecure: cfg.SessionCookieSecure,
+		OrganizationID: app.Organization().ID, Guard: app.Guard(), Vault: app.Vault(),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	stewardmeshv1.RegisterBridgeServiceServer(grpcServer, adapter)
+	grpcServer := grpc.NewServer(
+		grpc.MaxRecvMsgSize(grpcapi.MaximumMessageBytes), grpc.MaxSendMsgSize(grpcapi.MaximumMessageBytes),
+		grpc.InTapHandle(adapter.TapHandle), grpc.ForceServerCodec(adapter.TransportCodec()),
+	)
+	if err := adapter.RegisterAll(grpcServer); err != nil {
+		t.Fatal(err)
+	}
 	go func() { _ = grpcServer.Serve(listener) }()
 	t.Cleanup(func() { grpcServer.Stop(); _ = listener.Close() })
 	connection, err := grpc.NewClient("passthrough:///bridge", grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return listener.Dial() }))

@@ -233,19 +233,31 @@ Signals alert acknowledgement, requires a short-lived argument-bound one-use
 confirmation. See [Bridge](docs/features/bridge.md) and its
 [security review](docs/validation/bridge-security-review.md).
 
-Bridge administration also has a generated, executable gRPC adapter. It uses
-the same repositories and service authorization as REST, and revalidates the
-opaque Guard session bearer from gRPC `authorization` metadata on every RPC:
+Every domain service in the checked-in protobuf descriptor has a validated
+gRPC runtime adapter. The current standalone command remains Bridge-only until
+the all-domain listener activation receives its deployment security approval.
+A fixed adapter routes each method through the same in-process
+REST application, repositories, Guard authorization, ownership, validation,
+limits, audit, and error handling. Except for Guard bootstrap status, bootstrap,
+and local login, it revalidates exactly one opaque Guard session bearer from
+gRPC `authorization` metadata on every RPC:
 
 ```sh
 STEWARDMESH_GRPC_ADDR=127.0.0.1:9090 \
 go run ./cmd/stewardmesh-grpc
 ```
 
-Loopback plaintext is for local adapters only. A non-loopback address requires
+That command currently serves the approved Bridge administration surface; it
+does not activate the all-domain adapter described below.
+
+When the all-domain adapter is activated, loopback plaintext is for local
+adapters only. A non-loopback address requires
 both `STEWARDMESH_GRPC_TLS_CERT_FILE` and `STEWARDMESH_GRPC_TLS_KEY_FILE`; the
-listener enforces TLS 1.3 or newer. OAuth and MCP retain their native HTTP and
-stdio protocols rather than being wrapped in gRPC.
+listener enforces TLS 1.3 or newer. Cookies, origins, and CSRF values supplied
+by a gRPC client are never forwarded. The 34 MiB protobuf envelope admits the
+documented 32 MiB Exchange archive plus framing; narrower domain limits still
+apply. OAuth and MCP retain their native HTTP and stdio protocols rather than
+being wrapped in gRPC.
 
 For a local stdio client, first sign in through Guard and supply the current
 opaque session and explicit scopes only to the child process. PostgreSQL is

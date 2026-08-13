@@ -38,6 +38,17 @@ Every resource read and tool call emits `bridge.mcp.operation` with bounded acto
 
 ## REST and gRPC parity
 
+The all-domain gRPC adapter covers all 16 domain services and all 153 unary
+RPCs declared by the checked-in descriptor, not only Bridge administration.
+Production registration remains approval-gated, so the standalone command
+continues to expose only Bridge administration in this change. A fixed
+route/converter registry invokes the existing in-process
+REST application, so Guard permissions, organization and resource scope,
+ownership locks, validation, hard limits, auditing, repositories, and stable
+errors stay on one implementation path. Descriptor coverage fails if a declared
+method is missing from runtime registration. CSV, Exchange archives, Vault
+objects, and Atlas label artifacts have explicit bounded byte converters.
+
 | Operation | REST | gRPC | Parity |
 | --- | --- | --- | --- |
 | List/register/revoke OAuth clients | `/api/v1/bridge/clients` | `BridgeService.ListClients/CreateClient/RevokeClient` | Same fields, limits, Guard permissions, organization, and audit behavior |
@@ -45,7 +56,7 @@ Every resource read and tool call emits `bridge.mcp.operation` with bounded acto
 | OAuth metadata, authorize, token, revoke, consent redirect | Well-known, `/oauth/*`, consent API | Not exposed | Intentionally HTTP/browser protocol operations |
 | MCP remote and local transports | `/mcp`, stdio command | Not exposed | MCP owns its wire protocol; wrapping JSON-RPC in gRPC would not add parity |
 
-The checked-in OpenAPI and generated Go protobuf/gRPC bindings are validated in CI. `go run ./cmd/stewardmesh-grpc` starts the Bridge administration listener on `127.0.0.1:9090` by default. Each RPC requires the current opaque Guard session as `authorization: Bearer <session>` metadata and revalidates it. A non-loopback `STEWARDMESH_GRPC_ADDR` fails closed unless both `STEWARDMESH_GRPC_TLS_CERT_FILE` and `STEWARDMESH_GRPC_TLS_KEY_FILE` configure TLS 1.3 or newer. REST and gRPC use the same service methods, cursor rules, hard limits, authorization checks, audit behavior, and repository records; transport tests invoke all five generated RPCs and compare visible REST state. OAuth/browser and MCP wire protocols remain honestly transport-specific.
+The checked-in OpenAPI and generated Go protobuf/gRPC bindings are validated in CI. `go run ./cmd/stewardmesh-grpc` currently starts the approved Bridge administration listener on `127.0.0.1:9090`; all-domain activation is a separate security-reviewed deployment step. In the all-domain adapter, except for Guard bootstrap status, bootstrap, and local authentication, each RPC requires exactly one current opaque Guard session as `authorization: Bearer <session>` metadata and revalidates it before decoding. Client cookies, origins, and CSRF metadata are ignored; browser CSRF state and values are not exposed or rotated. The adapter's 34 MiB protobuf envelope accommodates the bounded 32 MiB Exchange archive plus framing while route-specific limits remain authoritative. The existing command's non-loopback address still fails closed unless certificate/key files configure TLS 1.3 or newer. OAuth/browser redirects and MCP keep their native protocols. See the [runtime parity validation](../validation/grpc-runtime-parity.md).
 
 Client and retained-grant administration uses stable ID cursors, a default page of 25, and a hard page limit of 100 in the service, memory/PostgreSQL adapters, REST, gRPC, OpenAPI, protobuf, and Workspace. The UI exposes keyboard-operable continuation controls instead of loading unbounded grant history. PostgreSQL serializes the active-client capacity check per organization within the creation transaction, so concurrent registrations cannot exceed 50.
 

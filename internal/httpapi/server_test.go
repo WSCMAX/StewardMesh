@@ -600,6 +600,26 @@ func TestSignalsRuleEvaluationActionHistoryDeliveryAndProtection(t *testing.T) {
 	if alert.Condition != signals.ConditionRenewal || alert.Status != signals.StatusActive {
 		t.Fatalf("unexpected Signals alert %#v", alert)
 	}
+	pending := httptest.NewRecorder()
+	handler.ServeHTTP(pending, authenticatedRequest(http.MethodGet, "/api/v1/signals/deliveries/pending?asOf=9999-12-31T00:00:00Z&limit=10", nil, session))
+	var deliveryQueue struct {
+		Items []signals.Delivery `json:"items"`
+	}
+	if pending.Code != http.StatusOK || json.Unmarshal(pending.Body.Bytes(), &deliveryQueue) != nil || len(deliveryQueue.Items) != 1 || deliveryQueue.Items[0].TargetID != "finance-owners" {
+		t.Fatalf("unexpected Signals delivery queue %d: %s", pending.Code, pending.Body.String())
+	}
+	missingDeliveryCSRF := authenticatedRequest(http.MethodPost, "/api/v1/signals/deliveries/"+deliveryQueue.Items[0].ID+"/attempts", bytes.NewBufferString(`{"succeeded":true,"retryable":false}`), session)
+	missingDeliveryCSRF.Header.Del(csrfHeader)
+	missingDeliveryCSRFResponse := httptest.NewRecorder()
+	handler.ServeHTTP(missingDeliveryCSRFResponse, missingDeliveryCSRF)
+	if missingDeliveryCSRFResponse.Code != http.StatusForbidden || !strings.Contains(missingDeliveryCSRFResponse.Body.String(), "csrf_failed") {
+		t.Fatalf("expected Signals delivery attempts to require CSRF, got %d: %s", missingDeliveryCSRFResponse.Code, missingDeliveryCSRFResponse.Body.String())
+	}
+	recordedDelivery := httptest.NewRecorder()
+	handler.ServeHTTP(recordedDelivery, authenticatedRequest(http.MethodPost, "/api/v1/signals/deliveries/"+deliveryQueue.Items[0].ID+"/attempts", bytes.NewBufferString(`{"succeeded":true,"retryable":false}`), session))
+	if recordedDelivery.Code != http.StatusOK || !strings.Contains(recordedDelivery.Body.String(), `"status":"delivered"`) {
+		t.Fatalf("unexpected Signals delivery attempt %d: %s", recordedDelivery.Code, recordedDelivery.Body.String())
+	}
 
 	ackPayload, _ := json.Marshal(map[string]any{"revision": alert.Revision})
 	ack := httptest.NewRecorder()
@@ -1527,11 +1547,14 @@ func TestAtlasCodesLabelTemplatesAndPrintArtifactsAreBoundedRetrySafeAndConfirme
 	}
 	for _, exposed := range []string{
 		"Content-Disposition", "X-Label-Batch-ID", "X-Label-Template-Version", "X-Label-Width-MM",
-		"X-Label-Height-MM", "X-Label-Item-Count", "X-Content-SHA256", "X-Idempotent-Replay",
+		"X-Label-Height-MM", "X-Label-Item-Count", "X-Content-SHA256", "X-Label-Created-At", "X-Idempotent-Replay",
 	} {
 		if !strings.Contains(printResponse.Header().Get("Access-Control-Expose-Headers"), exposed) {
 			t.Fatalf("label artifact response does not expose %s: %#v", exposed, printResponse.Header())
 		}
+	}
+	if strings.Contains(printResponse.Header().Get("Access-Control-Expose-Headers"), "X-StewardMesh-Label-Template") {
+		t.Fatalf("internal gRPC template metadata header was exposed to browser JavaScript: %#v", printResponse.Header())
 	}
 	replayRequest := authenticatedRequest(http.MethodPost, "/api/v1/asset-label-batches", bytes.NewReader(payload), session)
 	replayRequest.Header.Set("Idempotency-Key", "http-label-preview-one")

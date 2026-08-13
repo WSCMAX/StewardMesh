@@ -6,6 +6,7 @@ package httpapi
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -358,6 +359,8 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 	mux.Handle("GET /api/v1/signals/subscription-targets", server.protected(guard.PermissionSignalsRead, false, server.listSignalSubscriptionTargets))
 	mux.Handle("POST /api/v1/signals/subscriptions", server.protected(guard.PermissionSignalsWrite, true, server.createSignalSubscription))
 	mux.Handle("DELETE /api/v1/signals/subscriptions/{subscriptionID}", server.protected(guard.PermissionSignalsWrite, true, server.deleteSignalSubscription))
+	mux.Handle("GET /api/v1/signals/deliveries/pending", server.protected(guard.PermissionSignalsRead, false, server.listPendingSignalDeliveries))
+	mux.Handle("POST /api/v1/signals/deliveries/{deliveryID}/attempts", server.protected(guard.PermissionSignalsWrite, true, server.recordSignalDeliveryAttempt))
 	mux.Handle("GET /api/v1/signals/report.csv", server.protected(guard.PermissionSignalsRead, false, server.exportSignalsCSV))
 	mux.Handle("GET /api/v1/reach/endpoints", server.protected(guard.PermissionMessagingRead, false, server.listReachEndpoints))
 	mux.Handle("GET /api/v1/reach/providers", server.protected(guard.PermissionMessagingRead, false, server.listReachProviders))
@@ -3027,11 +3030,22 @@ func (s *Server) createAssetLabelBatch(w http.ResponseWriter, r *http.Request, a
 	w.Header().Set("Content-Type", batch.MediaType)
 	w.Header().Set("Content-Disposition", mime.FormatMediaType("inline", map[string]string{"filename": batch.FileName}))
 	w.Header().Set("X-Label-Batch-ID", batch.ID)
+	templateMetadata, err := json.Marshal(batch.Template)
+	if err != nil {
+		writeError(w, r, http.StatusInternalServerError, "atlas_labels_error", "label template metadata could not be encoded")
+		return
+	}
+	// The gRPC adapter invokes this same handler in-process and uses the exact
+	// immutable template selected during generation. Raw URL encoding keeps
+	// the bounded JSON metadata header-safe; browsers cannot read this internal
+	// header because it is deliberately absent from Access-Control-Expose-Headers.
+	w.Header().Set("X-StewardMesh-Label-Template", base64.RawURLEncoding.EncodeToString(templateMetadata))
 	w.Header().Set("X-Label-Template-Version", strconv.FormatInt(batch.Template.Version, 10))
 	w.Header().Set("X-Label-Width-MM", strconv.FormatFloat(batch.Template.WidthMM, 'f', 2, 64))
 	w.Header().Set("X-Label-Height-MM", strconv.FormatFloat(batch.Template.HeightMM, 'f', 2, 64))
 	w.Header().Set("X-Label-Item-Count", strconv.Itoa(batch.ItemCount))
 	w.Header().Set("X-Content-SHA256", batch.SHA256)
+	w.Header().Set("X-Label-Created-At", batch.CreatedAt.UTC().Format(time.RFC3339Nano))
 	w.Header().Set("X-Idempotent-Replay", strconv.FormatBool(!created))
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(batch.Contents)
@@ -3355,22 +3369,25 @@ func (s *Server) protected(permission guard.Permission, requireCSRF bool, next a
 			writeError(w, r, http.StatusServiceUnavailable, "authentication_unavailable", "authentication service unavailable")
 			return
 		}
-		cookie, err := r.Cookie(s.sessionCookieName())
-		if err != nil || cookie.Value == "" {
-			writeError(w, r, http.StatusUnauthorized, "authentication_required", "sign in is required")
-			return
-		}
-		authentication, err := s.guard.AuthenticateSession(r.Context(), cookie.Value)
-		if err != nil {
-			s.clearSessionCookie(w)
-			writeError(w, r, http.StatusUnauthorized, "invalid_session", "the session is invalid or expired")
-			return
+		authentication, nonBrowser := transportAuthentication(r.Context())
+		if !nonBrowser {
+			cookie, err := r.Cookie(s.sessionCookieName())
+			if err != nil || cookie.Value == "" {
+				writeError(w, r, http.StatusUnauthorized, "authentication_required", "sign in is required")
+				return
+			}
+			authentication, err = s.guard.AuthenticateSession(r.Context(), cookie.Value)
+			if err != nil {
+				s.clearSessionCookie(w)
+				writeError(w, r, http.StatusUnauthorized, "invalid_session", "the session is invalid or expired")
+				return
+			}
 		}
 		if scope, ok := foundation.ScopeFromContext(r.Context()); ok {
 			scope.ActorID = authentication.Principal.Subject
 			r = r.WithContext(foundation.WithScope(r.Context(), scope))
 		}
-		if requireCSRF {
+		if requireCSRF && !nonBrowser {
 			if !s.trustedBrowserRequest(r) {
 				writeError(w, r, http.StatusForbidden, "origin_denied", "request origin is not allowed")
 				return
@@ -3576,7 +3593,7 @@ func (s *Server) cors(next http.Handler) http.Handler {
 		if originAllowed {
 			w.Header().Set("Access-Control-Allow-Origin", s.allowedOrigin)
 			w.Header().Set("Access-Control-Allow-Credentials", "true")
-			w.Header().Set("Access-Control-Expose-Headers", "X-Correlation-ID, Content-Disposition, Retry-After, X-Label-Batch-ID, X-Label-Template-Version, X-Label-Width-MM, X-Label-Height-MM, X-Label-Item-Count, X-Content-SHA256, X-Exchange-Package-ID, X-Idempotent-Replay")
+			w.Header().Set("Access-Control-Expose-Headers", "X-Correlation-ID, Content-Disposition, Retry-After, X-Label-Batch-ID, X-Label-Template-Version, X-Label-Width-MM, X-Label-Height-MM, X-Label-Item-Count, X-Content-SHA256, X-Label-Created-At, X-Exchange-Package-ID, X-Idempotent-Replay")
 		}
 		if r.Method == http.MethodOptions {
 			if !originAllowed {

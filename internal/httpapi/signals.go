@@ -197,6 +197,57 @@ func (s *Server) deleteSignalSubscription(w http.ResponseWriter, r *http.Request
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (s *Server) listPendingSignalDeliveries(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if !s.requireSignals(w, r) {
+		return
+	}
+	var asOf time.Time
+	if raw := strings.TrimSpace(r.URL.Query().Get("asOf")); raw != "" {
+		parsed, err := time.Parse(time.RFC3339Nano, raw)
+		if err != nil {
+			writeError(w, r, http.StatusBadRequest, "validation_failed", "Signals delivery time is invalid")
+			return
+		}
+		asOf = parsed.UTC()
+	}
+	limit := 0
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil {
+			writeError(w, r, http.StatusBadRequest, "validation_failed", "Signals delivery limit is invalid")
+			return
+		}
+		limit = parsed
+	}
+	items, err := s.signals.ListPendingDeliveries(r.Context(), asOf, limit)
+	if err != nil {
+		writeSignalsError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) recordSignalDeliveryAttempt(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if !s.requireSignals(w, r) {
+		return
+	}
+	var input struct {
+		Succeeded bool   `json:"succeeded"`
+		Retryable bool   `json:"retryable"`
+		ErrorCode string `json:"errorCode"`
+	}
+	if decodeJSON(w, r, 8<<10, &input) != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid Signals delivery attempt payload")
+		return
+	}
+	updated, err := s.signals.RecordDeliveryAttempt(r.Context(), r.PathValue("deliveryID"), input.Succeeded, input.Retryable, input.ErrorCode)
+	if err != nil {
+		writeSignalsError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
+}
+
 func (s *Server) exportSignalsCSV(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
 	if !s.requireSignals(w, r) {
 		return

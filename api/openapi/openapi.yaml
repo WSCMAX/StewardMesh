@@ -933,6 +933,7 @@ paths:
             X-Label-Height-MM: {description: Physical height of each label in millimeters., schema: {type: number, format: double, minimum: 12, maximum: 300}}
             X-Label-Item-Count: {description: Number of labels in the bounded artifact., schema: {type: integer, minimum: 1, maximum: 50}}
             X-Content-SHA256: {description: SHA-256 digest of the exact returned artifact bytes., schema: {type: string, pattern: '^[a-f0-9]{64}$'}}
+            X-Label-Created-At: {description: UTC creation time of the immutable artifact snapshot., schema: {type: string, format: date-time}}
             X-Idempotent-Replay: {description: True when returning an exact prior result for the same request key., schema: {type: boolean}}
           content:
             image/svg+xml:
@@ -3151,6 +3152,42 @@ paths:
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/signals/deliveries/pending:
+    get:
+      summary: List bounded due Signals delivery work
+      description: Provider-neutral Reach handoff containing stable configured target references and sanitized state only. Provider URLs, credentials, response bodies, and organization selection are never accepted or returned.
+      operationId: listPendingSignalDeliveries
+      tags: [Signals]
+      x-requirement: REQ-SIGNALS-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - {in: query, name: asOf, required: false, schema: {type: string, format: date-time}, description: Omission uses the service UTC clock.}
+        - {in: query, name: limit, required: false, schema: {type: integer, minimum: 1, maximum: 500, default: 100}}
+      responses:
+        '200': {description: Due provider-neutral delivery records, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/SignalDeliveryCollection'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+  /api/v1/signals/deliveries/{deliveryId}/attempts:
+    parameters: [{in: path, name: deliveryId, required: true, schema: {$ref: '#/components/schemas/SignalID'}}]
+    post:
+      summary: Record one sanitized Signals delivery attempt
+      description: Records only success/retry disposition and an allowlisted stable error code. Raw provider errors and response bodies are rejected.
+      operationId: recordSignalDeliveryAttempt
+      tags: [Signals]
+      x-requirement: REQ-SIGNALS-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/RecordSignalDeliveryAttemptRequest'}}}}
+      responses:
+        '200': {description: Updated provider-neutral delivery record, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/SignalDelivery'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
   /api/v1/signals/report.csv:
     get:
       summary: Export the filtered Signals queue as spreadsheet-safe CSV
@@ -6195,6 +6232,36 @@ components:
         targetId:
           allOf: [{$ref: '#/components/schemas/SignalID'}]
           description: Stable configured target reference, never a URL or provider credential.
+    SignalDelivery:
+      type: object
+      additionalProperties: false
+      required: [id, alertId, subscriptionId, targetKind, targetId, status, attempts, createdAt, updatedAt]
+      properties:
+        id: {$ref: '#/components/schemas/SignalID'}
+        alertId: {$ref: '#/components/schemas/SignalID'}
+        subscriptionId: {$ref: '#/components/schemas/SignalID'}
+        targetKind: {type: string, enum: [group, webhook]}
+        targetId: {$ref: '#/components/schemas/SignalID'}
+        status: {type: string, enum: [pending, delivered, failed]}
+        attempts: {type: integer, minimum: 0, maximum: 8}
+        nextAttemptAt: {type: string, format: date-time}
+        lastErrorCode: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    SignalDeliveryCollection:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items: {type: array, maxItems: 500, items: {$ref: '#/components/schemas/SignalDelivery'}}
+    RecordSignalDeliveryAttemptRequest:
+      type: object
+      additionalProperties: false
+      required: [succeeded, retryable]
+      properties:
+        succeeded: {type: boolean}
+        retryable: {type: boolean}
+        errorCode: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
     ExchangeStableID:
       type: string
       pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'

@@ -8,7 +8,8 @@
           "docs/features/bridge.md",
           "docs/features/dictionary.md",
           "docs/requirements/initial.md",
-          "docs/validation/bridge-security-review.md"
+          "docs/validation/bridge-security-review.md",
+          "docs/validation/grpc-runtime-parity.md"
         ],
         "api": [
           "api/openapi/openapi.yaml",
@@ -22,7 +23,12 @@
           "internal/bridge/contracts.go",
           "internal/bridge/service.go",
           "internal/bridgegrpc/server.go",
+          "internal/grpcapi/codec.go",
+          "internal/grpcapi/routes.go",
+          "internal/grpcapi/server.go",
+          "internal/grpcapi/transport_codec.go",
           "internal/httpapi/bridge.go",
+          "internal/httpapi/transport_auth.go",
           "internal/repository/memory_bridge.go",
           "internal/repository/postgres/bridge.go"
         ],
@@ -32,9 +38,13 @@
         "tests": [
           "cmd/stewardmesh-grpc/main_test.go",
           "internal/application/bridge_grpc_test.go",
+          "internal/application/grpc_runtime_test.go",
           "internal/application/bridge_rate_test.go",
           "internal/application/bridge_test.go",
           "internal/bridge/security_test.go",
+          "internal/grpcapi/codec_test.go",
+          "internal/grpcapi/routes_test.go",
+          "internal/grpcapi/server_test.go",
           "internal/repository/contracttest/bridge.go",
           "internal/repository/postgres/postgres_integration_test.go",
           "web/src/BridgeManager.test.tsx"
@@ -266,7 +276,8 @@
           "docs/features/dictionary.md",
           "docs/requirements/initial.md",
           "docs/validation/atlas-codes-label-printing.md",
-          "docs/validation/atlas-codes-release.md"
+          "docs/validation/atlas-codes-release.md",
+          "docs/validation/grpc-runtime-parity.md"
         ],
         "api": [
           "api/openapi/openapi.yaml",
@@ -279,6 +290,8 @@
           "internal/atlascodes/rate_limiter.go",
           "internal/atlascodes/service.go",
           "internal/httpapi/server.go",
+          "internal/grpcapi/server.go",
+          "internal/httpapi/transport_auth.go",
           "internal/foundation/contracts.go",
           "internal/patterns/builtin.go",
           "internal/repository/memory_atlascodes.go",
@@ -294,6 +307,7 @@
           "internal/atlascodes/rate_limiter_test.go",
           "internal/atlascodes/service_test.go",
           "internal/httpapi/server_test.go",
+          "internal/application/grpc_runtime_test.go",
           "internal/repository/contracttest/atlascodes.go",
           "internal/repository/memory_atlascodes_test.go",
           "internal/repository/postgres/migrate_test.go",
@@ -623,7 +637,8 @@
           "README.md",
           "docs/features/dictionary.md",
           "docs/features/signals.md",
-          "docs/requirements/initial.md"
+          "docs/requirements/initial.md",
+          "docs/validation/grpc-runtime-parity.md"
         ],
         "api": [
           "api/openapi/openapi.yaml",
@@ -635,6 +650,7 @@
           "internal/guard/contracts.go",
           "internal/httpapi/server.go",
           "internal/httpapi/signals.go",
+          "internal/grpcapi/routes.go",
           "internal/repository/memory_signals.go",
           "internal/repository/postgres/signals.go",
           "internal/signals/contracts.go",
@@ -645,6 +661,7 @@
         ],
         "tests": [
           "internal/application/signals_evaluator_test.go",
+          "internal/application/grpc_runtime_test.go",
           "internal/httpapi/server_test.go",
           "internal/repository/contracttest/signals.go",
           "internal/repository/memory_signals_test.go",

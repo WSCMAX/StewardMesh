@@ -58,9 +58,16 @@ Audit events are `signals.rule.created`, `signals.rule.updated`, `signals.evalua
 - `GET` and `POST /api/v1/signals/subscriptions`
 - `GET /api/v1/signals/subscription-targets`
 - `DELETE /api/v1/signals/subscriptions/{subscriptionID}`
+- `GET /api/v1/signals/deliveries/pending`
+- `POST /api/v1/signals/deliveries/{deliveryID}/attempts`
 - `GET /api/v1/signals/report.csv`
 
-The protobuf contract also exposes the safe subscription-target catalog plus the narrow pending-delivery and attempt-result seam for Reach workers. REST and gRPC contracts use the same stable conditions, revisions, thresholds, and configured-target vocabulary.
+The protected REST and protobuf contracts expose the safe subscription-target
+catalog plus the narrow pending-delivery and attempt-result seam for Reach
+workers. They use the same bounded due-work query, stable conditions, revisions,
+thresholds, configured-target vocabulary, retry transitions, and sanitized
+error-code validation. URLs, credentials, and provider response bodies remain
+outside both contracts.
 
 Workspace presents Signals as a focused product area. Native labelled controls support rule creation, queue filtering, evaluation, acknowledgment, assignment, subscription management, and CSV export. Subscription creation uses the server-authoritative labelled Reach-target selector rather than a free-text target ID, disables the action when no target is valid, and gives retained unavailable subscriptions visible explanatory text. Severity and status are always readable text rather than color alone. Feedback uses announced status and focus-managed alert regions. Read-only sessions receive the queue and report without mutation controls. At 320 pixels, cards and forms reflow, long IDs wrap, and no control relies on a hover-only interaction.
 

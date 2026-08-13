@@ -851,6 +851,63 @@ func TestCreateAndListAssetRequiresPermissionAndCSRF(t *testing.T) {
 	}
 }
 
+func TestResolveModelAndBulkCreateAssets(t *testing.T) {
+	handler := newGuardServer(t)
+	session := bootstrapAdministrator(t, handler)
+	model := createPeopleRecord[domain.AssetModel](t, handler, session, "/api/v1/asset-models", map[string]any{
+		"id": "bulk-model", "manufacturer": "Framework", "name": "Laptop 13", "modelNumber": "FW13", "kind": "laptop",
+	})
+	resolvePath := "/api/v1/asset-models/resolve?manufacturer=" + url.QueryEscape(" framework ") +
+		"&name=" + url.QueryEscape("LAPTOP 13") + "&modelNumber=" + url.QueryEscape("fw13")
+	resolveRequest := authenticatedRequest(http.MethodGet, resolvePath, nil, session)
+	resolveResponse := httptest.NewRecorder()
+	handler.ServeHTTP(resolveResponse, resolveRequest)
+	if resolveResponse.Code != http.StatusOK || !strings.Contains(resolveResponse.Body.String(), `"id":"bulk-model"`) {
+		t.Fatalf("expected exact model resolution, got %d: %s", resolveResponse.Code, resolveResponse.Body.String())
+	}
+	payload, _ := json.Marshal(map[string]any{"items": []map[string]any{
+		{"id": "bulk-http-one", "name": "Bulk laptop one", "assetTag": "HTTP-BULK-001", "serialNumber": "HTTP-SERIAL-001", "status": "active"},
+		{"id": "bulk-http-two", "name": "Bulk laptop two", "assetTag": "HTTP-BULK-002", "serialNumber": "HTTP-SERIAL-002"},
+	}})
+	bulkPath := "/api/v1/asset-models/" + model.ID + "/assets/bulk"
+	bulkRequest := authenticatedRequest(http.MethodPost, bulkPath, bytes.NewReader(payload), session)
+	bulkResponse := httptest.NewRecorder()
+	handler.ServeHTTP(bulkResponse, bulkRequest)
+	if bulkResponse.Code != http.StatusCreated {
+		t.Fatalf("expected bulk create 201, got %d: %s", bulkResponse.Code, bulkResponse.Body.String())
+	}
+	var result atlas.BulkCreateAssetsResult
+	if err := json.Unmarshal(bulkResponse.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Items) != 2 || result.Items[0].ModelID != model.ID || result.Items[0].Kind != "laptop" || result.Items[1].Status != "draft" {
+		t.Fatalf("unexpected bulk response %#v", result)
+	}
+	conflictPayload, _ := json.Marshal(map[string]any{"items": []map[string]any{
+		{"id": "bulk-http-three", "name": "Should roll back", "assetTag": "HTTP-BULK-003"},
+		{"id": "bulk-http-four", "name": "Existing identity", "assetTag": "http-bulk-001"},
+	}})
+	conflictRequest := authenticatedRequest(http.MethodPost, bulkPath, bytes.NewReader(conflictPayload), session)
+	conflictResponse := httptest.NewRecorder()
+	handler.ServeHTTP(conflictResponse, conflictRequest)
+	if conflictResponse.Code != http.StatusConflict {
+		t.Fatalf("expected atomic bulk conflict, got %d: %s", conflictResponse.Code, conflictResponse.Body.String())
+	}
+	missingRequest := authenticatedRequest(http.MethodGet, "/api/v1/assets/bulk-http-three", nil, session)
+	missingResponse := httptest.NewRecorder()
+	handler.ServeHTTP(missingResponse, missingRequest)
+	if missingResponse.Code != http.StatusNotFound {
+		t.Fatalf("expected failed batch to leave no partial asset, got %d: %s", missingResponse.Code, missingResponse.Body.String())
+	}
+	missingCSRF := authenticatedRequest(http.MethodPost, bulkPath, bytes.NewReader(payload), session)
+	missingCSRF.Header.Del(csrfHeader)
+	missingCSRFResponse := httptest.NewRecorder()
+	handler.ServeHTTP(missingCSRFResponse, missingCSRF)
+	if missingCSRFResponse.Code != http.StatusForbidden {
+		t.Fatalf("expected bulk creation to require CSRF, got %d", missingCSRFResponse.Code)
+	}
+}
+
 func TestAtlasCodesIdentifierLifecycleIsRetrySafeLockedAndConflictRedacted(t *testing.T) {
 	handler := newGuardServer(t)
 	session := bootstrapAdministrator(t, handler)

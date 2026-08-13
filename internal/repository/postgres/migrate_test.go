@@ -14,8 +14,8 @@ func TestEmbeddedMigrationsAreOrderedAndChecksummed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(migrations) != 24 {
-		t.Fatalf("expected 24 platform migrations, got %d", len(migrations))
+	if len(migrations) != 25 {
+		t.Fatalf("expected 25 platform migrations, got %d", len(migrations))
 	}
 	for index, migration := range migrations {
 		expectedVersion := int64(index + 1)
@@ -24,6 +24,22 @@ func TestEmbeddedMigrationsAreOrderedAndChecksummed(t *testing.T) {
 		}
 		if len(migration.checksum) != 64 {
 			t.Fatalf("expected SHA-256 checksum for migration %d", migration.version)
+		}
+	}
+}
+
+func TestAtlasModelBulkIntakeMigrationPreservesDeploymentNotes(t *testing.T) {
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents := migrations[24].contents
+	for _, expected := range []string{
+		"REQ-ATLAS-MODELS-001", "inventory.models", "GitHub: #73",
+		"ADD COLUMN deployment_notes TEXT", "char_length(deployment_notes) <= 2000",
+	} {
+		if !strings.Contains(contents, expected) {
+			t.Fatalf("Atlas Models bulk intake migration is missing %q", expected)
 		}
 	}
 }

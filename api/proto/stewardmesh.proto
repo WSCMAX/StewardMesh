@@ -39,12 +39,14 @@ service GuardService {
 service AssetService {
   rpc ListAssetModels(ListAssetModelsRequest) returns (ListAssetModelsResponse);
   rpc GetAssetModel(GetAssetModelRequest) returns (AssetModel);
+  rpc ResolveAssetModel(ResolveAssetModelRequest) returns (AssetModel);
   rpc CreateAssetModel(CreateAssetModelRequest) returns (AssetModel);
   rpc UpdateAssetModel(UpdateAssetModelRequest) returns (AssetModel);
   rpc RetireAssetModel(RetireAssetModelRequest) returns (AssetModel);
   rpc ListAssets(ListAssetsRequest) returns (ListAssetsResponse);
   rpc GetAsset(GetAssetRequest) returns (Asset);
   rpc CreateAsset(CreateAssetRequest) returns (Asset);
+  rpc CreateAssetsFromModel(CreateAssetsFromModelRequest) returns (CreateAssetsFromModelResponse);
   rpc UpdateAsset(UpdateAssetRequest) returns (Asset);
   rpc ListAssetLifecycle(ListAssetLifecycleRequest) returns (ListAssetLifecycleResponse);
   // Resolution reauthorizes the matched asset against the caller's Guard
@@ -330,6 +332,12 @@ message GetAssetModelRequest {
   string model_id = 1;
 }
 
+message ResolveAssetModelRequest {
+  string manufacturer = 1;
+  string name = 2;
+  string model_number = 3;
+}
+
 message UpdateAssetModelRequest {
   AssetModel model = 1;
 }
@@ -345,6 +353,15 @@ message ListAssetsResponse {
 
 message CreateAssetRequest {
   Asset asset = 1;
+}
+
+message CreateAssetsFromModelRequest {
+  string model_id = 1;
+  repeated Asset items = 2;
+}
+
+message CreateAssetsFromModelResponse {
+  repeated Asset items = 1;
 }
 
 message GetAssetRequest {
@@ -485,6 +502,7 @@ message Asset {
   google.protobuf.Timestamp updated_at = 16;
   string organization_id = 17;
   string model_id = 18;
+  string deployment_notes = 19;
 }
 
 message AssetModel {

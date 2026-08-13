@@ -42,6 +42,12 @@ type ModelQuery struct {
 	Limit  int
 }
 
+type ModelIdentity struct {
+	Manufacturer string `json:"manufacturer"`
+	Name         string `json:"name"`
+	ModelNumber  string `json:"modelNumber,omitempty"`
+}
+
 type References struct {
 	SiteID       string `json:"siteId,omitempty"`
 	BuildingID   string `json:"buildingId,omitempty"`
@@ -51,26 +57,37 @@ type References struct {
 }
 
 type CreateAssetInput struct {
-	ID           string `json:"id,omitempty"`
-	ModelID      string `json:"modelId,omitempty"`
-	Name         string `json:"name"`
-	Kind         string `json:"kind"`
-	AssetTag     string `json:"assetTag,omitempty"`
-	SerialNumber string `json:"serialNumber,omitempty"`
-	Hostname     string `json:"hostname,omitempty"`
+	ID              string `json:"id,omitempty"`
+	ModelID         string `json:"modelId,omitempty"`
+	Name            string `json:"name"`
+	Kind            string `json:"kind"`
+	AssetTag        string `json:"assetTag,omitempty"`
+	SerialNumber    string `json:"serialNumber,omitempty"`
+	Hostname        string `json:"hostname,omitempty"`
+	DeploymentNotes string `json:"deploymentNotes,omitempty"`
 	References
 	Status       string     `json:"status"`
 	PurchaseDate *time.Time `json:"purchaseDate,omitempty"`
 }
 
+type BulkCreateAssetsInput struct {
+	ModelID string             `json:"modelId"`
+	Items   []CreateAssetInput `json:"items"`
+}
+
+type BulkCreateAssetsResult struct {
+	Items []domain.Asset `json:"items"`
+}
+
 type UpdateAssetInput struct {
-	ID           string `json:"-"`
-	ModelID      string `json:"modelId,omitempty"`
-	Name         string `json:"name"`
-	Kind         string `json:"kind"`
-	AssetTag     string `json:"assetTag,omitempty"`
-	SerialNumber string `json:"serialNumber,omitempty"`
-	Hostname     string `json:"hostname,omitempty"`
+	ID              string `json:"-"`
+	ModelID         string `json:"modelId,omitempty"`
+	Name            string `json:"name"`
+	Kind            string `json:"kind"`
+	AssetTag        string `json:"assetTag,omitempty"`
+	SerialNumber    string `json:"serialNumber,omitempty"`
+	Hostname        string `json:"hostname,omitempty"`
+	DeploymentNotes string `json:"deploymentNotes,omitempty"`
 	References
 	Status        string     `json:"status"`
 	PurchaseDate  *time.Time `json:"purchaseDate,omitempty"`
@@ -112,12 +129,14 @@ type UpdateModelInput struct {
 type Store interface {
 	ListModels(ctx context.Context, organizationID string, query ModelQuery) ([]domain.AssetModel, error)
 	GetModel(ctx context.Context, organizationID, id string) (domain.AssetModel, error)
+	ResolveModel(ctx context.Context, organizationID string, identity ModelIdentity) (domain.AssetModel, error)
 	CreateModel(ctx context.Context, model domain.AssetModel) (domain.AssetModel, error)
 	UpdateModel(ctx context.Context, model domain.AssetModel, expectedRevision int64) (domain.AssetModel, error)
 	RetireModel(ctx context.Context, organizationID, id string, expectedRevision int64, retiredAt time.Time) (domain.AssetModel, error)
 	ListAssets(ctx context.Context, organizationID string, query Query) ([]domain.Asset, error)
 	GetAsset(ctx context.Context, organizationID, id string) (domain.Asset, error)
 	CreateAsset(ctx context.Context, asset domain.Asset, initialEvent domain.AssetLifecycleEvent) (domain.Asset, error)
+	CreateAssets(ctx context.Context, assets []domain.Asset, initialEvents []domain.AssetLifecycleEvent) ([]domain.Asset, error)
 	UpdateAsset(ctx context.Context, asset domain.Asset, expectedRevision int64, lifecycleEvent *domain.AssetLifecycleEvent) (domain.Asset, error)
 	ListAssetLifecycle(ctx context.Context, organizationID, assetID string) ([]domain.AssetLifecycleEvent, error)
 }

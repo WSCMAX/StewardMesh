@@ -14,6 +14,7 @@ export type Asset = {
   assetTag?: string
   serialNumber?: string
   hostname?: string
+  deploymentNotes?: string
   siteId?: string
   buildingId?: string
   roomId?: string
@@ -72,6 +73,10 @@ type ReferenceOptions = {
   rooms: ReferenceRecord[]
   departments: ReferenceRecord[]
   identities: ReferenceRecord[]
+}
+
+type BulkAssetRow = {
+  key: number
 }
 
 type AtlasInventoryProps = {
@@ -143,6 +148,8 @@ export default function AtlasInventory({ assets, csrfToken, permissions, onAsset
   const [modelEditing, setModelEditing] = useState<AssetModel | null>(null)
   const [formOpen, setFormOpen] = useState(false)
   const [modelFormOpen, setModelFormOpen] = useState(false)
+  const [bulkModel, setBulkModel] = useState<AssetModel | null>(null)
+  const [bulkRows, setBulkRows] = useState<BulkAssetRow[]>([{ key: 0 }])
   const [prefillModelID, setPrefillModelID] = useState('')
   const [prefillKind, setPrefillKind] = useState('')
   const [selected, setSelected] = useState<Asset | null>(null)
@@ -154,6 +161,7 @@ export default function AtlasInventory({ assets, csrfToken, permissions, onAsset
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
   const errorRef = useRef<HTMLDivElement>(null)
+  const nextBulkRowKey = useRef(1)
   const canWrite = permissions.includes('assets.write')
   const canReadDirectory = permissions.includes('directory.read')
 
@@ -214,6 +222,26 @@ export default function AtlasInventory({ assets, csrfToken, permissions, onAsset
     void loadReferences()
   }
 
+  function openBulkCreateFromModel(model: AssetModel) {
+    setBulkModel(model)
+    setBulkRows([{ key: 0 }])
+    nextBulkRowKey.current = 1
+    setError('')
+    setMessage('')
+    void loadReferences()
+  }
+
+  function addBulkRow() {
+    if (bulkRows.length >= 100) return
+    const key = nextBulkRowKey.current
+    nextBulkRowKey.current += 1
+    setBulkRows((current) => [...current, { key }])
+  }
+
+  function removeBulkRow(key: number) {
+    setBulkRows((current) => current.length > 1 ? current.filter((row) => row.key !== key) : current)
+  }
+
   function openEdit(asset: Asset) {
     setEditing(asset)
     setPrefillModelID('')
@@ -269,6 +297,7 @@ export default function AtlasInventory({ assets, csrfToken, permissions, onAsset
       assetTag: String(values.get('assetTag') ?? ''),
       serialNumber: String(values.get('serialNumber') ?? ''),
       hostname: String(values.get('hostname') ?? ''),
+      deploymentNotes: String(values.get('deploymentNotes') ?? ''),
       siteId: String(values.get('siteId') ?? ''),
       buildingId: String(values.get('buildingId') ?? ''),
       roomId: String(values.get('roomId') ?? ''),
@@ -301,6 +330,52 @@ export default function AtlasInventory({ assets, csrfToken, permissions, onAsset
       void selectAsset(saved)
     } catch (requestError) {
       setError(requestError instanceof ApiRequestError ? requestError.message : 'The asset could not be saved.')
+      queueMicrotask(() => errorRef.current?.focus())
+    } finally {
+      setBusy('')
+    }
+  }
+
+  async function handleBulkSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!bulkModel) return
+    setError('')
+    setMessage('')
+    const values = new FormData(event.currentTarget)
+    const items = bulkRows.map((row) => {
+      const prefix = `bulk-${row.key}-`
+      const purchaseDate = String(values.get(`${prefix}purchaseDate`) ?? '')
+      const item: Record<string, unknown> = {
+        name: String(values.get(`${prefix}name`) ?? ''),
+        assetTag: String(values.get(`${prefix}assetTag`) ?? ''),
+        serialNumber: String(values.get(`${prefix}serialNumber`) ?? ''),
+        hostname: String(values.get(`${prefix}hostname`) ?? ''),
+        deploymentNotes: String(values.get(`${prefix}deploymentNotes`) ?? ''),
+        siteId: String(values.get(`${prefix}siteId`) ?? ''),
+        buildingId: String(values.get(`${prefix}buildingId`) ?? ''),
+        roomId: String(values.get(`${prefix}roomId`) ?? ''),
+        departmentId: String(values.get(`${prefix}departmentId`) ?? ''),
+        userId: String(values.get(`${prefix}userId`) ?? ''),
+        status: String(values.get(`${prefix}status`) ?? ''),
+      }
+      if (purchaseDate) item.purchaseDate = `${purchaseDate}T00:00:00Z`
+      return item
+    })
+    setBusy('save-bulk')
+    try {
+      const response = await requestJSON(`/api/v1/asset-models/${encodeURIComponent(bulkModel.id)}/assets/bulk`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+        body: JSON.stringify({ items }),
+      })
+      const created = readItems(response).filter(isAsset)
+      if (created.length !== items.length) throw new Error('invalid bulk asset response')
+      onAssetsChange([...assets, ...created].sort((left, right) => left.name.localeCompare(right.name)))
+      setBulkModel(null)
+      setMessage(`${created.length} asset${created.length === 1 ? '' : 's'} created from ${modelLabel(bulkModel)}.`)
+      void loadModels()
+    } catch (requestError) {
+      setError(requestError instanceof ApiRequestError ? requestError.message : 'The asset batch could not be created.')
       queueMicrotask(() => errorRef.current?.focus())
     } finally {
       setBusy('')
@@ -412,6 +487,45 @@ export default function AtlasInventory({ assets, csrfToken, permissions, onAsset
             <button className={`${buttonClass} mt-5`} disabled={busy === 'save-model'} type="submit">{busy === 'save-model' ? 'Saving…' : modelEditing ? 'Save model' : 'Create model'}</button>
           </form>
         )}
+        {bulkModel && canWrite && (
+          <form aria-label="Bulk add assets" className={`${subpanelClass} mt-5 border-steward-blue/35 bg-steward-ink-900/75 p-5`} onSubmit={handleBulkSubmit}>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h4 className="font-semibold">Bulk add from {modelLabel(bulkModel)}</h4>
+                <p className="mt-1 text-sm text-steward-mist-muted">Create up to 100 instances atomically. The model supplies the shared kind; every row keeps its own identity, deployment, status, and assignment details.</p>
+              </div>
+              <button className={plainButtonClass} onClick={() => setBulkModel(null)} type="button">Cancel</button>
+            </div>
+            <div className="mt-5 space-y-5">
+              {bulkRows.map((row, index) => {
+                const prefix = `bulk-${row.key}-`
+                return <fieldset className={`${subpanelClass} p-4`} key={row.key}>
+                  <legend className="px-1 font-semibold">Asset {index + 1}</legend>
+                  {bulkRows.length > 1 && <div className="flex justify-end"><button className={plainButtonClass} onClick={() => removeBulkRow(row.key)} type="button">Remove asset {index + 1}</button></div>}
+                  <div className="mt-3 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                    <TextField defaultValue="" label="Asset name" maxLength={200} name={`${prefix}name`} required />
+                    <TextField defaultValue="" label="Asset tag" maxLength={128} name={`${prefix}assetTag`} />
+                    <TextField defaultValue="" label="Serial number" maxLength={255} name={`${prefix}serialNumber`} />
+                    <TextField defaultValue="" label="Hostname" maxLength={253} name={`${prefix}hostname`} />
+                    <SelectField defaultValue="draft" label="Status" name={`${prefix}status`} options={statuses} />
+                    <label className={labelClass}>Purchase date<input className={inputClass} name={`${prefix}purchaseDate`} type="date" /></label>
+                    <ReferenceSelect defaultValue="" label="Site" name={`${prefix}siteId`} options={references.sites} />
+                    <ReferenceSelect defaultValue="" label="Building" name={`${prefix}buildingId`} options={references.buildings} />
+                    <ReferenceSelect defaultValue="" label="Room" name={`${prefix}roomId`} options={references.rooms} />
+                    <ReferenceSelect defaultValue="" label="Department" name={`${prefix}departmentId`} options={references.departments} />
+                    <ReferenceSelect defaultValue="" label="Primary user" name={`${prefix}userId`} options={references.identities} />
+                    <TextAreaField defaultValue="" label="Deployment notes" maxLength={2000} name={`${prefix}deploymentNotes`} />
+                  </div>
+                </fieldset>
+              })}
+            </div>
+            {!canReadDirectory && <p className="mt-4 text-sm text-steward-mist-muted">Directory references require directory read access. Core identity and deployment fields remain available.</p>}
+            <div className="mt-5 flex flex-wrap gap-3">
+              <button className={secondaryButtonClass} disabled={bulkRows.length >= 100} onClick={addBulkRow} type="button">Add another asset</button>
+              <button className={buttonClass} disabled={busy === 'save-bulk'} type="submit">{busy === 'save-bulk' ? 'Creating batch…' : `Create ${bulkRows.length} asset${bulkRows.length === 1 ? '' : 's'}`}</button>
+            </div>
+          </form>
+        )}
         {models.length === 0 ? <p className={`${emptyStateClass} mt-4`}>No active models have been registered.</p> : (
           <ul className="mt-4 grid gap-3 lg:grid-cols-2">{models.map((model) => (
             <li className={`${subpanelClass} p-4 transition hover:border-white/15 hover:bg-white/[0.025]`} key={model.id}>
@@ -422,6 +536,7 @@ export default function AtlasInventory({ assets, csrfToken, permissions, onAsset
                 </div>
                 {canWrite && <div className="flex flex-wrap gap-2">
                   <button className={secondaryButtonClass} onClick={() => openCreateFromModel(model)} type="button">Use</button>
+                  <button className={secondaryButtonClass} onClick={() => openBulkCreateFromModel(model)} type="button">Bulk add</button>
                   <button className={secondaryButtonClass} onClick={() => openModelEdit(model)} type="button">Edit</button>
                   <button className={dangerButtonClass} disabled={busy === `retire-model-${model.id}`} onClick={() => void retireModel(model)} type="button">{busy === `retire-model-${model.id}` ? 'Retiring…' : 'Retire'}</button>
                 </div>}
@@ -455,6 +570,7 @@ export default function AtlasInventory({ assets, csrfToken, permissions, onAsset
             <TextField defaultValue={assetValue(editing, 'assetTag')} label="Asset tag" maxLength={128} name="assetTag" />
             <TextField defaultValue={assetValue(editing, 'serialNumber')} label="Serial number" maxLength={255} name="serialNumber" />
             <TextField defaultValue={assetValue(editing, 'hostname')} label="Hostname" maxLength={253} name="hostname" />
+            <TextAreaField defaultValue={assetValue(editing, 'deploymentNotes')} label="Deployment notes" maxLength={2000} name="deploymentNotes" />
             <label className={labelClass}>Purchase date<input className={inputClass} defaultValue={assetValue(editing, 'purchaseDate').slice(0, 10)} name="purchaseDate" type="date" /></label>
             <ReferenceSelect defaultValue={assetValue(editing, 'siteId')} label="Site" name="siteId" options={references.sites} />
             <ReferenceSelect defaultValue={assetValue(editing, 'buildingId')} label="Building" name="buildingId" options={references.buildings} />
@@ -483,7 +599,7 @@ export default function AtlasInventory({ assets, csrfToken, permissions, onAsset
         <aside aria-labelledby="asset-detail-heading" className={`${subpanelClass} p-5`}>
           <h3 className="text-lg font-semibold" id="asset-detail-heading">Asset details</h3>
           {!selected ? <p className="mt-3 text-sm text-steward-mist-muted">Choose an asset to inspect its current record and lifecycle.</p> : <>
-            <dl className="mt-4 grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm"><Detail label="Name" value={selected.name} /><Detail label="Model" value={models.find((model) => model.id === selected.modelId) ? modelLabel(models.find((model) => model.id === selected.modelId) as AssetModel) : selected.modelId} /><Detail label="Kind" value={selected.kind} /><Detail label="Status" value={selected.status} /><Detail label="Asset tag" value={selected.assetTag} /><Detail label="Serial" value={selected.serialNumber} /><Detail label="Hostname" value={selected.hostname} /><Detail label="Site" value={selected.siteId} /><Detail label="Building" value={selected.buildingId} /><Detail label="Room" value={selected.roomId} /><Detail label="Department" value={selected.departmentId} /><Detail label="User" value={selected.userId} /><Detail label="Revision" value={String(selected.revision)} /></dl>
+            <dl className="mt-4 grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm"><Detail label="Name" value={selected.name} /><Detail label="Model" value={models.find((model) => model.id === selected.modelId) ? modelLabel(models.find((model) => model.id === selected.modelId) as AssetModel) : selected.modelId} /><Detail label="Kind" value={selected.kind} /><Detail label="Status" value={selected.status} /><Detail label="Asset tag" value={selected.assetTag} /><Detail label="Serial" value={selected.serialNumber} /><Detail label="Hostname" value={selected.hostname} /><Detail label="Deployment notes" value={selected.deploymentNotes} /><Detail label="Site" value={selected.siteId} /><Detail label="Building" value={selected.buildingId} /><Detail label="Room" value={selected.roomId} /><Detail label="Department" value={selected.departmentId} /><Detail label="User" value={selected.userId} /><Detail label="Revision" value={String(selected.revision)} /></dl>
             <h4 className="mt-6 font-semibold">Lifecycle history</h4>
             {busy === `history-${selected.id}` ? <p className="mt-2 text-sm text-steward-mist-muted" role="status">Loading lifecycle…</p> : lifecycle.length === 0 ? <p className="mt-2 text-sm text-steward-mist-muted">No lifecycle events loaded.</p> : <ol className="mt-3 space-y-3">{lifecycle.map((event) => <li className="border-l-2 border-steward-blue pl-3 text-sm" key={event.id}><p><strong>{event.fromStatus ? `${event.fromStatus} → ` : ''}{event.toStatus}</strong> · revision {event.revision}</p><p className="text-steward-mist-muted">{event.note || 'Status recorded'} · {new Date(event.occurredAt).toLocaleDateString()}</p></li>)}</ol>}
             <AtlasIdentifiers assetId={selected.id} assetName={selected.name} canWrite={canWrite} csrfToken={csrfToken} />
@@ -497,6 +613,10 @@ export default function AtlasInventory({ assets, csrfToken, permissions, onAsset
 function TextField({ defaultValue, help, label, maxLength, name, required }: { defaultValue: string; help?: string; label: string; maxLength?: number; name: string; required?: boolean }) {
   const helpID = help ? `${name}-help` : undefined
   return <label className={labelClass}>{label}{help && <span className="mt-1 block font-normal leading-5 text-steward-mist-muted" id={helpID}>{help}</span>}<input aria-describedby={helpID} className={inputClass} defaultValue={defaultValue} maxLength={maxLength} name={name} required={required} /></label>
+}
+
+function TextAreaField({ defaultValue, label, maxLength, name }: { defaultValue: string; label: string; maxLength: number; name: string }) {
+  return <label className={labelClass}>{label}<textarea className={`${inputClass} min-h-24 resize-y`} defaultValue={defaultValue} maxLength={maxLength} name={name} /></label>
 }
 
 function SelectField({ defaultValue, label, name, options }: { defaultValue: string; label: string; name: string; options: string[] }) {

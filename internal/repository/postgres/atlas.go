@@ -31,7 +31,7 @@ func NewAtlasStore(database *sql.DB) (*AtlasStore, error) {
 
 const atlasAssetColumns = `
 	organization_id, id, model_id, name, kind, asset_tag, serial_number, hostname,
-	site_id, building_id, room_id, department_id, user_id, status,
+	deployment_notes, site_id, building_id, room_id, department_id, user_id, status,
 	purchase_date, revision, created_at, updated_at`
 
 const atlasModelColumns = `
@@ -86,6 +86,25 @@ func (s *AtlasStore) GetModel(ctx context.Context, organizationID, id string) (d
 	}
 	if err != nil {
 		return domain.AssetModel{}, fmt.Errorf("get Atlas model: %w", err)
+	}
+	return model, nil
+}
+
+func (s *AtlasStore) ResolveModel(ctx context.Context, organizationID string, identity atlas.ModelIdentity) (domain.AssetModel, error) {
+	model, err := scanAtlasModel(s.database.QueryRowContext(ctx, `
+		SELECT `+atlasModelColumns+`, (
+			SELECT count(*) FROM atlas_assets AS asset
+			WHERE asset.organization_id = model.organization_id AND asset.model_id = model.id
+		)
+		FROM atlas_models AS model
+		WHERE organization_id = $1 AND normalized_manufacturer = $2
+		  AND normalized_name = $3 AND normalized_model_number = $4
+	`, organizationID, identity.Manufacturer, identity.Name, identity.ModelNumber), true)
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.AssetModel{}, atlas.ErrNotFound
+	}
+	if err != nil {
+		return domain.AssetModel{}, fmt.Errorf("resolve Atlas model: %w", err)
 	}
 	return model, nil
 }
@@ -223,34 +242,52 @@ func (s *AtlasStore) GetAsset(ctx context.Context, organizationID, id string) (d
 }
 
 func (s *AtlasStore) CreateAsset(ctx context.Context, asset domain.Asset, initialEvent domain.AssetLifecycleEvent) (domain.Asset, error) {
+	created, err := s.CreateAssets(ctx, []domain.Asset{asset}, []domain.AssetLifecycleEvent{initialEvent})
+	if err != nil {
+		return domain.Asset{}, err
+	}
+	return created[0], nil
+}
+
+func (s *AtlasStore) CreateAssets(ctx context.Context, assets []domain.Asset, initialEvents []domain.AssetLifecycleEvent) ([]domain.Asset, error) {
+	if len(assets) == 0 || len(assets) != len(initialEvents) {
+		return nil, atlas.ErrInvalidInput
+	}
 	transaction, err := s.database.BeginTx(ctx, nil)
 	if err != nil {
-		return domain.Asset{}, fmt.Errorf("begin Atlas asset creation: %w", err)
+		return nil, fmt.Errorf("begin Atlas asset creation: %w", err)
 	}
 	defer transaction.Rollback()
-	created, err := scanAtlasAsset(transaction.QueryRowContext(ctx, `
+	created := make([]domain.Asset, 0, len(assets))
+	for index, asset := range assets {
+		if initialEvents[index].OrganizationID != asset.OrganizationID || initialEvents[index].AssetID != asset.ID {
+			return nil, atlas.ErrInvalidInput
+		}
+		item, createErr := scanAtlasAsset(transaction.QueryRowContext(ctx, `
 		INSERT INTO atlas_assets (
 			organization_id, id, model_id, name, kind, asset_tag, normalized_asset_tag,
-			serial_number, normalized_serial_number, hostname, site_id, building_id,
+			serial_number, normalized_serial_number, hostname, deployment_notes, site_id, building_id,
 			room_id, department_id, user_id, status, purchase_date, revision, created_at, updated_at
 		) VALUES (
 			$1, $2, NULLIF($3, ''), $4, $5, $6, lower(btrim($6)), $7, lower(btrim($7)), $8,
-			NULLIF($9, ''), NULLIF($10, ''), NULLIF($11, ''), NULLIF($12, ''), NULLIF($13, ''),
-			$14, $15, $16, $17, $18
+			$9, NULLIF($10, ''), NULLIF($11, ''), NULLIF($12, ''), NULLIF($13, ''), NULLIF($14, ''),
+			$15, $16, $17, $18, $19
 		)
 		RETURNING `+atlasAssetColumns,
-		asset.OrganizationID, asset.ID, asset.ModelID, asset.Name, asset.Kind, asset.AssetTag, asset.SerialNumber,
-		asset.Hostname, asset.SiteID, asset.BuildingID, asset.RoomID, asset.DepartmentID, asset.UserID,
-		asset.Status, asset.PurchaseDate, asset.Revision, asset.CreatedAt, asset.UpdatedAt,
-	))
-	if err != nil {
-		return domain.Asset{}, translateAtlasWriteError("create Atlas asset", err)
-	}
-	if err := insertLifecycleEvent(ctx, transaction, initialEvent); err != nil {
-		return domain.Asset{}, err
+			asset.OrganizationID, asset.ID, asset.ModelID, asset.Name, asset.Kind, asset.AssetTag, asset.SerialNumber,
+			asset.Hostname, asset.DeploymentNotes, asset.SiteID, asset.BuildingID, asset.RoomID, asset.DepartmentID, asset.UserID,
+			asset.Status, asset.PurchaseDate, asset.Revision, asset.CreatedAt, asset.UpdatedAt,
+		))
+		if createErr != nil {
+			return nil, translateAtlasWriteError("create Atlas asset", createErr)
+		}
+		if eventErr := insertLifecycleEvent(ctx, transaction, initialEvents[index]); eventErr != nil {
+			return nil, eventErr
+		}
+		created = append(created, item)
 	}
 	if err := transaction.Commit(); err != nil {
-		return domain.Asset{}, fmt.Errorf("commit Atlas asset creation: %w", err)
+		return nil, fmt.Errorf("commit Atlas asset creation: %w", err)
 	}
 	return created, nil
 }
@@ -264,14 +301,14 @@ func (s *AtlasStore) UpdateAsset(ctx context.Context, asset domain.Asset, expect
 	updated, err := scanAtlasAsset(transaction.QueryRowContext(ctx, `
 		UPDATE atlas_assets
 		SET model_id = NULLIF($3, ''), name = $4, kind = $5, asset_tag = $6, normalized_asset_tag = lower(btrim($6)),
-			serial_number = $7, normalized_serial_number = lower(btrim($7)), hostname = $8,
-			site_id = NULLIF($9, ''), building_id = NULLIF($10, ''), room_id = NULLIF($11, ''),
-			department_id = NULLIF($12, ''), user_id = NULLIF($13, ''), status = $14,
-			purchase_date = $15, revision = revision + 1, updated_at = $16
-		WHERE organization_id = $1 AND id = $2 AND revision = $17
+			serial_number = $7, normalized_serial_number = lower(btrim($7)), hostname = $8, deployment_notes = $9,
+			site_id = NULLIF($10, ''), building_id = NULLIF($11, ''), room_id = NULLIF($12, ''),
+			department_id = NULLIF($13, ''), user_id = NULLIF($14, ''), status = $15,
+			purchase_date = $16, revision = revision + 1, updated_at = $17
+		WHERE organization_id = $1 AND id = $2 AND revision = $18
 		RETURNING `+atlasAssetColumns,
 		asset.OrganizationID, asset.ID, asset.ModelID, asset.Name, asset.Kind, asset.AssetTag, asset.SerialNumber,
-		asset.Hostname, asset.SiteID, asset.BuildingID, asset.RoomID, asset.DepartmentID, asset.UserID,
+		asset.Hostname, asset.DeploymentNotes, asset.SiteID, asset.BuildingID, asset.RoomID, asset.DepartmentID, asset.UserID,
 		asset.Status, asset.PurchaseDate, asset.UpdatedAt, expectedRevision,
 	))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -336,7 +373,7 @@ func scanAtlasAsset(scanner atlasScanner) (domain.Asset, error) {
 	var purchaseDate sql.NullTime
 	if err := scanner.Scan(
 		&asset.OrganizationID, &asset.ID, &modelID, &asset.Name, &asset.Kind, &asset.AssetTag,
-		&asset.SerialNumber, &asset.Hostname, &siteID, &buildingID, &roomID, &departmentID,
+		&asset.SerialNumber, &asset.Hostname, &asset.DeploymentNotes, &siteID, &buildingID, &roomID, &departmentID,
 		&userID, &asset.Status, &purchaseDate, &asset.Revision, &asset.CreatedAt, &asset.UpdatedAt,
 	); err != nil {
 		return domain.Asset{}, err

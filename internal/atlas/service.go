@@ -16,8 +16,9 @@ import (
 )
 
 const (
-	defaultListLimit = 50
-	maximumListLimit = 100
+	defaultListLimit  = 50
+	maximumListLimit  = 100
+	MaximumBulkAssets = 100
 )
 
 var (
@@ -95,6 +96,14 @@ func (s *Service) GetModel(ctx context.Context, id string) (domain.AssetModel, e
 		return domain.AssetModel{}, ErrInvalidInput
 	}
 	return s.store.GetModel(ctx, s.organizationID, id)
+}
+
+func (s *Service) ResolveModel(ctx context.Context, identity ModelIdentity) (domain.AssetModel, error) {
+	normalized, err := normalizeModelIdentity(identity)
+	if err != nil {
+		return domain.AssetModel{}, err
+	}
+	return s.store.ResolveModel(ctx, s.organizationID, normalized)
 }
 
 // Get satisfies People's provider-neutral AssetReader without weakening the
@@ -219,7 +228,7 @@ func (s *Service) CreateAsset(ctx context.Context, input CreateAssetInput) (doma
 	now := s.now().UTC()
 	asset := domain.Asset{
 		ID: id, OrganizationID: s.organizationID, ModelID: normalized.ModelID, Name: normalized.Name, Kind: normalized.Kind,
-		AssetTag: normalized.AssetTag, SerialNumber: normalized.SerialNumber, Hostname: normalized.Hostname,
+		AssetTag: normalized.AssetTag, SerialNumber: normalized.SerialNumber, Hostname: normalized.Hostname, DeploymentNotes: normalized.DeploymentNotes,
 		SiteID: normalized.SiteID, BuildingID: normalized.BuildingID, RoomID: normalized.RoomID,
 		DepartmentID: normalized.DepartmentID, UserID: normalized.UserID, Status: normalized.Status,
 		PurchaseDate: cloneDate(normalized.PurchaseDate), Revision: 1, CreatedAt: now, UpdatedAt: now,
@@ -240,6 +249,76 @@ func (s *Service) CreateAsset(ctx context.Context, input CreateAssetInput) (doma
 	return created, nil
 }
 
+func (s *Service) CreateAssetsFromModel(ctx context.Context, input BulkCreateAssetsInput) (BulkCreateAssetsResult, error) {
+	input.ModelID = strings.TrimSpace(input.ModelID)
+	if !assetIDPattern.MatchString(input.ModelID) || len(input.Items) < 1 || len(input.Items) > MaximumBulkAssets {
+		return BulkCreateAssetsResult{}, ErrInvalidInput
+	}
+	model, err := s.validateModelReference(ctx, input.ModelID)
+	if err != nil {
+		return BulkCreateAssetsResult{}, err
+	}
+	now := s.now().UTC()
+	assets := make([]domain.Asset, 0, len(input.Items))
+	events := make([]domain.AssetLifecycleEvent, 0, len(input.Items))
+	ids := make(map[string]struct{}, len(input.Items))
+	assetTags := make(map[string]struct{}, len(input.Items))
+	serialNumbers := make(map[string]struct{}, len(input.Items))
+	for _, item := range input.Items {
+		if strings.TrimSpace(item.ModelID) != "" && strings.TrimSpace(item.ModelID) != input.ModelID {
+			return BulkCreateAssetsResult{}, ErrInvalidInput
+		}
+		item.ModelID = input.ModelID
+		normalized, normalizeErr := s.normalizeCreateInput(item)
+		if normalizeErr != nil {
+			return BulkCreateAssetsResult{}, normalizeErr
+		}
+		if normalized.Kind == "" {
+			normalized.Kind = model.Kind
+		}
+		if validateErr := s.references.ValidateAssetReferences(ctx, s.organizationID, normalized.References); validateErr != nil {
+			return BulkCreateAssetsResult{}, validateErr
+		}
+		id := normalized.ID
+		if id == "" {
+			id, err = foundation.NewCorrelationID()
+			if err != nil {
+				return BulkCreateAssetsResult{}, fmt.Errorf("create bulk asset id: %w", err)
+			}
+		}
+		if _, exists := ids[id]; exists || repeatedNormalizedValue(assetTags, normalized.AssetTag) || repeatedNormalizedValue(serialNumbers, normalized.SerialNumber) {
+			return BulkCreateAssetsResult{}, ErrConflict
+		}
+		ids[id] = struct{}{}
+		asset := domain.Asset{
+			ID: id, OrganizationID: s.organizationID, ModelID: input.ModelID, Name: normalized.Name, Kind: normalized.Kind,
+			AssetTag: normalized.AssetTag, SerialNumber: normalized.SerialNumber, Hostname: normalized.Hostname, DeploymentNotes: normalized.DeploymentNotes,
+			SiteID: normalized.SiteID, BuildingID: normalized.BuildingID, RoomID: normalized.RoomID,
+			DepartmentID: normalized.DepartmentID, UserID: normalized.UserID, Status: normalized.Status,
+			PurchaseDate: cloneDate(normalized.PurchaseDate), Revision: 1, CreatedAt: now, UpdatedAt: now,
+		}
+		event, eventErr := s.lifecycleEvent(ctx, asset, "", asset.Status, "Asset registered from model bulk intake")
+		if eventErr != nil {
+			return BulkCreateAssetsResult{}, eventErr
+		}
+		assets = append(assets, asset)
+		events = append(events, event)
+	}
+	created, err := s.store.CreateAssets(ctx, assets, events)
+	if err != nil {
+		return BulkCreateAssetsResult{}, err
+	}
+	for _, asset := range created {
+		if err := s.auditAsset(ctx, "atlas.asset.created", asset.ID, map[string]string{
+			"status": asset.Status, "kind": asset.Kind, "revision": "1", "modelId": input.ModelID,
+			"modelRequirementId": ModelRequirementID, "creationMode": "model_bulk",
+		}); err != nil {
+			return BulkCreateAssetsResult{}, fmt.Errorf("audit bulk asset creation: %w", err)
+		}
+	}
+	return BulkCreateAssetsResult{Items: created}, nil
+}
+
 func (s *Service) UpdateAsset(ctx context.Context, input UpdateAssetInput) (domain.Asset, error) {
 	id := strings.TrimSpace(input.ID)
 	if !assetIDPattern.MatchString(id) || input.Revision < 1 {
@@ -254,14 +333,18 @@ func (s *Service) UpdateAsset(ctx context.Context, input UpdateAssetInput) (doma
 	}
 	normalized, err := s.normalizeCreateInput(CreateAssetInput{
 		ID: id, ModelID: input.ModelID, Name: input.Name, Kind: input.Kind, AssetTag: input.AssetTag,
-		SerialNumber: input.SerialNumber, Hostname: input.Hostname, References: input.References,
+		SerialNumber: input.SerialNumber, Hostname: input.Hostname, DeploymentNotes: input.DeploymentNotes, References: input.References,
 		Status: input.Status, PurchaseDate: input.PurchaseDate,
 	})
 	if err != nil {
 		return domain.Asset{}, err
 	}
-	if _, err := s.validateModelReference(ctx, normalized.ModelID); err != nil {
+	model, err := s.validateModelReference(ctx, normalized.ModelID)
+	if err != nil {
 		return domain.Asset{}, err
+	}
+	if normalized.Kind == "" && model.ID != "" {
+		normalized.Kind = model.Kind
 	}
 	if err := s.references.ValidateAssetReferences(ctx, s.organizationID, normalized.References); err != nil {
 		return domain.Asset{}, err
@@ -277,6 +360,7 @@ func (s *Service) UpdateAsset(ctx context.Context, input UpdateAssetInput) (doma
 	updated.AssetTag = normalized.AssetTag
 	updated.SerialNumber = normalized.SerialNumber
 	updated.Hostname = normalized.Hostname
+	updated.DeploymentNotes = normalized.DeploymentNotes
 	updated.SiteID = normalized.SiteID
 	updated.BuildingID = normalized.BuildingID
 	updated.RoomID = normalized.RoomID
@@ -334,6 +418,7 @@ func (s *Service) normalizeCreateInput(input CreateAssetInput) (CreateAssetInput
 	input.AssetTag = strings.TrimSpace(input.AssetTag)
 	input.SerialNumber = strings.TrimSpace(input.SerialNumber)
 	input.Hostname = strings.ToLower(strings.TrimSpace(input.Hostname))
+	input.DeploymentNotes = strings.TrimSpace(input.DeploymentNotes)
 	input.Status = strings.ToLower(strings.TrimSpace(input.Status))
 	if input.Status == "" {
 		input.Status = "draft"
@@ -341,11 +426,17 @@ func (s *Service) normalizeCreateInput(input CreateAssetInput) (CreateAssetInput
 	input.References = normalizeReferences(input.References)
 	if (input.ID != "" && !assetIDPattern.MatchString(input.ID)) || (input.ModelID != "" && !assetIDPattern.MatchString(input.ModelID)) ||
 		!validTextRange(input.Name, 1, 200) ||
-		!validText(input.AssetTag, 128) || !validText(input.SerialNumber, 255) || !validText(input.Hostname, 253) {
+		!validText(input.AssetTag, 128) || !validText(input.SerialNumber, 255) || !validText(input.Hostname, 253) ||
+		!validText(input.DeploymentNotes, 2000) {
 		return CreateAssetInput{}, ErrInvalidInput
 	}
-	if _, ok := validKinds[input.Kind]; !ok {
+	if input.Kind == "" && input.ModelID == "" {
 		return CreateAssetInput{}, ErrInvalidInput
+	}
+	if input.Kind != "" {
+		if _, ok := validKinds[input.Kind]; !ok {
+			return CreateAssetInput{}, ErrInvalidInput
+		}
 	}
 	if _, ok := validStatuses[input.Status]; !ok {
 		return CreateAssetInput{}, ErrInvalidInput
@@ -401,6 +492,17 @@ func normalizeCreateModelInput(input CreateModelInput) (CreateModelInput, error)
 	}
 	input.Specifications = specs
 	return input, nil
+}
+
+func normalizeModelIdentity(identity ModelIdentity) (ModelIdentity, error) {
+	identity.Manufacturer = strings.ToLower(strings.TrimSpace(identity.Manufacturer))
+	identity.Name = strings.ToLower(strings.TrimSpace(identity.Name))
+	identity.ModelNumber = strings.ToLower(strings.TrimSpace(identity.ModelNumber))
+	if !validTextRange(identity.Manufacturer, 1, 120) || !validTextRange(identity.Name, 1, 160) ||
+		!validText(identity.ModelNumber, 120) {
+		return ModelIdentity{}, ErrInvalidInput
+	}
+	return identity, nil
 }
 
 func normalizeQuery(query Query) (Query, error) {
@@ -512,6 +614,18 @@ func cloneSpecifications(values map[string]string) map[string]string {
 		cloned[key] = value
 	}
 	return cloned
+}
+
+func repeatedNormalizedValue(seen map[string]struct{}, value string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return false
+	}
+	if _, exists := seen[value]; exists {
+		return true
+	}
+	seen[value] = struct{}{}
+	return false
 }
 
 func actorFromContext(ctx context.Context) string {

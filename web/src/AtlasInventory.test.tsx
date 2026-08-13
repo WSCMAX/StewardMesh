@@ -111,6 +111,47 @@ test('creates a model and links a new asset to it', async () => {
   expect(onAssetsChange).toHaveBeenCalledWith([created])
 })
 
+test('bulk creates model instances with per-asset deployment fields and accessible repeatable rows', async () => {
+  const model = {
+    id: 'model-bulk', organizationId: 'example-org', manufacturer: 'Framework', name: 'Laptop 13',
+    modelNumber: 'FW13', kind: 'laptop', status: 'active', instanceCount: 0, revision: 1,
+    createdAt: '2026-08-12T12:00:00Z', updatedAt: '2026-08-12T12:00:00Z',
+  }
+  const created = [
+    { ...asset, id: 'bulk-1', modelId: model.id, name: 'Bulk laptop one', kind: 'laptop', assetTag: 'BULK-001', deploymentNotes: 'North lab cart' },
+    { ...asset, id: 'bulk-2', modelId: model.id, name: 'Bulk laptop two', kind: 'laptop', assetTag: 'BULK-002', status: 'draft' },
+  ]
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input)
+    if (path === '/api/v1/asset-models?limit=100') return jsonResponse({ items: [model] })
+    if (['/api/v1/sites', '/api/v1/buildings', '/api/v1/rooms', '/api/v1/departments', '/api/v1/identities?limit=100'].includes(path)) return jsonResponse({ items: [] })
+    if (path === '/api/v1/asset-models/model-bulk/assets/bulk' && init?.method === 'POST') return jsonResponse({ items: created }, 201)
+    throw new Error(`unexpected request: ${path}`)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  const onAssetsChange = vi.fn()
+  const { container } = render(<AtlasInventory assets={[]} csrfToken="csrf-token" onAssetsChange={onAssetsChange} permissions={['assets.read', 'assets.write']} />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Bulk add' }))
+  const first = within(screen.getByRole('group', { name: 'Asset 1' }))
+  fireEvent.change(first.getByLabelText('Asset name'), { target: { value: 'Bulk laptop one' } })
+  fireEvent.change(first.getByLabelText('Asset tag'), { target: { value: 'BULK-001' } })
+  fireEvent.change(first.getByLabelText('Deployment notes'), { target: { value: 'North lab cart' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Add another asset' }))
+  const second = within(screen.getByRole('group', { name: 'Asset 2' }))
+  fireEvent.change(second.getByLabelText('Asset name'), { target: { value: 'Bulk laptop two' } })
+  fireEvent.change(second.getByLabelText('Asset tag'), { target: { value: 'BULK-002' } })
+  expect((await axe.run(container)).violations).toEqual([])
+  fireEvent.click(screen.getByRole('button', { name: 'Create 2 assets' }))
+  expect(await screen.findByText('2 assets created from Framework Laptop 13 FW13.')).toBeInTheDocument()
+  expect(onAssetsChange).toHaveBeenCalledWith(created)
+  const request = fetchMock.mock.calls.find(([path, init]) => path === '/api/v1/asset-models/model-bulk/assets/bulk' && init?.method === 'POST')
+  expect(request?.[1]?.headers).toMatchObject({ 'X-CSRF-Token': 'csrf-token' })
+  expect(JSON.parse(String(request?.[1]?.body))).toEqual({ items: [
+    expect.objectContaining({ name: 'Bulk laptop one', assetTag: 'BULK-001', deploymentNotes: 'North lab cart', status: 'draft' }),
+    expect.objectContaining({ name: 'Bulk laptop two', assetTag: 'BULK-002', status: 'draft' }),
+  ] })
+})
+
 test('updates an asset using its current revision and records a lifecycle note', async () => {
   const updated = { ...asset, status: 'retired', revision: 2, updatedAt: '2026-08-10T13:00:00Z' }
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {

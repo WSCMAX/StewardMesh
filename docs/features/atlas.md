@@ -3,6 +3,7 @@
 - **Canonical ID:** `inventory.assets`
 - **Requirement:** `REQ-ATLAS-001`
 - **GitHub issue:** [#2 — Atlas asset inventory](https://github.com/WSCMAX/StewardMesh/issues/2)
+- **Product catalog extension:** [Atlas Catalog](atlas-catalog.md) (`REQ-ATLAS-CATALOG-001`)
 - **Identification extension:** [Atlas Codes](atlas-codes.md) (`REQ-ATLAS-CODES-001`, [GitHub #60](https://github.com/WSCMAX/StewardMesh/issues/60))
 
 ## Purpose
@@ -29,6 +30,8 @@ Locations use People-owned site, building, and room records. Buildings require t
 Purchase dates are stored as calendar dates. Updates require the current revision, so a stale browser or integration receives a conflict rather than silently overwriting a newer record.
 
 Barcode and QR identifiers are implemented through the separately traceable Atlas Codes extension. Its association model supports multiple active or historical identifiers without overloading asset tags or serial numbers.
+
+Reusable manufacturer/model facts, configurations, prices, and upgrade paths belong to Atlas Catalog rather than to individual asset categories. A later association slice will let an asset reference a catalog product and optional configuration while preserving item-specific identity, ownership, location, purchase facts, and lifecycle history in Atlas.
 
 ## Lifecycle history and audit
 

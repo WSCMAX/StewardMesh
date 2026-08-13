@@ -11,3 +11,5 @@ Requirement IDs use stable prefixes:
 - `OPS-` operations and delivery
 
 New requirements must include acceptance criteria and links to related feature dictionary entries.
+
+Traceability entries may declare `deliveryStatus` as `planned`, `foundation`, or `complete`. Planned entries require documentation; foundation entries require documentation, code, schema, and tests; complete entries require those artifacts plus transport API and UI evidence. Omitting the field means complete. This keeps early delivery honest without using placeholder API or UI paths.

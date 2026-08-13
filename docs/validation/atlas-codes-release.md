@@ -58,7 +58,7 @@ claiming a specific physical model.
 
 | Surface | Supported/tested v1 behavior | Evidence and limitations |
 |---|---|---|
-| Chromium desktop | Manual, paste, keyboard wedge, native `BarcodeDetector` camera when exposed by the browser, SVG/PDF preview and OS print/download | Automated component tests plus real-browser desktop validation. Camera tests use a controlled detector/media fixture; live camera quality remains device-dependent. |
+| Chromium desktop | Manual, paste, keyboard wedge, native `BarcodeDetector` camera when exposed by the browser, SVG/PDF preview and OS print/download | Automated component tests plus real-browser desktop validation. Controlled detector/media fixtures exercise successful Code 128 find, successful QR association, CSRF, and capture shutdown; live camera quality remains device-dependent. |
 | Chromium narrow layout | Manual, paste, camera when `BarcodeDetector` is available, responsive preview | Real Chromium validation at 320 CSS pixels; no page-level horizontal overflow. Mobile hardware is covered by the same responsive contract but was not physically certified. |
 | Firefox desktop/mobile | Manual, paste, USB/Bluetooth keyboard wedge, SVG/PDF output | Camera decoding is not advertised without a compatible `BarcodeDetector`; the UI announces this and retains all non-camera paths. |
 | Safari desktop/mobile | Manual, paste, USB/Bluetooth keyboard wedge, SVG/PDF output | Camera decoding is not advertised without a compatible `BarcodeDetector`; the UI announces this and retains all non-camera paths. |
@@ -95,7 +95,7 @@ claiming a specific physical model.
 |---|---|
 | Scan-to-find and scoped denial | `web/src/AtlasScanner.test.tsx`, `internal/httpapi/server_test.go` |
 | Scan-to-associate and explicit mode | `web/src/AtlasScanner.test.tsx`, `web/src/AtlasInventory.test.tsx` |
-| Duplicate bursts, malformed values, retry, cancellation, camera denial/disconnect | `web/src/AtlasScanner.test.tsx` |
+| Duplicate bursts, malformed values, retry, cancellation, successful Code 128/QR camera capture, camera denial/disconnect | `web/src/AtlasScanner.test.tsx` |
 | Association conflicts, stable retries, replacement/history, ownership locks, audit redaction | `internal/atlascodes/service_test.go`, `internal/repository/contracttest/atlascodes.go`, `internal/httpapi/server_test.go`, `web/src/AtlasIdentifiers.test.tsx` |
 | Single and bounded batch labels, test print, safe QR route, rendering errors, cancellation, exact retry | `internal/atlascodes/labels_test.go`, `internal/httpapi/server_test.go`, `web/src/AtlasLabelPrint.test.tsx` |
 | Memory/PostgreSQL organization isolation and concurrency | `internal/repository/memory_atlascodes_test.go`, `internal/repository/postgres/postgres_integration_test.go` |

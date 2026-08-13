@@ -101,6 +101,72 @@ test('retains a failed value for an explicit retry and cancellation closes the a
   expect(screen.getByText(/Scanning cancelled/)).toBeInTheDocument()
 })
 
+test('decodes a Code 128 camera frame into an explicit find and stops capture', async () => {
+  const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({ assetId: 'asset-camera' }))
+  vi.stubGlobal('fetch', fetchMock)
+  const stop = vi.fn()
+  const getUserMedia = vi.fn(async () => ({ getTracks: () => [{ stop }] }) as unknown as MediaStream)
+  vi.stubGlobal('navigator', Object.assign(Object.create(navigator), { mediaDevices: { getUserMedia } }))
+  let requestedFormats: string[] | undefined
+  vi.stubGlobal('BarcodeDetector', class {
+    constructor(options?: { formats?: string[] }) {
+      requestedFormats = options?.formats
+    }
+
+    detect = vi.fn(async () => [{ format: 'code_128', rawValue: 'CAMERA-CODE-128' }])
+  })
+  vi.stubGlobal('requestAnimationFrame', vi.fn((callback: FrameRequestCallback) => {
+    queueMicrotask(() => callback(1))
+    return 17
+  }))
+  vi.stubGlobal('cancelAnimationFrame', vi.fn())
+  vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined)
+  const onResolveAsset = vi.fn(async () => undefined)
+
+  render(<AtlasScanner canWrite csrfToken="csrf" onAssociated={vi.fn()} onResolveAsset={onResolveAsset} selectedAsset={null} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Open scanner' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Use camera' }))
+
+  expect(await screen.findByText(/Identifier matched/)).toBeInTheDocument()
+  expect(requestedFormats).toEqual(['code_128', 'qr_code'])
+  expect(onResolveAsset).toHaveBeenCalledWith('asset-camera')
+  expect(fetchMock).toHaveBeenCalledTimes(1)
+  expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({ symbology: 'code128', value: 'CAMERA-CODE-128' })
+  expect(stop).toHaveBeenCalledTimes(1)
+  expect(screen.getByRole('button', { name: 'Use camera' })).toBeInTheDocument()
+})
+
+test('decodes a QR camera frame only into the selected explicit association mode', async () => {
+  const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({ identifier: { assetId: 'asset-camera' }, created: true }, 201))
+  vi.stubGlobal('fetch', fetchMock)
+  const stop = vi.fn()
+  vi.stubGlobal('navigator', Object.assign(Object.create(navigator), {
+    mediaDevices: { getUserMedia: vi.fn(async () => ({ getTracks: () => [{ stop }] }) as unknown as MediaStream) },
+  }))
+  vi.stubGlobal('BarcodeDetector', class {
+    detect = vi.fn(async () => [{ format: 'qr_code', rawValue: 'CAMERA-QR-VALUE' }])
+  })
+  vi.stubGlobal('requestAnimationFrame', vi.fn((callback: FrameRequestCallback) => {
+    queueMicrotask(() => callback(1))
+    return 18
+  }))
+  vi.stubGlobal('cancelAnimationFrame', vi.fn())
+  vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined)
+  const onAssociated = vi.fn()
+
+  render(<AtlasScanner canWrite csrfToken="camera-csrf" onAssociated={onAssociated} onResolveAsset={vi.fn(async () => undefined)} selectedAsset={{ id: 'asset-camera', name: 'Camera asset' }} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Open scanner' }))
+  fireEvent.change(screen.getByLabelText('Workflow'), { target: { value: 'associate' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Use camera' }))
+
+  expect(await screen.findByText('Identifier associated with Camera asset.')).toBeInTheDocument()
+  expect(onAssociated).toHaveBeenCalledTimes(1)
+  expect(String(fetchMock.mock.calls[0]?.[0])).toBe('/api/v1/assets/asset-camera/identifiers')
+  expect(fetchMock.mock.calls[0]?.[1]?.headers).toMatchObject({ 'X-CSRF-Token': 'camera-csrf' })
+  expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({ symbology: 'qr', value: 'CAMERA-QR-VALUE' })
+  expect(stop).toHaveBeenCalledTimes(1)
+})
+
 test('keeps camera frames local and stops every media track on stop, cancellation, and unmount', async () => {
   const fetchMock = vi.fn()
   vi.stubGlobal('fetch', fetchMock)

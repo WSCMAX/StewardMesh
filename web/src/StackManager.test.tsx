@@ -47,6 +47,32 @@ test('renders authoritative analytics and read-only records without accessibilit
   expect((await axe.run(container)).violations).toEqual([])
 })
 
+test('keeps version and license calendar dates stable west of UTC', async () => {
+  vi.stubEnv('TZ', 'America/Chicago')
+  const calendarSnapshot = {
+    ...snapshot,
+    versions: [{ ...snapshot.versions[0], releasedOn: '2026-09-12T00:00:00Z' }],
+    licenses: [{ ...snapshot.licenses[0], startsOn: '2026-08-13T00:00:00Z', expiresOn: '2026-09-12T00:00:00Z' }],
+  }
+  vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => Promise.resolve(response(String(input).includes('/analytics') ? analytics : calendarSnapshot))))
+
+  try {
+    render(<StackManager assets={[]} csrfToken="csrf" permissions={['software.read', 'software.write']} />)
+    const versionRow = (await screen.findByText('1.0')).closest('tr')
+    const licenseRow = screen.getByText('Device subscription').closest('tr')
+    if (!versionRow || !licenseRow) throw new Error('Stack calendar rows missing')
+    const calendarLabel = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeZone: 'UTC' }).format(new Date('2026-09-12T00:00:00Z'))
+    const driftedLocalLabel = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(new Date('2026-09-12T00:00:00Z'))
+    expect(driftedLocalLabel).not.toBe(calendarLabel)
+    expect(within(versionRow).getByText(calendarLabel)).toBeInTheDocument()
+    expect(within(licenseRow).getByText(`1 Device · expires ${calendarLabel}`)).toBeInTheDocument()
+    expect(within(licenseRow).getByLabelText('License starts for Device subscription')).toHaveValue('2026-08-13')
+    expect(within(licenseRow).getByLabelText('License expires for Device subscription')).toHaveValue('2026-09-12')
+  } finally {
+    vi.unstubAllEnvs()
+  }
+})
+
 test('creates a product with CSRF and reloads the connected view', async () => {
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input)

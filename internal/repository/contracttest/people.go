@@ -1,6 +1,6 @@
 package contracttest
 
-// Requirement: REQ-PEOPLE-001. Feature: identity.directory.
+// Requirements: REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-002. Features: identity.directory, integrations.protocols.
 
 import (
 	"context"
@@ -139,6 +139,47 @@ func PeopleStore(t *testing.T, store people.Store, organizationID string) {
 		if _, err := store.CreateIdentity(ctx, identity); err != nil {
 			t.Fatal(err)
 		}
+	}
+	managed := contractIdentity(t, organizationID, "person", "Managed Person "+suffix, "managed."+suffix+"@example.test", "", "", now)
+	managed.Provider = "directory.example"
+	managed.ProviderSubject = "source-" + suffix
+	if _, err := store.CreateIdentity(ctx, managed); err != nil {
+		t.Fatal(err)
+	}
+	byProvider, err := store.GetIdentityByProvider(ctx, organizationID, managed.Provider, managed.ProviderSubject)
+	if err != nil || byProvider.ID != managed.ID {
+		t.Fatalf("provider identity lookup failed: %#v %v", byProvider, err)
+	}
+	byEmail, err := store.GetIdentityByEmail(ctx, organizationID, managed.NormalizedEmail)
+	if err != nil || byEmail.ID != managed.ID {
+		t.Fatalf("email identity lookup failed: %#v %v", byEmail, err)
+	}
+	updatedManaged := managed
+	updatedManaged.DisplayName = "Reconciled Person " + suffix
+	updatedManaged.NormalizedName = strings.ToLower(updatedManaged.DisplayName)
+	updatedManaged.Status = people.StatusInactive
+	updatedManaged.Revision = 2
+	updatedManaged.UpdatedAt = now.Add(time.Minute)
+	updatedManaged, err = store.ReconcileIdentity(ctx, updatedManaged, 1)
+	if err != nil || updatedManaged.Revision != 2 || updatedManaged.Status != people.StatusInactive {
+		t.Fatalf("reconcile identity failed: %#v %v", updatedManaged, err)
+	}
+	invalidRevision := updatedManaged
+	invalidRevision.Revision = 4
+	if _, err := store.ReconcileIdentity(ctx, invalidRevision, 2); !errors.Is(err, people.ErrConflict) {
+		t.Fatalf("expected non-sequential reconciliation conflict, got %v", err)
+	}
+	if _, err := store.ReconcileIdentity(ctx, updatedManaged, 1); !errors.Is(err, people.ErrConflict) {
+		t.Fatalf("expected stale reconciliation conflict, got %v", err)
+	}
+	if err := store.DeleteIdentity(ctx, organizationID, managed.ID, 1); !errors.Is(err, people.ErrConflict) {
+		t.Fatalf("expected stale identity deletion conflict, got %v", err)
+	}
+	if err := store.DeleteIdentity(ctx, organizationID, managed.ID, updatedManaged.Revision); err != nil {
+		t.Fatalf("delete compensated identity: %v", err)
+	}
+	if _, err := store.GetIdentity(ctx, organizationID, managed.ID); !errors.Is(err, people.ErrNotFound) {
+		t.Fatalf("deleted identity remained visible: %v", err)
 	}
 	duplicate := contractIdentity(t, organizationID, "person", "Duplicate email "+suffix, person.Email, department.ID, site.ID, now)
 	if _, err := store.CreateIdentity(ctx, duplicate); !errors.Is(err, people.ErrConflict) {

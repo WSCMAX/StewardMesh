@@ -1,7 +1,7 @@
 package httpapi
 
 // Requirements: REQ-FOUNDATION-001, REQ-WORKSPACE-001, REQ-ATLAS-001, REQ-ATLAS-CODES-001, REQ-PEOPLE-001,
-// REQ-DIRECTORY-EXPANSION-001, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-HORIZON-001, REQ-PLATFORM-VALKEY-001,
+// REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-HORIZON-001, REQ-PLATFORM-VALKEY-001,
 // SEC-GUARD-001, SEC-HTTP-001. Features include experience.workspace and inventory.models.
 
 import (
@@ -38,6 +38,7 @@ import (
 
 const (
 	csrfHeader                = "X-CSRF-Token"
+	idempotencyHeader         = "Idempotency-Key"
 	localSessionName          = "stewardmesh_session"
 	secureSessionName         = "__Host-stewardmesh_session"
 	localOIDCTransactionName  = "stewardmesh_oidc_transaction"
@@ -50,6 +51,7 @@ type Dependencies struct {
 	Atlas               *atlas.Service
 	AtlasCodes          *atlascodes.Service
 	People              *people.Service
+	DirectoryImports    *directoryexpansion.Service
 	Threads             *threads.Service
 	Vault               *storage.Service
 	Ledger              *ledger.Service
@@ -66,6 +68,7 @@ type Server struct {
 	atlas               *atlas.Service
 	atlasCodes          *atlascodes.Service
 	people              *people.Service
+	directoryImports    *directoryexpansion.Service
 	threads             *threads.Service
 	vault               *storage.Service
 	ledger              *ledger.Service
@@ -147,6 +150,7 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 		atlas:               deps.Atlas,
 		atlasCodes:          deps.AtlasCodes,
 		people:              deps.People,
+		directoryImports:    deps.DirectoryImports,
 		threads:             deps.Threads,
 		vault:               deps.Vault,
 		ledger:              deps.Ledger,
@@ -172,6 +176,11 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 	mux.HandleFunc("POST /api/v1/auth/saml/acs", server.samlACS)
 	mux.Handle("GET /api/v1/auth/session", server.protected("", false, server.getSession))
 	mux.Handle("POST /api/v1/auth/logout", server.protected("", true, server.logout))
+	mux.Handle("GET /api/v1/directory-imports", server.protected(guard.PermissionIntegrationsRead, false, server.listDirectoryImports))
+	mux.Handle("GET /api/v1/directory-imports/{batchID}", server.protected(guard.PermissionIntegrationsRead, false, server.getDirectoryImport))
+	mux.Handle("POST /api/v1/directory-imports/preview", server.protected(guard.PermissionIntegrationsWrite, true, server.previewDirectoryImport))
+	mux.Handle("POST /api/v1/directory-imports/{batchID}/apply", server.protected(guard.PermissionIntegrationsWrite, true, server.applyDirectoryImport))
+	mux.Handle("POST /api/v1/directory-imports/{batchID}/retry", server.protected(guard.PermissionIntegrationsWrite, true, server.retryDirectoryImport))
 	mux.Handle("GET /api/v1/guard/access", server.protected(guard.PermissionGuardManage, false, server.listGuardAccess))
 	mux.Handle("POST /api/v1/guard/roles", server.protected(guard.PermissionGuardManage, true, server.createGuardRole))
 	mux.Handle("POST /api/v1/guard/role-assignments", server.protected(guard.PermissionGuardManage, true, server.createGuardRoleAssignment))
@@ -263,6 +272,111 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 	mux.Handle("GET /api/v1/horizon/export.csv", server.protected(guard.PermissionPlanningRead, false, server.exportHorizonCSV))
 	mux.Handle("GET /api/v1/graph", server.protected("", false, server.graphView))
 	return server.correlation(server.securityHeaders(server.cors(mux)))
+}
+
+func (s *Server) listDirectoryImports(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	s.noStore(w)
+	if s.directoryImports == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "integrations_unavailable", "directory integrations are unavailable")
+		return
+	}
+	limit := directoryexpansion.DefaultListLimit
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil {
+			writeError(w, r, http.StatusBadRequest, "validation_failed", "directory import pagination is invalid")
+			return
+		}
+		limit = parsed
+	}
+	page, err := s.directoryImports.List(r.Context(), directoryexpansion.ListQuery{
+		Limit: limit, Cursor: strings.TrimSpace(r.URL.Query().Get("cursor")),
+	})
+	if err != nil {
+		writeDirectoryImportError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, page)
+}
+
+func (s *Server) getDirectoryImport(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	s.noStore(w)
+	if s.directoryImports == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "integrations_unavailable", "directory integrations are unavailable")
+		return
+	}
+	detail, err := s.directoryImports.Get(r.Context(), r.PathValue("batchID"))
+	if err != nil {
+		writeDirectoryImportError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, detail)
+}
+
+func (s *Server) previewDirectoryImport(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
+	s.noStore(w)
+	if s.directoryImports == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "integrations_unavailable", "directory integrations are unavailable")
+		return
+	}
+	var input directoryexpansion.PreviewRequest
+	if err := decodeJSON(w, r, 8<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid directory preview payload")
+		return
+	}
+	result, err := s.directoryImports.Preview(r.Context(), authentication, input, r.Header.Get(idempotencyHeader))
+	if err != nil {
+		writeDirectoryImportError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, result)
+}
+
+func (s *Server) applyDirectoryImport(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
+	s.noStore(w)
+	if s.directoryImports == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "integrations_unavailable", "directory integrations are unavailable")
+		return
+	}
+	result, err := s.directoryImports.Apply(r.Context(), authentication, r.PathValue("batchID"), r.Header.Get(idempotencyHeader))
+	if err != nil {
+		writeDirectoryImportError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) retryDirectoryImport(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
+	s.noStore(w)
+	if s.directoryImports == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "integrations_unavailable", "directory integrations are unavailable")
+		return
+	}
+	result, err := s.directoryImports.Retry(r.Context(), authentication, r.PathValue("batchID"), r.Header.Get(idempotencyHeader))
+	if err != nil {
+		writeDirectoryImportError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func writeDirectoryImportError(w http.ResponseWriter, r *http.Request, err error) {
+	switch {
+	case errors.Is(err, directoryexpansion.ErrInvalidInput):
+		writeError(w, r, http.StatusBadRequest, "validation_failed", "directory import input is invalid")
+	case errors.Is(err, directoryexpansion.ErrConnectorMissing):
+		writeError(w, r, http.StatusNotFound, "source_system_not_found", "the configured directory source system was not found")
+	case errors.Is(err, directoryexpansion.ErrNotFound):
+		writeError(w, r, http.StatusNotFound, "not_found", "the directory import batch was not found")
+	case errors.Is(err, directoryexpansion.ErrBusy):
+		writeError(w, r, http.StatusConflict, "operation_in_progress", "the directory import batch is already being processed")
+	case errors.Is(err, directoryexpansion.ErrNotRetryable):
+		writeError(w, r, http.StatusConflict, "not_retryable", "the directory import has no retryable failures")
+	case errors.Is(err, directoryexpansion.ErrConflict), errors.Is(err, directoryexpansion.ErrLeaseLost):
+		writeError(w, r, http.StatusConflict, "conflict", "the directory import conflicts with authoritative state")
+	default:
+		writeError(w, r, http.StatusInternalServerError, "integration_error", "the directory import operation could not be completed")
+	}
 }
 
 func (s *Server) listPatternsTemplates(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
@@ -2798,7 +2912,7 @@ func (s *Server) cors(next http.Handler) http.Handler {
 				return
 			}
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-CSRF-Token, X-Correlation-ID")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-CSRF-Token, X-Correlation-ID, Idempotency-Key")
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}

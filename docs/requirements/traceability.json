@@ -620,6 +620,49 @@
       }
     },
     {
+      "requirementId": "REQ-DIRECTORY-EXPANSION-002",
+      "featureId": "integrations.protocols",
+      "deliveryStatus": "foundation",
+      "artifacts": {
+        "documentation": [
+          "docs/features/dictionary.md",
+          "docs/features/directory-expansion.md",
+          "docs/requirements/initial.md"
+        ],
+        "api": [
+          "api/openapi/openapi.yaml",
+          "api/proto/stewardmesh.proto"
+        ],
+        "code": [
+          "internal/application/application.go",
+          "internal/directoryexpansion/connectors.go",
+          "internal/directoryexpansion/contracts.go",
+          "internal/directoryexpansion/importer.go",
+          "internal/directoryexpansion/people_target.go",
+          "internal/guard/contracts.go",
+          "internal/guard/service.go",
+          "internal/httpapi/server.go",
+          "internal/people/contracts.go",
+          "internal/repository/directory_import.go",
+          "internal/repository/memory_people.go",
+          "internal/repository/postgres/directory_import.go",
+          "internal/repository/postgres/people.go"
+        ],
+        "schema": [
+          "internal/repository/postgres/migrations/0028_directory_import_reconciliation.sql"
+        ],
+        "tests": [
+          "internal/directoryexpansion/contracts_test.go",
+          "internal/httpapi/server_test.go",
+          "internal/repository/contracttest/directory_import.go",
+          "internal/repository/contracttest/people.go",
+          "internal/repository/memory_directory_import_test.go",
+          "internal/repository/postgres/migrate_test.go",
+          "internal/repository/postgres/postgres_integration_test.go"
+        ]
+      }
+    },
+    {
       "requirementId": "REQ-PLATFORM-VALKEY-001",
       "featureId": "platform.runtime",
       "artifacts": {

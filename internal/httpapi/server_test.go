@@ -1,7 +1,7 @@
 package httpapi
 
 // Requirements: REQ-FOUNDATION-001, REQ-WORKSPACE-001, REQ-ATLAS-001, REQ-ATLAS-MODELS-001, REQ-ATLAS-CODES-001, REQ-PEOPLE-001,
-// REQ-DIRECTORY-EXPANSION-001, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-HORIZON-001, REQ-PLATFORM-VALKEY-001,
+// REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-HORIZON-001, REQ-PLATFORM-VALKEY-001,
 // SEC-GUARD-001, SEC-HTTP-001. Features include experience.workspace.
 
 import (
@@ -23,6 +23,7 @@ import (
 	"github.com/maxlemke/stewardmesh/internal/atlas"
 	"github.com/maxlemke/stewardmesh/internal/atlascodes"
 	"github.com/maxlemke/stewardmesh/internal/bootstrap"
+	"github.com/maxlemke/stewardmesh/internal/directoryexpansion"
 	"github.com/maxlemke/stewardmesh/internal/domain"
 	"github.com/maxlemke/stewardmesh/internal/foundation"
 	"github.com/maxlemke/stewardmesh/internal/guard"
@@ -86,6 +87,20 @@ type fakeHTTPSAMLAuthenticator struct {
 	relayState        string
 	expectedRequestID string
 	authenticates     int
+}
+
+type httpDirectoryConnector struct {
+	page  directoryexpansion.Page
+	calls int
+}
+
+func (c *httpDirectoryConnector) SourceSystem() directoryexpansion.SourceSystem {
+	return directoryexpansion.SourceSystem{ID: "hr-primary", Provider: "example", ConfigRevision: "v1"}
+}
+
+func (c *httpDirectoryConnector) PullPage(context.Context, string) (directoryexpansion.Page, error) {
+	c.calls++
+	return c.page, nil
 }
 
 func (f *fakeHTTPSAMLAuthenticator) AuthenticationURL(relayState string) (string, string, error) {
@@ -1499,6 +1514,106 @@ func TestCORSAllowsOnlyConfiguredCredentialedOrigin(t *testing.T) {
 	}
 }
 
+func TestDirectoryImportHTTPRequiresIntegrationPermissionsCSRFAndNoStore(t *testing.T) {
+	connector := &httpDirectoryConnector{page: directoryexpansion.Page{CompleteSnapshot: true, Records: []directoryexpansion.Record{{
+		SourceRecordID: "employee-1", Kind: directoryexpansion.RecordIdentity, IdentityKind: "person",
+		DisplayName: "Ada Example", Email: "ada@example.test", Status: "active",
+	}}}}
+	handler, _, connector := newGuardServerWithDirectory(t, nil, nil, nil, connector)
+	session := bootstrapAdministrator(t, handler)
+
+	unauthenticated := httptest.NewRequest(http.MethodGet, "/api/v1/directory-imports", nil)
+	unauthenticatedRes := httptest.NewRecorder()
+	handler.ServeHTTP(unauthenticatedRes, unauthenticated)
+	if unauthenticatedRes.Code != http.StatusUnauthorized || unauthenticatedRes.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("expected protected no-store response, got %d %#v", unauthenticatedRes.Code, unauthenticatedRes.Header())
+	}
+
+	missingCSRF := authenticatedRequest(http.MethodPost, "/api/v1/directory-imports/preview", strings.NewReader(`{"sourceSystemId":"hr-primary"}`), session)
+	missingCSRF.Header.Del(csrfHeader)
+	missingCSRF.Header.Set(idempotencyHeader, "http-preview-key-1")
+	missingCSRFRes := httptest.NewRecorder()
+	handler.ServeHTTP(missingCSRFRes, missingCSRF)
+	if missingCSRFRes.Code != http.StatusForbidden || connector.calls != 0 || missingCSRFRes.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("CSRF failure reached connector: %d calls=%d headers=%#v", missingCSRFRes.Code, connector.calls, missingCSRFRes.Header())
+	}
+
+	previewRequest := authenticatedRequest(http.MethodPost, "/api/v1/directory-imports/preview", strings.NewReader(`{"sourceSystemId":"hr-primary"}`), session)
+	previewRequest.Header.Set(idempotencyHeader, "http-preview-key-1")
+	previewRes := httptest.NewRecorder()
+	handler.ServeHTTP(previewRes, previewRequest)
+	if previewRes.Code != http.StatusCreated || previewRes.Header().Get("Cache-Control") != "no-store" || connector.calls != 1 {
+		t.Fatalf("unexpected preview %d headers=%#v body=%s calls=%d", previewRes.Code, previewRes.Header(), previewRes.Body.String(), connector.calls)
+	}
+	var preview directoryexpansion.OperationResult
+	if err := json.Unmarshal(previewRes.Body.Bytes(), &preview); err != nil {
+		t.Fatal(err)
+	}
+	if preview.Batch.ID == "" || preview.Batch.Status != directoryexpansion.BatchPreviewed {
+		t.Fatalf("unexpected preview %#v", preview)
+	}
+
+	applyRequest := authenticatedRequest(http.MethodPost, "/api/v1/directory-imports/"+preview.Batch.ID+"/apply", nil, session)
+	applyRequest.Header.Set(idempotencyHeader, "http-apply-key-001")
+	applyRes := httptest.NewRecorder()
+	handler.ServeHTTP(applyRes, applyRequest)
+	if applyRes.Code != http.StatusOK || applyRes.Header().Get("Cache-Control") != "no-store" || !strings.Contains(applyRes.Body.String(), `"status":"applied"`) {
+		t.Fatalf("unexpected apply %d headers=%#v body=%s", applyRes.Code, applyRes.Header(), applyRes.Body.String())
+	}
+
+	detailRequest := authenticatedRequest(http.MethodGet, "/api/v1/directory-imports/"+preview.Batch.ID, nil, session)
+	detailRes := httptest.NewRecorder()
+	handler.ServeHTTP(detailRes, detailRequest)
+	if detailRes.Code != http.StatusOK || detailRes.Header().Get("Cache-Control") != "no-store" || strings.Contains(detailRes.Body.String(), "http-preview-key") || strings.Contains(detailRes.Body.String(), "account:") {
+		t.Fatalf("unexpected safe detail %d headers=%#v body=%s", detailRes.Code, detailRes.Header(), detailRes.Body.String())
+	}
+}
+
+func TestDirectoryImportHTTPRejectsMissingIdempotencyAndUnknownSource(t *testing.T) {
+	handler, _, _ := newGuardServerWithDirectory(t, nil, nil, nil, nil)
+	session := bootstrapAdministrator(t, handler)
+	missingKey := authenticatedRequest(http.MethodPost, "/api/v1/directory-imports/preview", strings.NewReader(`{"sourceSystemId":"hr-primary"}`), session)
+	missingKeyRes := httptest.NewRecorder()
+	handler.ServeHTTP(missingKeyRes, missingKey)
+	if missingKeyRes.Code != http.StatusBadRequest || !strings.Contains(missingKeyRes.Body.String(), "validation_failed") {
+		t.Fatalf("unexpected missing key response %d %s", missingKeyRes.Code, missingKeyRes.Body.String())
+	}
+	unknown := authenticatedRequest(http.MethodPost, "/api/v1/directory-imports/preview", strings.NewReader(`{"sourceSystemId":"hr-primary"}`), session)
+	unknown.Header.Set(idempotencyHeader, "http-preview-key-2")
+	unknownRes := httptest.NewRecorder()
+	handler.ServeHTTP(unknownRes, unknown)
+	if unknownRes.Code != http.StatusNotFound || !strings.Contains(unknownRes.Body.String(), "source_system_not_found") {
+		t.Fatalf("unexpected unknown source response %d %s", unknownRes.Code, unknownRes.Body.String())
+	}
+}
+
+func TestDirectoryImportHTTPRejectsSessionWithoutIntegrationPermission(t *testing.T) {
+	connector := &httpDirectoryConnector{page: directoryexpansion.Page{CompleteSnapshot: true}}
+	handler, guardService, _ := newGuardServerWithDirectory(t, nil, nil, nil, connector)
+	administrator := bootstrapAdministrator(t, handler)
+
+	request := authenticatedRequest(http.MethodGet, "/api/v1/directory-imports", nil, administrator)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("administrator integration permission missing: %d %s", response.Code, response.Body.String())
+	}
+
+	external, err := guardService.LoginOIDC(context.Background(), identity.OIDCPrincipal{
+		Issuer: "https://issuer.example.test", Subject: "directory-reader", Email: "reader@example.test", DisplayName: "Reader",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deniedSession := testSession{cookie: &http.Cookie{Name: localSessionName, Value: external.Token}, csrfToken: external.CSRFToken}
+	denied := authenticatedRequest(http.MethodGet, "/api/v1/directory-imports", nil, deniedSession)
+	deniedRes := httptest.NewRecorder()
+	handler.ServeHTTP(deniedRes, denied)
+	if deniedRes.Code != http.StatusForbidden || !strings.Contains(deniedRes.Body.String(), "permission_denied") {
+		t.Fatalf("expected session without integrations.read to fail, got %d %s", deniedRes.Code, deniedRes.Body.String())
+	}
+}
+
 func newGuardServer(t *testing.T) http.Handler {
 	return newGuardServerWithLimiter(t, nil)
 }
@@ -1517,6 +1632,11 @@ func newGuardServerWithIdentity(t *testing.T, limiter guard.AttemptLimiter, oidc
 }
 
 func newGuardServerWithIdentityAndGuard(t *testing.T, limiter guard.AttemptLimiter, oidcFlow *identity.OIDCFlow, samlFlow *identity.SAMLFlow) (http.Handler, *guard.Service) {
+	handler, service, _ := newGuardServerWithDirectory(t, limiter, oidcFlow, samlFlow, nil)
+	return handler, service
+}
+
+func newGuardServerWithDirectory(t *testing.T, limiter guard.AttemptLimiter, oidcFlow *identity.OIDCFlow, samlFlow *identity.SAMLFlow, connector directoryexpansion.Connector) (http.Handler, *guard.Service, *httpDirectoryConnector) {
 	t.Helper()
 	organization, err := bootstrap.NewOrganization("example-org", "Example Organization")
 	if err != nil {
@@ -1543,9 +1663,29 @@ func newGuardServerWithIdentityAndGuard(t *testing.T, limiter guard.AttemptLimit
 	if err != nil {
 		t.Fatal(err)
 	}
-	peopleService, err := people.NewService(repository.NewMemoryPeopleStore(), atlasService, foundation.NopAuditor{}, people.ServiceConfig{
+	peopleStore := repository.NewMemoryPeopleStore()
+	peopleService, err := people.NewService(peopleStore, atlasService, foundation.NopAuditor{}, people.ServiceConfig{
 		OrganizationID: organization.ID,
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry, err := directoryexpansion.NewRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var concreteConnector *httpDirectoryConnector
+	if connector != nil {
+		if err := registry.Register(connector); err != nil {
+			t.Fatal(err)
+		}
+		concreteConnector, _ = connector.(*httpDirectoryConnector)
+	}
+	directoryTarget, err := directoryexpansion.NewPeopleTarget(peopleStore, service, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directoryService, err := directoryexpansion.NewService(repository.NewMemoryDirectoryImportStore(), directoryTarget, foundation.NopAuditor{}, registry, directoryexpansion.ServiceConfig{OrganizationID: organization.ID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1576,19 +1716,20 @@ func newGuardServerWithIdentityAndGuard(t *testing.T, limiter guard.AttemptLimit
 		t.Fatal(err)
 	}
 	handler := NewServer(Dependencies{
-		Atlas:      atlasService,
-		AtlasCodes: atlasCodesService,
-		People:     peopleService,
-		Threads:    threadsService,
-		Vault:      vaultService,
-		Ledger:     ledgerService,
-		Horizon:    horizonService,
-		Patterns:   patternsService,
-		Guard:      service,
-		OIDC:       oidcFlow,
-		SAML:       samlFlow,
+		Atlas:            atlasService,
+		AtlasCodes:       atlasCodesService,
+		People:           peopleService,
+		DirectoryImports: directoryService,
+		Threads:          threadsService,
+		Vault:            vaultService,
+		Ledger:           ledgerService,
+		Horizon:          horizonService,
+		Patterns:         patternsService,
+		Guard:            service,
+		OIDC:             oidcFlow,
+		SAML:             samlFlow,
 	}, testOrigin, organization)
-	return handler, service
+	return handler, service, concreteConnector
 }
 
 func findCookie(t *testing.T, cookies []*http.Cookie, name string) *http.Cookie {

@@ -1,8 +1,8 @@
-# Requirements: REQ-ATLAS-001, REQ-ATLAS-CODES-001, REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-HORIZON-001, REQ-LEDGER-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
+# Requirements: REQ-ATLAS-001, REQ-ATLAS-CODES-001, REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-HORIZON-001, REQ-LEDGER-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
 openapi: 3.1.0
 info:
   title: StewardMesh API
-  version: 0.10.0
+  version: 0.11.0
   description: Requirements-driven inventory, lifecycle, and secure organization management API.
   license:
     name: Apache License 2.0
@@ -1308,6 +1308,183 @@ paths:
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/directory-imports:
+    get:
+      summary: List directory import batches
+      operationId: listDirectoryImports
+      tags: [Bridge]
+      x-requirement: REQ-DIRECTORY-EXPANSION-002
+      x-required-permission: integrations.read
+      description: Requires organization-scoped `integrations.read`. Results contain durable plan and reconciliation metadata, never raw provider payloads.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - in: query
+          name: limit
+          required: false
+          schema: {type: integer, minimum: 1, maximum: 100, default: 50}
+        - in: query
+          name: cursor
+          required: false
+          description: Opaque cursor returned by the preceding page.
+          schema: {$ref: '#/components/schemas/DirectoryImportBatchID'}
+      responses:
+        '200':
+          description: Most recent matching organization-owned import batches
+          headers:
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DirectoryImportBatchPage'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '500': {$ref: '#/components/responses/InternalError'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+  /api/v1/directory-imports/preview:
+    post:
+      summary: Preview a directory import
+      operationId: previewDirectoryImport
+      tags: [Bridge]
+      x-requirement: REQ-DIRECTORY-EXPANSION-002
+      x-required-permission: integrations.write
+      description: |
+        Requires organization-scoped `integrations.write`. Pulls one configured read-only
+        source, normalizes a snapshot bounded to 100 pages and a 5,000-item plan,
+        and durably stores an immutable reconciliation
+        plan without mutating directory records. Neither the request nor the response accepts
+        or exposes raw provider payloads. Reusing the same idempotency key with the same source
+        returns the original preview; reusing it for another source is a conflict.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+        - $ref: '#/components/parameters/DirectoryImportIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PreviewDirectoryImportRequest'}
+      responses:
+        '201':
+          description: New or safely replayed immutable preview plan
+          headers:
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DirectoryImportOperationResult'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404':
+          description: The configured source system was not found
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '409':
+          description: The idempotency key was already used for a different preview request, or the bounded source snapshot could not be planned safely
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '500': {$ref: '#/components/responses/InternalError'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+  /api/v1/directory-imports/{batchID}:
+    get:
+      summary: Get a directory import batch
+      operationId: getDirectoryImport
+      tags: [Bridge]
+      x-requirement: REQ-DIRECTORY-EXPANSION-002
+      x-required-permission: integrations.read
+      description: Requires organization-scoped `integrations.read`. Returns the immutable plan, mapping-safe item detail, conflicts, and complete attempt history.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/DirectoryImportBatchID'
+      responses:
+        '200':
+          description: Organization-owned import batch detail
+          headers:
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DirectoryImportBatchDetail'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+  /api/v1/directory-imports/{batchID}/apply:
+    post:
+      summary: Apply a directory import preview
+      operationId: applyDirectoryImport
+      tags: [Bridge]
+      x-requirement: REQ-DIRECTORY-EXPANSION-002
+      x-required-permission: integrations.write
+      description: |
+        Requires organization-scoped `integrations.write`. Applies only the exact immutable plan
+        persisted by preview; it never re-pulls the provider and accepts no replacement records or
+        mappings. Conflicts remain visible instead of silently overwriting local or externally
+        owned records. Safe retries with the same idempotency key return the original attempt.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/DirectoryImportBatchID'
+        - $ref: '#/components/parameters/CSRFToken'
+        - $ref: '#/components/parameters/DirectoryImportIdempotencyKey'
+      responses:
+        '200':
+          description: Applied, partially applied, failed, or safely replayed persisted plan
+          headers:
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DirectoryImportOperationResult'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409':
+          description: The batch is not in the previewed state, is already running, reached the 100-attempt history limit, or the idempotency key conflicts with another operation
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '500': {$ref: '#/components/responses/InternalError'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+  /api/v1/directory-imports/{batchID}/retry:
+    post:
+      summary: Retry a directory import attempt
+      operationId: retryDirectoryImport
+      tags: [Bridge]
+      x-requirement: REQ-DIRECTORY-EXPANSION-002
+      x-required-permission: integrations.write
+      description: |
+        Requires organization-scoped `integrations.write`. Retries only retryable failed actions
+        from the exact persisted plan and preserves all earlier outcomes and attempts. After a
+        successful preview, retry never re-pulls the source. A transient connector failure that
+        prevented plan creation may resume the same failed batch using its pinned configuration
+        revision and durably install the recovered plan. Retry never accepts amended records,
+        mappings, or provider payloads.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/DirectoryImportBatchID'
+        - $ref: '#/components/parameters/CSRFToken'
+        - $ref: '#/components/parameters/DirectoryImportIdempotencyKey'
+      responses:
+        '200':
+          description: Retried or safely replayed persisted plan with complete attempt history
+          headers:
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DirectoryImportOperationResult'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409':
+          description: The batch has no retryable failed actions, is already running, reached the 100-attempt history limit, or the idempotency key conflicts with another operation
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '500': {$ref: '#/components/responses/InternalError'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
   /api/v1/identities:
     get:
       summary: Search directory identities
@@ -2263,7 +2440,7 @@ components:
       description: Opaque, Secure, host-only server-side session identifier used by HTTPS deployments.
   headers:
     NoStore:
-      description: Horizon planning data is never stored by shared or browser caches.
+      description: Sensitive planning or integration data is never stored by shared or browser caches.
       schema: {type: string, const: no-store}
   parameters:
     PatternsTemplateID:
@@ -2400,6 +2577,21 @@ components:
         type: string
         minLength: 32
         maxLength: 128
+    DirectoryImportBatchID:
+      in: path
+      name: batchID
+      required: true
+      description: Stable organization-owned directory import batch identity.
+      schema: {$ref: '#/components/schemas/DirectoryImportBatchID'}
+    DirectoryImportIdempotencyKey:
+      in: header
+      name: Idempotency-Key
+      required: true
+      description: Caller-generated key scoped to the organization and exact preview, apply, or retry operation. Only its SHA-256 digest is retained; neither the raw key nor its digest is returned.
+      schema:
+        type: string
+        minLength: 8
+        maxLength: 200
   responses:
     InvalidRequest:
       description: Invalid or malformed request
@@ -3324,6 +3516,161 @@ components:
       required: [items]
       properties:
         items: {type: array, items: {$ref: '#/components/schemas/Room'}}
+    DirectoryImportBatchID:
+      type: string
+      pattern: '^[a-f0-9]{32}$'
+    DirectoryImportSourceSystemID:
+      type: string
+      description: Stable provider-neutral identity of a configured read-only source system.
+      pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+    DirectoryImportProvider:
+      type: string
+      description: Provider adapter name recorded for operations and audit; the stable contract remains source-system neutral.
+      pattern: '^[a-z0-9][a-z0-9._-]{0,63}$'
+    DirectoryImportBatchStatus:
+      type: string
+      enum: [previewed, applying, applied, partially_applied, failed]
+    DirectoryImportAction:
+      type: string
+      description: Immutable action selected while the bounded source snapshot is previewed.
+      enum: [create, update, deactivate, unchanged, conflict]
+    DirectoryImportOutcome:
+      type: string
+      description: Durable reconciliation outcome for one immutable planned action.
+      enum: [pending, applied, unchanged, conflict, failed]
+    DirectoryImportOperation:
+      type: string
+      enum: [preview, apply, retry]
+    DirectoryImportFailureClass:
+      type: string
+      enum: [transient, permanent, conflict]
+    PreviewDirectoryImportRequest:
+      type: object
+      additionalProperties: false
+      description: Selects a server-configured source. Provider records, credentials, mappings, and payloads are never accepted from the caller.
+      required: [sourceSystemId]
+      properties:
+        sourceSystemId: {$ref: '#/components/schemas/DirectoryImportSourceSystemID'}
+    DirectoryImportCounts:
+      type: object
+      additionalProperties: false
+      required: [created, updated, unchanged, deactivated, conflicts, failed]
+      properties:
+        created: {type: integer, minimum: 0, maximum: 5000}
+        updated: {type: integer, minimum: 0, maximum: 5000}
+        unchanged: {type: integer, minimum: 0, maximum: 5000}
+        deactivated: {type: integer, minimum: 0, maximum: 5000}
+        conflicts: {type: integer, minimum: 0, maximum: 5000}
+        failed: {type: integer, minimum: 0, maximum: 5000}
+    DirectoryImportRecord:
+      type: object
+      additionalProperties: false
+      description: Bounded normalized record safe for reconciliation detail. It contains no raw provider payload, arbitrary attributes, endpoints, credentials, or internal mapping digests.
+      required: [sourceRecordId, kind, displayName, status]
+      properties:
+        sourceRecordId: {type: string, minLength: 1, maxLength: 255}
+        kind:
+          type: string
+          enum: [identity]
+        identityKind:
+          type: string
+          enum: [person, shared, public, lab]
+        displayName: {type: string, minLength: 1, maxLength: 200}
+        email: {type: string, format: email, maxLength: 320}
+        status:
+          type: string
+          enum: [active, inactive]
+    DirectoryImportItem:
+      type: object
+      additionalProperties: false
+      description: Mapping-safe item from the exact persisted plan. Internal source/target digests and authoritative mapping rows are not returned.
+      required: [id, ordinal, record, action, outcome, updatedAt]
+      properties:
+        id: {type: string, pattern: '^[a-f0-9]{32}$'}
+        ordinal: {type: integer, minimum: 0, maximum: 4999}
+        record: {$ref: '#/components/schemas/DirectoryImportRecord'}
+        targetId: {$ref: '#/components/schemas/DirectoryImportBatchID'}
+        expectedRevision: {type: integer, format: int64, minimum: 1}
+        action: {$ref: '#/components/schemas/DirectoryImportAction'}
+        outcome: {$ref: '#/components/schemas/DirectoryImportOutcome'}
+        failureClass: {$ref: '#/components/schemas/DirectoryImportFailureClass'}
+        retryable: {type: boolean}
+        error:
+          type: string
+          maxLength: 240
+          description: Sanitized conflict or failure guidance without raw provider content.
+        updatedAt: {type: string, format: date-time}
+    DirectoryImportAttempt:
+      type: object
+      additionalProperties: false
+      description: Immutable preview, apply, or retry history. Raw and digested idempotency keys and request fingerprints are not returned.
+      required: [id, operation, number, status, correlationId, startedAt]
+      properties:
+        id: {type: string, pattern: '^[a-f0-9]{32}$'}
+        number: {type: integer, minimum: 1, maximum: 100}
+        operation: {$ref: '#/components/schemas/DirectoryImportOperation'}
+        status: {$ref: '#/components/schemas/DirectoryImportBatchStatus'}
+        failureClass: {$ref: '#/components/schemas/DirectoryImportFailureClass'}
+        retryable: {type: boolean}
+        error:
+          type: string
+          maxLength: 240
+          description: Sanitized failure guidance.
+        correlationId: {type: string, minLength: 1, maxLength: 128}
+        startedAt: {type: string, format: date-time}
+        completedAt: {type: string, format: date-time}
+    DirectoryImportBatch:
+      type: object
+      additionalProperties: false
+      description: Durable organization-owned preview and reconciliation summary. PostgreSQL or another authoritative store owns this state; Valkey never does.
+      required: [id, sourceSystemId, provider, configRevision, status, completeSnapshot, counts, createdAt, updatedAt]
+      properties:
+        id: {$ref: '#/components/schemas/DirectoryImportBatchID'}
+        sourceSystemId: {$ref: '#/components/schemas/DirectoryImportSourceSystemID'}
+        provider: {$ref: '#/components/schemas/DirectoryImportProvider'}
+        configRevision: {type: string, minLength: 1, maxLength: 128}
+        status: {$ref: '#/components/schemas/DirectoryImportBatchStatus'}
+        completeSnapshot:
+          type: boolean
+          description: Whether the connector declared the bounded snapshot complete. Missing-source deactivations are planned only when true.
+        counts: {$ref: '#/components/schemas/DirectoryImportCounts'}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+        completedAt: {type: string, format: date-time}
+    DirectoryImportBatchDetail:
+      type: object
+      additionalProperties: false
+      description: Complete mapping-safe item plan and append-only attempt history for one batch.
+      required: [batch, items, attempts]
+      properties:
+        batch: {$ref: '#/components/schemas/DirectoryImportBatch'}
+        items:
+          type: array
+          maxItems: 5000
+          items: {$ref: '#/components/schemas/DirectoryImportItem'}
+        attempts:
+          type: array
+          maxItems: 100
+          items: {$ref: '#/components/schemas/DirectoryImportAttempt'}
+    DirectoryImportOperationResult:
+      type: object
+      additionalProperties: false
+      required: [batch, replay]
+      properties:
+        batch: {$ref: '#/components/schemas/DirectoryImportBatch'}
+        replay:
+          type: boolean
+          description: True when this exact idempotent operation returned its original persisted result.
+    DirectoryImportBatchPage:
+      type: object
+      additionalProperties: false
+      required: [batches]
+      properties:
+        batches:
+          type: array
+          maxItems: 100
+          items: {$ref: '#/components/schemas/DirectoryImportBatch'}
+        nextCursor: {$ref: '#/components/schemas/DirectoryImportBatchID'}
     Department:
       type: object
       required: [id, organizationId, name, status, revision, createdAt, updatedAt]

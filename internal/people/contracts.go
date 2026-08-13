@@ -1,5 +1,5 @@
 // Package people implements the StewardMesh directory and asset assignment domain.
-// Requirement: REQ-PEOPLE-001. Feature: identity.directory.
+// Requirements: REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-002. Features: identity.directory, integrations.protocols.
 package people
 
 import (
@@ -254,6 +254,10 @@ type Store interface {
 
 	CreateIdentity(ctx context.Context, identity Identity) (Identity, error)
 	GetIdentity(ctx context.Context, organizationID, id string) (Identity, error)
+	GetIdentityByProvider(ctx context.Context, organizationID, provider, providerSubject string) (Identity, error)
+	GetIdentityByEmail(ctx context.Context, organizationID, normalizedEmail string) (Identity, error)
+	ReconcileIdentity(ctx context.Context, identity Identity, expectedRevision uint64) (Identity, error)
+	DeleteIdentity(ctx context.Context, organizationID, id string, expectedRevision uint64) error
 	SearchIdentities(ctx context.Context, organizationID string, query IdentityQuery, visibility Visibility) ([]Identity, error)
 
 	CreateAssetAssignment(ctx context.Context, assignment AssetAssignment, replaceActiveRole bool) (AssetAssignment, error)

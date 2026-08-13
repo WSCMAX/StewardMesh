@@ -96,6 +96,22 @@ service PeopleService {
   rpc EndAssetAssignment(EndAssetAssignmentRequest) returns (AssetAssignment);
 }
 
+// Durable provider-neutral preview, apply, reconciliation, and retry.
+// Requirement: REQ-DIRECTORY-EXPANSION-002. Feature: integrations.protocols.
+// Every RPC is organization-scoped. List/Get require integrations.read;
+// Preview/Apply/Retry require integrations.write. Transport adapters map the
+// idempotency key to the REST Idempotency-Key header or equivalent gRPC input.
+// Preview persists a complete immutable plan but never mutates directory data;
+// apply and action retry consume only that plan. A transient connector failure
+// before plan creation may retry the same failed batch with its pinned config.
+service DirectoryImportService {
+  rpc ListDirectoryImports(ListDirectoryImportsRequest) returns (ListDirectoryImportsResponse);
+  rpc GetDirectoryImport(GetDirectoryImportRequest) returns (DirectoryImportBatchDetail);
+  rpc PreviewDirectoryImport(PreviewDirectoryImportRequest) returns (DirectoryImportOperationResult);
+  rpc ApplyDirectoryImport(ApplyDirectoryImportRequest) returns (DirectoryImportOperationResult);
+  rpc RetryDirectoryImport(RetryDirectoryImportRequest) returns (DirectoryImportOperationResult);
+}
+
 // Organization-scoped tag and goal hierarchies with explicit inheritance
 // provenance. Requirement: REQ-THREADS-001. Feature: goals.tags.
 service ThreadsService {
@@ -874,6 +890,161 @@ message Room {
   uint64 revision = 8;
   google.protobuf.Timestamp created_at = 9;
   google.protobuf.Timestamp updated_at = 10;
+}
+
+message ListDirectoryImportsRequest {
+  // Zero uses the server default; valid explicit values are 1 through 100.
+  uint32 limit = 1;
+  // Opaque cursor from the preceding page.
+  string cursor = 2;
+}
+
+message ListDirectoryImportsResponse {
+  repeated DirectoryImportBatch batches = 1;
+  string next_cursor = 2;
+}
+
+message GetDirectoryImportRequest {
+  string batch_id = 1;
+}
+
+message PreviewDirectoryImportRequest {
+  // Stable identity of a server-configured read-only source. Provider records,
+  // credentials, mappings, and raw payloads are never accepted here. Pulls are
+  // bounded to 100 provider pages and a 5,000-item plan, including historical
+  // mappings considered for deactivation.
+  string source_system_id = 1;
+  // REST maps this value from the required Idempotency-Key header.
+  string idempotency_key = 2;
+}
+
+message ApplyDirectoryImportRequest {
+  string batch_id = 1;
+  // REST maps this value from the required Idempotency-Key header.
+  string idempotency_key = 2;
+}
+
+message RetryDirectoryImportRequest {
+  string batch_id = 1;
+  // REST maps this value from the required Idempotency-Key header.
+  string idempotency_key = 2;
+}
+
+message DirectoryImportCounts {
+  uint32 created = 1;
+  uint32 updated = 2;
+  uint32 unchanged = 3;
+  uint32 deactivated = 4;
+  uint32 conflicts = 5;
+  uint32 failed = 6;
+}
+
+message DirectoryImportRecord {
+  string source_record_id = 1;
+  // Currently identity; open for later provider-neutral record families.
+  string kind = 2;
+  string identity_kind = 3;
+  string display_name = 4;
+  string email = 5;
+  string status = 6;
+}
+
+message DirectoryImportItem {
+  string id = 1;
+  uint32 ordinal = 2;
+  // Bounded normalized typed record. Raw provider payloads, arbitrary
+  // attributes, credentials, and internal mapping digests are not represented.
+  DirectoryImportRecord record = 3;
+  string target_id = 4;
+  uint64 expected_revision = 5;
+  DirectoryImportAction action = 6;
+  DirectoryImportOutcome outcome = 7;
+  DirectoryImportFailureClass failure_class = 8;
+  bool retryable = 9;
+  string error = 10;
+  google.protobuf.Timestamp updated_at = 11;
+}
+
+message DirectoryImportAttempt {
+  string id = 1;
+  DirectoryImportOperation operation = 2;
+  uint32 number = 3;
+  DirectoryImportBatchStatus status = 4;
+  DirectoryImportFailureClass failure_class = 5;
+  bool retryable = 6;
+  string error = 7;
+  reserved 8;
+  string correlation_id = 9;
+  google.protobuf.Timestamp started_at = 10;
+  google.protobuf.Timestamp completed_at = 11;
+}
+
+message DirectoryImportBatch {
+  string id = 1;
+  string source_system_id = 2;
+  string provider = 3;
+  string config_revision = 4;
+  DirectoryImportBatchStatus status = 5;
+  // Missing-source deactivations are planned only for a complete snapshot.
+  bool complete_snapshot = 6;
+  DirectoryImportCounts counts = 7;
+  google.protobuf.Timestamp created_at = 8;
+  google.protobuf.Timestamp updated_at = 9;
+  google.protobuf.Timestamp completed_at = 10;
+}
+
+message DirectoryImportBatchDetail {
+  DirectoryImportBatch batch = 1;
+  // Complete mapping-safe plan and append-only attempt history.
+  repeated DirectoryImportItem items = 2;
+  repeated DirectoryImportAttempt attempts = 3;
+}
+
+message DirectoryImportOperationResult {
+  DirectoryImportBatch batch = 1;
+  // True when this exact idempotent operation returned its persisted result.
+  bool replay = 2;
+}
+
+enum DirectoryImportBatchStatus {
+  DIRECTORY_IMPORT_BATCH_STATUS_UNSPECIFIED = 0;
+  DIRECTORY_IMPORT_BATCH_STATUS_PREVIEWED = 1;
+  DIRECTORY_IMPORT_BATCH_STATUS_APPLYING = 2;
+  DIRECTORY_IMPORT_BATCH_STATUS_APPLIED = 3;
+  DIRECTORY_IMPORT_BATCH_STATUS_PARTIALLY_APPLIED = 4;
+  DIRECTORY_IMPORT_BATCH_STATUS_FAILED = 5;
+}
+
+enum DirectoryImportAction {
+  DIRECTORY_IMPORT_ACTION_UNSPECIFIED = 0;
+  DIRECTORY_IMPORT_ACTION_CREATE = 1;
+  DIRECTORY_IMPORT_ACTION_UPDATE = 2;
+  DIRECTORY_IMPORT_ACTION_DEACTIVATE = 3;
+  DIRECTORY_IMPORT_ACTION_UNCHANGED = 4;
+  DIRECTORY_IMPORT_ACTION_CONFLICT = 5;
+}
+
+enum DirectoryImportOutcome {
+  DIRECTORY_IMPORT_OUTCOME_UNSPECIFIED = 0;
+  DIRECTORY_IMPORT_OUTCOME_PENDING = 1;
+  DIRECTORY_IMPORT_OUTCOME_APPLIED = 2;
+  DIRECTORY_IMPORT_OUTCOME_UNCHANGED = 3;
+  DIRECTORY_IMPORT_OUTCOME_CONFLICT = 4;
+  DIRECTORY_IMPORT_OUTCOME_FAILED = 5;
+}
+
+enum DirectoryImportOperation {
+  DIRECTORY_IMPORT_OPERATION_UNSPECIFIED = 0;
+  DIRECTORY_IMPORT_OPERATION_PREVIEW = 1;
+  DIRECTORY_IMPORT_OPERATION_APPLY = 2;
+  DIRECTORY_IMPORT_OPERATION_RETRY = 3;
+}
+
+enum DirectoryImportFailureClass {
+  DIRECTORY_IMPORT_FAILURE_CLASS_UNSPECIFIED = 0;
+  DIRECTORY_IMPORT_FAILURE_CLASS_TRANSIENT = 1;
+  DIRECTORY_IMPORT_FAILURE_CLASS_PERMANENT = 2;
+  DIRECTORY_IMPORT_FAILURE_CLASS_CONFLICT = 3;
 }
 
 message ListDepartmentsRequest {}

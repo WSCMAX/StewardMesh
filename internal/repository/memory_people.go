@@ -1,6 +1,6 @@
 package repository
 
-// Requirement: REQ-PEOPLE-001. Feature: identity.directory.
+// Requirements: REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-002. Features: identity.directory, integrations.protocols.
 
 import (
 	"context"
@@ -347,6 +347,85 @@ func (s *MemoryPeopleStore) GetIdentity(_ context.Context, organizationID, id st
 		return people.Identity{}, people.ErrNotFound
 	}
 	return identity, nil
+}
+
+func (s *MemoryPeopleStore) GetIdentityByProvider(_ context.Context, organizationID, provider, providerSubject string) (people.Identity, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	id, exists := s.identityByProvider[peopleKey(organizationID, provider, providerSubject)]
+	if !exists {
+		return people.Identity{}, people.ErrNotFound
+	}
+	identity, exists := s.identities[id]
+	if !exists || identity.OrganizationID != organizationID {
+		return people.Identity{}, people.ErrNotFound
+	}
+	return identity, nil
+}
+
+func (s *MemoryPeopleStore) GetIdentityByEmail(_ context.Context, organizationID, normalizedEmail string) (people.Identity, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	id, exists := s.identityByEmail[peopleKey(organizationID, normalizedEmail)]
+	if !exists {
+		return people.Identity{}, people.ErrNotFound
+	}
+	identity, exists := s.identities[id]
+	if !exists || identity.OrganizationID != organizationID {
+		return people.Identity{}, people.ErrNotFound
+	}
+	return identity, nil
+}
+
+func (s *MemoryPeopleStore) ReconcileIdentity(_ context.Context, identity people.Identity, expectedRevision uint64) (people.Identity, error) {
+	if !validMemoryIdentity(identity) {
+		return people.Identity{}, people.ErrInvalidInput
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	existing, exists := s.identities[identity.ID]
+	if !exists || existing.OrganizationID != identity.OrganizationID {
+		return people.Identity{}, people.ErrNotFound
+	}
+	if existing.Revision != expectedRevision || identity.Revision != expectedRevision+1 || identity.CreatedAt != existing.CreatedAt {
+		return people.Identity{}, people.ErrConflict
+	}
+	if identity.NormalizedEmail != existing.NormalizedEmail && identity.NormalizedEmail != "" {
+		if otherID, duplicate := s.identityByEmail[peopleKey(identity.OrganizationID, identity.NormalizedEmail)]; duplicate && otherID != identity.ID {
+			return people.Identity{}, people.ErrConflict
+		}
+	}
+	if identity.Provider != existing.Provider || identity.ProviderSubject != existing.ProviderSubject {
+		return people.Identity{}, people.ErrConflict
+	}
+	if existing.NormalizedEmail != "" {
+		delete(s.identityByEmail, peopleKey(existing.OrganizationID, existing.NormalizedEmail))
+	}
+	if identity.NormalizedEmail != "" {
+		s.identityByEmail[peopleKey(identity.OrganizationID, identity.NormalizedEmail)] = identity.ID
+	}
+	s.identities[identity.ID] = identity
+	return identity, nil
+}
+
+func (s *MemoryPeopleStore) DeleteIdentity(_ context.Context, organizationID, id string, expectedRevision uint64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	identity, exists := s.identities[id]
+	if !exists || identity.OrganizationID != organizationID {
+		return people.ErrNotFound
+	}
+	if identity.Revision != expectedRevision {
+		return people.ErrConflict
+	}
+	if identity.NormalizedEmail != "" {
+		delete(s.identityByEmail, peopleKey(identity.OrganizationID, identity.NormalizedEmail))
+	}
+	if identity.Provider != "" {
+		delete(s.identityByProvider, peopleKey(identity.OrganizationID, identity.Provider, identity.ProviderSubject))
+	}
+	delete(s.identities, id)
+	return nil
 }
 
 func (s *MemoryPeopleStore) SearchIdentities(_ context.Context, organizationID string, query people.IdentityQuery, visibility people.Visibility) ([]people.Identity, error) {

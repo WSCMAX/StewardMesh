@@ -6,7 +6,7 @@ import (
 )
 
 // Requirements: REQ-FOUNDATION-001, SEC-GUARD-001, REQ-PEOPLE-001,
-// REQ-DIRECTORY-EXPANSION-001, REQ-ATLAS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001,
+// REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-ATLAS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001,
 // REQ-HORIZON-001, REQ-ATLAS-CODES-001, REQ-ATLAS-MODELS-001, REQ-ATLAS-CATALOG-001, REQ-PATTERNS-001.
 // Features: lifecycle.planning, inventory.identifiers, inventory.models, inventory.catalog, templates.schemas.
 func TestEmbeddedMigrationsAreOrderedAndChecksummed(t *testing.T) {
@@ -14,8 +14,8 @@ func TestEmbeddedMigrationsAreOrderedAndChecksummed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(migrations) != 27 {
-		t.Fatalf("expected 27 platform migrations, got %d", len(migrations))
+	if len(migrations) != 28 {
+		t.Fatalf("expected 28 platform migrations, got %d", len(migrations))
 	}
 	for index, migration := range migrations {
 		expectedVersion := int64(index + 1)
@@ -24,6 +24,24 @@ func TestEmbeddedMigrationsAreOrderedAndChecksummed(t *testing.T) {
 		}
 		if len(migration.checksum) != 64 {
 			t.Fatalf("expected SHA-256 checksum for migration %d", migration.version)
+		}
+	}
+}
+
+func TestDirectoryImportMigrationAddsDurablePlansAttemptsMappingsAndLeases(t *testing.T) {
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents := migrations[27].contents
+	for _, expected := range []string{
+		"REQ-DIRECTORY-EXPANSION-002", "integrations.protocols", "GitHub: #25",
+		"CREATE TABLE directory_import_items", "CREATE TABLE directory_import_attempts",
+		"CREATE TABLE directory_import_mappings", "idempotency_hash", "lease_token",
+		"integrations.read", "integrations.write",
+	} {
+		if !strings.Contains(contents, expected) {
+			t.Fatalf("directory import migration is missing %q", expected)
 		}
 	}
 }

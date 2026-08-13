@@ -1,6 +1,6 @@
 package guard
 
-// Requirements: REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
+// Requirements: REQ-DIRECTORY-EXPANSION-002, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
 
 import (
 	"context"
@@ -659,6 +659,38 @@ func (s *Service) RegisterResourceOwnership(ctx context.Context, authentication 
 	if err := s.requireOrganizationManager(ctx, authentication); err != nil {
 		return ResourceOwnership{}, false, err
 	}
+	return s.registerResourceOwnership(ctx, authentication.Principal.Subject, input)
+}
+
+// RegisterImportedResourceOwnership is the narrow internal seam used by the
+// integration engine after it has independently authorized integrations.write.
+// It does not grant callers general Guard administration rights.
+func (s *Service) RegisterImportedResourceOwnership(ctx context.Context, actorID string, input ResourceOwnershipInput) (ResourceOwnership, bool, error) {
+	actorID = strings.TrimSpace(actorID)
+	if actorID == "" || len(actorID) > 128 {
+		return ResourceOwnership{}, false, fmt.Errorf("%w: import actor is required", ErrInvalidInput)
+	}
+	return s.registerResourceOwnership(ctx, actorID, input)
+}
+
+// ImportedResourceOwnership and DeleteImportedResourceOwnership are narrow
+// compensation seams for a just-created import target whose mapping commit
+// failed. They cannot claim or delete an already-claimed ownership record.
+func (s *Service) ImportedResourceOwnership(ctx context.Context, organizationID, resourceType, resourceID string) (ResourceOwnership, error) {
+	if organizationID != s.organizationID {
+		return ResourceOwnership{}, ErrNotFound
+	}
+	return s.store.GetResourceOwnership(ctx, organizationID, resourceType, resourceID)
+}
+
+func (s *Service) DeleteImportedResourceOwnership(ctx context.Context, ownership ResourceOwnership) error {
+	if ownership.OrganizationID != s.organizationID || !ownership.WriteLocked {
+		return fmt.Errorf("%w: compensating ownership lock is invalid", ErrInvalidInput)
+	}
+	return s.store.DeleteResourceOwnership(ctx, ownership)
+}
+
+func (s *Service) registerResourceOwnership(ctx context.Context, actorID string, input ResourceOwnershipInput) (ResourceOwnership, bool, error) {
 	resourceType, resourceID, sourceSystemID, sourceRecordID, err := validateOwnershipInput(input)
 	if err != nil {
 		return ResourceOwnership{}, false, err
@@ -683,7 +715,7 @@ func (s *Service) RegisterResourceOwnership(ctx context.Context, authentication 
 		"resourceType":   registered.ResourceType,
 		"sourceSystemId": registered.SourceSystemID,
 	}
-	if err := s.audit(ctx, authentication.Principal.Subject, "guard.ownership.locked", registered.ResourceType, registered.ResourceID, metadata); err != nil {
+	if err := s.audit(ctx, actorID, "guard.ownership.locked", registered.ResourceType, registered.ResourceID, metadata); err != nil {
 		rollbackErr := s.store.DeleteResourceOwnership(ctx, registered)
 		return ResourceOwnership{}, false, fmt.Errorf("audit resource ownership registration: %w", errors.Join(err, rollbackErr))
 	}

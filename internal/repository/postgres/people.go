@@ -1,6 +1,6 @@
 package postgres
 
-// Requirement: REQ-PEOPLE-001. Feature: identity.directory.
+// Requirements: REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-002. Features: identity.directory, integrations.protocols.
 
 import (
 	"context"
@@ -383,6 +383,81 @@ func (s *PeopleStore) GetIdentity(ctx context.Context, organizationID, id string
 		return people.Identity{}, fmt.Errorf("get identity: %w", err)
 	}
 	return identity, nil
+}
+
+func (s *PeopleStore) GetIdentityByProvider(ctx context.Context, organizationID, provider, providerSubject string) (people.Identity, error) {
+	row := s.database.QueryRowContext(ctx, `
+		SELECT id, organization_id, kind, display_name, normalized_name, email, normalized_email,
+		       COALESCE(department_id, ''), COALESCE(site_id, ''), status, provider, provider_subject,
+		       revision, created_at, updated_at
+		FROM people_identities WHERE organization_id = $1 AND provider = $2 AND provider_subject = $3
+	`, organizationID, provider, providerSubject)
+	identity, err := scanPeopleIdentity(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return people.Identity{}, people.ErrNotFound
+	}
+	if err != nil {
+		return people.Identity{}, fmt.Errorf("get identity by provider: %w", err)
+	}
+	return identity, nil
+}
+
+func (s *PeopleStore) GetIdentityByEmail(ctx context.Context, organizationID, normalizedEmail string) (people.Identity, error) {
+	row := s.database.QueryRowContext(ctx, `
+		SELECT id, organization_id, kind, display_name, normalized_name, email, normalized_email,
+		       COALESCE(department_id, ''), COALESCE(site_id, ''), status, provider, provider_subject,
+		       revision, created_at, updated_at
+		FROM people_identities WHERE organization_id = $1 AND normalized_email = $2
+	`, organizationID, normalizedEmail)
+	identity, err := scanPeopleIdentity(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return people.Identity{}, people.ErrNotFound
+	}
+	if err != nil {
+		return people.Identity{}, fmt.Errorf("get identity by email: %w", err)
+	}
+	return identity, nil
+}
+
+func (s *PeopleStore) ReconcileIdentity(ctx context.Context, identity people.Identity, expectedRevision uint64) (people.Identity, error) {
+	if expectedRevision == 0 || identity.Revision != expectedRevision+1 {
+		return people.Identity{}, people.ErrConflict
+	}
+	row := s.database.QueryRowContext(ctx, `
+		UPDATE people_identities SET
+			kind = $4, display_name = $5, normalized_name = $6, email = $7, normalized_email = $8,
+			department_id = NULLIF($9, ''), site_id = NULLIF($10, ''), status = $11,
+			revision = $12, updated_at = $13
+		WHERE organization_id = $1 AND id = $2 AND revision = $3 AND provider = $14 AND provider_subject = $15 AND created_at = $16
+		RETURNING id, organization_id, kind, display_name, normalized_name, email, normalized_email,
+		          COALESCE(department_id, ''), COALESCE(site_id, ''), status, provider, provider_subject,
+		          revision, created_at, updated_at
+	`, identity.OrganizationID, identity.ID, expectedRevision, identity.Kind, identity.DisplayName, identity.NormalizedName,
+		identity.Email, identity.NormalizedEmail, identity.DepartmentID, identity.SiteID, identity.Status,
+		identity.Revision, identity.UpdatedAt, identity.Provider, identity.ProviderSubject, identity.CreatedAt)
+	updated, err := scanPeopleIdentity(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return people.Identity{}, people.ErrConflict
+	}
+	if err != nil {
+		return people.Identity{}, mapPeopleStoreError("reconcile identity", err)
+	}
+	return updated, nil
+}
+
+func (s *PeopleStore) DeleteIdentity(ctx context.Context, organizationID, id string, expectedRevision uint64) error {
+	result, err := s.database.ExecContext(ctx, `DELETE FROM people_identities WHERE organization_id=$1 AND id=$2 AND revision=$3`, organizationID, id, expectedRevision)
+	if err != nil {
+		return mapPeopleStoreError("delete identity", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("inspect identity deletion: %w", err)
+	}
+	if rows == 0 {
+		return people.ErrConflict
+	}
+	return nil
 }
 
 func (s *PeopleStore) SearchIdentities(ctx context.Context, organizationID string, filter people.IdentityQuery, visibility people.Visibility) ([]people.Identity, error) {

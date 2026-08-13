@@ -1,6 +1,6 @@
 // Package application constructs StewardMesh's transport-neutral HTTP
 // application and owns the lifecycle of its shared runtime dependencies.
-// Requirements: REQ-FOUNDATION-001, REQ-ATLAS-001, REQ-ATLAS-CODES-001, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-HORIZON-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001.
+// Requirements: REQ-FOUNDATION-001, REQ-ATLAS-001, REQ-ATLAS-CODES-001, REQ-DIRECTORY-EXPANSION-002, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-HORIZON-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001.
 package application
 
 import (
@@ -17,6 +17,7 @@ import (
 	"github.com/maxlemke/stewardmesh/internal/bootstrap"
 	"github.com/maxlemke/stewardmesh/internal/cache"
 	"github.com/maxlemke/stewardmesh/internal/config"
+	"github.com/maxlemke/stewardmesh/internal/directoryexpansion"
 	"github.com/maxlemke/stewardmesh/internal/foundation"
 	"github.com/maxlemke/stewardmesh/internal/guard"
 	"github.com/maxlemke/stewardmesh/internal/horizon"
@@ -36,7 +37,8 @@ import (
 // short-lived runtimes must leave this disabled and run migrations as a
 // separate deployment operation.
 type Options struct {
-	RunMigrations bool
+	RunMigrations       bool
+	DirectoryConnectors []directoryexpansion.Connector
 }
 
 // Application is a reusable StewardMesh HTTP application. It does not own an
@@ -178,6 +180,20 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 	if err != nil {
 		return fail(fmt.Errorf("initialize People: %w", err))
 	}
+	directoryRegistry, err := directoryexpansion.NewRegistry(options.DirectoryConnectors...)
+	if err != nil {
+		return fail(fmt.Errorf("initialize directory connector registry: %w", err))
+	}
+	directoryTarget, err := directoryexpansion.NewPeopleTarget(runtime.peopleStore, guardService, nil)
+	if err != nil {
+		return fail(fmt.Errorf("initialize directory People target: %w", err))
+	}
+	directoryService, err := directoryexpansion.NewService(runtime.directoryImportStore, directoryTarget, runtime.auditor, directoryRegistry, directoryexpansion.ServiceConfig{
+		OrganizationID: cfg.OrganizationID,
+	})
+	if err != nil {
+		return fail(fmt.Errorf("initialize directory imports: %w", err))
+	}
 	ledgerService, err := ledger.NewService(runtime.ledgerStore, ledgerReferenceValidator{
 		atlas: atlasService, vault: vaultService, people: runtime.peopleStore, organizationID: cfg.OrganizationID,
 	}, runtime.auditor, ledger.ServiceConfig{OrganizationID: cfg.OrganizationID})
@@ -197,6 +213,7 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 		Atlas:               atlasService,
 		AtlasCodes:          atlasCodesService,
 		People:              peopleService,
+		DirectoryImports:    directoryService,
 		Threads:             threadsService,
 		Vault:               vaultService,
 		Ledger:              ledgerService,
@@ -246,18 +263,19 @@ func (a *Application) Close() error {
 }
 
 type foundationRuntime struct {
-	organization    bootstrap.Organization
-	assetStore      atlas.Store
-	atlasCodesStore atlascodes.Store
-	threadsStore    threads.Store
-	storageStore    storage.MetadataStore
-	ledgerStore     ledger.Store
-	horizonStore    horizon.Store
-	patternsStore   patterns.Store
-	guardStore      guard.Store
-	peopleStore     people.Store
-	auditor         foundation.Auditor
-	close           func() error
+	organization         bootstrap.Organization
+	assetStore           atlas.Store
+	atlasCodesStore      atlascodes.Store
+	threadsStore         threads.Store
+	storageStore         storage.MetadataStore
+	ledgerStore          ledger.Store
+	horizonStore         horizon.Store
+	patternsStore        patterns.Store
+	guardStore           guard.Store
+	peopleStore          people.Store
+	directoryImportStore directoryexpansion.Store
+	auditor              foundation.Auditor
+	close                func() error
 }
 
 func initializeAttemptLimiter(ctx context.Context, cfg config.Config) (guard.AttemptLimiter, func() error, error) {
@@ -312,24 +330,26 @@ func initializeFoundation(ctx context.Context, cfg config.Config, runMigrations 
 		return foundationRuntime{}, errors.New("context is required")
 	}
 	var (
-		organizations   repository.OrganizationRepository
-		assetStore      atlas.Store
-		atlasCodesStore atlascodes.Store
-		threadsStore    threads.Store
-		storageStore    storage.MetadataStore
-		ledgerStore     ledger.Store
-		horizonStore    horizon.Store
-		patternsStore   patterns.Store
-		guardStore      guard.Store
-		peopleStore     people.Store
-		auditor         foundation.Auditor = foundation.NopAuditor{}
-		closeRuntime                       = func() error { return nil }
+		organizations        repository.OrganizationRepository
+		assetStore           atlas.Store
+		atlasCodesStore      atlascodes.Store
+		threadsStore         threads.Store
+		storageStore         storage.MetadataStore
+		ledgerStore          ledger.Store
+		horizonStore         horizon.Store
+		patternsStore        patterns.Store
+		guardStore           guard.Store
+		peopleStore          people.Store
+		directoryImportStore directoryexpansion.Store
+		auditor              foundation.Auditor = foundation.NopAuditor{}
+		closeRuntime                            = func() error { return nil }
 	)
 	switch cfg.RepositoryDriver {
 	case config.RepositoryDriverMemory:
 		organizations = repository.NewMemoryOrganizationRepository()
 		guardStore = repository.NewMemoryGuardStore()
 		peopleStore = repository.NewMemoryPeopleStore()
+		directoryImportStore = repository.NewMemoryDirectoryImportStore()
 		assetStore = repository.NewMemoryAtlasStore()
 		atlasCodesStore = repository.NewMemoryAtlasCodesStore()
 		threadsStore = repository.NewMemoryThreadsStore()
@@ -365,6 +385,11 @@ func initializeFoundation(ctx context.Context, cfg config.Config, runMigrations 
 			return foundationRuntime{}, err
 		}
 		peopleStore, err = postgresrepository.NewPeopleStore(database)
+		if err != nil {
+			_ = database.Close()
+			return foundationRuntime{}, err
+		}
+		directoryImportStore, err = postgresrepository.NewDirectoryImportStore(database)
 		if err != nil {
 			_ = database.Close()
 			return foundationRuntime{}, err
@@ -451,18 +476,19 @@ func initializeFoundation(ctx context.Context, cfg config.Config, runMigrations 
 		return foundationRuntime{}, fmt.Errorf("audit organization bootstrap: %w", err)
 	}
 	return foundationRuntime{
-		organization:    organization,
-		assetStore:      assetStore,
-		atlasCodesStore: atlasCodesStore,
-		threadsStore:    threadsStore,
-		storageStore:    storageStore,
-		ledgerStore:     ledgerStore,
-		horizonStore:    horizonStore,
-		patternsStore:   patternsStore,
-		guardStore:      guardStore,
-		peopleStore:     peopleStore,
-		auditor:         auditor,
-		close:           closeRuntime,
+		organization:         organization,
+		assetStore:           assetStore,
+		atlasCodesStore:      atlasCodesStore,
+		threadsStore:         threadsStore,
+		storageStore:         storageStore,
+		ledgerStore:          ledgerStore,
+		horizonStore:         horizonStore,
+		patternsStore:        patternsStore,
+		guardStore:           guardStore,
+		peopleStore:          peopleStore,
+		directoryImportStore: directoryImportStore,
+		auditor:              auditor,
+		close:                closeRuntime,
 	}, nil
 }
 

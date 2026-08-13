@@ -239,6 +239,7 @@
       "featureId": "inventory.models",
       "artifacts": {
         "documentation": [
+          "README.md",
           "docs/features/atlas-models.md",
           "docs/features/atlas.md",
           "docs/features/dictionary.md",
@@ -258,7 +259,8 @@
         ],
         "schema": [
           "internal/repository/postgres/migrations/0023_atlas_models.sql",
-          "internal/repository/postgres/migrations/0025_atlas_model_bulk_intake.sql"
+          "internal/repository/postgres/migrations/0025_atlas_model_bulk_intake.sql",
+          "internal/repository/postgres/migrations/0026_atlas_model_default_provenance.sql"
         ],
         "tests": [
           "internal/atlas/service_test.go",

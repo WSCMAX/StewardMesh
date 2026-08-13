@@ -757,6 +757,7 @@ func TestCreateAndListAssetRequiresPermissionAndCSRF(t *testing.T) {
 		"id": "model-1", "manufacturer": "Framework", "name": "Laptop 13", "modelNumber": "FW13",
 		"kind": "laptop", "warrantyMonths": 36, "usefulLifeMonths": 48,
 		"specifications": map[string]string{"CPU": "Ryzen", "Memory": "32 GB"},
+		"sourceSystemId": "model-import", "sourceRecordId": "framework-fw13-v1",
 	})
 	modelReq := authenticatedRequest(http.MethodPost, "/api/v1/asset-models", bytes.NewReader(modelPayload), session)
 	modelRes := httptest.NewRecorder()
@@ -788,6 +789,11 @@ func TestCreateAndListAssetRequiresPermissionAndCSRF(t *testing.T) {
 	if created.OrganizationID != "example-org" || created.ModelID != model.ID || created.Revision != 1 || created.Status != "active" {
 		t.Fatalf("unexpected created asset %#v", created)
 	}
+	if created.ModelContext == nil || created.ModelContext.ModelRevision != 1 || created.ModelContext.Kind != "laptop" ||
+		created.ModelContext.SourceSystemID != "model-import" || created.ModelContext.SourceRecordID != "framework-fw13-v1" ||
+		len(created.ModelContext.Overrides) != 1 || created.ModelContext.Overrides[0] != "kind" {
+		t.Fatalf("unexpected asset model context %#v", created.ModelContext)
+	}
 	modelListReq := authenticatedRequest(http.MethodGet, "/api/v1/asset-models?q=framework&kind=laptop", nil, session)
 	modelListRes := httptest.NewRecorder()
 	handler.ServeHTTP(modelListRes, modelListReq)
@@ -803,7 +809,10 @@ func TestCreateAndListAssetRequiresPermissionAndCSRF(t *testing.T) {
 	getReq := authenticatedRequest(http.MethodGet, "/api/v1/assets/asset-1", nil, session)
 	getRes := httptest.NewRecorder()
 	handler.ServeHTTP(getRes, getReq)
-	if getRes.Code != http.StatusOK || !strings.Contains(getRes.Body.String(), "lab-server.example.test") {
+	if getRes.Code != http.StatusOK || !strings.Contains(getRes.Body.String(), "lab-server.example.test") ||
+		!strings.Contains(getRes.Body.String(), `"modelContext":{"manufacturer":"Framework"`) ||
+		!strings.Contains(getRes.Body.String(), `"defaultsEffectiveAt"`) ||
+		!strings.Contains(getRes.Body.String(), `"overrides":["kind"]`) {
 		t.Fatalf("expected asset detail, got %d: %s", getRes.Code, getRes.Body.String())
 	}
 	updatePayload, _ := json.Marshal(map[string]any{

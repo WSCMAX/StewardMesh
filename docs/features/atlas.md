@@ -30,7 +30,7 @@ Locations use People-owned site, building, and room records. Buildings require t
 
 Purchase dates are stored as calendar dates. Updates require the current revision, so a stale browser or integration receives a conflict rather than silently overwriting a newer record.
 
-Shared product models are implemented through the separately traceable Atlas Models extension. An asset may reference one active model while retaining its own tag, serial, hostname, lifecycle, location, user, and override fields.
+Shared product models are implemented through the separately traceable Atlas Models extension. An asset may reference one active model while retaining its own tag, serial, hostname, lifecycle, location, user, and override fields. Each link keeps an immutable snapshot of the applied defaults, model revision, source provenance, and effective/application dates so later model changes cannot rewrite asset history.
 
 Barcode and QR identifiers are implemented through the separately traceable Atlas Codes extension. Its association model supports multiple active or historical identifiers without overloading asset tags or serial numbers.
 

@@ -503,6 +503,25 @@ message Asset {
   string organization_id = 17;
   string model_id = 18;
   string deployment_notes = 19;
+  AssetModelContext model_context = 20;
+}
+
+message AssetModelContext {
+  string manufacturer = 1;
+  string name = 2;
+  string model_number = 3;
+  string kind = 4;
+  string vendor_identifier = 5;
+  map<string, string> specifications = 6;
+  string support_url = 7;
+  int32 warranty_months = 8;
+  int32 useful_life_months = 9;
+  string source_system_id = 10;
+  string source_record_id = 11;
+  int64 model_revision = 12;
+  google.protobuf.Timestamp defaults_effective_at = 13;
+  google.protobuf.Timestamp applied_at = 14;
+  repeated string overrides = 15;
 }
 
 message AssetModel {

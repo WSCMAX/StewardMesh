@@ -106,6 +106,7 @@ func TestServiceMaintainsModelsAndAssetCounts(t *testing.T) {
 		Kind: "LAPTOP", VendorIdentifier: "vendor-fw13",
 		Specifications: map[string]string{"CPU": "Ryzen", "Memory": "32 GB"},
 		SupportURL:     "https://support.example.test/fw13", WarrantyMonths: 36, UsefulLifeMonths: 48,
+		SourceSystemID: "model-import", SourceRecordID: "framework-fw13-v1",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -118,11 +119,18 @@ func TestServiceMaintainsModelsAndAssetCounts(t *testing.T) {
 	}); !errors.Is(err, atlas.ErrConflict) {
 		t.Fatalf("expected duplicate model conflict, got %v", err)
 	}
-	if _, err := service.CreateAsset(context.Background(), atlas.CreateAssetInput{
+	asset, err := service.CreateAsset(context.Background(), atlas.CreateAssetInput{
 		ID: "asset-one", ModelID: model.ID, Name: "Framework laptop", Kind: "laptop", Status: "active",
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
+	if asset.ModelContext == nil || asset.ModelContext.ModelRevision != 1 || asset.ModelContext.Kind != "laptop" ||
+		asset.ModelContext.SourceSystemID != "model-import" || asset.ModelContext.SourceRecordID != "framework-fw13-v1" ||
+		len(asset.ModelContext.Overrides) != 0 {
+		t.Fatalf("unexpected initial model context %#v", asset.ModelContext)
+	}
+	appliedAt := asset.ModelContext.AppliedAt
 	models, err := service.ListModels(context.Background(), atlas.ModelQuery{Search: "framework"})
 	if err != nil || len(models) != 1 || models[0].InstanceCount != 1 {
 		t.Fatalf("unexpected models %#v err=%v", models, err)
@@ -130,11 +138,27 @@ func TestServiceMaintainsModelsAndAssetCounts(t *testing.T) {
 	now = now.Add(time.Hour)
 	updated, err := service.UpdateModel(context.Background(), atlas.UpdateModelInput{
 		ID: model.ID, Manufacturer: model.Manufacturer, Name: model.Name, ModelNumber: model.ModelNumber,
-		Kind: model.Kind, VendorIdentifier: model.VendorIdentifier, Specifications: model.Specifications,
-		SupportURL: model.SupportURL, WarrantyMonths: 48, UsefulLifeMonths: model.UsefulLifeMonths, Revision: model.Revision,
+		Kind: "computer", VendorIdentifier: model.VendorIdentifier, Specifications: map[string]string{"CPU": "Ryzen 2"},
+		SupportURL: model.SupportURL, WarrantyMonths: 48, UsefulLifeMonths: model.UsefulLifeMonths,
+		SourceSystemID: "model-import", SourceRecordID: "framework-fw13-v2", Revision: model.Revision,
 	})
 	if err != nil || updated.Revision != 2 || updated.WarrantyMonths != 48 {
 		t.Fatalf("unexpected updated model %#v err=%v", updated, err)
+	}
+	unchanged, err := service.GetAsset(context.Background(), asset.ID)
+	if err != nil || unchanged.ModelContext == nil || unchanged.ModelContext.ModelRevision != 1 ||
+		unchanged.ModelContext.Kind != "laptop" || unchanged.ModelContext.WarrantyMonths != 36 ||
+		unchanged.ModelContext.Specifications["CPU"] != "Ryzen" || unchanged.ModelContext.SourceRecordID != "framework-fw13-v1" {
+		t.Fatalf("model update rewrote asset defaults %#v err=%v", unchanged.ModelContext, err)
+	}
+	now = now.Add(time.Hour)
+	overridden, err := service.UpdateAsset(context.Background(), atlas.UpdateAssetInput{
+		ID: asset.ID, ModelID: model.ID, Name: asset.Name, Kind: "desktop", Status: asset.Status, Revision: asset.Revision,
+	})
+	if err != nil || overridden.ModelContext == nil || len(overridden.ModelContext.Overrides) != 1 ||
+		overridden.ModelContext.Overrides[0] != "kind" || overridden.ModelContext.ModelRevision != 1 ||
+		!overridden.ModelContext.AppliedAt.Equal(appliedAt) {
+		t.Fatalf("unexpected model override context %#v err=%v", overridden.ModelContext, err)
 	}
 	retired, err := service.RetireModel(context.Background(), model.ID, updated.Revision)
 	if err != nil || retired.Status != "retired" || retired.InstanceCount != 1 {

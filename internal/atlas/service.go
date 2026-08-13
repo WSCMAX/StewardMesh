@@ -227,7 +227,8 @@ func (s *Service) CreateAsset(ctx context.Context, input CreateAssetInput) (doma
 	}
 	now := s.now().UTC()
 	asset := domain.Asset{
-		ID: id, OrganizationID: s.organizationID, ModelID: normalized.ModelID, Name: normalized.Name, Kind: normalized.Kind,
+		ID: id, OrganizationID: s.organizationID, ModelID: normalized.ModelID,
+		ModelContext: snapshotModelContext(model, normalized.Kind, now), Name: normalized.Name, Kind: normalized.Kind,
 		AssetTag: normalized.AssetTag, SerialNumber: normalized.SerialNumber, Hostname: normalized.Hostname, DeploymentNotes: normalized.DeploymentNotes,
 		SiteID: normalized.SiteID, BuildingID: normalized.BuildingID, RoomID: normalized.RoomID,
 		DepartmentID: normalized.DepartmentID, UserID: normalized.UserID, Status: normalized.Status,
@@ -241,9 +242,9 @@ func (s *Service) CreateAsset(ctx context.Context, input CreateAssetInput) (doma
 	if err != nil {
 		return domain.Asset{}, err
 	}
-	if err := s.auditAsset(ctx, "atlas.asset.created", created.ID, map[string]string{
+	if err := s.auditAsset(ctx, "atlas.asset.created", created.ID, withModelContextAudit(created, map[string]string{
 		"status": created.Status, "kind": created.Kind, "revision": "1",
-	}); err != nil {
+	})); err != nil {
 		return domain.Asset{}, fmt.Errorf("audit asset creation: %w", err)
 	}
 	return created, nil
@@ -291,7 +292,8 @@ func (s *Service) CreateAssetsFromModel(ctx context.Context, input BulkCreateAss
 		}
 		ids[id] = struct{}{}
 		asset := domain.Asset{
-			ID: id, OrganizationID: s.organizationID, ModelID: input.ModelID, Name: normalized.Name, Kind: normalized.Kind,
+			ID: id, OrganizationID: s.organizationID, ModelID: input.ModelID,
+			ModelContext: snapshotModelContext(model, normalized.Kind, now), Name: normalized.Name, Kind: normalized.Kind,
 			AssetTag: normalized.AssetTag, SerialNumber: normalized.SerialNumber, Hostname: normalized.Hostname, DeploymentNotes: normalized.DeploymentNotes,
 			SiteID: normalized.SiteID, BuildingID: normalized.BuildingID, RoomID: normalized.RoomID,
 			DepartmentID: normalized.DepartmentID, UserID: normalized.UserID, Status: normalized.Status,
@@ -309,10 +311,10 @@ func (s *Service) CreateAssetsFromModel(ctx context.Context, input BulkCreateAss
 		return BulkCreateAssetsResult{}, err
 	}
 	for _, asset := range created {
-		if err := s.auditAsset(ctx, "atlas.asset.created", asset.ID, map[string]string{
+		if err := s.auditAsset(ctx, "atlas.asset.created", asset.ID, withModelContextAudit(asset, map[string]string{
 			"status": asset.Status, "kind": asset.Kind, "revision": "1", "modelId": input.ModelID,
 			"modelRequirementId": ModelRequirementID, "creationMode": "model_bulk",
-		}); err != nil {
+		})); err != nil {
 			return BulkCreateAssetsResult{}, fmt.Errorf("audit bulk asset creation: %w", err)
 		}
 	}
@@ -344,7 +346,11 @@ func (s *Service) UpdateAsset(ctx context.Context, input UpdateAssetInput) (doma
 		return domain.Asset{}, err
 	}
 	if normalized.Kind == "" && model.ID != "" {
-		normalized.Kind = model.Kind
+		if existing.ModelID == normalized.ModelID && existing.ModelContext != nil {
+			normalized.Kind = existing.ModelContext.Kind
+		} else {
+			normalized.Kind = model.Kind
+		}
 	}
 	if err := s.references.ValidateAssetReferences(ctx, s.organizationID, normalized.References); err != nil {
 		return domain.Asset{}, err
@@ -353,9 +359,11 @@ func (s *Service) UpdateAsset(ctx context.Context, input UpdateAssetInput) (doma
 	if !validText(note, 1000) || (note != "" && normalized.Status == existing.Status) {
 		return domain.Asset{}, ErrInvalidInput
 	}
+	now := s.now().UTC()
 	updated := existing
 	updated.Name = normalized.Name
 	updated.ModelID = normalized.ModelID
+	updated.ModelContext = updatedModelContext(existing, model, normalized.Kind, now)
 	updated.Kind = normalized.Kind
 	updated.AssetTag = normalized.AssetTag
 	updated.SerialNumber = normalized.SerialNumber
@@ -369,7 +377,7 @@ func (s *Service) UpdateAsset(ctx context.Context, input UpdateAssetInput) (doma
 	updated.Status = normalized.Status
 	updated.PurchaseDate = cloneDate(normalized.PurchaseDate)
 	updated.Revision = existing.Revision + 1
-	updated.UpdatedAt = s.now().UTC()
+	updated.UpdatedAt = now
 
 	var event *domain.AssetLifecycleEvent
 	if updated.Status != existing.Status {
@@ -393,6 +401,7 @@ func (s *Service) UpdateAsset(ctx context.Context, input UpdateAssetInput) (doma
 	if existing.Status != persisted.Status {
 		metadata["previousStatus"] = existing.Status
 	}
+	metadata = withModelContextAudit(persisted, metadata)
 	if err := s.auditAsset(ctx, "atlas.asset.updated", persisted.ID, metadata); err != nil {
 		return domain.Asset{}, fmt.Errorf("audit asset update: %w", err)
 	}
@@ -616,6 +625,48 @@ func cloneSpecifications(values map[string]string) map[string]string {
 	return cloned
 }
 
+func snapshotModelContext(model domain.AssetModel, assetKind string, appliedAt time.Time) *domain.AssetModelContext {
+	if model.ID == "" {
+		return nil
+	}
+	context := &domain.AssetModelContext{
+		Manufacturer: model.Manufacturer, Name: model.Name, ModelNumber: model.ModelNumber, Kind: model.Kind,
+		VendorIdentifier: model.VendorIdentifier, Specifications: cloneSpecifications(model.Specifications),
+		SupportURL: model.SupportURL, WarrantyMonths: model.WarrantyMonths, UsefulLifeMonths: model.UsefulLifeMonths,
+		SourceSystemID: model.SourceSystemID, SourceRecordID: model.SourceRecordID, ModelRevision: model.Revision,
+		DefaultsEffectiveAt: model.UpdatedAt.UTC(), AppliedAt: appliedAt.UTC(), Overrides: []string{},
+	}
+	if assetKind != model.Kind {
+		context.Overrides = []string{"kind"}
+	}
+	return context
+}
+
+func updatedModelContext(existing domain.Asset, model domain.AssetModel, assetKind string, appliedAt time.Time) *domain.AssetModelContext {
+	if model.ID == "" {
+		return nil
+	}
+	if existing.ModelID != model.ID || existing.ModelContext == nil {
+		return snapshotModelContext(model, assetKind, appliedAt)
+	}
+	context := cloneModelContext(existing.ModelContext)
+	context.Overrides = []string{}
+	if assetKind != context.Kind {
+		context.Overrides = []string{"kind"}
+	}
+	return context
+}
+
+func cloneModelContext(value *domain.AssetModelContext) *domain.AssetModelContext {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	cloned.Specifications = cloneSpecifications(value.Specifications)
+	cloned.Overrides = append([]string{}, value.Overrides...)
+	return &cloned
+}
+
 func repeatedNormalizedValue(seen map[string]struct{}, value string) bool {
 	value = strings.ToLower(strings.TrimSpace(value))
 	if value == "" {
@@ -699,4 +750,15 @@ func modelAuditMetadata(model domain.AssetModel) map[string]string {
 		"manufacturer": model.Manufacturer, "modelNumber": model.ModelNumber,
 		"kind": model.Kind, "status": model.Status, "revision": fmt.Sprintf("%d", model.Revision),
 	}
+}
+
+func withModelContextAudit(asset domain.Asset, metadata map[string]string) map[string]string {
+	if asset.ModelContext == nil {
+		return metadata
+	}
+	metadata["modelId"] = asset.ModelID
+	metadata["modelRevision"] = fmt.Sprintf("%d", asset.ModelContext.ModelRevision)
+	metadata["modelOverrides"] = strings.Join(asset.ModelContext.Overrides, ",")
+	metadata["modelRequirementId"] = ModelRequirementID
+	return metadata
 }

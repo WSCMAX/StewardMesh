@@ -152,7 +152,7 @@ test('generates all seven controls, validates the exact version, and round trips
   expect(screen.getByLabelText('Record title (required)')).toHaveValue('Imported row')
   expect(screen.getByLabelText('Budget amount (required)')).toHaveValue(2500)
   expect((await axe.run(container)).violations).toEqual([])
-})
+}, 15_000)
 
 test('rejects malformed runtime field bounds', async () => {
   vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({

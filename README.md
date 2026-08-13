@@ -161,6 +161,13 @@ credential-free delivery handoff to Reach. See [Stack](docs/features/stack.md)
 and [Signals](docs/features/signals.md) for their ownership boundaries,
 permissions, APIs, security reviews, and validation coverage.
 
+Reach (`REQ-REACH-001`, `messaging.delivery`) turns those configured handoffs
+into explicitly confirmed email, Teams, or webhook delivery. Deployment-owned
+endpoints and external secret references keep routes and credentials out of the
+browser and database responses; bounded retries and sanitized history make each
+attempt reviewable. See [Reach](docs/features/reach.md) for adapter behavior,
+deployment configuration, permissions, security boundaries, and validation.
+
 People now provides sites, departments, person/shared/public/lab identities,
 structured site addresses, buildings and rooms, scoped directory search, and
 effective-dated multi-user asset assignments.

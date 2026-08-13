@@ -3,7 +3,7 @@ import type { GuideTopicID } from './guide'
 import { AreaIcon, MenuIcon, cx, panelClass, plainButtonClass, secondaryButtonClass, type AreaIconName } from './ui'
 import { scopeSummary, type PermissionAccess } from './workspaceAccess'
 
-// Requirements: REQ-WORKSPACE-001, REQ-SIGNALS-001, REQ-EXCHANGE-001. Features: experience.workspace, alerts.rules, migration.packages.
+// Requirements: REQ-WORKSPACE-001, REQ-SIGNALS-001, REQ-REACH-001, REQ-EXCHANGE-001. Features: experience.workspace, alerts.rules, messaging.delivery, migration.packages.
 
 export type WorkspaceAreaID = 'overview' | Exclude<GuideTopicID, 'workspace' | 'guide'>
 
@@ -31,7 +31,7 @@ type WorkspaceShellProps = {
   visitedAreas: ReadonlySet<WorkspaceAreaID>
 }
 
-const workspaceAreaIDs: readonly WorkspaceAreaID[] = ['overview', 'atlas', 'horizon', 'ledger', 'stack', 'signals', 'threads', 'vault', 'exchange', 'people', 'guard']
+const workspaceAreaIDs: readonly WorkspaceAreaID[] = ['overview', 'atlas', 'horizon', 'ledger', 'stack', 'signals', 'reach', 'threads', 'vault', 'exchange', 'people', 'guard']
 
 export function workspaceAreaFromHash(hash: string): WorkspaceAreaID {
   const candidate = hash.replace(/^#workspace-/, '')

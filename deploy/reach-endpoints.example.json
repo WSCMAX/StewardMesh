@@ -1,0 +1,46 @@
+[
+  {
+    "id": "operations-hook",
+    "label": "Operations signed webhook",
+    "kind": "webhook",
+    "url": "https://hooks.example.invalid/stewardmesh",
+    "testUrl": "https://hooks.example.invalid/health"
+  },
+  {
+    "id": "operations-smtp",
+    "label": "Operations SMTP relay",
+    "kind": "smtp",
+    "address": "smtp.example.invalid:587",
+    "serverName": "smtp.example.invalid",
+    "requireTls": true
+  },
+  {
+    "id": "operations-ses",
+    "label": "Operations Amazon SES",
+    "kind": "ses",
+    "url": "https://email.us-east-1.amazonaws.com/v2/email/outbound-emails",
+    "testUrl": "https://email.us-east-1.amazonaws.com/v2/email/account",
+    "region": "us-east-1"
+  },
+  {
+    "id": "operations-gmail",
+    "label": "Operations Gmail",
+    "kind": "gmail_oauth",
+    "url": "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+    "testUrl": "https://gmail.googleapis.com/gmail/v1/users/me/profile"
+  },
+  {
+    "id": "operations-outlook",
+    "label": "Operations Outlook",
+    "kind": "outlook_oauth",
+    "url": "https://graph.microsoft.com/v1.0/me/sendMail",
+    "testUrl": "https://graph.microsoft.com/v1.0/me"
+  },
+  {
+    "id": "operations-teams",
+    "label": "Operations Teams channel",
+    "kind": "teams",
+    "url": "https://graph.microsoft.com/v1.0/teams/replace-team-id/channels/replace-channel-id/messages",
+    "testUrl": "https://graph.microsoft.com/v1.0/me"
+  }
+]

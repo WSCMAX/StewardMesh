@@ -1,7 +1,7 @@
 package httpapi
 
 // Requirements: REQ-FOUNDATION-001, REQ-WORKSPACE-001, REQ-ATLAS-001, REQ-ATLAS-CODES-001, REQ-PEOPLE-001,
-// REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-STACK-001, REQ-HORIZON-001, REQ-SIGNALS-001, REQ-EXCHANGE-001, REQ-PLATFORM-VALKEY-001,
+// REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-STACK-001, REQ-HORIZON-001, REQ-SIGNALS-001, REQ-REACH-001, REQ-EXCHANGE-001, REQ-PLATFORM-VALKEY-001,
 // SEC-GUARD-001, SEC-HTTP-001. Features include experience.workspace and inventory.models.
 // Feature: migration.packages.
 
@@ -34,6 +34,7 @@ import (
 	"github.com/maxlemke/stewardmesh/internal/ledger"
 	"github.com/maxlemke/stewardmesh/internal/patterns"
 	"github.com/maxlemke/stewardmesh/internal/people"
+	"github.com/maxlemke/stewardmesh/internal/reach"
 	"github.com/maxlemke/stewardmesh/internal/signals"
 	"github.com/maxlemke/stewardmesh/internal/stack"
 	"github.com/maxlemke/stewardmesh/internal/storage"
@@ -65,6 +66,7 @@ type Dependencies struct {
 	Patterns            *patterns.Service
 	Signals             *signals.Service
 	Exchange            *exchange.Service
+	Reach               *reach.Service
 	Guard               *guard.Service
 	OIDC                *identity.OIDCFlow
 	SAML                *identity.SAMLFlow
@@ -86,6 +88,7 @@ type Server struct {
 	patterns            *patterns.Service
 	signals             *signals.Service
 	exchange            *exchange.Service
+	reach               *reach.Service
 	guard               *guard.Service
 	oidc                *identity.OIDCFlow
 	saml                *identity.SAMLFlow
@@ -172,6 +175,7 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 		patterns:            deps.Patterns,
 		signals:             deps.Signals,
 		exchange:            deps.Exchange,
+		reach:               deps.Reach,
 		guard:               deps.Guard,
 		oidc:                deps.OIDC,
 		saml:                deps.SAML,
@@ -320,6 +324,24 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 	mux.Handle("POST /api/v1/signals/subscriptions", server.protected(guard.PermissionSignalsWrite, true, server.createSignalSubscription))
 	mux.Handle("DELETE /api/v1/signals/subscriptions/{subscriptionID}", server.protected(guard.PermissionSignalsWrite, true, server.deleteSignalSubscription))
 	mux.Handle("GET /api/v1/signals/report.csv", server.protected(guard.PermissionSignalsRead, false, server.exportSignalsCSV))
+	mux.Handle("GET /api/v1/reach/endpoints", server.protected(guard.PermissionMessagingRead, false, server.listReachEndpoints))
+	mux.Handle("GET /api/v1/reach/providers", server.protected(guard.PermissionMessagingRead, false, server.listReachProviders))
+	mux.Handle("POST /api/v1/reach/providers", server.protected(guard.PermissionMessagingWrite, true, server.createReachProvider))
+	mux.Handle("PUT /api/v1/reach/providers/{providerID}", server.protected(guard.PermissionMessagingWrite, true, server.updateReachProvider))
+	mux.Handle("POST /api/v1/reach/providers/{providerID}/rotate-secret", server.protected(guard.PermissionMessagingWrite, true, server.rotateReachProviderSecret))
+	mux.Handle("POST /api/v1/reach/providers/{providerID}/test", server.protected(guard.PermissionMessagingWrite, true, server.testReachProvider))
+	mux.Handle("GET /api/v1/reach/providers/{providerID}/tests", server.protected(guard.PermissionMessagingRead, false, server.listReachProviderTests))
+	mux.Handle("GET /api/v1/reach/templates", server.protected(guard.PermissionMessagingRead, false, server.listReachTemplates))
+	mux.Handle("POST /api/v1/reach/templates", server.protected(guard.PermissionMessagingWrite, true, server.createReachTemplate))
+	mux.Handle("PUT /api/v1/reach/templates/{templateID}", server.protected(guard.PermissionMessagingWrite, true, server.updateReachTemplate))
+	mux.Handle("GET /api/v1/reach/groups", server.protected(guard.PermissionMessagingRead, false, server.listReachGroups))
+	mux.Handle("POST /api/v1/reach/groups", server.protected(guard.PermissionMessagingWrite, true, server.createReachGroup))
+	mux.Handle("PUT /api/v1/reach/groups/{groupID}", server.protected(guard.PermissionMessagingWrite, true, server.updateReachGroup))
+	mux.Handle("GET /api/v1/reach/messages", server.protected(guard.PermissionMessagingRead, false, server.listReachMessages))
+	mux.Handle("POST /api/v1/reach/messages/send", server.protected(guard.PermissionMessagingWrite, true, server.sendReachMessage))
+	mux.Handle("POST /api/v1/reach/messages/{messageID}/retry", server.protected(guard.PermissionMessagingWrite, true, server.retryReachMessage))
+	mux.Handle("GET /api/v1/reach/messages/{messageID}/attempts", server.protected(guard.PermissionMessagingRead, false, server.listReachMessageAttempts))
+	mux.Handle("POST /api/v1/reach/signals/process", server.protected(guard.PermissionMessagingWrite, true, server.processReachSignals))
 	mux.Handle("GET /api/v1/graph", server.protected("", false, server.graphView))
 	return server.correlation(server.securityHeaders(server.cors(mux)))
 }

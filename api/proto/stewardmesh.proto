@@ -231,6 +231,33 @@ service ExchangeService {
   rpc ImportExchangePackage(ImportExchangePackageRequest) returns (ImportExchangePackageResponse);
 }
 
+// Provider-safe messaging configuration, explicit delivery actions, and
+// sanitized history. Requirement: REQ-REACH-001. Feature: messaging.delivery.
+// Reads require messaging.read; mutations, connection tests, sends, retries,
+// secret-reference rotation, and Signals processing require messaging.write.
+// Endpoint locations, provider response bodies, and secret values are never
+// represented by this contract.
+service ReachService {
+  rpc ListEndpoints(ListReachEndpointsRequest) returns (ListReachEndpointsResponse);
+  rpc ListProviders(ListReachProvidersRequest) returns (ListReachProvidersResponse);
+  rpc CreateProvider(CreateReachProviderRequest) returns (ReachProvider);
+  rpc UpdateProvider(UpdateReachProviderRequest) returns (ReachProvider);
+  rpc RotateProviderSecret(RotateReachProviderSecretRequest) returns (ReachProvider);
+  rpc TestProvider(TestReachProviderRequest) returns (ReachProviderTest);
+  rpc ListProviderTests(ListReachProviderTestsRequest) returns (ListReachProviderTestsResponse);
+  rpc ListTemplates(ListReachTemplatesRequest) returns (ListReachTemplatesResponse);
+  rpc CreateTemplate(CreateReachTemplateRequest) returns (ReachTemplate);
+  rpc UpdateTemplate(UpdateReachTemplateRequest) returns (ReachTemplate);
+  rpc ListGroups(ListReachGroupsRequest) returns (ListReachGroupsResponse);
+  rpc CreateGroup(CreateReachGroupRequest) returns (ReachSubscriberGroup);
+  rpc UpdateGroup(UpdateReachGroupRequest) returns (ReachSubscriberGroup);
+  rpc ListMessages(ListReachMessagesRequest) returns (ListReachMessagesResponse);
+  rpc SendMessage(SendReachMessageRequest) returns (ReachMessage);
+  rpc RetryMessage(RetryReachMessageRequest) returns (ReachMessage);
+  rpc ListMessageAttempts(ListReachMessageAttemptsRequest) returns (ListReachMessageAttemptsResponse);
+  rpc ProcessSignals(ProcessReachSignalsRequest) returns (ReachProcessResult);
+}
+
 message GetOrganizationRequest {}
 
 message Organization {
@@ -2523,4 +2550,242 @@ message ImportExchangePackageResponse {
   // completed; no provider writes are repeated. Holding and failed receipts
   // may safely retry the exact archive after their blocker is resolved.
   bool replay = 2;
+}
+
+message ListReachEndpointsRequest {}
+
+message ListReachEndpointsResponse {
+  repeated ReachEndpoint items = 1;
+}
+
+message ReachEndpoint {
+  string id = 1;
+  string label = 2;
+  // smtp, ses, gmail_oauth, outlook_oauth, teams, or webhook.
+  string kind = 3;
+}
+
+message ListReachProvidersRequest {}
+
+message ListReachProvidersResponse {
+  repeated ReachProvider items = 1;
+}
+
+message ReachProvider {
+  string id = 1;
+  string organization_id = 2;
+  string name = 3;
+  string kind = 4;
+  string endpoint_id = 5;
+  string sender = 6;
+  // True indicates an external reference exists. Its identifier and resolved
+  // secret are intentionally omitted.
+  bool secret_configured = 7;
+  bool enabled = 8;
+  int64 revision = 9;
+  string created_by = 10;
+  string updated_by = 11;
+  google.protobuf.Timestamp created_at = 12;
+  google.protobuf.Timestamp updated_at = 13;
+}
+
+message CreateReachProviderRequest {
+  string id = 1;
+  string name = 2;
+  string kind = 3;
+  string endpoint_id = 4;
+  string sender = 5;
+  // An env: or external: reference under a deployment-owned resolver. Raw OAuth
+  // tokens, passwords, signing keys, and provider credentials are invalid.
+  string secret_ref = 6;
+  bool enabled = 7;
+}
+
+message UpdateReachProviderRequest {
+  string provider_id = 1;
+  string name = 2;
+  string sender = 3;
+  bool enabled = 4;
+  int64 revision = 5;
+}
+
+message RotateReachProviderSecretRequest {
+  string provider_id = 1;
+  // An env: or external: reference; never raw secret material.
+  string secret_ref = 2;
+  int64 revision = 3;
+  bool confirm = 4;
+}
+
+message TestReachProviderRequest {
+  string provider_id = 1;
+  bool confirm = 2;
+}
+
+message ListReachProviderTestsRequest {
+  string provider_id = 1;
+}
+
+message ListReachProviderTestsResponse {
+  repeated ReachProviderTest items = 1;
+}
+
+message ReachProviderTest {
+  string id = 1;
+  string provider_id = 2;
+  string outcome = 3;
+  // Sanitized stable code only; raw provider responses are prohibited.
+  string error_code = 4;
+  string tested_by = 5;
+  google.protobuf.Timestamp tested_at = 6;
+}
+
+message ListReachTemplatesRequest {}
+
+message ListReachTemplatesResponse {
+  repeated ReachTemplate items = 1;
+}
+
+message ReachTemplate {
+  string id = 1;
+  string organization_id = 2;
+  string name = 3;
+  string subject = 4;
+  string body = 5;
+  int64 revision = 6;
+  string created_by = 7;
+  string updated_by = 8;
+  google.protobuf.Timestamp created_at = 9;
+  google.protobuf.Timestamp updated_at = 10;
+}
+
+message CreateReachTemplateRequest {
+  string id = 1;
+  string name = 2;
+  // Plain text with allowlisted variables; markup is never interpreted.
+  string subject = 3;
+  string body = 4;
+}
+
+message UpdateReachTemplateRequest {
+  string template_id = 1;
+  string name = 2;
+  string subject = 3;
+  string body = 4;
+  int64 revision = 5;
+}
+
+message ReachRecipient {
+  // email or channel.
+  string kind = 1;
+  // Validated email address or stable channel identifier.
+  string address = 2;
+}
+
+message ListReachGroupsRequest {}
+
+message ListReachGroupsResponse {
+  repeated ReachSubscriberGroup items = 1;
+}
+
+message ReachSubscriberGroup {
+  string id = 1;
+  string organization_id = 2;
+  string name = 3;
+  string provider_id = 4;
+  string template_id = 5;
+  repeated ReachRecipient recipients = 6;
+  int64 revision = 7;
+  string created_by = 8;
+  string updated_by = 9;
+  google.protobuf.Timestamp created_at = 10;
+  google.protobuf.Timestamp updated_at = 11;
+}
+
+message CreateReachGroupRequest {
+  string id = 1;
+  string name = 2;
+  string provider_id = 3;
+  string template_id = 4;
+  repeated ReachRecipient recipients = 5;
+}
+
+message UpdateReachGroupRequest {
+  string group_id = 1;
+  string name = 2;
+  string provider_id = 3;
+  string template_id = 4;
+  repeated ReachRecipient recipients = 5;
+  int64 revision = 6;
+}
+
+message ListReachMessagesRequest {
+  int32 limit = 1;
+}
+
+message ListReachMessagesResponse {
+  repeated ReachMessage items = 1;
+}
+
+message ReachMessage {
+  string id = 1;
+  string organization_id = 2;
+  string group_id = 3;
+  string provider_id = 4;
+  string template_id = 5;
+  string source_kind = 6;
+  string source_id = 7;
+  string subject = 8;
+  string body = 9;
+  repeated ReachRecipient recipients = 10;
+  string status = 11;
+  int32 attempts = 12;
+  google.protobuf.Timestamp next_attempt_at = 13;
+  string last_error_code = 14;
+  string created_by = 15;
+  google.protobuf.Timestamp created_at = 16;
+  google.protobuf.Timestamp updated_at = 17;
+}
+
+message SendReachMessageRequest {
+  string group_id = 1;
+  google.protobuf.Struct variables = 2;
+  bool confirm = 3;
+  string idempotency_key = 4;
+}
+
+message RetryReachMessageRequest {
+  string message_id = 1;
+  bool confirm = 2;
+}
+
+message ListReachMessageAttemptsRequest {
+  string message_id = 1;
+}
+
+message ListReachMessageAttemptsResponse {
+  repeated ReachDeliveryAttempt items = 1;
+}
+
+message ReachDeliveryAttempt {
+  string id = 1;
+  string message_id = 2;
+  int32 attempt = 3;
+  string outcome = 4;
+  string error_code = 5;
+  bool retryable = 6;
+  google.protobuf.Timestamp next_attempt_at = 7;
+  google.protobuf.Timestamp occurred_at = 8;
+}
+
+message ProcessReachSignalsRequest {
+  bool confirm = 1;
+  int32 limit = 2;
+}
+
+message ReachProcessResult {
+  int32 examined = 1;
+  int32 delivered = 2;
+  int32 retrying = 3;
+  int32 failed = 4;
 }

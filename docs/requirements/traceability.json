@@ -607,6 +607,59 @@
       }
     },
     {
+      "requirementId": "REQ-REACH-001",
+      "featureId": "messaging.delivery",
+      "artifacts": {
+        "documentation": [
+          "README.md",
+          "docs/features/dictionary.md",
+          "docs/features/reach.md",
+          "docs/requirements/initial.md"
+        ],
+        "api": [
+          "api/openapi/openapi.yaml",
+          "api/proto/stewardmesh.proto"
+        ],
+        "code": [
+          "internal/application/application.go",
+          "internal/config/config.go",
+          "internal/guard/contracts.go",
+          "internal/httpapi/reach.go",
+          "internal/httpapi/server.go",
+          "internal/reach/contracts.go",
+          "internal/reach/http_transport.go",
+          "internal/reach/runtime.go",
+          "internal/reach/service.go",
+          "internal/reach/smtp_transport.go",
+          "internal/repository/memory_reach.go",
+          "internal/repository/postgres/reach.go"
+        ],
+        "schema": [
+          ".env.example",
+          "internal/repository/postgres/migrations/0033_reach_messaging.sql"
+        ],
+        "tests": [
+          "internal/httpapi/server_test.go",
+          "internal/reach/http_transport_test.go",
+          "internal/reach/runtime_test.go",
+          "internal/reach/service_test.go",
+          "internal/reach/smtp_transport_test.go",
+          "internal/repository/contracttest/reach.go",
+          "internal/repository/memory_reach_test.go",
+          "internal/repository/postgres/migrate_test.go",
+          "internal/repository/postgres/postgres_integration_test.go",
+          "web/src/ReachManager.test.tsx"
+        ],
+        "ui": [
+          "web/src/App.tsx",
+          "web/src/ReachManager.tsx",
+          "web/src/WorkspaceShell.tsx",
+          "web/src/documentation.ts",
+          "web/src/guide.ts"
+        ]
+      }
+    },
+    {
       "requirementId": "SEC-GUARD-001",
       "featureId": "authorization.security",
       "artifacts": {

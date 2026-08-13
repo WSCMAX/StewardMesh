@@ -13,3 +13,5 @@ Operational and financial alert rules, deduplicated action history, assignment, 
 Bounded dependency-aware `.openinventory` exports, idempotent imports, Vault
 file choices, holding outcomes, provenance, checksums, and Guard ownership
 claims are documented in [Exchange](exchange.md).
+
+Approved email, Teams, and signed-webhook adapters, external secret references, templates, subscriber groups, bounded retries, and sanitized history are documented in [Reach](reach.md).

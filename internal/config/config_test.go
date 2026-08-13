@@ -1,6 +1,6 @@
 package config
 
-// Requirements: REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005, REQ-STORAGE-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
+// Requirements: REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005, REQ-STORAGE-001, REQ-REACH-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
 
 import (
 	"strings"
@@ -146,6 +146,23 @@ func TestValidateRejectsUnsafeGrouperConfigurationWithoutLeakingSecrets(t *testi
 				t.Fatalf("Grouper configuration error leaked a credential: %v", err)
 			}
 		})
+	}
+}
+
+func TestLoadSupportsReachDeploymentReferences(t *testing.T) {
+	t.Setenv("STEWARDMESH_REPOSITORY_DRIVER", "memory")
+	t.Setenv("STEWARDMESH_REACH_ENDPOINTS_FILE", "deploy/reach-endpoints.example.json")
+	t.Setenv("STEWARDMESH_REACH_SECRET_PREFIX", "ORG_REACH_SECRET_")
+	configuration, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if configuration.ReachEndpointsFile != "deploy/reach-endpoints.example.json" || configuration.ReachSecretPrefix != "ORG_REACH_SECRET_" {
+		t.Fatalf("unexpected Reach configuration %#v", configuration)
+	}
+	configuration.ReachSecretPrefix = "unsafe-prefix"
+	if err := configuration.Validate(); err == nil || strings.Contains(err.Error(), "ORG_REACH") {
+		t.Fatalf("expected redacted invalid Reach prefix, got %v", err)
 	}
 }
 

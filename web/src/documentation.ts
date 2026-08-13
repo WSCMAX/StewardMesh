@@ -1,6 +1,6 @@
-// Requirements: REQ-DIRECTORY-EXPANSION-005, REQ-SIGNALS-001, REQ-EXCHANGE-001, DOC-001. Features: integrations.protocols, alerts.rules, migration.packages, experience.help.
+// Requirements: REQ-DIRECTORY-EXPANSION-005, REQ-SIGNALS-001, REQ-REACH-001, REQ-EXCHANGE-001, DOC-001. Features: integrations.protocols, alerts.rules, messaging.delivery, migration.packages, experience.help.
 
-export type DocumentationTopicID = 'overview' | 'workspace' | 'atlas' | 'horizon' | 'ledger' | 'stack' | 'signals' | 'threads' | 'vault' | 'exchange' | 'people' | 'guard' | 'guide'
+export type DocumentationTopicID = 'overview' | 'workspace' | 'atlas' | 'horizon' | 'ledger' | 'stack' | 'signals' | 'reach' | 'threads' | 'vault' | 'exchange' | 'people' | 'guard' | 'guide'
 
 export type DocumentationStep = {
   title: string
@@ -59,6 +59,7 @@ export const documentationPages: readonly DocumentationPage[] = [
           'Ledger owns vendors, purchases, contracts, commitments, costs, and budgets.',
           'Stack owns software products, installations, entitlements, assignments, and compliance conditions.',
           'Signals owns operational and financial alert rules, acknowledgment, assignment, and delivery handoffs.',
+          'Reach owns approved delivery adapters, templates, subscriber groups, confirmed sends, retries, and sanitized history.',
           'Threads owns hierarchical tags, strategic goals, links, and inheritance provenance.',
           'Vault owns private evidence metadata, integrity checks, and authorized downloads.',
           'Exchange owns bounded migration package assembly, validation, import receipts, and holding outcomes.',
@@ -282,7 +283,46 @@ export const documentationPages: readonly DocumentationPage[] = [
         paragraphs: ['Signals reads require signals.read and every rule, evaluation, acknowledgment, assignment, and subscription change requires signals.write plus the current CSRF token. Audit records identify the requirement and feature without copying sensitive source payloads.'],
       },
     ],
-    related: ['ledger', 'horizon', 'stack'],
+    related: ['reach', 'ledger', 'horizon'],
+  },
+  {
+    id: 'reach',
+    group: 'Product areas',
+    kicker: 'Message delivery',
+    title: 'Reach',
+    summary: 'Configure approved delivery adapters, reusable plain-text templates, subscriber groups, confirmed sends, and sanitized retry history.',
+    appHref: '#workspace-reach',
+    appLabel: 'Open Reach',
+    searchTerms: ['email', 'smtp', 'ses', 'gmail', 'outlook', 'teams', 'webhook', 'delivery', 'retry', 'subscriber', 'template'],
+    sections: [
+      {
+        id: 'providers',
+        title: 'Select deployment-approved providers',
+        paragraphs: ['Operators choose endpoint IDs from deployment configuration. The browser cannot submit or discover provider URLs, SMTP addresses, cloud regions, OAuth tokens, or credentials. Gmail and Outlook use OAuth bearer references; SES uses SigV4 credentials; SMTP uses a structured external credential; Teams and generic webhooks use fixed routes.'],
+        callout: { title: 'References, never secrets', body: 'Enter a stable env: or external: reference. Secret values remain in the deployment secret system and are resolved only for the outbound call.', tone: 'warning' },
+      },
+      {
+        id: 'compose',
+        title: 'Compose reusable delivery policy',
+        steps: [
+          { title: 'Create a plain-text template', body: 'Use only title, summary, severity, record_id, and organization tokens. HTML and unknown template expressions are rejected.' },
+          { title: 'Create a subscriber group', body: 'Pair one enabled provider and template with validated email recipients or configured Teams channel IDs.' },
+          { title: 'Confirm the external action', body: 'Provider tests, manual sends, secret-reference rotations, retries, and pending Signals processing require an explicit confirmation and messaging.write access.' },
+        ],
+      },
+      {
+        id: 'history',
+        title: 'Review bounded retry history',
+        paragraphs: ['Each attempt records a provider-neutral outcome and sanitized error code. Retryable failures use exponential delays beginning at five minutes, capped at 24 hours, and stop after eight attempts. Provider response bodies, exception text, endpoint routes, and credentials are never retained in delivery history.'],
+      },
+      {
+        id: 'security',
+        title: 'Understand outbound protections',
+        bullets: ['Fixed HTTPS endpoints prevent callers from turning Reach into an arbitrary network client; HTTP and relaxed SMTP TLS are restricted to explicit loopback fixtures.', 'Webhook deliveries carry a timestamp, nonce, and HMAC-SHA256 signature; receivers should reject stale timestamps and repeated nonces.', 'Outbound clients use bounded timeouts, reject redirects, and discard bounded response bodies.', 'messaging.read protects configuration and history; messaging.write plus CSRF protects every mutation.'],
+        callout: { title: 'Adapter status', body: 'StewardMesh validates adapter request contracts with deterministic mocks. These adapters are not claimed as externally certified against every provider tenant or licensing configuration.', tone: 'info' },
+      },
+    ],
+    related: ['signals', 'guard', 'guide'],
   },
   {
     id: 'threads',

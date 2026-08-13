@@ -1,4 +1,4 @@
-# Requirements: REQ-ATLAS-001, REQ-ATLAS-MODELS-001, REQ-ATLAS-CODES-001, REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-HORIZON-001, REQ-LEDGER-001, REQ-STACK-001, REQ-SIGNALS-001, REQ-EXCHANGE-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
+# Requirements: REQ-ATLAS-001, REQ-ATLAS-MODELS-001, REQ-ATLAS-CODES-001, REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-HORIZON-001, REQ-LEDGER-001, REQ-STACK-001, REQ-SIGNALS-001, REQ-REACH-001, REQ-EXCHANGE-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
 openapi: 3.1.0
 info:
   title: StewardMesh API
@@ -3080,6 +3080,265 @@ paths:
         '500': {$ref: '#/components/responses/InternalError'}
         '503': {$ref: '#/components/responses/ServiceUnavailable'}
 
+  /api/v1/reach/endpoints:
+    get:
+      summary: List deployment-owned Reach endpoint choices
+      description: Network locations and credentials are excluded from this response.
+      operationId: listReachEndpoints
+      tags: [Reach]
+      x-requirement: REQ-REACH-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200': {description: Safe endpoint metadata, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/ReachEndpointCollection'}}}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /api/v1/reach/providers:
+    get:
+      summary: List redacted messaging provider configurations
+      operationId: listReachProviders
+      tags: [Reach]
+      x-requirement: REQ-REACH-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200': {description: Provider configurations without secret references or endpoint addresses, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/ReachProviderCollection'}}}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+    post:
+      summary: Configure a provider using fixed endpoint and external secret references
+      operationId: createReachProvider
+      tags: [Reach]
+      x-requirement: REQ-REACH-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CreateReachProviderRequest'}}}}
+      responses:
+        '201': {description: Redacted provider configuration created, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/ReachProvider'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+  /api/v1/reach/providers/{providerId}:
+    parameters: [{in: path, name: providerId, required: true, schema: {$ref: '#/components/schemas/ReachID'}}]
+    put:
+      summary: Update non-secret provider metadata
+      operationId: updateReachProvider
+      tags: [Reach]
+      x-requirement: REQ-REACH-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UpdateReachProviderRequest'}}}}
+      responses:
+        '200': {description: Provider updated, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/ReachProvider'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/reach/providers/{providerId}/rotate-secret:
+    parameters: [{in: path, name: providerId, required: true, schema: {$ref: '#/components/schemas/ReachID'}}]
+    post:
+      summary: Rotate an external provider secret reference
+      operationId: rotateReachProviderSecret
+      tags: [Reach]
+      x-requirement: REQ-REACH-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/RotateReachSecretRequest'}}}}
+      responses:
+        '200': {description: Secret reference rotated and response redacted, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/ReachProvider'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/reach/providers/{providerId}/test:
+    parameters: [{in: path, name: providerId, required: true, schema: {$ref: '#/components/schemas/ReachID'}}]
+    post:
+      summary: Explicitly test a configured provider connection
+      operationId: testReachProvider
+      tags: [Reach]
+      x-requirement: REQ-REACH-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ReachConfirmedAction'}}}}
+      responses:
+        '200': {description: Sanitized connection result, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/ReachProviderTest'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/reach/providers/{providerId}/tests:
+    parameters: [{in: path, name: providerId, required: true, schema: {$ref: '#/components/schemas/ReachID'}}]
+    get:
+      summary: List sanitized provider connection history
+      operationId: listReachProviderTests
+      tags: [Reach]
+      x-requirement: REQ-REACH-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200': {description: Provider test history, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/ReachProviderTestCollection'}}}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/reach/templates:
+    get:
+      summary: List plain-text Reach templates
+      operationId: listReachTemplates
+      tags: [Reach]
+      x-requirement: REQ-REACH-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200': {description: Bounded templates, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/ReachTemplateCollection'}}}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+    post:
+      summary: Create an allowlisted plain-text template
+      operationId: createReachTemplate
+      tags: [Reach]
+      x-requirement: REQ-REACH-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CreateReachTemplateRequest'}}}}
+      responses:
+        '201': {description: Template created, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/ReachTemplate'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/reach/templates/{templateId}:
+    parameters: [{in: path, name: templateId, required: true, schema: {$ref: '#/components/schemas/ReachID'}}]
+    put:
+      summary: Update a Reach template with optimistic concurrency
+      operationId: updateReachTemplate
+      tags: [Reach]
+      x-requirement: REQ-REACH-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UpdateReachTemplateRequest'}}}}
+      responses:
+        '200': {description: Template updated, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/ReachTemplate'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/reach/groups:
+    get:
+      summary: List Reach subscriber groups
+      operationId: listReachGroups
+      tags: [Reach]
+      x-requirement: REQ-REACH-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200': {description: Subscriber groups and safe recipients, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/ReachGroupCollection'}}}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+    post:
+      summary: Create a provider-backed subscriber group
+      operationId: createReachGroup
+      tags: [Reach]
+      x-requirement: REQ-REACH-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CreateReachGroupRequest'}}}}
+      responses:
+        '201': {description: Subscriber group created, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/ReachGroup'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/reach/groups/{groupId}:
+    parameters: [{in: path, name: groupId, required: true, schema: {$ref: '#/components/schemas/ReachID'}}]
+    put:
+      summary: Update a Reach subscriber group
+      operationId: updateReachGroup
+      tags: [Reach]
+      x-requirement: REQ-REACH-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UpdateReachGroupRequest'}}}}
+      responses:
+        '200': {description: Subscriber group updated, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/ReachGroup'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/reach/messages:
+    get:
+      summary: List Reach delivery history
+      operationId: listReachMessages
+      tags: [Reach]
+      x-requirement: REQ-REACH-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{in: query, name: limit, required: false, schema: {type: integer, minimum: 1, maximum: 500, default: 100}}]
+      responses:
+        '200': {description: Redacted delivery history, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/ReachMessageCollection'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /api/v1/reach/messages/send:
+    post:
+      summary: Explicitly render and send a group message
+      operationId: sendReachMessage
+      tags: [Reach]
+      x-requirement: REQ-REACH-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}, {$ref: '#/components/parameters/ReachIdempotencyKey'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/SendReachMessageRequest'}}}}
+      responses:
+        '202': {description: Message attempted or returned from an idempotent replay, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/ReachMessage'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/reach/messages/{messageId}/retry:
+    parameters: [{in: path, name: messageId, required: true, schema: {$ref: '#/components/schemas/ReachID'}}]
+    post:
+      summary: Explicitly retry a non-delivered message
+      operationId: retryReachMessage
+      tags: [Reach]
+      x-requirement: REQ-REACH-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ReachConfirmedAction'}}}}
+      responses:
+        '200': {description: Updated delivery result, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/ReachMessage'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/reach/messages/{messageId}/attempts:
+    parameters: [{in: path, name: messageId, required: true, schema: {$ref: '#/components/schemas/ReachID'}}]
+    get:
+      summary: List immutable sanitized delivery attempts
+      operationId: listReachMessageAttempts
+      tags: [Reach]
+      x-requirement: REQ-REACH-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200': {description: Delivery attempt history, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/ReachAttemptCollection'}}}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/reach/signals/process:
+    post:
+      summary: Explicitly process due Signals delivery work
+      operationId: processReachSignals
+      tags: [Reach]
+      x-requirement: REQ-REACH-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ProcessReachSignalsRequest'}}}}
+      responses:
+        '200': {description: Sanitized delivery totals, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/ReachProcessResult'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
 components:
   securitySchemes:
     localCookieAuth:
@@ -3246,6 +3505,13 @@ components:
         type: string
         minLength: 8
         maxLength: 200
+    ReachIdempotencyKey:
+      in: header
+      name: Idempotency-Key
+      required: false
+      description: Optional caller-generated stable identifier that prevents a confirmed manual send from invoking its provider more than once.
+      schema:
+        $ref: '#/components/schemas/ReachID'
   responses:
     InvalidRequest:
       description: Invalid or malformed request
@@ -5656,6 +5922,271 @@ components:
         replay:
           type: boolean
           description: True only for the exact package ID and archive digest after an earlier completed import. Holding and failed receipts may safely retry the exact archive after dependencies or transient errors are resolved.
+    ReachID:
+      type: string
+      pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+    ReachProviderKind:
+      type: string
+      enum: [smtp, ses, gmail_oauth, outlook_oauth, teams, webhook]
+    ReachEndpoint:
+      type: object
+      additionalProperties: false
+      required: [id, label, kind]
+      properties:
+        id: {$ref: '#/components/schemas/ReachID'}
+        label: {type: string, minLength: 1, maxLength: 160}
+        kind: {$ref: '#/components/schemas/ReachProviderKind'}
+    ReachEndpointCollection:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items: {type: array, maxItems: 50, items: {$ref: '#/components/schemas/ReachEndpoint'}}
+    ReachProvider:
+      type: object
+      additionalProperties: false
+      required: [id, organizationId, name, kind, endpointId, secretConfigured, enabled, revision, createdBy, updatedBy, createdAt, updatedAt]
+      properties:
+        id: {$ref: '#/components/schemas/ReachID'}
+        organizationId: {$ref: '#/components/schemas/ReachID'}
+        name: {type: string, minLength: 1, maxLength: 160}
+        kind: {$ref: '#/components/schemas/ReachProviderKind'}
+        endpointId: {$ref: '#/components/schemas/ReachID'}
+        sender: {type: string, format: email, maxLength: 320}
+        secretConfigured: {type: boolean, description: Indicates an external reference exists; the reference and secret value are never returned.}
+        enabled: {type: boolean}
+        revision: {type: integer, format: int64, minimum: 1}
+        createdBy: {type: string, minLength: 1, maxLength: 200}
+        updatedBy: {type: string, minLength: 1, maxLength: 200}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    ReachProviderCollection:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items: {type: array, maxItems: 50, items: {$ref: '#/components/schemas/ReachProvider'}}
+    CreateReachProviderRequest:
+      type: object
+      additionalProperties: false
+      required: [name, kind, endpointId, secretRef]
+      properties:
+        id: {$ref: '#/components/schemas/ReachID'}
+        name: {type: string, minLength: 1, maxLength: 160}
+        kind: {$ref: '#/components/schemas/ReachProviderKind'}
+        endpointId: {$ref: '#/components/schemas/ReachID'}
+        sender: {type: string, format: email, maxLength: 320}
+        secretRef:
+          type: string
+          pattern: '^(env|external):[A-Za-z0-9][A-Za-z0-9._-]{0,95}$'
+          description: Explicit environment or injected external secret reference; never a credential value.
+        enabled: {type: boolean, default: true}
+    UpdateReachProviderRequest:
+      type: object
+      additionalProperties: false
+      required: [name, enabled, revision]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 160}
+        sender: {type: string, format: email, maxLength: 320}
+        enabled: {type: boolean}
+        revision: {type: integer, format: int64, minimum: 1}
+    RotateReachSecretRequest:
+      type: object
+      additionalProperties: false
+      required: [secretRef, revision, confirm]
+      properties:
+        secretRef:
+          type: string
+          pattern: '^(env|external):[A-Za-z0-9][A-Za-z0-9._-]{0,95}$'
+          description: New explicit environment or injected external reference; raw secret material is not accepted.
+        revision: {type: integer, format: int64, minimum: 1}
+        confirm: {type: boolean, const: true}
+    ReachConfirmedAction:
+      type: object
+      additionalProperties: false
+      required: [confirm]
+      properties:
+        confirm: {type: boolean, const: true}
+    ReachProviderTest:
+      type: object
+      additionalProperties: false
+      required: [id, providerId, outcome, testedBy, testedAt]
+      properties:
+        id: {$ref: '#/components/schemas/ReachID'}
+        providerId: {$ref: '#/components/schemas/ReachID'}
+        outcome: {type: string, enum: [succeeded, failed]}
+        errorCode: {type: string, pattern: '^[a-z][a-z0-9_]{0,63}$'}
+        testedBy: {type: string, minLength: 1, maxLength: 200}
+        testedAt: {type: string, format: date-time}
+    ReachProviderTestCollection:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items: {type: array, maxItems: 100, items: {$ref: '#/components/schemas/ReachProviderTest'}}
+    ReachTemplate:
+      type: object
+      additionalProperties: false
+      required: [id, organizationId, name, subject, body, revision, createdBy, updatedBy, createdAt, updatedAt]
+      properties:
+        id: {$ref: '#/components/schemas/ReachID'}
+        organizationId: {$ref: '#/components/schemas/ReachID'}
+        name: {type: string, minLength: 1, maxLength: 160}
+        subject: {type: string, minLength: 1, maxLength: 200}
+        body: {type: string, minLength: 1, maxLength: 4000}
+        revision: {type: integer, format: int64, minimum: 1}
+        createdBy: {type: string, minLength: 1, maxLength: 200}
+        updatedBy: {type: string, minLength: 1, maxLength: 200}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    ReachTemplateCollection:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items: {type: array, maxItems: 100, items: {$ref: '#/components/schemas/ReachTemplate'}}
+    CreateReachTemplateRequest:
+      type: object
+      additionalProperties: false
+      required: [name, subject, body]
+      properties:
+        id: {$ref: '#/components/schemas/ReachID'}
+        name: {type: string, minLength: 1, maxLength: 160}
+        subject: {type: string, minLength: 1, maxLength: 200, description: Plain text with allowlisted double-brace variables.}
+        body: {type: string, minLength: 1, maxLength: 4000, description: Plain text with allowlisted double-brace variables; HTML is never interpreted.}
+    UpdateReachTemplateRequest:
+      type: object
+      additionalProperties: false
+      required: [name, subject, body, revision]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 160}
+        subject: {type: string, minLength: 1, maxLength: 200}
+        body: {type: string, minLength: 1, maxLength: 4000}
+        revision: {type: integer, format: int64, minimum: 1}
+    ReachRecipient:
+      type: object
+      additionalProperties: false
+      required: [kind, address]
+      properties:
+        kind: {type: string, enum: [email, channel]}
+        address: {type: string, minLength: 1, maxLength: 320, description: Validated email address or stable configured channel identifier.}
+    ReachGroup:
+      type: object
+      additionalProperties: false
+      required: [id, organizationId, name, providerId, templateId, recipients, revision, createdBy, updatedBy, createdAt, updatedAt]
+      properties:
+        id: {$ref: '#/components/schemas/ReachID'}
+        organizationId: {$ref: '#/components/schemas/ReachID'}
+        name: {type: string, minLength: 1, maxLength: 160}
+        providerId: {$ref: '#/components/schemas/ReachID'}
+        templateId: {$ref: '#/components/schemas/ReachID'}
+        recipients: {type: array, minItems: 1, maxItems: 100, uniqueItems: true, items: {$ref: '#/components/schemas/ReachRecipient'}}
+        revision: {type: integer, format: int64, minimum: 1}
+        createdBy: {type: string, minLength: 1, maxLength: 200}
+        updatedBy: {type: string, minLength: 1, maxLength: 200}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    ReachGroupCollection:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items: {type: array, maxItems: 100, items: {$ref: '#/components/schemas/ReachGroup'}}
+    CreateReachGroupRequest:
+      type: object
+      additionalProperties: false
+      required: [name, providerId, templateId, recipients]
+      properties:
+        id: {$ref: '#/components/schemas/ReachID'}
+        name: {type: string, minLength: 1, maxLength: 160}
+        providerId: {$ref: '#/components/schemas/ReachID'}
+        templateId: {$ref: '#/components/schemas/ReachID'}
+        recipients: {type: array, minItems: 1, maxItems: 100, uniqueItems: true, items: {$ref: '#/components/schemas/ReachRecipient'}}
+    UpdateReachGroupRequest:
+      type: object
+      additionalProperties: false
+      required: [name, providerId, templateId, recipients, revision]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 160}
+        providerId: {$ref: '#/components/schemas/ReachID'}
+        templateId: {$ref: '#/components/schemas/ReachID'}
+        recipients: {type: array, minItems: 1, maxItems: 100, uniqueItems: true, items: {$ref: '#/components/schemas/ReachRecipient'}}
+        revision: {type: integer, format: int64, minimum: 1}
+    ReachMessage:
+      type: object
+      additionalProperties: false
+      required: [id, organizationId, providerId, sourceKind, subject, body, recipients, status, attempts, createdBy, createdAt, updatedAt]
+      properties:
+        id: {$ref: '#/components/schemas/ReachID'}
+        organizationId: {$ref: '#/components/schemas/ReachID'}
+        groupId: {$ref: '#/components/schemas/ReachID'}
+        providerId: {$ref: '#/components/schemas/ReachID'}
+        templateId: {$ref: '#/components/schemas/ReachID'}
+        sourceKind: {type: string, enum: [manual, signals]}
+        sourceId: {$ref: '#/components/schemas/ReachID'}
+        subject: {type: string, minLength: 1, maxLength: 200}
+        body: {type: string, minLength: 1, maxLength: 4000}
+        recipients: {type: array, maxItems: 100, items: {$ref: '#/components/schemas/ReachRecipient'}}
+        status: {type: string, enum: [queued, retrying, delivered, failed]}
+        attempts: {type: integer, minimum: 0, maximum: 8}
+        nextAttemptAt: {type: string, format: date-time}
+        lastErrorCode: {type: string, pattern: '^[a-z][a-z0-9_]{0,63}$'}
+        createdBy: {type: string, minLength: 1, maxLength: 200}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    ReachMessageCollection:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items: {type: array, maxItems: 500, items: {$ref: '#/components/schemas/ReachMessage'}}
+    SendReachMessageRequest:
+      type: object
+      additionalProperties: false
+      required: [groupId, confirm]
+      properties:
+        groupId: {$ref: '#/components/schemas/ReachID'}
+        variables:
+          type: object
+          maxProperties: 5
+          propertyNames: {enum: [title, summary, severity, record_id, organization]}
+          additionalProperties: {type: string, minLength: 1, maxLength: 500}
+        confirm: {type: boolean, const: true}
+    ReachDeliveryAttempt:
+      type: object
+      additionalProperties: false
+      required: [id, messageId, attempt, outcome, retryable, occurredAt]
+      properties:
+        id: {type: string, pattern: '^[a-f0-9]{32}$'}
+        messageId: {$ref: '#/components/schemas/ReachID'}
+        attempt: {type: integer, minimum: 1, maximum: 8}
+        outcome: {type: string, enum: [succeeded, retrying, failed]}
+        errorCode: {type: string, pattern: '^[a-z][a-z0-9_]{0,63}$'}
+        retryable: {type: boolean}
+        nextAttemptAt: {type: string, format: date-time}
+        occurredAt: {type: string, format: date-time}
+    ReachAttemptCollection:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items: {type: array, maxItems: 8, items: {$ref: '#/components/schemas/ReachDeliveryAttempt'}}
+    ProcessReachSignalsRequest:
+      type: object
+      additionalProperties: false
+      required: [confirm]
+      properties:
+        confirm: {type: boolean, const: true}
+        limit: {type: integer, minimum: 1, maximum: 500, default: 100}
+    ReachProcessResult:
+      type: object
+      additionalProperties: false
+      required: [examined, delivered, retrying, failed]
+      properties:
+        examined: {type: integer, minimum: 0, maximum: 500}
+        delivered: {type: integer, minimum: 0, maximum: 500}
+        retrying: {type: integer, minimum: 0, maximum: 500}
+        failed: {type: integer, minimum: 0, maximum: 500}
     Tag:
       type: object
       additionalProperties: false

@@ -1,5 +1,5 @@
 // Package config loads and validates provider-neutral StewardMesh settings.
-// Requirements: REQ-FOUNDATION-001, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005, REQ-STORAGE-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
+// Requirements: REQ-FOUNDATION-001, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005, REQ-STORAGE-001, REQ-REACH-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
 package config
 
 import (
@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -87,6 +88,8 @@ type Config struct {
 	SailPointBaseURL            string
 	SailPointClientID           string
 	SailPointClientSecret       string
+	ReachEndpointsFile          string
+	ReachSecretPrefix           string
 	AllowedOrigin               string
 	OrganizationID              string
 	OrganizationName            string
@@ -194,6 +197,8 @@ func FromEnv() Config {
 		SailPointBaseURL:            os.Getenv("STEWARDMESH_SAILPOINT_BASE_URL"),
 		SailPointClientID:           os.Getenv("STEWARDMESH_SAILPOINT_CLIENT_ID"),
 		SailPointClientSecret:       os.Getenv("STEWARDMESH_SAILPOINT_CLIENT_SECRET"),
+		ReachEndpointsFile:          os.Getenv("STEWARDMESH_REACH_ENDPOINTS_FILE"),
+		ReachSecretPrefix:           envOr("STEWARDMESH_REACH_SECRET_PREFIX", "STEWARDMESH_REACH_SECRET_"),
 		AllowedOrigin:               allowedOrigin,
 		OrganizationID:              organizationID,
 		OrganizationName:            envOr("STEWARDMESH_ORGANIZATION_NAME", "StewardMesh Local Organization"),
@@ -318,6 +323,12 @@ func (c Config) Validate() error {
 	}
 	if err := c.validateGrouper(); err != nil {
 		return err
+	}
+	if len(c.ReachEndpointsFile) > 1024 || strings.ContainsRune(c.ReachEndpointsFile, '\x00') {
+		return errors.New("STEWARDMESH_REACH_ENDPOINTS_FILE is invalid")
+	}
+	if !regexp.MustCompile(`^[A-Z][A-Z0-9_]{2,63}$`).MatchString(c.ReachSecretPrefix) {
+		return errors.New("STEWARDMESH_REACH_SECRET_PREFIX must be an uppercase environment-variable prefix")
 	}
 	if c.SessionTTL < 15*time.Minute || c.SessionTTL > 24*time.Hour {
 		return errors.New("STEWARDMESH_SESSION_TTL must be between 15m and 24h")

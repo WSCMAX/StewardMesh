@@ -1,6 +1,6 @@
 // Package application constructs StewardMesh's transport-neutral HTTP
 // application and owns the lifecycle of its shared runtime dependencies.
-// Requirements: REQ-FOUNDATION-001, REQ-ATLAS-001, REQ-ATLAS-CODES-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-STACK-001, REQ-HORIZON-001, REQ-SIGNALS-001, REQ-EXCHANGE-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001.
+// Requirements: REQ-FOUNDATION-001, REQ-ATLAS-001, REQ-ATLAS-CODES-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-STACK-001, REQ-HORIZON-001, REQ-SIGNALS-001, REQ-REACH-001, REQ-EXCHANGE-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001.
 // Feature: migration.packages.
 package application
 
@@ -30,6 +30,7 @@ import (
 	"github.com/maxlemke/stewardmesh/internal/ledger"
 	"github.com/maxlemke/stewardmesh/internal/patterns"
 	"github.com/maxlemke/stewardmesh/internal/people"
+	"github.com/maxlemke/stewardmesh/internal/reach"
 	"github.com/maxlemke/stewardmesh/internal/repository"
 	postgresrepository "github.com/maxlemke/stewardmesh/internal/repository/postgres"
 	"github.com/maxlemke/stewardmesh/internal/signals"
@@ -45,6 +46,9 @@ import (
 type Options struct {
 	RunMigrations       bool
 	DirectoryConnectors []directoryexpansion.Connector
+	ReachEndpoints      []reach.Endpoint
+	ReachSecrets        reach.SecretResolver
+	ReachTransports     *reach.TransportRegistry
 }
 
 // Application is a reusable StewardMesh HTTP application. It does not own an
@@ -262,6 +266,35 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 	if err != nil {
 		return fail(fmt.Errorf("initialize Signals: %w", err))
 	}
+	reachEndpoints := append([]reach.Endpoint(nil), options.ReachEndpoints...)
+	if options.ReachEndpoints == nil {
+		reachEndpoints, err = reach.LoadEndpointsFile(cfg.ReachEndpointsFile)
+		if err != nil {
+			return fail(fmt.Errorf("initialize Reach endpoints: %w", err))
+		}
+	}
+	reachEndpointCatalog, err := reach.NewEndpointCatalog(reachEndpoints)
+	if err != nil {
+		return fail(fmt.Errorf("initialize Reach endpoint catalog: %w", err))
+	}
+	reachSecrets := options.ReachSecrets
+	if reachSecrets == nil {
+		reachSecrets, err = reach.NewEnvironmentSecretResolver(cfg.ReachSecretPrefix)
+		if err != nil {
+			return fail(fmt.Errorf("initialize Reach secret resolver: %w", err))
+		}
+	}
+	reachTransports := options.ReachTransports
+	if reachTransports == nil {
+		reachTransports, err = reach.DefaultTransportRegistry(nil)
+		if err != nil {
+			return fail(fmt.Errorf("initialize Reach transports: %w", err))
+		}
+	}
+	reachService, err := reach.NewService(runtime.reachStore, reachEndpointCatalog, reachTransports, reachSecrets, signalsService, runtime.auditor, reach.ServiceConfig{OrganizationID: cfg.OrganizationID})
+	if err != nil {
+		return fail(fmt.Errorf("initialize Reach: %w", err))
+	}
 	patternsService, err := patterns.NewService(runtime.patternsStore, runtime.auditor, patterns.ServiceConfig{OrganizationID: cfg.OrganizationID})
 	if err != nil {
 		return fail(fmt.Errorf("initialize Patterns: %w", err))
@@ -299,6 +332,7 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 		Stack:               stackService,
 		Horizon:             horizonService,
 		Signals:             signalsService,
+		Reach:               reachService,
 		Patterns:            patternsService,
 		Exchange:            exchangeService,
 		Guard:               guardService,
@@ -354,6 +388,7 @@ type foundationRuntime struct {
 	stackStore           stack.Store
 	horizonStore         horizon.Store
 	signalsStore         signals.Store
+	reachStore           reach.Store
 	patternsStore        patterns.Store
 	guardStore           guard.Store
 	peopleStore          people.Store
@@ -429,6 +464,7 @@ func initializeFoundation(ctx context.Context, cfg config.Config, runMigrations 
 		stackStore           stack.Store
 		horizonStore         horizon.Store
 		signalsStore         signals.Store
+		reachStore           reach.Store
 		patternsStore        patterns.Store
 		guardStore           guard.Store
 		peopleStore          people.Store
@@ -452,6 +488,7 @@ func initializeFoundation(ctx context.Context, cfg config.Config, runMigrations 
 		stackStore = repository.NewMemoryStackStore()
 		horizonStore = repository.NewMemoryHorizonStore()
 		signalsStore = repository.NewMemorySignalsStore()
+		reachStore = repository.NewMemoryReachStore()
 		patternsStore = repository.NewMemoryPatternsStore()
 	case config.RepositoryDriverPostgres:
 		database, err := postgresrepository.Open(ctx, cfg.DatabaseURL)
@@ -535,6 +572,11 @@ func initializeFoundation(ctx context.Context, cfg config.Config, runMigrations 
 			_ = database.Close()
 			return foundationRuntime{}, err
 		}
+		reachStore, err = postgresrepository.NewReachStore(database)
+		if err != nil {
+			_ = database.Close()
+			return foundationRuntime{}, err
+		}
 		patternsStore, err = postgresrepository.NewPatternsStore(database)
 		if err != nil {
 			_ = database.Close()
@@ -596,6 +638,7 @@ func initializeFoundation(ctx context.Context, cfg config.Config, runMigrations 
 		stackStore:           stackStore,
 		horizonStore:         horizonStore,
 		signalsStore:         signalsStore,
+		reachStore:           reachStore,
 		patternsStore:        patternsStore,
 		guardStore:           guardStore,
 		peopleStore:          peopleStore,

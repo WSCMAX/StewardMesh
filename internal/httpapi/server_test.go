@@ -1,7 +1,7 @@
 package httpapi
 
 // Requirements: REQ-FOUNDATION-001, REQ-WORKSPACE-001, REQ-ATLAS-001, REQ-ATLAS-MODELS-001, REQ-ATLAS-CODES-001, REQ-PEOPLE-001,
-// REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-005, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-STACK-001, REQ-HORIZON-001, REQ-SIGNALS-001, REQ-PLATFORM-VALKEY-001,
+// REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-005, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-STACK-001, REQ-HORIZON-001, REQ-SIGNALS-001, REQ-REACH-001, REQ-EXCHANGE-001, REQ-PLATFORM-VALKEY-001,
 // SEC-GUARD-001, SEC-HTTP-001. Features include experience.workspace.
 
 import (
@@ -33,6 +33,7 @@ import (
 	"github.com/maxlemke/stewardmesh/internal/ledger"
 	"github.com/maxlemke/stewardmesh/internal/patterns"
 	"github.com/maxlemke/stewardmesh/internal/people"
+	"github.com/maxlemke/stewardmesh/internal/reach"
 	"github.com/maxlemke/stewardmesh/internal/repository"
 	"github.com/maxlemke/stewardmesh/internal/signals"
 	"github.com/maxlemke/stewardmesh/internal/stack"
@@ -74,6 +75,22 @@ func (allowHTTPThreadTargets) ValidateThreadTarget(context.Context, string, thre
 }
 
 type allowHTTPLedgerReferences struct{}
+
+type httpReachSecrets struct{}
+
+func (httpReachSecrets) Resolve(context.Context, string) ([]byte, error) {
+	return []byte("01234567890123456789012345678901"), nil
+}
+
+type httpReachTransport struct{}
+
+func (httpReachTransport) Test(context.Context, reach.Endpoint, reach.Provider, []byte) reach.DeliveryResult {
+	return reach.DeliveryResult{Succeeded: true}
+}
+
+func (httpReachTransport) Send(context.Context, reach.Endpoint, reach.Provider, reach.Message, []byte) reach.DeliveryResult {
+	return reach.DeliveryResult{Succeeded: true}
+}
 
 func (allowHTTPLedgerReferences) ValidateAssets(context.Context, []string) error          { return nil }
 func (allowHTTPLedgerReferences) ValidateDocuments(context.Context, []string) error       { return nil }
@@ -571,6 +588,72 @@ func TestSignalsRuleEvaluationActionHistoryDeliveryAndProtection(t *testing.T) {
 	handler.ServeHTTP(unsafeSubscriber, authenticatedRequest(http.MethodPost, "/api/v1/signals/subscriptions", unsafePayload, session))
 	if unsafeSubscriber.Code != http.StatusBadRequest || !strings.Contains(unsafeSubscriber.Body.String(), "validation_failed") {
 		t.Fatalf("expected Signals to reject webhook URLs, got %d: %s", unsafeSubscriber.Code, unsafeSubscriber.Body.String())
+	}
+}
+
+func TestReachConfigurationSendHistorySignalsHandoffAndProtection(t *testing.T) {
+	handler := newGuardServer(t)
+	session := bootstrapAdministrator(t, handler)
+	provider := createPeopleRecord[reach.Provider](t, handler, session, "/api/v1/reach/providers", map[string]any{
+		"id": "operations-hook", "name": "Operations hook", "kind": "webhook", "endpointId": "hook-primary", "secretRef": "external:hook-secret-v1",
+	})
+	if !provider.SecretConfigured || provider.SecretRef != "" {
+		t.Fatalf("Reach provider response did not redact its external secret reference: %#v", provider)
+	}
+	template := createPeopleRecord[reach.Template](t, handler, session, "/api/v1/reach/templates", map[string]any{
+		"id": "signal-template", "name": "Signal alert", "subject": "{{severity}}: {{title}}", "body": "{{summary}}\nAlert {{record_id}}",
+	})
+	group := createPeopleRecord[reach.SubscriberGroup](t, handler, session, "/api/v1/reach/groups", map[string]any{
+		"id": "finance-owners", "name": "Finance owners", "providerId": provider.ID, "templateId": template.ID,
+		"recipients": []map[string]string{{"kind": "email", "address": "owner@example.test"}},
+	})
+	if len(group.Recipients) != 1 {
+		t.Fatalf("unexpected Reach group %#v", group)
+	}
+
+	providerTest := httptest.NewRecorder()
+	handler.ServeHTTP(providerTest, authenticatedRequest(http.MethodPost, "/api/v1/reach/providers/"+provider.ID+"/test", bytes.NewBufferString(`{"confirm":true}`), session))
+	if providerTest.Code != http.StatusOK || !strings.Contains(providerTest.Body.String(), `"outcome":"succeeded"`) || strings.Contains(providerTest.Body.String(), "hook-secret") {
+		t.Fatalf("unexpected redacted Reach provider test %d: %s", providerTest.Code, providerTest.Body.String())
+	}
+
+	send := authenticatedRequest(http.MethodPost, "/api/v1/reach/messages/send", bytes.NewBufferString(`{"groupId":"finance-owners","variables":{"severity":"warning","title":"Renewal","summary":"Renewal is due.","record_id":"contract-one"},"confirm":true}`), session)
+	send.Header.Set(idempotencyHeader, "reach-http-send-one")
+	sendResponse := httptest.NewRecorder()
+	handler.ServeHTTP(sendResponse, send)
+	var message reach.Message
+	if sendResponse.Code != http.StatusAccepted || json.Unmarshal(sendResponse.Body.Bytes(), &message) != nil || message.Status != "delivered" {
+		t.Fatalf("unexpected Reach send %d: %s", sendResponse.Code, sendResponse.Body.String())
+	}
+	attempts := httptest.NewRecorder()
+	handler.ServeHTTP(attempts, authenticatedRequest(http.MethodGet, "/api/v1/reach/messages/"+message.ID+"/attempts", nil, session))
+	if attempts.Code != http.StatusOK || !strings.Contains(attempts.Body.String(), `"outcome":"succeeded"`) || strings.Contains(attempts.Body.String(), "hook-secret") {
+		t.Fatalf("unexpected Reach history %d: %s", attempts.Code, attempts.Body.String())
+	}
+
+	rule := createPeopleRecord[signals.Rule](t, handler, session, "/api/v1/signals/rules", map[string]any{
+		"id": "reach-renewals", "name": "Reach renewals", "condition": "renewal", "severity": "critical",
+	})
+	createPeopleRecord[signals.Subscription](t, handler, session, "/api/v1/signals/subscriptions", map[string]any{
+		"id": "reach-finance-subscription", "ruleId": rule.ID, "targetKind": "group", "targetId": group.ID,
+	})
+	evaluation := httptest.NewRecorder()
+	handler.ServeHTTP(evaluation, authenticatedRequest(http.MethodPost, "/api/v1/signals/evaluate", bytes.NewBufferString(`{"asOf":"2026-08-13T12:00:00Z"}`), session))
+	if evaluation.Code != http.StatusOK {
+		t.Fatalf("prepare Reach Signals delivery %d: %s", evaluation.Code, evaluation.Body.String())
+	}
+	process := httptest.NewRecorder()
+	handler.ServeHTTP(process, authenticatedRequest(http.MethodPost, "/api/v1/reach/signals/process", bytes.NewBufferString(`{"confirm":true,"limit":10}`), session))
+	if process.Code != http.StatusOK || !strings.Contains(process.Body.String(), `"delivered":1`) {
+		t.Fatalf("unexpected Reach Signals processing %d: %s", process.Code, process.Body.String())
+	}
+
+	missingCSRF := authenticatedRequest(http.MethodPost, "/api/v1/reach/providers/"+provider.ID+"/test", bytes.NewBufferString(`{"confirm":true}`), session)
+	missingCSRF.Header.Del(csrfHeader)
+	denied := httptest.NewRecorder()
+	handler.ServeHTTP(denied, missingCSRF)
+	if denied.Code != http.StatusForbidden || !strings.Contains(denied.Body.String(), "csrf_failed") {
+		t.Fatalf("expected Reach provider test to require CSRF, got %d: %s", denied.Code, denied.Body.String())
 	}
 }
 
@@ -2245,6 +2328,21 @@ func newGuardServerWithDirectory(t *testing.T, limiter guard.AttemptLimiter, oid
 	if err != nil {
 		t.Fatal(err)
 	}
+	reachEndpoints, err := reach.NewEndpointCatalog([]reach.Endpoint{{ID: "hook-primary", Label: "Operations hook", Kind: reach.ProviderWebhook, URL: "https://hooks.example.test/reach"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reachTransports, err := reach.NewTransportRegistry(map[reach.ProviderKind]reach.Transport{reach.ProviderWebhook: httpReachTransport{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reachService, err := reach.NewService(repository.NewMemoryReachStore(), reachEndpoints, reachTransports, httpReachSecrets{}, signalsService, foundation.NopAuditor{}, reach.ServiceConfig{
+		OrganizationID: organization.ID,
+		Now:            func() time.Time { return time.Date(2026, time.August, 13, 12, 0, 0, 0, time.UTC) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	atlasLabelsService, err := atlascodes.NewLabelService(atlasCodesService, atlasService, patternsService, atlascodes.DefaultLabelRenderers(), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -2281,6 +2379,7 @@ func newGuardServerWithDirectory(t *testing.T, limiter guard.AttemptLimiter, oid
 		Patterns:         patternsService,
 		Signals:          signalsService,
 		Exchange:         exchangeService,
+		Reach:            reachService,
 		Guard:            service,
 		OIDC:             oidcFlow,
 		SAML:             samlFlow,

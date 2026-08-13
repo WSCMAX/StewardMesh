@@ -19,7 +19,81 @@ import (
 )
 
 type graphAssetReader struct {
-	items []domain.Asset
+	items           []domain.Asset
+	userSites       map[string]string
+	userDepartments map[string]string
+}
+
+type recordingPeopleGraphStore struct {
+	people.Store
+	legacyCalls int
+	graphLimits []int
+}
+
+func (s *recordingPeopleGraphStore) ListSites(ctx context.Context, organizationID string, visibility people.Visibility) ([]people.Site, error) {
+	s.legacyCalls++
+	return s.Store.ListSites(ctx, organizationID, visibility)
+}
+
+func (s *recordingPeopleGraphStore) ListBuildings(ctx context.Context, organizationID, siteID string, visibility people.Visibility) ([]people.Building, error) {
+	s.legacyCalls++
+	return s.Store.ListBuildings(ctx, organizationID, siteID, visibility)
+}
+
+func (s *recordingPeopleGraphStore) ListRooms(ctx context.Context, organizationID, siteID, buildingID string, visibility people.Visibility) ([]people.Room, error) {
+	s.legacyCalls++
+	return s.Store.ListRooms(ctx, organizationID, siteID, buildingID, visibility)
+}
+
+func (s *recordingPeopleGraphStore) ListDepartments(ctx context.Context, organizationID string, visibility people.Visibility) ([]people.Department, error) {
+	s.legacyCalls++
+	return s.Store.ListDepartments(ctx, organizationID, visibility)
+}
+
+func (s *recordingPeopleGraphStore) ListGraphLocations(ctx context.Context, organizationID string, query people.GraphLocationQuery, visibility people.Visibility) (people.GraphLocations, error) {
+	s.graphLimits = append(s.graphLimits, query.Limit)
+	return s.Store.ListGraphLocations(ctx, organizationID, query, visibility)
+}
+
+func (s *recordingPeopleGraphStore) ListGraphIdentities(ctx context.Context, organizationID string, query people.GraphIdentityQuery, visibility people.Visibility) ([]people.Identity, error) {
+	s.graphLimits = append(s.graphLimits, query.Limit)
+	return s.Store.ListGraphIdentities(ctx, organizationID, query, visibility)
+}
+
+type recordingGroupGraphStore struct {
+	GroupTargetStore
+	legacyCalls int
+	graphLimits []int
+}
+
+func (s *recordingGroupGraphStore) ListManagedGroups(ctx context.Context, organizationID string) ([]ManagedGroup, error) {
+	s.legacyCalls++
+	return s.GroupTargetStore.ListManagedGroups(ctx, organizationID)
+}
+
+func (s *recordingGroupGraphStore) ListManagedMemberships(ctx context.Context, organizationID string) ([]ManagedMembership, error) {
+	s.legacyCalls++
+	return s.GroupTargetStore.ListManagedMemberships(ctx, organizationID)
+}
+
+func (s *recordingGroupGraphStore) ListGraphManagedGroups(ctx context.Context, organizationID string, query ManagedGroupGraphQuery) ([]ManagedGroup, error) {
+	s.graphLimits = append(s.graphLimits, query.Limit)
+	return s.GroupTargetStore.ListGraphManagedGroups(ctx, organizationID, query)
+}
+
+func (s *recordingGroupGraphStore) ListGraphManagedMemberships(ctx context.Context, organizationID string, query ManagedMembershipGraphQuery) ([]ManagedMembership, error) {
+	s.graphLimits = append(s.graphLimits, query.Limit)
+	return s.GroupTargetStore.ListGraphManagedMemberships(ctx, organizationID, query)
+}
+
+type recordingAssetGraphReader struct {
+	inner  graphAssetReader
+	limits []int
+}
+
+func (r *recordingAssetGraphReader) ListGraphAssets(ctx context.Context, query atlas.GraphAssetQuery) ([]domain.Asset, error) {
+	r.limits = append(r.limits, query.Limit)
+	return r.inner.ListGraphAssets(ctx, query)
 }
 
 func (r graphAssetReader) GetAsset(_ context.Context, id string) (domain.Asset, error) {
@@ -44,12 +118,29 @@ func (r graphAssetReader) ListGraphAssets(_ context.Context, query atlas.GraphAs
 			!containsTestValue(query.References.UserIDs, item.UserID) {
 			continue
 		}
+		if !query.Directory.All && !containsTestValue(query.Directory.SiteIDs, item.SiteID) &&
+			!containsTestValue(query.Directory.DepartmentIDs, item.DepartmentID) &&
+			!containsTestValue(query.Directory.UserIDs, item.UserID) &&
+			!(query.Directory.MatchUserDirectory && item.UserID != "" &&
+				(containsTestValue(query.Directory.SiteIDs, r.userSites[item.UserID]) ||
+					containsTestValue(query.Directory.DepartmentIDs, r.userDepartments[item.UserID]))) {
+			continue
+		}
 		if query.LabelSearch != "" && !strings.Contains(strings.ToLower(item.Name), strings.ToLower(query.LabelSearch)) {
+			continue
+		}
+		if query.DirectOrganizationChildren && (item.SiteID != "" || item.BuildingID != "" || item.RoomID != "" || item.DepartmentID != "" || item.UserID != "") {
 			continue
 		}
 		items = append(items, item)
 	}
-	sort.Slice(items, func(i, j int) bool { return items[i].ID < items[j].ID })
+	sort.Slice(items, func(i, j int) bool {
+		left, right := strings.ToLower(items[i].Name), strings.ToLower(items[j].Name)
+		if left == right {
+			return items[i].ID < items[j].ID
+		}
+		return left < right
+	})
 	if query.Limit > 0 && len(items) > query.Limit {
 		items = items[:query.Limit]
 	}
@@ -201,6 +292,43 @@ func TestRelationshipGraphDelegatesSearchAndHonorsLimitsBeyondSourceDefaults(t *
 	}
 }
 
+func TestRelationshipGraphUsesOnlyRequestedBoundedSourceLimits(t *testing.T) {
+	groups, peopleStore, assets := relationshipGraphFixture(t)
+	recordingPeople := &recordingPeopleGraphStore{Store: peopleStore}
+	recordingGroups := &recordingGroupGraphStore{GroupTargetStore: groups}
+	recordingAssets := &recordingAssetGraphReader{inner: assets}
+	graphStore, err := NewRelationshipGraphStore(recordingGroups, recordingPeople, recordingAssets, domain.Organization{ID: "example-org", Name: "Example Org"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := graphStore.Graph(context.Background(), GraphQuery{Limit: 1, Scope: GraphScope{
+		Directory: people.Visibility{All: true}, Assets: AssetVisibility{All: true},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := graphStore.Graph(context.Background(), GraphQuery{
+		Search: "Example Org", Kind: NodeOrganization, Relationship: RelationshipContains, Limit: 1,
+		Scope: GraphScope{Directory: people.Visibility{All: true}, Assets: AssetVisibility{All: true}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if recordingPeople.legacyCalls != 0 || recordingGroups.legacyCalls != 0 {
+		t.Fatalf("graph used unbounded public list methods: people=%d groups=%d", recordingPeople.legacyCalls, recordingGroups.legacyCalls)
+	}
+	for source, limits := range map[string][]int{
+		"people": recordingPeople.graphLimits, "groups": recordingGroups.graphLimits, "assets": recordingAssets.limits,
+	} {
+		if len(limits) == 0 {
+			t.Fatalf("%s graph source was not exercised", source)
+		}
+		for _, limit := range limits {
+			if limit != 1 {
+				t.Fatalf("limit=1 graph asked %s source for %d rows: %#v", source, limit, limits)
+			}
+		}
+	}
+}
+
 func TestRelationshipGraphLoadsRelationshipContextBeyondFiveHundredSourceRecords(t *testing.T) {
 	store, peopleStore, assets := relationshipGraphFixture(t)
 	now := time.Date(2026, time.August, 13, 12, 0, 0, 0, time.UTC)
@@ -277,7 +405,7 @@ func TestRelationshipGraphIntersectsDirectoryAndAssetVisibility(t *testing.T) {
 	sameSiteOtherDepartment := graphAssetReader{items: append(append([]domain.Asset(nil), assets.items...), domain.Asset{
 		ID: "asset-same-site-hidden-department", OrganizationID: "example-org", Name: "Same Site Hidden Department Asset",
 		Kind: "laptop", SiteID: "site-a", DepartmentID: "department-b", Status: "active",
-	})}
+	}), userSites: assets.userSites, userDepartments: assets.userDepartments}
 	departmentGraphStore, err := NewRelationshipGraphStore(store, peopleStore, sameSiteOtherDepartment, domain.Organization{ID: "example-org", Name: "Example Org"})
 	if err != nil {
 		t.Fatal(err)
@@ -303,6 +431,134 @@ func TestRelationshipGraphIntersectsDirectoryAndAssetVisibility(t *testing.T) {
 	}
 	if _, err := graphStore.Graph(context.Background(), GraphQuery{Kind: "unregistered", Scope: GraphScope{Directory: people.Visibility{All: true}}}); !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("expected an unregistered node kind to fail closed, got %v", err)
+	}
+}
+
+func TestRelationshipGraphAuthorizesUserOnlyAssetAfterIdentityProjection(t *testing.T) {
+	store, peopleStore, assets := relationshipGraphFixture(t)
+	assets.items = append(assets.items, domain.Asset{
+		ID: "asset-user-only", OrganizationID: "example-org", Name: "User Only Laptop", Kind: "laptop",
+		UserID: "person-a", Status: "active",
+	})
+	graphStore, err := NewRelationshipGraphStore(store, peopleStore, assets, domain.Organization{ID: "example-org", Name: "Example Org"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	visible, err := graphStore.Graph(context.Background(), GraphQuery{
+		Search: "User Only Laptop", Kind: NodeAsset,
+		Scope: GraphScope{Directory: people.Visibility{SiteIDs: []string{"site-a"}}, Assets: AssetVisibility{All: true}},
+	})
+	if err != nil || !graphHasNode(visible, "asset:asset-user-only") {
+		t.Fatalf("asset whose only directory-visible link is UserID was dropped: graph=%#v err=%v", visible, err)
+	}
+	hidden, err := graphStore.Graph(context.Background(), GraphQuery{
+		Search: "User Only Laptop", Kind: NodeAsset,
+		Scope: GraphScope{Directory: people.Visibility{SiteIDs: []string{"site-b"}}, Assets: AssetVisibility{All: true}},
+	})
+	if err != nil || graphHasNode(hidden, "asset:asset-user-only") {
+		t.Fatalf("user-only asset escaped directory visibility: graph=%#v err=%v", hidden, err)
+	}
+}
+
+func TestRelationshipGraphAppliesDirectoryVisibilityBeforeAssetLimit(t *testing.T) {
+	store, peopleStore, assets := relationshipGraphFixture(t)
+	for index := 0; index < 20; index++ {
+		assets.items = append(assets.items, domain.Asset{
+			ID: fmt.Sprintf("hidden-asset-%02d", index), OrganizationID: "example-org",
+			Name: fmt.Sprintf("Alpha Hidden Asset %02d", index), Kind: "computer", SiteID: "site-b", Status: "active",
+		})
+	}
+	assets.items = append(assets.items, domain.Asset{
+		ID: "visible-after-hidden-assets", OrganizationID: "example-org", Name: "Zeta Visible Asset",
+		Kind: "computer", SiteID: "site-a", Status: "active",
+	})
+	graphStore, err := NewRelationshipGraphStore(store, peopleStore, assets, domain.Organization{ID: "example-org", Name: "Example Org"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	graph, err := graphStore.Graph(context.Background(), GraphQuery{
+		Kind: NodeAsset, Limit: 10,
+		Scope: GraphScope{Directory: people.Visibility{SiteIDs: []string{"site-a"}}, Assets: AssetVisibility{All: true}},
+	})
+	if err != nil || !graphHasNode(graph, "asset:visible-after-hidden-assets") {
+		t.Fatalf("out-of-directory assets crowded a valid asset out before source limit: graph=%#v err=%v", graph, err)
+	}
+	for index := 0; index < 20; index++ {
+		if graphHasNode(graph, fmt.Sprintf("asset:hidden-asset-%02d", index)) {
+			t.Fatalf("out-of-directory asset leaked through the pre-limit predicate: %#v", graph)
+		}
+	}
+}
+
+func TestRelationshipGraphOrganizationContainsSelectsDirectChildrenBeforeSourceLimit(t *testing.T) {
+	store, peopleStore, assets := relationshipGraphFixture(t)
+	now := time.Date(2026, time.August, 13, 12, 0, 0, 0, time.UTC)
+	for index := 0; index < MaximumGraphLimit; index++ {
+		identityName := fmt.Sprintf("Alpha Nested Identity %03d", index)
+		if _, err := peopleStore.CreateIdentity(context.Background(), people.Identity{
+			ID: fmt.Sprintf("nested-person-%03d", index), OrganizationID: "example-org", Kind: people.IdentityPerson,
+			DisplayName: identityName, NormalizedName: strings.ToLower(identityName), SiteID: "site-a", DepartmentID: "department-a",
+			Status: people.StatusActive, Revision: 1, CreatedAt: now, UpdatedAt: now,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		assets.items = append(assets.items, domain.Asset{
+			ID: fmt.Sprintf("nested-asset-%03d", index), OrganizationID: "example-org",
+			Name: fmt.Sprintf("Alpha Nested Asset %03d", index), Kind: "computer", SiteID: "site-a", Status: "active",
+		})
+	}
+	rootIdentity := people.Identity{ID: "root-person-target", OrganizationID: "example-org", Kind: people.IdentityPerson,
+		DisplayName: "Zeta Root Person", NormalizedName: "zeta root person", Status: people.StatusActive,
+		Revision: 1, CreatedAt: now, UpdatedAt: now}
+	if _, err := peopleStore.CreateIdentity(context.Background(), rootIdentity); err != nil {
+		t.Fatal(err)
+	}
+	assets.items = append(assets.items, domain.Asset{ID: "root-asset-target", OrganizationID: "example-org", Name: "Zeta Root Asset", Kind: "computer", Status: "active"})
+	graphStore, err := NewRelationshipGraphStore(store, peopleStore, assets, domain.Organization{ID: "example-org", Name: "Example Org"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	graph, err := graphStore.Graph(context.Background(), GraphQuery{
+		Search: "Example Org", Kind: NodeOrganization, Relationship: RelationshipContains, Limit: 20,
+		Scope: GraphScope{Directory: people.Visibility{All: true}, Assets: AssetVisibility{All: true}},
+	})
+	if err != nil || !graphHasEdge(graph, "organization:example-org", "person:"+rootIdentity.ID, RelationshipContains) ||
+		!graphHasEdge(graph, "organization:example-org", "asset:root-asset-target", RelationshipContains) {
+		t.Fatalf("nested records crowded direct organization children out before selection: graph=%#v err=%v", graph, err)
+	}
+	if graphHasNode(graph, "person:nested-person-000") || graphHasNode(graph, "asset:nested-asset-000") {
+		t.Fatalf("organization containment included a non-direct source record: %#v", graph)
+	}
+}
+
+func TestRelationshipGraphRejectsAggregateVisibilitySelectorsOverMaximum(t *testing.T) {
+	store, peopleStore, assets := relationshipGraphFixture(t)
+	graphStore, err := NewRelationshipGraphStore(store, peopleStore, assets, domain.Organization{ID: "example-org", Name: "Example Org"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sites := make([]string, MaximumGraphLimit)
+	for index := range sites {
+		sites[index] = fmt.Sprintf("site-%03d", index)
+	}
+	_, err = graphStore.Graph(context.Background(), GraphQuery{Scope: GraphScope{
+		Directory: people.Visibility{SiteIDs: sites}, Assets: AssetVisibility{ResourceIDs: []string{"asset-extra"}},
+	}})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected aggregate visibility selectors to fail as invalid input, got %v", err)
+	}
+	for name, invalidID := range map[string]string{
+		"oversized": strings.Repeat("x", 129),
+		"control":   "site\ncontrol",
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := graphStore.Graph(context.Background(), GraphQuery{Scope: GraphScope{
+				Directory: people.Visibility{SiteIDs: []string{invalidID}},
+			}})
+			if !errors.Is(err, ErrInvalidInput) {
+				t.Fatalf("expected invalid selector ID to fail before a source query, got %v", err)
+			}
+		})
 	}
 }
 
@@ -431,7 +687,8 @@ func relationshipGraphFixture(t *testing.T) (*repository.MemoryDirectoryImportSt
 	assets := graphAssetReader{items: []domain.Asset{
 		{ID: "asset-a", OrganizationID: "example-org", Name: "North Laptop", Kind: "laptop", SiteID: "site-a", DepartmentID: "department-a", UserID: "person-a", Status: "active"},
 		{ID: "asset-b", OrganizationID: "example-org", Name: "South Laptop", Kind: "laptop", SiteID: "site-b", DepartmentID: "department-b", UserID: "person-b", Status: "active"},
-	}}
+	}, userSites: map[string]string{"person-a": "site-a", "person-b": "site-b"},
+		userDepartments: map[string]string{"person-a": "department-a", "person-b": "department-b"}}
 	return directoryStore, peopleStore, assets
 }
 

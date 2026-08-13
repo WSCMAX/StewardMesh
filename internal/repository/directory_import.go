@@ -1,11 +1,12 @@
 package repository
 
-// Requirements: REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-005.
-// Features: integrations.protocols, identity.directory.
+// Requirements: REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-005, REQ-DIRECTORY-EXPANSION-008.
+// Features: integrations.protocols, identity.directory, threads.relationships.
 
 import (
 	"context"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -165,6 +166,65 @@ func (s *MemoryDirectoryImportStore) ListManagedMemberships(_ context.Context, o
 		}
 	}
 	sort.Slice(memberships, func(i, j int) bool { return memberships[i].ID < memberships[j].ID })
+	return memberships, nil
+}
+
+func (s *MemoryDirectoryImportStore) ListGraphManagedGroups(_ context.Context, organizationID string, query directoryexpansion.ManagedGroupGraphQuery) ([]directoryexpansion.ManagedGroup, error) {
+	if strings.TrimSpace(organizationID) == "" || !query.Valid() {
+		return nil, directoryexpansion.ErrInvalidInput
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	label := strings.ToLower(query.LabelSearch)
+	groups := make([]directoryexpansion.ManagedGroup, 0)
+	for _, group := range s.groups {
+		if group.OrganizationID != organizationID || group.Status != "active" ||
+			label != "" && !strings.Contains(strings.ToLower(group.DisplayName), label) ||
+			len(query.GroupIDs) > 0 && !sliceContains(query.GroupIDs, group.ID) {
+			continue
+		}
+		groups = append(groups, cloneManagedGroup(group))
+	}
+	sort.Slice(groups, func(i, j int) bool {
+		left, right := strings.ToLower(groups[i].DisplayName), strings.ToLower(groups[j].DisplayName)
+		if left == right {
+			return groups[i].ID < groups[j].ID
+		}
+		return left < right
+	})
+	if len(groups) > query.Limit {
+		groups = groups[:query.Limit]
+	}
+	return groups, nil
+}
+
+func (s *MemoryDirectoryImportStore) ListGraphManagedMemberships(_ context.Context, organizationID string, query directoryexpansion.ManagedMembershipGraphQuery) ([]directoryexpansion.ManagedMembership, error) {
+	if strings.TrimSpace(organizationID) == "" || !query.Valid() {
+		return nil, directoryexpansion.ErrInvalidInput
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	label := strings.ToLower(query.LabelSearch)
+	memberships := make([]directoryexpansion.ManagedMembership, 0)
+	for _, membership := range s.members {
+		selected := len(query.GroupIDs)+len(query.MemberIDs) == 0 ||
+			sliceContains(query.GroupIDs, membership.GroupID) || sliceContains(query.MemberIDs, membership.MemberID)
+		if membership.OrganizationID != organizationID || membership.Status != "active" || !selected ||
+			label != "" && !strings.Contains(strings.ToLower(membership.MemberDisplayName), label) {
+			continue
+		}
+		memberships = append(memberships, cloneManagedMembership(membership))
+	}
+	sort.Slice(memberships, func(i, j int) bool {
+		left, right := strings.ToLower(memberships[i].MemberDisplayName), strings.ToLower(memberships[j].MemberDisplayName)
+		if left == right {
+			return memberships[i].ID < memberships[j].ID
+		}
+		return left < right
+	})
+	if len(memberships) > query.Limit {
+		memberships = memberships[:query.Limit]
+	}
 	return memberships, nil
 }
 

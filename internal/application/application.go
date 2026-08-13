@@ -521,10 +521,11 @@ func initializeFoundation(ctx context.Context, cfg config.Config, runMigrations 
 	case config.RepositoryDriverMemory:
 		organizations = repository.NewMemoryOrganizationRepository()
 		guardStore = repository.NewMemoryGuardStore()
-		peopleStore = repository.NewMemoryPeopleStore()
+		memoryPeopleStore := repository.NewMemoryPeopleStore()
+		peopleStore = memoryPeopleStore
 		directoryImportStore = repository.NewMemoryDirectoryImportStore()
 		exchangeStore = repository.NewMemoryExchangeStore()
-		assetStore = repository.NewMemoryAtlasStore()
+		assetStore = repository.NewMemoryAtlasStoreWithPeople(memoryPeopleStore)
 		atlasCodesStore = repository.NewMemoryAtlasCodesStore()
 		threadsStore = repository.NewMemoryThreadsStore()
 		storageStore = repository.NewMemoryStorageStore()

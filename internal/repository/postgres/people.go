@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -348,6 +349,314 @@ func (s *PeopleStore) ListDepartments(ctx context.Context, organizationID string
 	return result, nil
 }
 
+func (s *PeopleStore) ListGraphLocations(ctx context.Context, organizationID string, filter people.GraphLocationQuery, visibility people.Visibility) (people.GraphLocations, error) {
+	if organizationID == "" || visibility.Empty() || !filter.Valid() {
+		return people.GraphLocations{}, people.ErrInvalidInput
+	}
+	result := people.GraphLocations{Sites: []people.Site{}, Buildings: []people.Building{}, Rooms: []people.Room{}, Departments: []people.Department{}}
+	hasSelector := filter.DirectOrganizationChildren || len(filter.SiteIDs)+len(filter.BuildingIDs)+len(filter.RoomIDs)+
+		len(filter.DepartmentIDs)+len(filter.ParentSiteIDs)+len(filter.ParentBuildingIDs) > 0
+	if filter.Kind == "" || filter.Kind == people.GraphLocationSite {
+		selected := !hasSelector || filter.DirectOrganizationChildren || len(filter.SiteIDs) > 0
+		if selected {
+			items, err := s.listGraphSites(ctx, organizationID, filter, visibility, hasSelector)
+			if err != nil {
+				return people.GraphLocations{}, err
+			}
+			result.Sites = items
+		}
+	}
+	if filter.Kind == "" || filter.Kind == people.GraphLocationBuilding {
+		selected := !hasSelector || len(filter.BuildingIDs)+len(filter.ParentSiteIDs) > 0
+		if selected {
+			items, err := s.listGraphBuildings(ctx, organizationID, filter, visibility, hasSelector)
+			if err != nil {
+				return people.GraphLocations{}, err
+			}
+			result.Buildings = items
+		}
+	}
+	if filter.Kind == "" || filter.Kind == people.GraphLocationRoom {
+		selected := !hasSelector || len(filter.RoomIDs)+len(filter.ParentSiteIDs)+len(filter.ParentBuildingIDs) > 0
+		if selected {
+			items, err := s.listGraphRooms(ctx, organizationID, filter, visibility, hasSelector)
+			if err != nil {
+				return people.GraphLocations{}, err
+			}
+			result.Rooms = items
+		}
+	}
+	if filter.Kind == "" || filter.Kind == people.GraphLocationDepartment {
+		selected := !hasSelector || filter.DirectOrganizationChildren || len(filter.DepartmentIDs)+len(filter.ParentSiteIDs) > 0
+		if selected {
+			items, err := s.listGraphDepartments(ctx, organizationID, filter, visibility, hasSelector)
+			if err != nil {
+				return people.GraphLocations{}, err
+			}
+			result.Departments = items
+		}
+	}
+	return limitGraphLocations(result, filter.Limit), nil
+}
+
+func (s *PeopleStore) listGraphSites(ctx context.Context, organizationID string, filter people.GraphLocationQuery, visibility people.Visibility, hasSelector bool) ([]people.Site, error) {
+	query := strings.Builder{}
+	query.WriteString(`SELECT s.id, s.organization_id, s.name, s.normalized_name, s.address_line1, s.address_line2,
+		s.address_city, s.address_region, s.address_postal_code, s.address_country,
+		s.status, s.revision, s.created_at, s.updated_at FROM people_sites s
+		WHERE s.organization_id = $1 AND s.status = 'active'`)
+	arguments := []any{organizationID}
+	if !visibility.All {
+		predicates := make([]string, 0, 2)
+		if len(visibility.SiteIDs) > 0 {
+			predicates = append(predicates, inPredicate("s.id", visibility.SiteIDs, &arguments))
+		}
+		if len(visibility.DepartmentIDs) > 0 {
+			departmentPredicate := inPredicate("visible_department.id", visibility.DepartmentIDs, &arguments)
+			predicates = append(predicates, `EXISTS (SELECT 1 FROM people_departments visible_department
+				WHERE visible_department.organization_id = s.organization_id AND visible_department.site_id = s.id AND `+departmentPredicate+`)`)
+		}
+		if len(predicates) == 0 {
+			return nil, people.ErrScopeRequired
+		}
+		query.WriteString(" AND (" + strings.Join(predicates, " OR ") + ")")
+	}
+	if filter.LabelSearch != "" {
+		arguments = append(arguments, strings.ToLower(filter.LabelSearch))
+		query.WriteString(fmt.Sprintf(" AND strpos(lower(s.name), $%d) > 0", len(arguments)))
+	}
+	if hasSelector && !filter.DirectOrganizationChildren {
+		query.WriteString(" AND " + inPredicate("s.id", filter.SiteIDs, &arguments))
+	}
+	arguments = append(arguments, filter.Limit)
+	query.WriteString(fmt.Sprintf(" ORDER BY lower(s.name), s.id LIMIT $%d", len(arguments)))
+	rows, err := s.database.QueryContext(ctx, query.String(), arguments...)
+	if err != nil {
+		return nil, fmt.Errorf("list graph sites: %w", err)
+	}
+	defer rows.Close()
+	items := make([]people.Site, 0)
+	for rows.Next() {
+		item, err := scanPeopleSite(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan graph site: %w", err)
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate graph sites: %w", err)
+	}
+	return items, nil
+}
+
+func (s *PeopleStore) listGraphBuildings(ctx context.Context, organizationID string, filter people.GraphLocationQuery, visibility people.Visibility, hasSelector bool) ([]people.Building, error) {
+	query := strings.Builder{}
+	query.WriteString(`SELECT b.id, b.organization_id, b.site_id, b.name, b.normalized_name,
+		b.status, b.revision, b.created_at, b.updated_at FROM people_buildings b
+		WHERE b.organization_id = $1 AND b.status = 'active'`)
+	arguments := []any{organizationID}
+	if !visibility.All {
+		predicate, ok := locationVisibilityPredicate("b.organization_id", "b.site_id", visibility, &arguments)
+		if !ok {
+			return nil, people.ErrScopeRequired
+		}
+		query.WriteString(" AND (" + predicate + ")")
+	}
+	if filter.LabelSearch != "" {
+		arguments = append(arguments, strings.ToLower(filter.LabelSearch))
+		query.WriteString(fmt.Sprintf(" AND strpos(lower(b.name), $%d) > 0", len(arguments)))
+	}
+	if hasSelector {
+		selectors := make([]string, 0, 2)
+		if len(filter.BuildingIDs) > 0 {
+			selectors = append(selectors, inPredicate("b.id", filter.BuildingIDs, &arguments))
+		}
+		if len(filter.ParentSiteIDs) > 0 {
+			selectors = append(selectors, inPredicate("b.site_id", filter.ParentSiteIDs, &arguments))
+		}
+		query.WriteString(" AND (" + strings.Join(selectors, " OR ") + ")")
+	}
+	arguments = append(arguments, filter.Limit)
+	query.WriteString(fmt.Sprintf(" ORDER BY lower(b.name), b.id LIMIT $%d", len(arguments)))
+	rows, err := s.database.QueryContext(ctx, query.String(), arguments...)
+	if err != nil {
+		return nil, fmt.Errorf("list graph buildings: %w", err)
+	}
+	defer rows.Close()
+	items := make([]people.Building, 0)
+	for rows.Next() {
+		item, err := scanPeopleBuilding(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan graph building: %w", err)
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate graph buildings: %w", err)
+	}
+	return items, nil
+}
+
+func (s *PeopleStore) listGraphRooms(ctx context.Context, organizationID string, filter people.GraphLocationQuery, visibility people.Visibility, hasSelector bool) ([]people.Room, error) {
+	query := strings.Builder{}
+	query.WriteString(`SELECT r.id, r.organization_id, r.site_id, r.building_id, r.room_number, r.normalized_number,
+		r.name, r.status, r.revision, r.created_at, r.updated_at FROM people_rooms r
+		WHERE r.organization_id = $1 AND r.status = 'active'`)
+	arguments := []any{organizationID}
+	if !visibility.All {
+		predicate, ok := locationVisibilityPredicate("r.organization_id", "r.site_id", visibility, &arguments)
+		if !ok {
+			return nil, people.ErrScopeRequired
+		}
+		query.WriteString(" AND (" + predicate + ")")
+	}
+	if filter.LabelSearch != "" {
+		arguments = append(arguments, strings.ToLower(filter.LabelSearch))
+		query.WriteString(fmt.Sprintf(" AND strpos(lower('Room ' || r.room_number || CASE WHEN r.name <> '' THEN ' · ' || r.name ELSE '' END), $%d) > 0", len(arguments)))
+	}
+	if hasSelector {
+		selectors := make([]string, 0, 3)
+		if len(filter.RoomIDs) > 0 {
+			selectors = append(selectors, inPredicate("r.id", filter.RoomIDs, &arguments))
+		}
+		if len(filter.ParentSiteIDs) > 0 {
+			selectors = append(selectors, inPredicate("r.site_id", filter.ParentSiteIDs, &arguments))
+		}
+		if len(filter.ParentBuildingIDs) > 0 {
+			selectors = append(selectors, inPredicate("r.building_id", filter.ParentBuildingIDs, &arguments))
+		}
+		query.WriteString(" AND (" + strings.Join(selectors, " OR ") + ")")
+	}
+	arguments = append(arguments, filter.Limit)
+	query.WriteString(fmt.Sprintf(" ORDER BY lower(r.room_number), r.id LIMIT $%d", len(arguments)))
+	rows, err := s.database.QueryContext(ctx, query.String(), arguments...)
+	if err != nil {
+		return nil, fmt.Errorf("list graph rooms: %w", err)
+	}
+	defer rows.Close()
+	items := make([]people.Room, 0)
+	for rows.Next() {
+		item, err := scanPeopleRoom(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan graph room: %w", err)
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate graph rooms: %w", err)
+	}
+	return items, nil
+}
+
+func (s *PeopleStore) listGraphDepartments(ctx context.Context, organizationID string, filter people.GraphLocationQuery, visibility people.Visibility, hasSelector bool) ([]people.Department, error) {
+	query := strings.Builder{}
+	query.WriteString(`SELECT d.id, d.organization_id, d.name, d.normalized_name, COALESCE(d.site_id, ''),
+		d.status, d.revision, d.created_at, d.updated_at FROM people_departments d
+		WHERE d.organization_id = $1 AND d.status = 'active'`)
+	arguments := []any{organizationID}
+	if !visibility.All {
+		predicates := make([]string, 0, 2)
+		if len(visibility.DepartmentIDs) > 0 {
+			predicates = append(predicates, inPredicate("d.id", visibility.DepartmentIDs, &arguments))
+		}
+		if len(visibility.SiteIDs) > 0 {
+			predicates = append(predicates, inPredicate("d.site_id", visibility.SiteIDs, &arguments))
+		}
+		if len(predicates) == 0 {
+			return nil, people.ErrScopeRequired
+		}
+		query.WriteString(" AND (" + strings.Join(predicates, " OR ") + ")")
+	}
+	if filter.LabelSearch != "" {
+		arguments = append(arguments, strings.ToLower(filter.LabelSearch))
+		query.WriteString(fmt.Sprintf(" AND strpos(lower(d.name), $%d) > 0", len(arguments)))
+	}
+	if hasSelector {
+		selectors := make([]string, 0, 3)
+		if len(filter.DepartmentIDs) > 0 {
+			selectors = append(selectors, inPredicate("d.id", filter.DepartmentIDs, &arguments))
+		}
+		if len(filter.ParentSiteIDs) > 0 {
+			selectors = append(selectors, inPredicate("d.site_id", filter.ParentSiteIDs, &arguments))
+		}
+		if filter.DirectOrganizationChildren {
+			selectors = append(selectors, "d.site_id IS NULL")
+		}
+		query.WriteString(" AND (" + strings.Join(selectors, " OR ") + ")")
+	}
+	arguments = append(arguments, filter.Limit)
+	query.WriteString(fmt.Sprintf(" ORDER BY lower(d.name), d.id LIMIT $%d", len(arguments)))
+	rows, err := s.database.QueryContext(ctx, query.String(), arguments...)
+	if err != nil {
+		return nil, fmt.Errorf("list graph departments: %w", err)
+	}
+	defer rows.Close()
+	items := make([]people.Department, 0)
+	for rows.Next() {
+		item, err := scanPeopleDepartment(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan graph department: %w", err)
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate graph departments: %w", err)
+	}
+	return items, nil
+}
+
+func limitGraphLocations(input people.GraphLocations, limit int) people.GraphLocations {
+	type candidate struct {
+		kind      people.GraphLocationKind
+		id, label string
+		index     int
+	}
+	candidates := make([]candidate, 0, len(input.Sites)+len(input.Buildings)+len(input.Rooms)+len(input.Departments))
+	for index, item := range input.Sites {
+		candidates = append(candidates, candidate{people.GraphLocationSite, item.ID, item.Name, index})
+	}
+	for index, item := range input.Buildings {
+		candidates = append(candidates, candidate{people.GraphLocationBuilding, item.ID, item.Name, index})
+	}
+	for index, item := range input.Rooms {
+		label := "Room " + item.Number
+		if item.Name != "" {
+			label += " · " + item.Name
+		}
+		candidates = append(candidates, candidate{people.GraphLocationRoom, item.ID, label, index})
+	}
+	for index, item := range input.Departments {
+		candidates = append(candidates, candidate{people.GraphLocationDepartment, item.ID, item.Name, index})
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].kind != candidates[j].kind {
+			return candidates[i].kind < candidates[j].kind
+		}
+		left, right := strings.ToLower(candidates[i].label), strings.ToLower(candidates[j].label)
+		if left != right {
+			return left < right
+		}
+		return candidates[i].id < candidates[j].id
+	})
+	if len(candidates) > limit {
+		candidates = candidates[:limit]
+	}
+	result := people.GraphLocations{Sites: []people.Site{}, Buildings: []people.Building{}, Rooms: []people.Room{}, Departments: []people.Department{}}
+	for _, item := range candidates {
+		switch item.kind {
+		case people.GraphLocationSite:
+			result.Sites = append(result.Sites, input.Sites[item.index])
+		case people.GraphLocationBuilding:
+			result.Buildings = append(result.Buildings, input.Buildings[item.index])
+		case people.GraphLocationRoom:
+			result.Rooms = append(result.Rooms, input.Rooms[item.index])
+		case people.GraphLocationDepartment:
+			result.Departments = append(result.Departments, input.Departments[item.index])
+		}
+	}
+	return result
+}
+
 func (s *PeopleStore) CreateIdentity(ctx context.Context, identity people.Identity) (people.Identity, error) {
 	row := s.database.QueryRowContext(ctx, `
 		INSERT INTO people_identities (
@@ -559,6 +868,9 @@ func (s *PeopleStore) ListGraphIdentities(ctx context.Context, organizationID st
 	if filter.Kind != "" {
 		arguments = append(arguments, filter.Kind)
 		query.WriteString(fmt.Sprintf(" AND kind = $%d", len(arguments)))
+	}
+	if filter.DirectOrganizationChildren {
+		query.WriteString(" AND department_id IS NULL AND site_id IS NULL")
 	}
 	selectors := make([]string, 0, 3)
 	if len(filter.IdentityIDs) > 0 {

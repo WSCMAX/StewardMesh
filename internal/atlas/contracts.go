@@ -7,6 +7,7 @@ import (
 	"errors"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/maxlemke/stewardmesh/internal/domain"
@@ -68,6 +69,28 @@ type GraphAssetReferences struct {
 	UserIDs       []string
 }
 
+// GraphAssetDirectoryVisibility is a second, independent authorization
+// predicate applied before the graph source limit. MatchUserDirectory permits
+// an adapter to match an asset's user identity against the same site and
+// department selectors; it never widens the authenticated Atlas visibility.
+type GraphAssetDirectoryVisibility struct {
+	All                bool
+	SiteIDs            []string
+	DepartmentIDs      []string
+	UserIDs            []string
+	MatchUserDirectory bool
+}
+
+func (v GraphAssetDirectoryVisibility) Empty() bool {
+	return !v.All && len(v.SiteIDs)+len(v.DepartmentIDs)+len(v.UserIDs) == 0
+}
+
+func (v GraphAssetDirectoryVisibility) Valid() bool {
+	return !v.Empty() && len(v.SiteIDs)+len(v.DepartmentIDs)+len(v.UserIDs) <= MaximumGraphAssetLimit &&
+		(!v.MatchUserDirectory || len(v.SiteIDs)+len(v.DepartmentIDs) > 0) &&
+		validGraphAssetIDs(v.SiteIDs) && validGraphAssetIDs(v.DepartmentIDs) && validGraphAssetIDs(v.UserIDs)
+}
+
 func (r GraphAssetReferences) Empty() bool {
 	return len(r.ResourceIDs)+len(r.SiteIDs)+len(r.BuildingIDs)+len(r.RoomIDs)+len(r.DepartmentIDs)+len(r.UserIDs) == 0
 }
@@ -79,23 +102,42 @@ func (r GraphAssetReferences) Valid() bool {
 }
 
 type GraphAssetQuery struct {
-	LabelSearch string
-	Visibility  GraphAssetVisibility
-	References  GraphAssetReferences
-	Limit       int
+	LabelSearch                string
+	Visibility                 GraphAssetVisibility
+	Directory                  GraphAssetDirectoryVisibility
+	References                 GraphAssetReferences
+	DirectOrganizationChildren bool
+	Limit                      int
 }
 
 const MaximumGraphAssetLimit = 500
 
 func (q GraphAssetQuery) Valid() bool {
-	return q.Limit >= 1 && q.Limit <= MaximumGraphAssetLimit && q.Visibility.Valid() && q.References.Valid() &&
-		utf8.ValidString(q.LabelSearch) && utf8.RuneCountInString(q.LabelSearch) <= 200
+	return q.Limit >= 1 && q.Limit <= MaximumGraphAssetLimit && q.Visibility.Valid() && q.Directory.Valid() && q.References.Valid() &&
+		validGraphAssetText(q.LabelSearch, 200)
+}
+
+func validGraphAssetText(value string, maximum int) bool {
+	if !utf8.ValidString(value) || utf8.RuneCountInString(value) > maximum {
+		return false
+	}
+	for _, character := range value {
+		if unicode.IsControl(character) {
+			return false
+		}
+	}
+	return true
 }
 
 func validGraphAssetIDs(values []string) bool {
 	for _, value := range values {
-		if strings.TrimSpace(value) == "" {
+		if strings.TrimSpace(value) == "" || !utf8.ValidString(value) || utf8.RuneCountInString(value) > 128 {
 			return false
+		}
+		for _, character := range value {
+			if unicode.IsControl(character) {
+				return false
+			}
 		}
 	}
 	return true

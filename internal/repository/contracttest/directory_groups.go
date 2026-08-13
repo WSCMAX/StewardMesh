@@ -1,6 +1,6 @@
 package contracttest
 
-// Requirements: REQ-DIRECTORY-EXPANSION-005, REQ-DIRECTORY-EXPANSION-006. Feature: integrations.protocols.
+// Requirements: REQ-DIRECTORY-EXPANSION-005, REQ-DIRECTORY-EXPANSION-006, REQ-DIRECTORY-EXPANSION-008. Features: integrations.protocols, threads.relationships.
 
 import (
 	"context"
@@ -35,14 +35,6 @@ func DirectoryGroupTargetStore(t *testing.T, store directoryexpansion.GroupTarge
 	if reloaded.Metadata["classification"] != "internal" {
 		t.Fatal("managed group metadata alias escaped repository boundary")
 	}
-	group.DisplayName, group.Status, group.Revision, group.UpdatedAt = "Former staff", "inactive", 2, now.Add(time.Second)
-	if _, err := store.ReconcileManagedGroup(ctx, group, 99); !errors.Is(err, directoryexpansion.ErrConflict) {
-		t.Fatalf("expected stale group revision conflict, got %v", err)
-	}
-	updated, err := store.ReconcileManagedGroup(ctx, group, 1)
-	if err != nil || updated.Revision != 2 || updated.Status != "inactive" {
-		t.Fatalf("reconcile managed group: %#v err=%v", updated, err)
-	}
 	membership := directoryexpansion.ManagedMembership{ID: contractDirectoryID("membership", unique), OrganizationID: organizationID,
 		SourceSystemID: group.SourceSystemID, SourceRecordID: "membership-source-" + unique, GroupID: group.ID,
 		GroupSourceID: group.SourceRecordID, MemberID: contractDirectoryID("subject", unique), MemberSourceID: "subject-" + unique,
@@ -59,6 +51,32 @@ func DirectoryGroupTargetStore(t *testing.T, store directoryexpansion.GroupTarge
 	}
 	if _, err := store.CreateManagedMembership(ctx, membership); !errors.Is(err, directoryexpansion.ErrConflict) {
 		t.Fatalf("expected duplicate managed membership conflict, got %v", err)
+	}
+	graphGroups, err := store.ListGraphManagedGroups(ctx, organizationID, directoryexpansion.ManagedGroupGraphQuery{
+		LabelSearch: "staff", GroupIDs: []string{group.ID}, Limit: 10,
+	})
+	if err != nil || len(graphGroups) != 1 || graphGroups[0].ID != group.ID {
+		t.Fatalf("graph managed-group query failed: %#v err=%v", graphGroups, err)
+	}
+	graphMemberships, err := store.ListGraphManagedMemberships(ctx, organizationID, directoryexpansion.ManagedMembershipGraphQuery{
+		LabelSearch: "ada", GroupIDs: []string{group.ID}, MemberIDs: []string{membership.MemberID}, Limit: 10,
+	})
+	if err != nil || len(graphMemberships) != 1 || graphMemberships[0].ID != membership.ID {
+		t.Fatalf("graph managed-membership query failed: %#v err=%v", graphMemberships, err)
+	}
+	outsideGraphGroups, err := store.ListGraphManagedGroups(ctx, organizationID+"-other", directoryexpansion.ManagedGroupGraphQuery{
+		GroupIDs: []string{group.ID}, Limit: 10,
+	})
+	if err != nil || len(outsideGraphGroups) != 0 {
+		t.Fatalf("graph managed-group query escaped organization scope: %#v err=%v", outsideGraphGroups, err)
+	}
+	group.DisplayName, group.Status, group.Revision, group.UpdatedAt = "Former staff", "inactive", 2, now.Add(time.Second)
+	if _, err := store.ReconcileManagedGroup(ctx, group, 99); !errors.Is(err, directoryexpansion.ErrConflict) {
+		t.Fatalf("expected stale group revision conflict, got %v", err)
+	}
+	updated, err := store.ReconcileManagedGroup(ctx, group, 1)
+	if err != nil || updated.Revision != 2 || updated.Status != "inactive" {
+		t.Fatalf("reconcile managed group: %#v err=%v", updated, err)
 	}
 	membership.Status, membership.Revision, membership.UpdatedAt = "inactive", 2, now.Add(time.Second)
 	if _, err := store.ReconcileManagedMembership(ctx, membership, 1); err != nil {

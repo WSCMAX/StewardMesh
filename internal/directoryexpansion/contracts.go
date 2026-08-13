@@ -7,7 +7,10 @@ package directoryexpansion
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/maxlemke/stewardmesh/internal/guard"
 	"github.com/maxlemke/stewardmesh/internal/people"
@@ -140,6 +143,56 @@ type ManagedMembership struct {
 	CreatedAt, UpdatedAt                               time.Time
 }
 
+type ManagedGroupGraphQuery struct {
+	LabelSearch string
+	GroupIDs    []string
+	Limit       int
+}
+
+type ManagedMembershipGraphQuery struct {
+	LabelSearch string
+	GroupIDs    []string
+	MemberIDs   []string
+	Limit       int
+}
+
+func (q ManagedGroupGraphQuery) Valid() bool {
+	return q.Limit >= 1 && q.Limit <= MaximumGraphLimit && validGraphContractText(q.LabelSearch, 200) &&
+		validGraphContractIDs(q.GroupIDs) && len(q.GroupIDs) <= MaximumGraphLimit
+}
+
+func (q ManagedMembershipGraphQuery) Valid() bool {
+	return q.Limit >= 1 && q.Limit <= MaximumGraphLimit && validGraphContractText(q.LabelSearch, 200) &&
+		validGraphContractIDs(q.GroupIDs) && validGraphContractIDs(q.MemberIDs) &&
+		len(q.GroupIDs)+len(q.MemberIDs) <= MaximumGraphLimit
+}
+
+func validGraphContractText(value string, maximum int) bool {
+	if !utf8.ValidString(value) || utf8.RuneCountInString(value) > maximum {
+		return false
+	}
+	for _, character := range value {
+		if unicode.IsControl(character) {
+			return false
+		}
+	}
+	return true
+}
+
+func validGraphContractIDs(values []string) bool {
+	for _, value := range values {
+		if strings.TrimSpace(value) == "" || !utf8.ValidString(value) || utf8.RuneCountInString(value) > 128 {
+			return false
+		}
+		for _, character := range value {
+			if unicode.IsControl(character) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 type GroupTargetStore interface {
 	GetManagedGroup(context.Context, string, string) (ManagedGroup, error)
 	CreateManagedGroup(context.Context, ManagedGroup) (ManagedGroup, error)
@@ -151,6 +204,8 @@ type GroupTargetStore interface {
 	DeleteManagedMembership(context.Context, string, string, uint64) error
 	ListManagedGroups(context.Context, string) ([]ManagedGroup, error)
 	ListManagedMemberships(context.Context, string) ([]ManagedMembership, error)
+	ListGraphManagedGroups(context.Context, string, ManagedGroupGraphQuery) ([]ManagedGroup, error)
+	ListGraphManagedMemberships(context.Context, string, ManagedMembershipGraphQuery) ([]ManagedMembership, error)
 }
 
 type Page struct {

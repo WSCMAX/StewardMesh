@@ -11,13 +11,25 @@ import (
 
 	"github.com/maxlemke/stewardmesh/internal/atlas"
 	"github.com/maxlemke/stewardmesh/internal/domain"
+	"github.com/maxlemke/stewardmesh/internal/people"
 )
 
+type memoryGraphIdentityVisibility interface {
+	GraphIdentityVisible(string, string, people.Visibility) bool
+}
+
 type MemoryAtlasStore struct {
-	mu        sync.RWMutex
-	models    map[string]domain.AssetModel
-	assets    map[string]domain.Asset
-	lifecycle map[string][]domain.AssetLifecycleEvent
+	mu         sync.RWMutex
+	models     map[string]domain.AssetModel
+	assets     map[string]domain.Asset
+	lifecycle  map[string][]domain.AssetLifecycleEvent
+	identities memoryGraphIdentityVisibility
+}
+
+func NewMemoryAtlasStoreWithPeople(identities *MemoryPeopleStore) *MemoryAtlasStore {
+	store := NewMemoryAtlasStore()
+	store.identities = identities
+	return store
 }
 
 var _ atlas.Store = (*MemoryAtlasStore)(nil)
@@ -204,7 +216,10 @@ func (s *MemoryAtlasStore) ListGraphAssets(_ context.Context, organizationID str
 	items := make([]domain.Asset, 0)
 	for _, asset := range s.assets {
 		if asset.OrganizationID != organizationID || !memoryGraphAssetVisible(asset, query.Visibility) ||
+			!s.memoryGraphAssetDirectoryVisible(asset, query.Directory) ||
 			!memoryGraphAssetMatchesReferences(asset, query.References) ||
+			query.DirectOrganizationChildren && (asset.SiteID != "" || asset.BuildingID != "" || asset.RoomID != "" ||
+				asset.DepartmentID != "" || asset.UserID != "") ||
 			query.LabelSearch != "" && !strings.Contains(strings.ToLower(asset.Name), strings.ToLower(query.LabelSearch)) {
 			continue
 		}
@@ -215,6 +230,17 @@ func (s *MemoryAtlasStore) ListGraphAssets(_ context.Context, organizationID str
 		items = items[:query.Limit]
 	}
 	return items, nil
+}
+
+func (s *MemoryAtlasStore) memoryGraphAssetDirectoryVisible(asset domain.Asset, visibility atlas.GraphAssetDirectoryVisibility) bool {
+	return visibility.All ||
+		(asset.SiteID != "" && sliceContains(visibility.SiteIDs, asset.SiteID)) ||
+		(asset.DepartmentID != "" && sliceContains(visibility.DepartmentIDs, asset.DepartmentID)) ||
+		(asset.UserID != "" && sliceContains(visibility.UserIDs, asset.UserID)) ||
+		(visibility.MatchUserDirectory && asset.UserID != "" && s.identities != nil &&
+			s.identities.GraphIdentityVisible(asset.OrganizationID, asset.UserID, people.Visibility{
+				SiteIDs: visibility.SiteIDs, DepartmentIDs: visibility.DepartmentIDs,
+			}))
 }
 
 func memoryGraphAssetVisible(asset domain.Asset, visibility atlas.GraphAssetVisibility) bool {

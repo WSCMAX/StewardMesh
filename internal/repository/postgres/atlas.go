@@ -297,6 +297,31 @@ func (s *AtlasStore) ListGraphAssets(ctx context.Context, organizationID string,
 		}
 		query.WriteString(" AND (" + strings.Join(visibility, " OR ") + ")")
 	}
+	if !filter.Directory.All {
+		directory := make([]string, 0, 4)
+		if len(filter.Directory.SiteIDs) > 0 {
+			directory = append(directory, atlasInPredicate("site_id", filter.Directory.SiteIDs, &arguments))
+		}
+		if len(filter.Directory.DepartmentIDs) > 0 {
+			directory = append(directory, atlasInPredicate("department_id", filter.Directory.DepartmentIDs, &arguments))
+		}
+		if len(filter.Directory.UserIDs) > 0 {
+			directory = append(directory, atlasInPredicate("user_id", filter.Directory.UserIDs, &arguments))
+		}
+		if filter.Directory.MatchUserDirectory && len(filter.Directory.SiteIDs)+len(filter.Directory.DepartmentIDs) > 0 {
+			identityPredicates := make([]string, 0, 2)
+			if len(filter.Directory.SiteIDs) > 0 {
+				identityPredicates = append(identityPredicates, atlasInPredicate("graph_identity.site_id", filter.Directory.SiteIDs, &arguments))
+			}
+			if len(filter.Directory.DepartmentIDs) > 0 {
+				identityPredicates = append(identityPredicates, atlasInPredicate("graph_identity.department_id", filter.Directory.DepartmentIDs, &arguments))
+			}
+			directory = append(directory, `EXISTS (SELECT 1 FROM people_identities graph_identity
+				WHERE graph_identity.organization_id = atlas_assets.organization_id AND graph_identity.id = atlas_assets.user_id
+				AND graph_identity.status = 'active' AND (`+strings.Join(identityPredicates, " OR ")+`))`)
+		}
+		query.WriteString(" AND (" + strings.Join(directory, " OR ") + ")")
+	}
 	references := make([]string, 0, 6)
 	for _, reference := range []struct {
 		column string
@@ -313,6 +338,9 @@ func (s *AtlasStore) ListGraphAssets(ctx context.Context, organizationID string,
 	if len(references) > 0 {
 		sort.Strings(references)
 		query.WriteString(" AND (" + strings.Join(references, " OR ") + ")")
+	}
+	if filter.DirectOrganizationChildren {
+		query.WriteString(" AND site_id IS NULL AND building_id IS NULL AND room_id IS NULL AND department_id IS NULL AND user_id IS NULL")
 	}
 	arguments = append(arguments, filter.Limit)
 	query.WriteString(fmt.Sprintf(" ORDER BY lower(name), id LIMIT $%d", len(arguments)))

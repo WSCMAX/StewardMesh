@@ -593,6 +593,15 @@ func normalizeGraphAssetQuery(query GraphAssetQuery) (GraphAssetQuery, error) {
 	if query.Visibility.DepartmentIDs, err = normalizedGraphIDs(query.Visibility.DepartmentIDs, referencePattern); err != nil {
 		return GraphAssetQuery{}, err
 	}
+	if query.Directory.SiteIDs, err = normalizedGraphIDs(query.Directory.SiteIDs, referencePattern); err != nil {
+		return GraphAssetQuery{}, err
+	}
+	if query.Directory.DepartmentIDs, err = normalizedGraphIDs(query.Directory.DepartmentIDs, referencePattern); err != nil {
+		return GraphAssetQuery{}, err
+	}
+	if query.Directory.UserIDs, err = normalizedGraphIDs(query.Directory.UserIDs, referencePattern); err != nil {
+		return GraphAssetQuery{}, err
+	}
 	if query.References.ResourceIDs, err = normalizedGraphIDs(query.References.ResourceIDs, assetIDPattern); err != nil {
 		return GraphAssetQuery{}, err
 	}
@@ -607,6 +616,7 @@ func normalizeGraphAssetQuery(query GraphAssetQuery) (GraphAssetQuery, error) {
 		}
 	}
 	if len(query.Visibility.ResourceIDs)+len(query.Visibility.SiteIDs)+len(query.Visibility.DepartmentIDs) > MaximumGraphAssetLimit ||
+		len(query.Directory.SiteIDs)+len(query.Directory.DepartmentIDs)+len(query.Directory.UserIDs) > MaximumGraphAssetLimit ||
 		len(query.References.ResourceIDs)+len(query.References.SiteIDs)+len(query.References.BuildingIDs)+
 			len(query.References.RoomIDs)+len(query.References.DepartmentIDs)+len(query.References.UserIDs) > MaximumGraphAssetLimit {
 		return GraphAssetQuery{}, ErrInvalidInput

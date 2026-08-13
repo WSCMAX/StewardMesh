@@ -131,6 +131,26 @@ func PeopleStore(t *testing.T, store people.Store, organizationID string) {
 	if createdDepartment.SiteID != site.ID {
 		t.Fatalf("unexpected department %#v", createdDepartment)
 	}
+	graphLocations, err := store.ListGraphLocations(ctx, organizationID, people.GraphLocationQuery{
+		SiteIDs: []string{site.ID}, ParentSiteIDs: []string{site.ID}, Limit: 10,
+	}, people.Visibility{All: true})
+	if err != nil || len(graphLocations.Sites) != 1 || len(graphLocations.Buildings) != 1 ||
+		len(graphLocations.Rooms) != 1 || len(graphLocations.Departments) != 1 {
+		t.Fatalf("graph location selector query failed: %#v err=%v", graphLocations, err)
+	}
+	directGraphLocations, err := store.ListGraphLocations(ctx, organizationID, people.GraphLocationQuery{
+		DirectOrganizationChildren: true, Limit: 10,
+	}, people.Visibility{All: true})
+	if err != nil || len(directGraphLocations.Sites) != 1 || len(directGraphLocations.Buildings) != 0 ||
+		len(directGraphLocations.Rooms) != 0 || len(directGraphLocations.Departments) != 0 {
+		t.Fatalf("graph direct-child location query failed: %#v err=%v", directGraphLocations, err)
+	}
+	outsideGraphLocations, err := store.ListGraphLocations(ctx, organizationID+"-other", people.GraphLocationQuery{
+		SiteIDs: []string{site.ID}, Limit: 10,
+	}, people.Visibility{All: true})
+	if err != nil || len(outsideGraphLocations.Sites)+len(outsideGraphLocations.Buildings)+len(outsideGraphLocations.Rooms)+len(outsideGraphLocations.Departments) != 0 {
+		t.Fatalf("graph location query escaped organization scope: %#v err=%v", outsideGraphLocations, err)
+	}
 
 	person := contractIdentity(t, organizationID, "person", "Alex Rivera "+suffix, "alex."+suffix+"@example.test", department.ID, site.ID, now)
 	shared := contractIdentity(t, organizationID, "shared", "Operations Desk "+suffix, "", department.ID, site.ID, now)
@@ -149,6 +169,12 @@ func PeopleStore(t *testing.T, store people.Store, organizationID string) {
 	}, people.Visibility{All: true})
 	if err != nil || len(graphItems) != 1 || graphItems[0].ID != graphTarget.ID {
 		t.Fatalf("graph identity label/reference query failed: %#v err=%v", graphItems, err)
+	}
+	directGraphItems, err := store.ListGraphIdentities(ctx, organizationID, people.GraphIdentityQuery{
+		DirectOrganizationChildren: true, Limit: 10,
+	}, people.Visibility{All: true})
+	if err != nil || !contractIdentityPresent(directGraphItems, graphTarget.ID) || contractIdentityPresent(directGraphItems, person.ID) {
+		t.Fatalf("graph direct-child identity query failed: %#v err=%v", directGraphItems, err)
 	}
 	outsideGraphItems, err := store.ListGraphIdentities(ctx, organizationID, people.GraphIdentityQuery{
 		IdentityIDs: []string{graphTarget.ID}, Limit: 10,
@@ -318,6 +344,15 @@ func contractIdentity(t *testing.T, organizationID string, kind people.IdentityK
 		CreatedAt:       now,
 		UpdatedAt:       now,
 	}
+}
+
+func contractIdentityPresent(identities []people.Identity, id string) bool {
+	for _, identity := range identities {
+		if identity.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 func contractAssignment(t *testing.T, organizationID, assetID, assigneeID string, assigneeKind people.AssigneeKind, role people.AssignmentRole, effectiveFrom time.Time) people.AssetAssignment {

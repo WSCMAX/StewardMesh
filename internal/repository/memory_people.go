@@ -300,6 +300,157 @@ func (s *MemoryPeopleStore) ListDepartments(_ context.Context, organizationID st
 	return result, nil
 }
 
+func (s *MemoryPeopleStore) ListGraphLocations(_ context.Context, organizationID string, query people.GraphLocationQuery, visibility people.Visibility) (people.GraphLocations, error) {
+	if organizationID == "" || visibility.Empty() || !query.Valid() {
+		return people.GraphLocations{}, people.ErrInvalidInput
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	visibleSites := stringSet(visibility.SiteIDs)
+	visibleDepartments := stringSet(visibility.DepartmentIDs)
+	if !visibility.All {
+		for _, department := range s.departments {
+			if department.OrganizationID == organizationID && department.SiteID != "" {
+				if _, allowed := visibleDepartments[department.ID]; allowed {
+					visibleSites[department.SiteID] = struct{}{}
+				}
+			}
+		}
+	}
+	siteIDs, buildingIDs, roomIDs := stringSet(query.SiteIDs), stringSet(query.BuildingIDs), stringSet(query.RoomIDs)
+	departmentIDs := stringSet(query.DepartmentIDs)
+	parentSiteIDs, parentBuildingIDs := stringSet(query.ParentSiteIDs), stringSet(query.ParentBuildingIDs)
+	hasSelector := query.DirectOrganizationChildren || len(siteIDs)+len(buildingIDs)+len(roomIDs)+len(departmentIDs)+len(parentSiteIDs)+len(parentBuildingIDs) > 0
+	search := strings.ToLower(query.LabelSearch)
+	type candidate struct {
+		kind       people.GraphLocationKind
+		id, label  string
+		site       *people.Site
+		building   *people.Building
+		room       *people.Room
+		department *people.Department
+	}
+	candidates := make([]candidate, 0, query.Limit)
+	if query.Kind == "" || query.Kind == people.GraphLocationSite {
+		for _, item := range s.sites {
+			if item.OrganizationID != organizationID || item.Status != people.StatusActive || !visibility.All && !setContains(visibleSites, item.ID) {
+				continue
+			}
+			if search != "" && !strings.Contains(strings.ToLower(item.Name), search) {
+				continue
+			}
+			if hasSelector && !setContains(siteIDs, item.ID) && !query.DirectOrganizationChildren {
+				continue
+			}
+			copy := item
+			candidates = append(candidates, candidate{kind: people.GraphLocationSite, id: item.ID, label: item.Name, site: &copy})
+		}
+	}
+	if query.Kind == "" || query.Kind == people.GraphLocationBuilding {
+		for _, item := range s.buildings {
+			if item.OrganizationID != organizationID || item.Status != people.StatusActive || !s.siteVisible(organizationID, item.SiteID, visibility) {
+				continue
+			}
+			if search != "" && !strings.Contains(strings.ToLower(item.Name), search) {
+				continue
+			}
+			if hasSelector && !setContains(buildingIDs, item.ID) && !setContains(parentSiteIDs, item.SiteID) {
+				continue
+			}
+			copy := item
+			candidates = append(candidates, candidate{kind: people.GraphLocationBuilding, id: item.ID, label: item.Name, building: &copy})
+		}
+	}
+	if query.Kind == "" || query.Kind == people.GraphLocationRoom {
+		for _, item := range s.rooms {
+			if item.OrganizationID != organizationID || item.Status != people.StatusActive || !s.siteVisible(organizationID, item.SiteID, visibility) {
+				continue
+			}
+			label := graphRoomLabel(item)
+			if search != "" && !strings.Contains(strings.ToLower(label), search) {
+				continue
+			}
+			if hasSelector && !setContains(roomIDs, item.ID) && !setContains(parentSiteIDs, item.SiteID) && !setContains(parentBuildingIDs, item.BuildingID) {
+				continue
+			}
+			copy := item
+			candidates = append(candidates, candidate{kind: people.GraphLocationRoom, id: item.ID, label: label, room: &copy})
+		}
+	}
+	if query.Kind == "" || query.Kind == people.GraphLocationDepartment {
+		for _, item := range s.departments {
+			if item.OrganizationID != organizationID || item.Status != people.StatusActive {
+				continue
+			}
+			if !visibility.All && !setContains(visibleDepartments, item.ID) && !setContains(visibleSites, item.SiteID) {
+				continue
+			}
+			if search != "" && !strings.Contains(strings.ToLower(item.Name), search) {
+				continue
+			}
+			direct := query.DirectOrganizationChildren && item.SiteID == ""
+			if hasSelector && !setContains(departmentIDs, item.ID) && !setContains(parentSiteIDs, item.SiteID) && !direct {
+				continue
+			}
+			copy := item
+			candidates = append(candidates, candidate{kind: people.GraphLocationDepartment, id: item.ID, label: item.Name, department: &copy})
+		}
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].kind != candidates[j].kind {
+			return candidates[i].kind < candidates[j].kind
+		}
+		left, right := strings.ToLower(candidates[i].label), strings.ToLower(candidates[j].label)
+		if left != right {
+			return left < right
+		}
+		return candidates[i].id < candidates[j].id
+	})
+	if len(candidates) > query.Limit {
+		candidates = candidates[:query.Limit]
+	}
+	result := people.GraphLocations{Sites: []people.Site{}, Buildings: []people.Building{}, Rooms: []people.Room{}, Departments: []people.Department{}}
+	for _, item := range candidates {
+		switch item.kind {
+		case people.GraphLocationSite:
+			result.Sites = append(result.Sites, *item.site)
+		case people.GraphLocationBuilding:
+			result.Buildings = append(result.Buildings, *item.building)
+		case people.GraphLocationRoom:
+			result.Rooms = append(result.Rooms, *item.room)
+		case people.GraphLocationDepartment:
+			result.Departments = append(result.Departments, *item.department)
+		}
+	}
+	return result, nil
+}
+
+func graphRoomLabel(room people.Room) string {
+	label := "Room " + room.Number
+	if room.Name != "" {
+		label += " · " + room.Name
+	}
+	return label
+}
+
+func setContains(values map[string]struct{}, value string) bool {
+	_, present := values[value]
+	return present
+}
+
+// GraphIdentityVisible is the O(1) in-memory companion to PostgreSQL's
+// pre-limit identity EXISTS predicate for user-linked graph assets.
+func (s *MemoryPeopleStore) GraphIdentityVisible(organizationID, identityID string, visibility people.Visibility) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	identity, present := s.identities[identityID]
+	if !present || identity.OrganizationID != organizationID || identity.Status != people.StatusActive {
+		return false
+	}
+	return visibility.All || setContains(stringSet(visibility.SiteIDs), identity.SiteID) ||
+		setContains(stringSet(visibility.DepartmentIDs), identity.DepartmentID)
+}
+
 func (s *MemoryPeopleStore) CreateIdentity(_ context.Context, identity people.Identity) (people.Identity, error) {
 	if !validMemoryIdentity(identity) {
 		return people.Identity{}, people.ErrInvalidInput
@@ -496,6 +647,9 @@ func (s *MemoryPeopleStore) ListGraphIdentities(_ context.Context, organizationI
 			}
 		}
 		if query.Kind != "" && identity.Kind != query.Kind || search != "" && !strings.Contains(strings.ToLower(identity.DisplayName), search) {
+			continue
+		}
+		if query.DirectOrganizationChildren && (identity.DepartmentID != "" || identity.SiteID != "") {
 			continue
 		}
 		if hasSelector {

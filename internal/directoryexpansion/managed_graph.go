@@ -48,7 +48,11 @@ func (s *ManagedGraphStore) Graph(ctx context.Context, query GraphQuery) (Graph,
 		return emptyGraph(), nil
 	}
 	builder := newGraphBuilder()
-	if err := s.project(ctx, builder, ""); err != nil {
+	if err := s.projectAnchors(ctx, builder, "", query); err != nil {
+		return Graph{}, err
+	}
+	anchors := graphAnchorNodes(builder.graph().Nodes, query)
+	if err := s.projectRelationshipContext(ctx, builder, "", query, anchors); err != nil {
 		return Graph{}, err
 	}
 	return filterGraph(builder.graph(), query), nil
@@ -82,18 +86,21 @@ func (s *RelationshipGraphStore) Graph(ctx context.Context, query GraphQuery) (G
 	organizationNodeID := typedNodeID(NodeOrganization, s.organization.ID)
 	builder.addNode(Node{ID: organizationNodeID, Kind: NodeOrganization, Label: s.organization.Name})
 
-	if err := s.projectLocations(ctx, builder, query.Scope.Directory, organizationNodeID); err != nil {
-		return Graph{}, err
+	if locationQuery := graphAnchorLocationQuery(query); locationQuery != nil {
+		if _, err := s.projectLocations(ctx, builder, query.Scope.Directory, organizationNodeID, *locationQuery); err != nil {
+			return Graph{}, err
+		}
 	}
 	if query.Scope.Directory.All {
 		managed := &ManagedGraphStore{store: s.groups, organizationID: s.organization.ID}
-		if err := managed.project(ctx, builder, organizationNodeID); err != nil {
+		if err := managed.projectAnchors(ctx, builder, organizationNodeID, query); err != nil {
 			return Graph{}, err
 		}
 	}
 
+	var anchorIdentities []people.Identity
 	if identityQuery := graphAnchorIdentityQuery(query); identityQuery != nil {
-		_, err = s.projectIdentities(ctx, builder, query.Scope.Directory, organizationNodeID, *identityQuery)
+		anchorIdentities, err = s.projectIdentities(ctx, builder, query.Scope.Directory, organizationNodeID, *identityQuery)
 		if err != nil {
 			return Graph{}, err
 		}
@@ -109,19 +116,32 @@ func (s *RelationshipGraphStore) Graph(ctx context.Context, query GraphQuery) (G
 		}
 	}
 	anchors := graphAnchorNodes(builder.graph().Nodes, query)
-	identityContext, assetContext := graphRelationshipContext(query, anchors, anchorAssets)
-	if identityContext != nil {
-		if _, err := s.projectIdentities(ctx, builder, query.Scope.Directory, organizationNodeID, *identityContext); err != nil {
+	identityContext, assetContext, locationContext := graphRelationshipContext(query, anchors, anchorIdentities, anchorAssets)
+	if locationContext != nil {
+		if _, err := s.projectLocations(ctx, builder, query.Scope.Directory, organizationNodeID, *locationContext); err != nil {
 			return Graph{}, err
 		}
-		// Asset anchors are loaded before their assigned identity context is
-		// known. Project them once more so assigned_to edges are materialized;
-		// semantic edge deduplication keeps every other relationship stable.
-		s.projectAssetRecords(builder, query.Scope, organizationNodeID, anchorAssets)
 	}
+	var contextIdentities []people.Identity
+	if identityContext != nil {
+		contextIdentities, err = s.projectIdentities(ctx, builder, query.Scope.Directory, organizationNodeID, *identityContext)
+		if err != nil {
+			return Graph{}, err
+		}
+	}
+	var contextAssets []domain.Asset
 	if assetContext != nil && !query.Scope.Assets.Empty() {
 		assetContext.Visibility = graphAssetVisibility(query.Scope.Assets)
-		if _, err := s.projectAssets(ctx, builder, query.Scope, organizationNodeID, *assetContext); err != nil {
+		contextAssets, err = s.projectAssets(ctx, builder, query.Scope, organizationNodeID, *assetContext)
+		if err != nil {
+			return Graph{}, err
+		}
+	}
+	s.projectIdentityRecords(builder, organizationNodeID, append(anchorIdentities, contextIdentities...))
+	s.projectAssetRecords(builder, query.Scope, organizationNodeID, append(anchorAssets, contextAssets...))
+	if query.Scope.Directory.All {
+		managed := &ManagedGraphStore{store: s.groups, organizationID: s.organization.ID}
+		if err := managed.projectRelationshipContext(ctx, builder, organizationNodeID, query, anchors); err != nil {
 			return Graph{}, err
 		}
 	}
@@ -133,7 +153,7 @@ func graphAnchorIdentityQuery(query GraphQuery) *people.GraphIdentityQuery {
 	if query.Kind != "" && !identityKind {
 		return nil
 	}
-	result := &people.GraphIdentityQuery{LabelSearch: query.Search, Limit: MaximumGraphLimit}
+	result := &people.GraphIdentityQuery{LabelSearch: query.Search, Limit: query.Limit}
 	if identityKind {
 		result.Kind = kind
 	}
@@ -144,7 +164,26 @@ func graphAnchorAssetQuery(query GraphQuery) *atlas.GraphAssetQuery {
 	if query.Kind != "" && query.Kind != NodeAsset {
 		return nil
 	}
-	return &atlas.GraphAssetQuery{LabelSearch: query.Search, Limit: MaximumGraphLimit}
+	return &atlas.GraphAssetQuery{LabelSearch: query.Search, Limit: query.Limit}
+}
+
+func graphAnchorLocationQuery(query GraphQuery) *people.GraphLocationQuery {
+	result := &people.GraphLocationQuery{LabelSearch: query.Search, Limit: query.Limit}
+	switch query.Kind {
+	case "":
+		return result
+	case NodeSite:
+		result.Kind = people.GraphLocationSite
+	case NodeBuilding:
+		result.Kind = people.GraphLocationBuilding
+	case NodeRoom:
+		result.Kind = people.GraphLocationRoom
+	case NodeDepartment:
+		result.Kind = people.GraphLocationDepartment
+	default:
+		return nil
+	}
+	return result
 }
 
 func graphAssetVisibility(visibility AssetVisibility) atlas.GraphAssetVisibility {
@@ -152,26 +191,34 @@ func graphAssetVisibility(visibility AssetVisibility) atlas.GraphAssetVisibility
 }
 
 func graphAnchorNodes(nodes []Node, query GraphQuery) []Node {
-	anchors := make([]Node, 0, len(nodes))
+	ordered := append([]Node(nil), nodes...)
+	sort.Slice(ordered, func(i, j int) bool { return graphNodeLess(ordered[i], ordered[j]) })
+	anchors := make([]Node, 0, len(ordered))
 	search := strings.ToLower(query.Search)
-	for _, node := range nodes {
+	for _, node := range ordered {
 		if query.Kind != "" && node.Kind != query.Kind || search != "" && !strings.Contains(strings.ToLower(node.Label), search) {
 			continue
 		}
 		anchors = append(anchors, node)
+		if len(anchors) == query.Limit {
+			break
+		}
 	}
 	return anchors
 }
 
-func graphRelationshipContext(query GraphQuery, anchors []Node, anchorAssets []domain.Asset) (*people.GraphIdentityQuery, *atlas.GraphAssetQuery) {
+func graphRelationshipContext(query GraphQuery, anchors []Node, anchorIdentities []people.Identity, anchorAssets []domain.Asset) (*people.GraphIdentityQuery, *atlas.GraphAssetQuery, *people.GraphLocationQuery) {
 	if query.Relationship == "" {
-		return nil, nil
+		return nil, nil, nil
 	}
-	identities := &people.GraphIdentityQuery{Limit: MaximumGraphLimit}
-	assets := &atlas.GraphAssetQuery{Limit: MaximumGraphLimit}
-	selectorCount := 0
-	appendSelector := func(values *[]string, value string) {
-		if value == "" || selectorCount == MaximumGraphLimit {
+	identities := &people.GraphIdentityQuery{Limit: query.Limit}
+	assets := &atlas.GraphAssetQuery{Limit: query.Limit}
+	locations := &people.GraphLocationQuery{Limit: query.Limit}
+	identitySelectorCount := 0
+	assetSelectorCount := 0
+	locationSelectorCount := 0
+	appendSelector := func(values *[]string, value string, count *int) {
+		if value == "" || *count == query.Limit {
 			return
 		}
 		for _, existing := range *values {
@@ -180,53 +227,73 @@ func graphRelationshipContext(query GraphQuery, anchors []Node, anchorAssets []d
 			}
 		}
 		*values = append(*values, value)
-		selectorCount++
+		*count++
 	}
 	for _, node := range anchors {
 		_, rawID, _ := strings.Cut(node.ID, ":")
 		switch query.Relationship {
 		case RelationshipBelongsTo:
 			if node.Kind == NodeDepartment {
-				appendSelector(&identities.DepartmentIDs, rawID)
-				appendSelector(&assets.References.DepartmentIDs, rawID)
+				appendSelector(&identities.DepartmentIDs, rawID, &identitySelectorCount)
+				appendSelector(&assets.References.DepartmentIDs, rawID, &assetSelectorCount)
 			}
 		case RelationshipLocatedAt:
 			switch node.Kind {
 			case NodeSite:
-				appendSelector(&identities.SiteIDs, rawID)
-				appendSelector(&assets.References.SiteIDs, rawID)
+				appendSelector(&identities.SiteIDs, rawID, &identitySelectorCount)
+				appendSelector(&assets.References.SiteIDs, rawID, &assetSelectorCount)
 			case NodeBuilding:
-				appendSelector(&assets.References.BuildingIDs, rawID)
+				appendSelector(&assets.References.BuildingIDs, rawID, &assetSelectorCount)
 			case NodeRoom:
-				appendSelector(&assets.References.RoomIDs, rawID)
+				appendSelector(&assets.References.RoomIDs, rawID, &assetSelectorCount)
 			}
 		case RelationshipAssignedTo:
 			if isIdentityNodeKind(node.Kind) {
-				appendSelector(&assets.References.UserIDs, rawID)
+				appendSelector(&assets.References.UserIDs, rawID, &assetSelectorCount)
 			}
 		case RelationshipContains:
-			if node.Kind == NodeOrganization {
-				// Direct children without a location are discovered from the
-				// bounded authorized source sets and filtered by their edges.
-				identities = &people.GraphIdentityQuery{Limit: MaximumGraphLimit}
-				assets = &atlas.GraphAssetQuery{Limit: MaximumGraphLimit}
+			switch node.Kind {
+			case NodeOrganization:
+				identities.DirectOrganizationChildren = true
+				assets.DirectOrganizationChildren = true
+				locations.DirectOrganizationChildren = true
+			case NodeSite:
+				appendSelector(&locations.ParentSiteIDs, rawID, &locationSelectorCount)
+			case NodeBuilding:
+				appendSelector(&locations.ParentBuildingIDs, rawID, &locationSelectorCount)
 			}
 		}
 	}
-	if query.Relationship == RelationshipAssignedTo {
-		for _, asset := range anchorAssets {
-			if asset.UserID != "" {
-				appendSelector(&identities.IdentityIDs, asset.UserID)
-			}
+	for _, identity := range anchorIdentities {
+		switch query.Relationship {
+		case RelationshipBelongsTo:
+			appendSelector(&locations.DepartmentIDs, identity.DepartmentID, &locationSelectorCount)
+		case RelationshipLocatedAt:
+			appendSelector(&locations.SiteIDs, identity.SiteID, &locationSelectorCount)
 		}
 	}
-	if !hasGraphIdentitySelectors(*identities) && !(query.Relationship == RelationshipContains && graphHasKind(anchors, NodeOrganization)) {
+	for _, asset := range anchorAssets {
+		switch query.Relationship {
+		case RelationshipBelongsTo:
+			appendSelector(&locations.DepartmentIDs, asset.DepartmentID, &locationSelectorCount)
+		case RelationshipLocatedAt:
+			appendSelector(&locations.SiteIDs, asset.SiteID, &locationSelectorCount)
+			appendSelector(&locations.BuildingIDs, asset.BuildingID, &locationSelectorCount)
+			appendSelector(&locations.RoomIDs, asset.RoomID, &locationSelectorCount)
+		case RelationshipAssignedTo:
+			appendSelector(&identities.IdentityIDs, asset.UserID, &identitySelectorCount)
+		}
+	}
+	if !hasGraphIdentitySelectors(*identities) && !identities.DirectOrganizationChildren {
 		identities = nil
 	}
-	if assets.References.Empty() && !(query.Relationship == RelationshipContains && graphHasKind(anchors, NodeOrganization)) {
+	if assets.References.Empty() && !assets.DirectOrganizationChildren {
 		assets = nil
 	}
-	return identities, assets
+	if !hasGraphLocationSelectors(*locations) && !locations.DirectOrganizationChildren {
+		locations = nil
+	}
+	return identities, assets, locations
 }
 
 func isIdentityNodeKind(kind NodeKind) bool {
@@ -238,6 +305,11 @@ func hasGraphIdentitySelectors(query people.GraphIdentityQuery) bool {
 	return len(query.IdentityIDs)+len(query.DepartmentIDs)+len(query.SiteIDs) > 0
 }
 
+func hasGraphLocationSelectors(query people.GraphLocationQuery) bool {
+	return len(query.SiteIDs)+len(query.BuildingIDs)+len(query.RoomIDs)+len(query.DepartmentIDs)+
+		len(query.ParentSiteIDs)+len(query.ParentBuildingIDs) > 0
+}
+
 func graphHasKind(nodes []Node, kind NodeKind) bool {
 	for _, node := range nodes {
 		if node.Kind == kind {
@@ -247,24 +319,17 @@ func graphHasKind(nodes []Node, kind NodeKind) bool {
 	return false
 }
 
-func (s *RelationshipGraphStore) projectLocations(ctx context.Context, builder *graphBuilder, visibility people.Visibility, organizationNodeID string) error {
-	sites, err := s.people.ListSites(ctx, s.organization.ID, visibility)
+func (s *RelationshipGraphStore) projectLocations(ctx context.Context, builder *graphBuilder, visibility people.Visibility, organizationNodeID string, graphQuery people.GraphLocationQuery) (people.GraphLocations, error) {
+	locations, err := s.people.ListGraphLocations(ctx, s.organization.ID, graphQuery, visibility)
 	if err != nil {
-		return err
+		return people.GraphLocations{}, err
 	}
-	buildings, err := s.people.ListBuildings(ctx, s.organization.ID, "", visibility)
-	if err != nil {
-		return err
-	}
-	rooms, err := s.people.ListRooms(ctx, s.organization.ID, "", "", visibility)
-	if err != nil {
-		return err
-	}
-	departments, err := s.people.ListDepartments(ctx, s.organization.ID, visibility)
-	if err != nil {
-		return err
-	}
-	for _, site := range sites {
+	s.projectLocationRecords(builder, organizationNodeID, locations)
+	return locations, nil
+}
+
+func (s *RelationshipGraphStore) projectLocationRecords(builder *graphBuilder, organizationNodeID string, locations people.GraphLocations) {
+	for _, site := range locations.Sites {
 		if site.Status != people.StatusActive {
 			continue
 		}
@@ -272,47 +337,44 @@ func (s *RelationshipGraphStore) projectLocations(ctx context.Context, builder *
 		builder.addNode(Node{ID: id, Kind: NodeSite, Label: site.Name, Attributes: statusAttributes(site.Status, "local")})
 		builder.addEdge(RelationshipContains, organizationNodeID, id, nil)
 	}
-	for _, building := range buildings {
+	for _, building := range locations.Buildings {
 		if building.Status != people.StatusActive {
 			continue
 		}
 		parentID := typedNodeID(NodeSite, building.SiteID)
-		if !builder.hasNode(parentID) {
-			continue
-		}
 		id := typedNodeID(NodeBuilding, building.ID)
 		builder.addNode(Node{ID: id, Kind: NodeBuilding, Label: building.Name, Attributes: statusAttributes(building.Status, "local")})
-		builder.addEdge(RelationshipContains, parentID, id, nil)
+		if builder.hasNode(parentID) {
+			builder.addEdge(RelationshipContains, parentID, id, nil)
+		}
 	}
-	for _, room := range rooms {
+	for _, room := range locations.Rooms {
 		if room.Status != people.StatusActive {
 			continue
 		}
 		parentID := typedNodeID(NodeBuilding, room.BuildingID)
-		if !builder.hasNode(parentID) {
-			continue
-		}
 		label := "Room " + room.Number
 		if room.Name != "" {
 			label += " · " + room.Name
 		}
 		id := typedNodeID(NodeRoom, room.ID)
 		builder.addNode(Node{ID: id, Kind: NodeRoom, Label: label, Attributes: statusAttributes(room.Status, "local")})
-		builder.addEdge(RelationshipContains, parentID, id, nil)
+		if builder.hasNode(parentID) {
+			builder.addEdge(RelationshipContains, parentID, id, nil)
+		}
 	}
-	for _, department := range departments {
+	for _, department := range locations.Departments {
 		if department.Status != people.StatusActive {
 			continue
 		}
 		id := typedNodeID(NodeDepartment, department.ID)
 		builder.addNode(Node{ID: id, Kind: NodeDepartment, Label: department.Name, Attributes: statusAttributes(department.Status, "local")})
-		parentID := organizationNodeID
-		if candidate := typedNodeID(NodeSite, department.SiteID); department.SiteID != "" && builder.hasNode(candidate) {
-			parentID = candidate
+		if department.SiteID == "" {
+			builder.addEdge(RelationshipContains, organizationNodeID, id, nil)
+		} else if candidate := typedNodeID(NodeSite, department.SiteID); builder.hasNode(candidate) {
+			builder.addEdge(RelationshipContains, candidate, id, nil)
 		}
-		builder.addEdge(RelationshipContains, parentID, id, nil)
 	}
-	return nil
 }
 
 func (s *RelationshipGraphStore) projectIdentities(ctx context.Context, builder *graphBuilder, visibility people.Visibility, organizationNodeID string, graphQuery people.GraphIdentityQuery) ([]people.Identity, error) {
@@ -320,6 +382,11 @@ func (s *RelationshipGraphStore) projectIdentities(ctx context.Context, builder 
 	if err != nil {
 		return nil, err
 	}
+	s.projectIdentityRecords(builder, organizationNodeID, identities)
+	return identities, nil
+}
+
+func (s *RelationshipGraphStore) projectIdentityRecords(builder *graphBuilder, organizationNodeID string, identities []people.Identity) {
 	for _, identity := range identities {
 		if identity.Status != people.StatusActive {
 			continue
@@ -331,37 +398,119 @@ func (s *RelationshipGraphStore) projectIdentities(ctx context.Context, builder 
 			origin = "imported"
 		}
 		builder.addNode(Node{ID: id, Kind: kind, Label: identity.DisplayName, Attributes: statusAttributes(identity.Status, origin)})
-		related := false
+		related := identity.DepartmentID != "" || identity.SiteID != ""
 		if target := typedNodeID(NodeDepartment, identity.DepartmentID); identity.DepartmentID != "" && builder.hasNode(target) {
 			builder.addEdge(RelationshipBelongsTo, id, target, nil)
-			related = true
 		}
 		if target := typedNodeID(NodeSite, identity.SiteID); identity.SiteID != "" && builder.hasNode(target) {
 			builder.addEdge(RelationshipLocatedAt, id, target, nil)
-			related = true
 		}
 		if !related {
 			builder.addEdge(RelationshipContains, organizationNodeID, id, nil)
 		}
 	}
-	return identities, nil
 }
 
-func (s *ManagedGraphStore) project(ctx context.Context, builder *graphBuilder, organizationNodeID string) error {
-	groups, err := s.store.ListManagedGroups(ctx, s.organizationID)
+func (s *ManagedGraphStore) projectAnchors(ctx context.Context, builder *graphBuilder, organizationNodeID string, query GraphQuery) error {
+	groups := make([]ManagedGroup, 0)
+	memberships := make([]ManagedMembership, 0)
+	var err error
+	if query.Kind == "" || query.Kind == NodeGroup {
+		groups, err = s.store.ListGraphManagedGroups(ctx, s.organizationID, ManagedGroupGraphQuery{LabelSearch: query.Search, Limit: query.Limit})
+		if err != nil {
+			return err
+		}
+	}
+	if query.Kind == "" || query.Kind == NodeSubject {
+		memberships, err = s.store.ListGraphManagedMemberships(ctx, s.organizationID, ManagedMembershipGraphQuery{LabelSearch: query.Search, Limit: query.Limit})
+		if err != nil {
+			return err
+		}
+		membershipGroups, err := s.listMembershipGroups(ctx, memberships, query.Limit)
+		if err != nil {
+			return err
+		}
+		groups = mergeManagedGroups(groups, membershipGroups)
+	}
+	s.projectManagedRecords(builder, organizationNodeID, groups, memberships)
+	return nil
+}
+
+func (s *ManagedGraphStore) projectRelationshipContext(ctx context.Context, builder *graphBuilder, organizationNodeID string, query GraphQuery, anchors []Node) error {
+	if query.Relationship == RelationshipContains && graphHasKind(anchors, NodeOrganization) {
+		groups, err := s.store.ListGraphManagedGroups(ctx, s.organizationID, ManagedGroupGraphQuery{Limit: query.Limit})
+		if err != nil {
+			return err
+		}
+		s.projectManagedRecords(builder, organizationNodeID, groups, nil)
+		return nil
+	}
+	if query.Relationship != RelationshipMemberOf {
+		return nil
+	}
+	groupIDs := make([]string, 0)
+	memberIDs := make([]string, 0)
+	for _, node := range anchors {
+		_, rawID, _ := strings.Cut(node.ID, ":")
+		switch node.Kind {
+		case NodeGroup:
+			appendUniqueGraphID(&groupIDs, rawID, query.Limit)
+			appendUniqueGraphID(&memberIDs, rawID, query.Limit)
+		case NodeSubject:
+			appendUniqueGraphID(&memberIDs, rawID, query.Limit)
+		}
+	}
+	membershipSets := make([][]ManagedMembership, 0, 2)
+	if len(groupIDs) > 0 {
+		items, err := s.store.ListGraphManagedMemberships(ctx, s.organizationID, ManagedMembershipGraphQuery{GroupIDs: groupIDs, Limit: query.Limit})
+		if err != nil {
+			return err
+		}
+		membershipSets = append(membershipSets, items)
+	}
+	if len(memberIDs) > 0 {
+		items, err := s.store.ListGraphManagedMemberships(ctx, s.organizationID, ManagedMembershipGraphQuery{MemberIDs: memberIDs, Limit: query.Limit})
+		if err != nil {
+			return err
+		}
+		membershipSets = append(membershipSets, items)
+	}
+	memberships := mergeManagedMemberships(membershipSets...)
+	if len(memberships) > query.Limit {
+		memberships = memberships[:query.Limit]
+	}
+	groups, err := s.listMembershipGroups(ctx, memberships, query.Limit)
 	if err != nil {
 		return err
 	}
-	memberships, err := s.store.ListManagedMemberships(ctx, s.organizationID)
-	if err != nil {
-		return err
+	s.projectManagedRecords(builder, organizationNodeID, groups, memberships)
+	return nil
+}
+
+func (s *ManagedGraphStore) listMembershipGroups(ctx context.Context, memberships []ManagedMembership, limit int) ([]ManagedGroup, error) {
+	ids := make([]string, 0, min(len(memberships)*2, limit))
+	for _, membership := range memberships {
+		appendUniqueGraphID(&ids, membership.GroupID, limit)
+		if membership.MemberKind == MemberGroup {
+			appendUniqueGraphID(&ids, membership.MemberID, limit)
+		}
 	}
-	activeGroups := make(map[string]ManagedGroup, len(groups))
+	sort.Strings(ids)
+	if len(ids) == 0 {
+		return []ManagedGroup{}, nil
+	}
+	groups, err := s.store.ListGraphManagedGroups(ctx, s.organizationID, ManagedGroupGraphQuery{GroupIDs: ids, Limit: limit})
+	if err != nil {
+		return nil, err
+	}
+	return mergeManagedGroups(groups), nil
+}
+
+func (s *ManagedGraphStore) projectManagedRecords(builder *graphBuilder, organizationNodeID string, groups []ManagedGroup, memberships []ManagedMembership) {
 	for _, group := range groups {
 		if group.Status != "active" {
 			continue
 		}
-		activeGroups[group.ID] = group
 		id := typedNodeID(NodeGroup, group.ID)
 		builder.addNode(Node{ID: id, Kind: NodeGroup, Label: group.DisplayName, Attributes: statusAttributes(group.Status, "imported")})
 		if organizationNodeID != "" {
@@ -372,29 +521,104 @@ func (s *ManagedGraphStore) project(ctx context.Context, builder *graphBuilder, 
 		if membership.Status != "active" {
 			continue
 		}
-		if _, present := activeGroups[membership.GroupID]; !present {
+		to := typedNodeID(NodeGroup, membership.GroupID)
+		if !builder.hasNode(to) {
 			continue
 		}
-		to := typedNodeID(NodeGroup, membership.GroupID)
 		from := ""
 		if membership.MemberKind == MemberGroup {
-			if _, present := activeGroups[membership.MemberID]; !present {
+			from = typedNodeID(NodeGroup, membership.MemberID)
+			if !builder.hasNode(from) {
 				continue
 			}
-			from = typedNodeID(NodeGroup, membership.MemberID)
 		} else {
 			from = typedNodeID(NodeSubject, membership.MemberID)
 			builder.addNode(Node{ID: from, Kind: NodeSubject, Label: membership.MemberDisplayName, Attributes: statusAttributes(membership.Status, "imported")})
 		}
 		builder.addEdgeWithID(membership.ID, RelationshipMemberOf, from, to, map[string]string{"origin": "imported"})
 	}
-	return nil
+}
+
+func appendUniqueGraphID(values *[]string, value string, limit int) {
+	if value == "" || len(*values) == limit {
+		return
+	}
+	for _, existing := range *values {
+		if existing == value {
+			return
+		}
+	}
+	*values = append(*values, value)
+}
+
+func mergeManagedGroups(sets ...[]ManagedGroup) []ManagedGroup {
+	byID := make(map[string]ManagedGroup)
+	for _, set := range sets {
+		for _, group := range set {
+			byID[group.ID] = group
+		}
+	}
+	result := make([]ManagedGroup, 0, len(byID))
+	for _, group := range byID {
+		result = append(result, group)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		left, right := strings.ToLower(result[i].DisplayName), strings.ToLower(result[j].DisplayName)
+		if left == right {
+			return result[i].ID < result[j].ID
+		}
+		return left < right
+	})
+	return result
+}
+
+func mergeManagedMemberships(sets ...[]ManagedMembership) []ManagedMembership {
+	byID := make(map[string]ManagedMembership)
+	for _, set := range sets {
+		for _, membership := range set {
+			byID[membership.ID] = membership
+		}
+	}
+	result := make([]ManagedMembership, 0, len(byID))
+	for _, membership := range byID {
+		result = append(result, membership)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		left, right := strings.ToLower(result[i].MemberDisplayName), strings.ToLower(result[j].MemberDisplayName)
+		if left == right {
+			return result[i].ID < result[j].ID
+		}
+		return left < right
+	})
+	return result
 }
 
 func (s *RelationshipGraphStore) projectAssets(ctx context.Context, builder *graphBuilder, scope GraphScope, organizationNodeID string, graphQuery atlas.GraphAssetQuery) ([]domain.Asset, error) {
+	if scope.Directory.All {
+		graphQuery.Directory = atlas.GraphAssetDirectoryVisibility{All: true}
+	} else {
+		graphQuery.Directory = atlas.GraphAssetDirectoryVisibility{
+			SiteIDs: scope.Directory.SiteIDs, DepartmentIDs: scope.Directory.DepartmentIDs, MatchUserDirectory: true,
+		}
+	}
 	assets, err := s.assets.ListGraphAssets(ctx, graphQuery)
 	if err != nil {
 		return nil, err
+	}
+	userIDs := make([]string, 0, len(assets))
+	for _, asset := range assets {
+		if asset.OrganizationID == s.organization.ID {
+			appendUniqueGraphID(&userIDs, asset.UserID, graphQuery.Limit)
+		}
+	}
+	sort.Strings(userIDs)
+	if len(userIDs) > 0 {
+		if _, err := s.projectIdentities(ctx, builder, scope.Directory, organizationNodeID, people.GraphIdentityQuery{
+			IdentityIDs: userIDs,
+			Limit:       graphQuery.Limit,
+		}); err != nil {
+			return nil, err
+		}
 	}
 	s.projectAssetRecords(builder, scope, organizationNodeID, assets)
 	return assets, nil
@@ -413,7 +637,7 @@ func (s *RelationshipGraphStore) projectAssetRecords(builder *graphBuilder, scop
 			"asset_kind": asset.Kind,
 			"status":     asset.Status,
 		}})
-		related := false
+		related := asset.SiteID != "" || asset.BuildingID != "" || asset.RoomID != "" || asset.DepartmentID != "" || asset.UserID != ""
 		for _, reference := range []struct {
 			kind NodeKind
 			id   string
@@ -425,23 +649,16 @@ func (s *RelationshipGraphStore) projectAssetRecords(builder *graphBuilder, scop
 			target := typedNodeID(reference.kind, reference.id)
 			if reference.id != "" && builder.hasNode(target) {
 				builder.addEdge(RelationshipLocatedAt, id, target, nil)
-				related = true
 			}
 		}
 		if target := typedNodeID(NodeDepartment, asset.DepartmentID); asset.DepartmentID != "" && builder.hasNode(target) {
 			builder.addEdge(RelationshipBelongsTo, id, target, nil)
-			related = true
 		}
 		if asset.UserID != "" {
-			// A nonempty source reference means the asset is related even when
-			// the endpoint is not yet projected or is outside directory scope.
-			// This avoids inventing an organization containment edge.
-			related = true
 			for _, kind := range []NodeKind{NodePerson, NodeShared, NodePublic, NodeLab} {
 				target := typedNodeID(kind, asset.UserID)
 				if builder.hasNode(target) {
 					builder.addEdge(RelationshipAssignedTo, id, target, nil)
-					related = true
 					break
 				}
 			}
@@ -601,15 +818,38 @@ func normalizeGraphQuery(query GraphQuery, requireScope bool) (GraphQuery, error
 	if query.Limit < 1 || query.Limit > MaximumGraphLimit {
 		return GraphQuery{}, ErrInvalidInput
 	}
+	if !validGraphSelectorValues(query.Scope.Directory.DepartmentIDs) || !validGraphSelectorValues(query.Scope.Directory.SiteIDs) ||
+		!validGraphSelectorValues(query.Scope.Assets.ResourceIDs) || !validGraphSelectorValues(query.Scope.Assets.SiteIDs) ||
+		!validGraphSelectorValues(query.Scope.Assets.DepartmentIDs) {
+		return GraphQuery{}, ErrInvalidInput
+	}
 	query.Scope.Directory.DepartmentIDs = uniqueGraphValues(query.Scope.Directory.DepartmentIDs)
 	query.Scope.Directory.SiteIDs = uniqueGraphValues(query.Scope.Directory.SiteIDs)
 	query.Scope.Assets.ResourceIDs = uniqueGraphValues(query.Scope.Assets.ResourceIDs)
 	query.Scope.Assets.SiteIDs = uniqueGraphValues(query.Scope.Assets.SiteIDs)
 	query.Scope.Assets.DepartmentIDs = uniqueGraphValues(query.Scope.Assets.DepartmentIDs)
+	if len(query.Scope.Directory.DepartmentIDs)+len(query.Scope.Directory.SiteIDs)+
+		len(query.Scope.Assets.ResourceIDs)+len(query.Scope.Assets.SiteIDs)+len(query.Scope.Assets.DepartmentIDs) > MaximumGraphLimit {
+		return GraphQuery{}, ErrInvalidInput
+	}
 	if requireScope && query.Scope.Directory.Empty() {
 		return GraphQuery{}, ErrGraphScope
 	}
 	return query, nil
+}
+
+func validGraphSelectorValues(values []string) bool {
+	for _, value := range values {
+		if strings.TrimSpace(value) == "" || !utf8.ValidString(value) || utf8.RuneCountInString(value) > 128 {
+			return false
+		}
+		for _, character := range value {
+			if unicode.IsControl(character) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func validNodeKind(kind NodeKind) bool {

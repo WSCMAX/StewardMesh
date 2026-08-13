@@ -1,6 +1,6 @@
 package postgres
 
-// Requirements: REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-005. Feature: integrations.protocols.
+// Requirements: REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-005, REQ-DIRECTORY-EXPANSION-008. Features: integrations.protocols, threads.relationships.
 
 import (
 	"context"
@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -165,6 +166,83 @@ func (s *DirectoryImportStore) ListManagedMemberships(ctx context.Context, organ
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate managed memberships: %w", err)
+	}
+	return memberships, nil
+}
+
+func (s *DirectoryImportStore) ListGraphManagedGroups(ctx context.Context, organizationID string, filter directoryexpansion.ManagedGroupGraphQuery) ([]directoryexpansion.ManagedGroup, error) {
+	if strings.TrimSpace(organizationID) == "" || !filter.Valid() {
+		return nil, directoryexpansion.ErrInvalidInput
+	}
+	query := strings.Builder{}
+	query.WriteString(`SELECT ` + managedGroupColumns + ` FROM directory_managed_groups WHERE organization_id=$1 AND status='active'`)
+	arguments := []any{organizationID}
+	if filter.LabelSearch != "" {
+		arguments = append(arguments, strings.ToLower(filter.LabelSearch))
+		query.WriteString(fmt.Sprintf(" AND strpos(lower(display_name), $%d) > 0", len(arguments)))
+	}
+	if len(filter.GroupIDs) > 0 {
+		query.WriteString(" AND " + inPredicate("id", filter.GroupIDs, &arguments))
+	}
+	arguments = append(arguments, filter.Limit)
+	query.WriteString(fmt.Sprintf(" ORDER BY lower(display_name), id LIMIT $%d", len(arguments)))
+	rows, err := s.database.QueryContext(ctx, query.String(), arguments...)
+	if err != nil {
+		return nil, fmt.Errorf("list graph managed groups: %w", err)
+	}
+	defer rows.Close()
+	groups := make([]directoryexpansion.ManagedGroup, 0)
+	for rows.Next() {
+		group, scanErr := scanManagedGroup(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		groups = append(groups, group)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate graph managed groups: %w", err)
+	}
+	return groups, nil
+}
+
+func (s *DirectoryImportStore) ListGraphManagedMemberships(ctx context.Context, organizationID string, filter directoryexpansion.ManagedMembershipGraphQuery) ([]directoryexpansion.ManagedMembership, error) {
+	if strings.TrimSpace(organizationID) == "" || !filter.Valid() {
+		return nil, directoryexpansion.ErrInvalidInput
+	}
+	query := strings.Builder{}
+	query.WriteString(`SELECT ` + managedMembershipColumns + ` FROM directory_managed_memberships WHERE organization_id=$1 AND status='active'`)
+	arguments := []any{organizationID}
+	if filter.LabelSearch != "" {
+		arguments = append(arguments, strings.ToLower(filter.LabelSearch))
+		query.WriteString(fmt.Sprintf(" AND strpos(lower(member_display_name), $%d) > 0", len(arguments)))
+	}
+	selectors := make([]string, 0, 2)
+	if len(filter.GroupIDs) > 0 {
+		selectors = append(selectors, inPredicate("group_id", filter.GroupIDs, &arguments))
+	}
+	if len(filter.MemberIDs) > 0 {
+		selectors = append(selectors, inPredicate("member_id", filter.MemberIDs, &arguments))
+	}
+	if len(selectors) > 0 {
+		query.WriteString(" AND (" + strings.Join(selectors, " OR ") + ")")
+	}
+	arguments = append(arguments, filter.Limit)
+	query.WriteString(fmt.Sprintf(" ORDER BY lower(member_display_name), id LIMIT $%d", len(arguments)))
+	rows, err := s.database.QueryContext(ctx, query.String(), arguments...)
+	if err != nil {
+		return nil, fmt.Errorf("list graph managed memberships: %w", err)
+	}
+	defer rows.Close()
+	memberships := make([]directoryexpansion.ManagedMembership, 0)
+	for rows.Next() {
+		membership, scanErr := scanManagedMembership(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		memberships = append(memberships, membership)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate graph managed memberships: %w", err)
 	}
 	return memberships, nil
 }

@@ -1,16 +1,17 @@
 package postgres
 
 // Requirements: REQ-FOUNDATION-001, SEC-GUARD-001, REQ-PEOPLE-001,
-// REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-005, REQ-DIRECTORY-EXPANSION-006, REQ-ATLAS-001, REQ-ATLAS-MODELS-001,
+// REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-005, REQ-DIRECTORY-EXPANSION-006, REQ-DIRECTORY-EXPANSION-008, REQ-ATLAS-001, REQ-ATLAS-MODELS-001,
 // REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-HORIZON-001,
 // REQ-ATLAS-CODES-001, REQ-PATTERNS-001, REQ-STACK-001, REQ-SIGNALS-001, REQ-REACH-001, REQ-EXCHANGE-001, REQ-API-001, SEC-MCP-001.
-// Features: lifecycle.planning, inventory.models, inventory.identifiers, templates.schemas, alerts.rules, messaging.delivery, migration.packages, integrations.protocols.
+// Features: lifecycle.planning, inventory.models, inventory.identifiers, templates.schemas, alerts.rules, messaging.delivery, migration.packages, integrations.protocols, threads.relationships.
 
 import (
 	"context"
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"github.com/maxlemke/stewardmesh/internal/bridge"
 	"github.com/maxlemke/stewardmesh/internal/domain"
 	"github.com/maxlemke/stewardmesh/internal/foundation"
+	"github.com/maxlemke/stewardmesh/internal/people"
 	"github.com/maxlemke/stewardmesh/internal/repository/contracttest"
 )
 
@@ -390,7 +392,30 @@ func TestAtlasStoreIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	contracttest.AtlasStore(t, store, organizationID, fmt.Sprintf("postgres-%d", time.Now().UnixNano()))
+	unique := fmt.Sprintf("postgres-%d", time.Now().UnixNano())
+	contracttest.AtlasStore(t, store, organizationID, unique)
+	peopleStore, err := NewPeopleStore(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	visibleSite := people.Site{ID: "visible-graph-site-" + unique, OrganizationID: organizationID, Name: "Visible Graph Site " + unique,
+		NormalizedName: strings.ToLower("Visible Graph Site " + unique), Status: people.StatusActive, Revision: 1, CreatedAt: now, UpdatedAt: now}
+	hiddenSite := people.Site{ID: "hidden-graph-site-" + unique, OrganizationID: organizationID, Name: "Hidden Graph Site " + unique,
+		NormalizedName: strings.ToLower("Hidden Graph Site " + unique), Status: people.StatusActive, Revision: 1, CreatedAt: now, UpdatedAt: now}
+	if _, err := peopleStore.CreateSite(ctx, visibleSite); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := peopleStore.CreateSite(ctx, hiddenSite); err != nil {
+		t.Fatal(err)
+	}
+	visibleUser := people.Identity{ID: "visible-graph-user-" + unique, OrganizationID: organizationID, Kind: people.IdentityPerson,
+		DisplayName: "Visible Graph User " + unique, NormalizedName: strings.ToLower("Visible Graph User " + unique),
+		SiteID: visibleSite.ID, Status: people.StatusActive, Revision: 1, CreatedAt: now, UpdatedAt: now}
+	if _, err := peopleStore.CreateIdentity(ctx, visibleUser); err != nil {
+		t.Fatal(err)
+	}
+	contracttest.AtlasGraphDirectoryStore(t, store, organizationID, unique, visibleSite.ID, hiddenSite.ID, visibleUser.ID)
 }
 
 func TestAtlasCodesStoreIntegration(t *testing.T) {

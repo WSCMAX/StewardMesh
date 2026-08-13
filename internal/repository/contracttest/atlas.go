@@ -121,17 +121,38 @@ func AtlasStore(t testing.TB, subject atlas.Store, organizationID, suffix string
 	}
 	graphItems, err := subject.ListGraphAssets(ctx, organizationID, atlas.GraphAssetQuery{
 		LabelSearch: "contract server", Visibility: atlas.GraphAssetVisibility{All: true},
-		References: atlas.GraphAssetReferences{ResourceIDs: []string{asset.ID}}, Limit: 10,
+		Directory: atlas.GraphAssetDirectoryVisibility{All: true}, References: atlas.GraphAssetReferences{ResourceIDs: []string{asset.ID}}, Limit: 10,
 	})
 	if err != nil || len(graphItems) != 1 || graphItems[0].ID != asset.ID {
 		t.Fatalf("graph asset label/reference query failed: %#v err=%v", graphItems, err)
 	}
+	directGraphItems, err := subject.ListGraphAssets(ctx, organizationID, atlas.GraphAssetQuery{
+		Visibility: atlas.GraphAssetVisibility{All: true}, Directory: atlas.GraphAssetDirectoryVisibility{All: true}, DirectOrganizationChildren: true, Limit: 10,
+	})
+	if err != nil || !contractAssetPresent(directGraphItems, asset.ID) {
+		t.Fatalf("graph direct-child asset query failed: %#v err=%v", directGraphItems, err)
+	}
 	hiddenGraphItems, err := subject.ListGraphAssets(ctx, organizationID, atlas.GraphAssetQuery{
 		Visibility: atlas.GraphAssetVisibility{ResourceIDs: []string{bulkAssets[0].ID}},
-		References: atlas.GraphAssetReferences{ResourceIDs: []string{asset.ID}}, Limit: 10,
+		Directory:  atlas.GraphAssetDirectoryVisibility{All: true}, References: atlas.GraphAssetReferences{ResourceIDs: []string{asset.ID}}, Limit: 10,
 	})
 	if err != nil || len(hiddenGraphItems) != 0 {
 		t.Fatalf("graph asset reference widened authenticated visibility: %#v err=%v", hiddenGraphItems, err)
+	}
+	preLimitDirectoryItems, err := subject.ListGraphAssets(ctx, organizationID, atlas.GraphAssetQuery{
+		Visibility: atlas.GraphAssetVisibility{All: true},
+		Directory:  atlas.GraphAssetDirectoryVisibility{SiteIDs: []string{"graph-site-" + suffix}},
+		Limit:      10,
+	})
+	if err != nil || len(preLimitDirectoryItems) != 0 {
+		t.Fatalf("graph directory predicate failed closed incorrectly: %#v err=%v", preLimitDirectoryItems, err)
+	}
+	if _, err := subject.ListGraphAssets(ctx, organizationID, atlas.GraphAssetQuery{
+		Visibility: atlas.GraphAssetVisibility{All: true},
+		Directory:  atlas.GraphAssetDirectoryVisibility{UserIDs: []string{"user-" + suffix}, MatchUserDirectory: true},
+		Limit:      10,
+	}); !errors.Is(err, atlas.ErrInvalidInput) {
+		t.Fatalf("expected user-only MatchUserDirectory query to fail before SQL, got %v", err)
 	}
 	deploymentItems, err := subject.ListAssets(ctx, organizationID, atlas.Query{ModelID: model.ID, DeploymentContext: "RACK", Limit: 10})
 	if err != nil || len(deploymentItems) != 1 || deploymentItems[0].ID != bulkAssets[0].ID {
@@ -181,6 +202,50 @@ func AtlasStore(t testing.TB, subject atlas.Store, organizationID, suffix string
 	if err != nil || maintained.Revision != 3 || maintained.ModelContext == nil || maintained.ModelContext.ModelRevision != 1 {
 		t.Fatalf("existing retired-model link prevented Atlas asset maintenance %#v err=%v", maintained, err)
 	}
+}
+
+func AtlasGraphDirectoryStore(t testing.TB, subject atlas.Store, organizationID, suffix, visibleSite, hiddenSite, visibleUser string) {
+	t.Helper()
+	now := time.Date(2026, time.August, 13, 12, 0, 0, 0, time.UTC)
+	for index := 0; index < 20; index++ {
+		asset := domain.Asset{ID: "hidden-graph-asset-" + suffix + string(rune('a'+index)), OrganizationID: organizationID,
+			Name: "Alpha Hidden Graph Asset " + string(rune('a'+index)), Kind: "computer", SiteID: hiddenSite,
+			Status: "active", Revision: 1, CreatedAt: now, UpdatedAt: now}
+		event := domain.AssetLifecycleEvent{ID: "hidden-graph-event-" + suffix + string(rune('a'+index)), OrganizationID: organizationID,
+			AssetID: asset.ID, ToStatus: asset.Status, Revision: 1, ActorID: "contract-user", OccurredAt: now}
+		if _, err := subject.CreateAsset(context.Background(), asset, event); err != nil {
+			t.Fatalf("create hidden graph asset: %v", err)
+		}
+	}
+	visible := domain.Asset{ID: "visible-graph-asset-" + suffix, OrganizationID: organizationID, Name: "Zeta Visible Graph Asset",
+		Kind: "computer", SiteID: visibleSite, Status: "active", Revision: 1, CreatedAt: now, UpdatedAt: now}
+	event := domain.AssetLifecycleEvent{ID: "visible-graph-event-" + suffix, OrganizationID: organizationID, AssetID: visible.ID,
+		ToStatus: visible.Status, Revision: 1, ActorID: "contract-user", OccurredAt: now}
+	if _, err := subject.CreateAsset(context.Background(), visible, event); err != nil {
+		t.Fatalf("create visible graph asset: %v", err)
+	}
+	userAsset := domain.Asset{ID: "visible-user-graph-asset-" + suffix, OrganizationID: organizationID, Name: "Zeta User Graph Asset",
+		Kind: "computer", UserID: visibleUser, Status: "active", Revision: 1, CreatedAt: now, UpdatedAt: now}
+	userEvent := domain.AssetLifecycleEvent{ID: "visible-user-graph-event-" + suffix, OrganizationID: organizationID, AssetID: userAsset.ID,
+		ToStatus: userAsset.Status, Revision: 1, ActorID: "contract-user", OccurredAt: now}
+	if _, err := subject.CreateAsset(context.Background(), userAsset, userEvent); err != nil {
+		t.Fatalf("create user-linked graph asset: %v", err)
+	}
+	items, err := subject.ListGraphAssets(context.Background(), organizationID, atlas.GraphAssetQuery{
+		Visibility: atlas.GraphAssetVisibility{All: true}, Directory: atlas.GraphAssetDirectoryVisibility{SiteIDs: []string{visibleSite}, MatchUserDirectory: true}, Limit: 10,
+	})
+	if err != nil || len(items) != 2 || !contractAssetPresent(items, visible.ID) || !contractAssetPresent(items, userAsset.ID) {
+		t.Fatalf("out-of-directory assets crowded valid asset before source limit: %#v err=%v", items, err)
+	}
+}
+
+func contractAssetPresent(assets []domain.Asset, id string) bool {
+	for _, asset := range assets {
+		if asset.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 func contractModelContext(model domain.AssetModel, kind string, appliedAt time.Time) *domain.AssetModelContext {

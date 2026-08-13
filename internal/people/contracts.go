@@ -7,6 +7,7 @@ import (
 	"errors"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/maxlemke/stewardmesh/internal/domain"
@@ -186,12 +187,13 @@ type IdentityQuery struct {
 // bounded result.
 // Requirement: REQ-DIRECTORY-EXPANSION-008. Feature: threads.relationships.
 type GraphIdentityQuery struct {
-	LabelSearch   string
-	Kind          IdentityKind
-	IdentityIDs   []string
-	DepartmentIDs []string
-	SiteIDs       []string
-	Limit         int
+	LabelSearch                string
+	Kind                       IdentityKind
+	IdentityIDs                []string
+	DepartmentIDs              []string
+	SiteIDs                    []string
+	DirectOrganizationChildren bool
+	Limit                      int
 }
 
 const MaximumGraphIdentityLimit = 500
@@ -204,14 +206,71 @@ func (q GraphIdentityQuery) Valid() bool {
 		len(q.IdentityIDs)+len(q.DepartmentIDs)+len(q.SiteIDs) <= MaximumGraphIdentityLimit
 }
 
+type GraphLocationKind string
+
+const (
+	GraphLocationSite       GraphLocationKind = "site"
+	GraphLocationBuilding   GraphLocationKind = "building"
+	GraphLocationRoom       GraphLocationKind = "room"
+	GraphLocationDepartment GraphLocationKind = "department"
+)
+
+// GraphLocationQuery is the bounded People location projection used by the
+// relationship graph. Exact IDs select endpoints, parent IDs select hierarchy
+// children, and DirectOrganizationChildren selects sites plus departments
+// without a site. Selectors are combined with OR semantics.
+type GraphLocationQuery struct {
+	LabelSearch                string
+	Kind                       GraphLocationKind
+	SiteIDs                    []string
+	BuildingIDs                []string
+	RoomIDs                    []string
+	DepartmentIDs              []string
+	ParentSiteIDs              []string
+	ParentBuildingIDs          []string
+	DirectOrganizationChildren bool
+	Limit                      int
+}
+
+type GraphLocations struct {
+	Sites       []Site
+	Buildings   []Building
+	Rooms       []Room
+	Departments []Department
+}
+
+func (q GraphLocationQuery) Valid() bool {
+	return q.Limit >= 1 && q.Limit <= MaximumGraphIdentityLimit &&
+		(q.Kind == "" || q.Kind == GraphLocationSite || q.Kind == GraphLocationBuilding ||
+			q.Kind == GraphLocationRoom || q.Kind == GraphLocationDepartment) &&
+		validGraphQueryText(q.LabelSearch, 200) && validGraphQueryIDs(q.SiteIDs) &&
+		validGraphQueryIDs(q.BuildingIDs) && validGraphQueryIDs(q.RoomIDs) && validGraphQueryIDs(q.DepartmentIDs) &&
+		validGraphQueryIDs(q.ParentSiteIDs) && validGraphQueryIDs(q.ParentBuildingIDs) &&
+		len(q.SiteIDs)+len(q.BuildingIDs)+len(q.RoomIDs)+len(q.DepartmentIDs)+
+			len(q.ParentSiteIDs)+len(q.ParentBuildingIDs) <= MaximumGraphIdentityLimit
+}
+
 func validGraphQueryText(value string, maximum int) bool {
-	return utf8.ValidString(value) && utf8.RuneCountInString(value) <= maximum
+	if !utf8.ValidString(value) || utf8.RuneCountInString(value) > maximum {
+		return false
+	}
+	for _, character := range value {
+		if unicode.IsControl(character) {
+			return false
+		}
+	}
+	return true
 }
 
 func validGraphQueryIDs(values []string) bool {
 	for _, value := range values {
-		if strings.TrimSpace(value) == "" {
+		if strings.TrimSpace(value) == "" || !utf8.ValidString(value) || utf8.RuneCountInString(value) > 128 {
 			return false
+		}
+		for _, character := range value {
+			if unicode.IsControl(character) {
+				return false
+			}
 		}
 	}
 	return true
@@ -292,6 +351,7 @@ type Store interface {
 	CreateDepartment(ctx context.Context, department Department) (Department, error)
 	GetDepartment(ctx context.Context, organizationID, id string) (Department, error)
 	ListDepartments(ctx context.Context, organizationID string, visibility Visibility) ([]Department, error)
+	ListGraphLocations(ctx context.Context, organizationID string, query GraphLocationQuery, visibility Visibility) (GraphLocations, error)
 
 	CreateIdentity(ctx context.Context, identity Identity) (Identity, error)
 	GetIdentity(ctx context.Context, organizationID, id string) (Identity, error)

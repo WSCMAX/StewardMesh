@@ -1,4 +1,4 @@
-export type DocumentationTopicID = 'overview' | 'workspace' | 'atlas' | 'horizon' | 'ledger' | 'threads' | 'vault' | 'people' | 'guard' | 'guide'
+export type DocumentationTopicID = 'overview' | 'workspace' | 'atlas' | 'horizon' | 'ledger' | 'stack' | 'threads' | 'vault' | 'people' | 'guard' | 'guide'
 
 export type DocumentationStep = {
   title: string
@@ -199,6 +199,49 @@ export const documentationPages: readonly DocumentationPage[] = [
       },
     ],
     related: ['horizon', 'vault', 'atlas'],
+  },
+  {
+    id: 'stack',
+    group: 'Product areas',
+    kicker: 'Software and licenses',
+    title: 'Stack',
+    summary: 'Connect installed software to Atlas assets, preserve purchased entitlements, assign seats, and review explicit license conditions.',
+    appHref: '#workspace-stack',
+    appLabel: 'Open Stack',
+    searchTerms: ['software', 'license', 'entitlement', 'installation', 'version', 'assignment', 'expiration', 'compliance'],
+    sections: [
+      {
+        id: 'inventory',
+        title: 'Connect software to inventory',
+        steps: [
+          { title: 'Define the product', body: 'Record the publisher and product once, then add the versions your organization installs or uses.' },
+          { title: 'Associate an installation', body: 'Choose a version and an organization-visible Atlas asset. Stack preserves installation time and usage state without copying the asset record.' },
+          { title: 'Review coverage', body: 'The compliance summary identifies an active installation that lacks a matching asset, identity, department, site, or enterprise entitlement.' },
+        ],
+      },
+      {
+        id: 'entitlements',
+        title: 'Preserve the purchased entitlement',
+        paragraphs: ['A license records its device, user, concurrent, site, or enterprise metric, positive quantity, effective dates, and optional version scope. Device seats assign to assets, user seats to identities, and site seats to sites. Ledger vendor, purchase order, contract, and cost references explain the purchase while Vault document IDs preserve supporting evidence.'],
+        callout: { title: 'References stay authoritative', body: 'Stack validates every Atlas, People, Ledger, and Vault reference through the owning feature before saving it.', tone: 'info' },
+      },
+      {
+        id: 'conditions',
+        title: 'Act on explicit conditions',
+        bullets: ['Expiring and expired conditions include the remaining day count.', 'Over-assigned conditions compare assigned seats with purchased quantity.', 'Under-used conditions identify assignments explicitly marked unused.', 'Missing-license conditions identify installed assets without a matching entitlement.'],
+      },
+      {
+        id: 'lifecycle',
+        title: 'Keep lifecycle history explicit',
+        paragraphs: ['Revise entitlement quantities and dates, mark unsupported or retired software, remove installations, update usage, and end assignments from the record table. Every change carries the current revision; retirement, removal, and assignment end cannot be silently reopened.'],
+      },
+      {
+        id: 'portable-records',
+        title: 'Move records safely',
+        paragraphs: ['Portable export keeps stable IDs, revisions, typed dependencies, and bounded typed payloads. Import validates every envelope and dependency set before writing, orders dependencies, and uses the supplied source identity for exact replay: unchanged data is not duplicated and changed data conflicts for review.'],
+      },
+    ],
+    related: ['atlas', 'ledger', 'people'],
   },
   {
     id: 'threads',

@@ -1,6 +1,6 @@
 // Package application constructs StewardMesh's transport-neutral HTTP
 // application and owns the lifecycle of its shared runtime dependencies.
-// Requirements: REQ-FOUNDATION-001, REQ-ATLAS-001, REQ-ATLAS-CODES-001, REQ-DIRECTORY-EXPANSION-002, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-HORIZON-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001.
+// Requirements: REQ-FOUNDATION-001, REQ-ATLAS-001, REQ-ATLAS-CODES-001, REQ-DIRECTORY-EXPANSION-002, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-STACK-001, REQ-HORIZON-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001.
 package application
 
 import (
@@ -28,6 +28,7 @@ import (
 	"github.com/maxlemke/stewardmesh/internal/people"
 	"github.com/maxlemke/stewardmesh/internal/repository"
 	postgresrepository "github.com/maxlemke/stewardmesh/internal/repository/postgres"
+	"github.com/maxlemke/stewardmesh/internal/stack"
 	"github.com/maxlemke/stewardmesh/internal/storage"
 	"github.com/maxlemke/stewardmesh/internal/threads"
 )
@@ -200,6 +201,13 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 	if err != nil {
 		return fail(fmt.Errorf("initialize Ledger: %w", err))
 	}
+	stackService, err := stack.NewService(runtime.stackStore, stackReferenceValidator{
+		atlas: atlasService, vault: vaultService, people: runtime.peopleStore, ledger: runtime.ledgerStore,
+		organizationID: cfg.OrganizationID,
+	}, runtime.auditor, stack.ServiceConfig{OrganizationID: cfg.OrganizationID})
+	if err != nil {
+		return fail(fmt.Errorf("initialize Stack: %w", err))
+	}
 	horizonService, err := horizon.NewService(runtime.horizonStore, atlasService, ledgerService, threadsService, runtime.auditor, horizon.ServiceConfig{OrganizationID: cfg.OrganizationID})
 	if err != nil {
 		return fail(fmt.Errorf("initialize Horizon: %w", err))
@@ -217,6 +225,7 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 		Threads:             threadsService,
 		Vault:               vaultService,
 		Ledger:              ledgerService,
+		Stack:               stackService,
 		Horizon:             horizonService,
 		Patterns:            patternsService,
 		Guard:               guardService,
@@ -269,6 +278,7 @@ type foundationRuntime struct {
 	threadsStore         threads.Store
 	storageStore         storage.MetadataStore
 	ledgerStore          ledger.Store
+	stackStore           stack.Store
 	horizonStore         horizon.Store
 	patternsStore        patterns.Store
 	guardStore           guard.Store
@@ -336,6 +346,7 @@ func initializeFoundation(ctx context.Context, cfg config.Config, runMigrations 
 		threadsStore         threads.Store
 		storageStore         storage.MetadataStore
 		ledgerStore          ledger.Store
+		stackStore           stack.Store
 		horizonStore         horizon.Store
 		patternsStore        patterns.Store
 		guardStore           guard.Store
@@ -355,6 +366,7 @@ func initializeFoundation(ctx context.Context, cfg config.Config, runMigrations 
 		threadsStore = repository.NewMemoryThreadsStore()
 		storageStore = repository.NewMemoryStorageStore()
 		ledgerStore = repository.NewMemoryLedgerStore()
+		stackStore = repository.NewMemoryStackStore()
 		horizonStore = repository.NewMemoryHorizonStore()
 		patternsStore = repository.NewMemoryPatternsStore()
 	case config.RepositoryDriverPostgres:
@@ -415,6 +427,11 @@ func initializeFoundation(ctx context.Context, cfg config.Config, runMigrations 
 			return foundationRuntime{}, err
 		}
 		ledgerStore, err = postgresrepository.NewLedgerStore(database)
+		if err != nil {
+			_ = database.Close()
+			return foundationRuntime{}, err
+		}
+		stackStore, err = postgresrepository.NewStackStore(database)
 		if err != nil {
 			_ = database.Close()
 			return foundationRuntime{}, err
@@ -482,6 +499,7 @@ func initializeFoundation(ctx context.Context, cfg config.Config, runMigrations 
 		threadsStore:         threadsStore,
 		storageStore:         storageStore,
 		ledgerStore:          ledgerStore,
+		stackStore:           stackStore,
 		horizonStore:         horizonStore,
 		patternsStore:        patternsStore,
 		guardStore:           guardStore,
@@ -512,6 +530,123 @@ type ledgerReferenceValidator struct {
 	vault          *storage.Service
 	people         people.Store
 	organizationID string
+}
+
+type stackReferenceValidator struct {
+	atlas          *atlas.Service
+	vault          *storage.Service
+	people         people.Store
+	ledger         ledger.Store
+	organizationID string
+}
+
+func (v stackReferenceValidator) ResolveAsset(ctx context.Context, assetID string) (stack.AssetContext, error) {
+	if v.atlas == nil {
+		return stack.AssetContext{}, errors.New("Atlas service is required")
+	}
+	asset, err := v.atlas.GetAsset(ctx, assetID)
+	if err != nil {
+		return stack.AssetContext{}, mapStackReferenceError("asset", err)
+	}
+	return stack.AssetContext{ID: asset.ID, SiteID: asset.SiteID, DepartmentID: asset.DepartmentID, IdentityID: asset.UserID}, nil
+}
+
+func (v stackReferenceValidator) ValidateAssignee(ctx context.Context, kind, id string) error {
+	if kind == "asset" {
+		_, err := v.ResolveAsset(ctx, id)
+		return err
+	}
+	if v.people == nil {
+		return errors.New("People store is required")
+	}
+	var err error
+	switch kind {
+	case "identity":
+		_, err = v.people.GetIdentity(ctx, v.organizationID, id)
+	case "department":
+		_, err = v.people.GetDepartment(ctx, v.organizationID, id)
+	case "site":
+		_, err = v.people.GetSite(ctx, v.organizationID, id)
+	default:
+		return stack.ErrInvalidInput
+	}
+	if err != nil {
+		return mapStackReferenceError(kind, err)
+	}
+	return nil
+}
+
+func (v stackReferenceValidator) ValidateFinancialReferences(ctx context.Context, vendorID, purchaseOrderID, contractID, costRecordID string) error {
+	if v.ledger == nil {
+		return errors.New("Ledger store is required")
+	}
+	if vendorID != "" {
+		if _, err := v.ledger.GetVendor(ctx, v.organizationID, vendorID); err != nil {
+			return mapStackReferenceError("vendor", err)
+		}
+	}
+	if purchaseOrderID != "" {
+		purchaseOrder, err := v.ledger.GetPurchaseOrder(ctx, v.organizationID, purchaseOrderID)
+		if err != nil {
+			return mapStackReferenceError("purchase order", err)
+		}
+		if vendorID != "" && purchaseOrder.VendorID != vendorID {
+			return stack.ErrReferenceMissing
+		}
+	}
+	if contractID != "" {
+		contract, err := v.ledger.GetContract(ctx, v.organizationID, contractID)
+		if err != nil {
+			return mapStackReferenceError("contract", err)
+		}
+		if vendorID != "" && contract.VendorID != vendorID {
+			return stack.ErrReferenceMissing
+		}
+	}
+	if costRecordID != "" {
+		snapshot, err := v.ledger.Snapshot(ctx, v.organizationID)
+		if err != nil {
+			return fmt.Errorf("validate Stack cost record: %w", err)
+		}
+		found := false
+		for _, cost := range snapshot.Costs {
+			if cost.ID != costRecordID {
+				continue
+			}
+			found = true
+			if (purchaseOrderID != "" && cost.PurchaseOrderID != purchaseOrderID) || (contractID != "" && cost.ContractID != contractID) {
+				return stack.ErrReferenceMissing
+			}
+			break
+		}
+		if !found {
+			return stack.ErrReferenceMissing
+		}
+	}
+	return nil
+}
+
+func (v stackReferenceValidator) ValidateDocuments(ctx context.Context, documentIDs []string) error {
+	if v.vault == nil {
+		return errors.New("Vault service is required")
+	}
+	for _, id := range documentIDs {
+		if _, err := v.vault.GetBlob(ctx, id); err != nil {
+			return mapStackReferenceError("document", err)
+		}
+	}
+	return nil
+}
+
+func mapStackReferenceError(kind string, err error) error {
+	if errors.Is(err, atlas.ErrNotFound) || errors.Is(err, people.ErrNotFound) || errors.Is(err, people.ErrReferenceMissing) ||
+		errors.Is(err, ledger.ErrNotFound) || errors.Is(err, ledger.ErrReferenceMissing) || errors.Is(err, storage.ErrNotFound) {
+		return stack.ErrReferenceMissing
+	}
+	if errors.Is(err, atlas.ErrInvalidInput) || errors.Is(err, people.ErrInvalidInput) || errors.Is(err, ledger.ErrInvalidInput) || errors.Is(err, storage.ErrInvalidInput) {
+		return stack.ErrInvalidInput
+	}
+	return fmt.Errorf("validate Stack %s reference: %w", kind, err)
 }
 
 func (v ledgerReferenceValidator) ValidateAssets(ctx context.Context, assetIDs []string) error {

@@ -31,7 +31,7 @@ type WorkspaceShellProps = {
   visitedAreas: ReadonlySet<WorkspaceAreaID>
 }
 
-const workspaceAreaIDs: readonly WorkspaceAreaID[] = ['overview', 'atlas', 'horizon', 'ledger', 'threads', 'vault', 'people', 'guard']
+const workspaceAreaIDs: readonly WorkspaceAreaID[] = ['overview', 'atlas', 'horizon', 'ledger', 'stack', 'threads', 'vault', 'people', 'guard']
 
 export function workspaceAreaFromHash(hash: string): WorkspaceAreaID {
   const candidate = hash.replace(/^#workspace-/, '')

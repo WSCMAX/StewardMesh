@@ -7,15 +7,15 @@ import (
 
 // Requirements: REQ-FOUNDATION-001, SEC-GUARD-001, REQ-PEOPLE-001,
 // REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-ATLAS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001,
-// REQ-HORIZON-001, REQ-ATLAS-CODES-001, REQ-ATLAS-MODELS-001, REQ-ATLAS-CATALOG-001, REQ-PATTERNS-001.
-// Features: lifecycle.planning, inventory.identifiers, inventory.models, inventory.catalog, templates.schemas.
+// REQ-HORIZON-001, REQ-ATLAS-CODES-001, REQ-ATLAS-MODELS-001, REQ-ATLAS-CATALOG-001, REQ-PATTERNS-001, REQ-STACK-001.
+// Features: lifecycle.planning, inventory.identifiers, inventory.models, inventory.catalog, templates.schemas, software.licenses.
 func TestEmbeddedMigrationsAreOrderedAndChecksummed(t *testing.T) {
 	migrations, err := loadMigrations()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(migrations) != 28 {
-		t.Fatalf("expected 28 platform migrations, got %d", len(migrations))
+	if len(migrations) != 29 {
+		t.Fatalf("expected 29 platform migrations, got %d", len(migrations))
 	}
 	for index, migration := range migrations {
 		expectedVersion := int64(index + 1)
@@ -42,6 +42,32 @@ func TestDirectoryImportMigrationAddsDurablePlansAttemptsMappingsAndLeases(t *te
 	} {
 		if !strings.Contains(contents, expected) {
 			t.Fatalf("directory import migration is missing %q", expected)
+		}
+	}
+}
+
+func TestStackMigrationAddsSoftwareEntitlementsAndAdministratorPermissions(t *testing.T) {
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var contents string
+	for _, migration := range migrations {
+		if migration.version == 29 {
+			contents = migration.contents
+			break
+		}
+	}
+	if contents == "" {
+		t.Fatal("Stack migration 0029 is missing")
+	}
+	for _, expected := range []string{
+		"REQ-STACK-001", "software.licenses", "GitHub: #7", "CREATE TABLE stack_products", "CREATE TABLE stack_versions",
+		"CREATE TABLE stack_installations", "stack_installations_active_unique", "CREATE TABLE stack_licenses", "document_ids JSONB",
+		"CREATE TABLE stack_assignments", "stack_assignments_active_unique", "'software.read'", "'software.write'", "r.source = 'builtin'",
+	} {
+		if !strings.Contains(contents, expected) {
+			t.Fatalf("Stack migration is missing %q", expected)
 		}
 	}
 }

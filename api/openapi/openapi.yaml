@@ -1,4 +1,4 @@
-# Requirements: REQ-ATLAS-001, REQ-ATLAS-MODELS-001, REQ-ATLAS-CODES-001, REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-HORIZON-001, REQ-LEDGER-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
+# Requirements: REQ-ATLAS-001, REQ-ATLAS-MODELS-001, REQ-ATLAS-CODES-001, REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-HORIZON-001, REQ-LEDGER-001, REQ-STACK-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
 openapi: 3.1.0
 info:
   title: StewardMesh API
@@ -2426,6 +2426,255 @@ paths:
         '400': {$ref: '#/components/responses/InvalidRequest'}
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
+  /api/v1/stack:
+    get:
+      summary: List the organization Stack snapshot
+      operationId: getStackSnapshot
+      tags: [Stack]
+      x-requirement: REQ-STACK-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200':
+          description: Software products, versions, installations, licenses, and assignments
+          headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}
+          content: {application/json: {schema: {$ref: '#/components/schemas/StackSnapshot'}}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /api/v1/stack/analytics:
+    get:
+      summary: Calculate software entitlement and compliance analytics
+      operationId: getStackAnalytics
+      tags: [Stack]
+      x-requirement: REQ-STACK-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - in: query
+          name: asOf
+          schema: {type: string, format: date-time}
+        - in: query
+          name: expiringWithinDays
+          description: Zero or omission uses the 90-day default.
+          schema: {type: integer, format: int64, minimum: 0, maximum: 3660}
+      responses:
+        '200':
+          description: Current entitlement totals and deterministic compliance conditions
+          headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}
+          content: {application/json: {schema: {$ref: '#/components/schemas/StackAnalytics'}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /api/v1/stack/products:
+    post:
+      summary: Define a software product
+      operationId: createStackProduct
+      tags: [Stack]
+      x-requirement: REQ-STACK-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CreateStackProductRequest'}}}}
+      responses:
+        '201': {description: Software product created or idempotently replayed, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/StackProduct'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/stack/versions:
+    post:
+      summary: Define a product version
+      operationId: createStackVersion
+      tags: [Stack]
+      x-requirement: REQ-STACK-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CreateStackVersionRequest'}}}}
+      responses:
+        '201': {description: Product version created or idempotently replayed, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/StackVersion'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/UnprocessableEntity'}
+  /api/v1/stack/products/{productId}/status:
+    parameters: [{in: path, name: productId, required: true, schema: {$ref: '#/components/schemas/StackID'}}]
+    put:
+      summary: Update software product lifecycle status
+      operationId: updateStackProductStatus
+      tags: [Stack]
+      x-requirement: REQ-STACK-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UpdateStackProductStatusRequest'}}}}
+      responses:
+        '200': {description: Product status updated, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/StackProduct'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/stack/versions/{versionId}/status:
+    parameters: [{in: path, name: versionId, required: true, schema: {$ref: '#/components/schemas/StackID'}}]
+    put:
+      summary: Update software version support status
+      operationId: updateStackVersionStatus
+      tags: [Stack]
+      x-requirement: REQ-STACK-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UpdateStackVersionStatusRequest'}}}}
+      responses:
+        '200': {description: Version status updated, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/StackVersion'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/stack/installations:
+    post:
+      summary: Associate installed software with an Atlas asset
+      operationId: recordStackInstallation
+      tags: [Stack]
+      x-requirement: REQ-STACK-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/RecordStackInstallationRequest'}}}}
+      responses:
+        '201': {description: Software installation recorded or idempotently replayed, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/StackInstallation'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/UnprocessableEntity'}
+  /api/v1/stack/licenses:
+    post:
+      summary: Create a software license entitlement
+      operationId: createStackLicense
+      tags: [Stack]
+      x-requirement: REQ-STACK-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CreateStackLicenseRequest'}}}}
+      responses:
+        '201': {description: License created or idempotently replayed, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/StackLicense'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/UnprocessableEntity'}
+  /api/v1/stack/installations/{installationId}:
+    parameters: [{in: path, name: installationId, required: true, schema: {$ref: '#/components/schemas/StackID'}}]
+    put:
+      summary: Update installation usage or record removal
+      operationId: updateStackInstallationState
+      tags: [Stack]
+      x-requirement: REQ-STACK-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UpdateStackInstallationStateRequest'}}}}
+      responses:
+        '200': {description: Installation state updated, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/StackInstallation'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/stack/licenses/{licenseId}/entitlement:
+    parameters: [{in: path, name: licenseId, required: true, schema: {$ref: '#/components/schemas/StackID'}}]
+    put:
+      summary: Update license quantity, effective dates, or lifecycle status
+      operationId: updateStackLicenseEntitlement
+      tags: [Stack]
+      x-requirement: REQ-STACK-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UpdateStackLicenseEntitlementRequest'}}}}
+      responses:
+        '200': {description: License entitlement updated, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/StackLicense'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/stack/assignments:
+    post:
+      summary: Assign license seats to an asset or People directory record
+      operationId: createStackAssignment
+      tags: [Stack]
+      x-requirement: REQ-STACK-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CreateStackAssignmentRequest'}}}}
+      responses:
+        '201': {description: License assignment created or idempotently replayed, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/StackAssignment'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/UnprocessableEntity'}
+  /api/v1/stack/assignments/{assignmentId}/usage:
+    parameters:
+      - in: path
+        name: assignmentId
+        required: true
+        schema: {$ref: '#/components/schemas/StackID'}
+    put:
+      summary: Update license assignment usage with optimistic concurrency
+      operationId: updateStackAssignmentUsage
+      tags: [Stack]
+      x-requirement: REQ-STACK-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UpdateStackAssignmentUsageRequest'}}}}
+      responses:
+        '200': {description: Assignment usage updated, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/StackAssignment'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/stack/exchange:
+    get:
+      summary: Export dependency-aware portable Stack records
+      operationId: exportStackRecords
+      tags: [Stack]
+      x-requirement: REQ-STACK-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200': {description: Bounded provider-neutral Stack records, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/StackExchangeExport'}}}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /api/v1/stack/assignments/{assignmentId}/end:
+    parameters: [{in: path, name: assignmentId, required: true, schema: {$ref: '#/components/schemas/StackID'}}]
+    put:
+      summary: End an active license assignment
+      operationId: endStackAssignment
+      tags: [Stack]
+      x-requirement: REQ-STACK-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/EndStackAssignmentRequest'}}}}
+      responses:
+        '200': {description: Assignment ended, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/StackAssignment'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/stack/exchange/import:
+    post:
+      summary: Idempotently import dependency-aware portable Stack records
+      operationId: importStackRecords
+      tags: [Stack]
+      x-requirement: REQ-STACK-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/StackExchangeImportRequest'}}}}
+      responses:
+        '200': {description: Created and unchanged record counts, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/StackImportResult'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/UnprocessableEntity'}
 components:
   securitySchemes:
     localCookieAuth:
@@ -2440,7 +2689,7 @@ components:
       description: Opaque, Secure, host-only server-side session identifier used by HTTPS deployments.
   headers:
     NoStore:
-      description: Sensitive planning or integration data is never stored by shared or browser caches.
+      description: Protected feature, planning, and integration data is never stored by shared or browser caches.
       schema: {type: string, const: no-store}
   parameters:
     PatternsTemplateID:
@@ -4263,6 +4512,315 @@ components:
         amountsByKindMinor:
           type: object
           additionalProperties: {type: integer, format: int64, minimum: 0}
+    StackID:
+      type: string
+      pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+    StackSourceRecordID:
+      type: string
+      pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,254}$'
+    StackProductStatus: {type: string, enum: [active, retired]}
+    StackVersionStatus: {type: string, enum: [active, unsupported, retired]}
+    StackInstallationStatus: {type: string, enum: [installed, removed]}
+    StackLicenseStatus: {type: string, enum: [active, expired, retired]}
+    StackUsageState: {type: string, enum: [unknown, used, unused]}
+    StackEntitlementMetric: {type: string, enum: [device, user, concurrent, site, enterprise]}
+    StackAssigneeKind: {type: string, enum: [asset, identity, department, site]}
+    StackProduct:
+      type: object
+      additionalProperties: false
+      required: [id, organizationId, name, publisher, status, revision, createdAt, updatedAt]
+      properties:
+        id: {$ref: '#/components/schemas/StackID'}
+        organizationId: {$ref: '#/components/schemas/StackID'}
+        name: {type: string, minLength: 1, maxLength: 200}
+        publisher: {type: string, minLength: 1, maxLength: 200}
+        category: {type: string, maxLength: 100}
+        status: {$ref: '#/components/schemas/StackProductStatus'}
+        sourceSystemId: {$ref: '#/components/schemas/StackID'}
+        sourceRecordId: {$ref: '#/components/schemas/StackSourceRecordID'}
+        revision: {type: integer, format: int64, minimum: 1}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    CreateStackProductRequest:
+      type: object
+      additionalProperties: false
+      required: [name, publisher]
+      properties:
+        id: {$ref: '#/components/schemas/StackID'}
+        name: {type: string, minLength: 1, maxLength: 200}
+        publisher: {type: string, minLength: 1, maxLength: 200}
+        category: {type: string, maxLength: 100}
+        status: {$ref: '#/components/schemas/StackProductStatus'}
+        sourceSystemId: {$ref: '#/components/schemas/StackID'}
+        sourceRecordId: {$ref: '#/components/schemas/StackSourceRecordID'}
+      dependentRequired: {sourceSystemId: [sourceRecordId], sourceRecordId: [sourceSystemId]}
+    UpdateStackProductStatusRequest:
+      type: object
+      additionalProperties: false
+      required: [status, revision]
+      properties:
+        status: {$ref: '#/components/schemas/StackProductStatus'}
+        revision: {type: integer, format: int64, minimum: 1}
+    StackVersion:
+      type: object
+      additionalProperties: false
+      required: [id, organizationId, productId, name, status, revision, createdAt, updatedAt]
+      properties:
+        id: {$ref: '#/components/schemas/StackID'}
+        organizationId: {$ref: '#/components/schemas/StackID'}
+        productId: {$ref: '#/components/schemas/StackID'}
+        name: {type: string, minLength: 1, maxLength: 100}
+        releasedOn: {type: string, format: date-time}
+        status: {$ref: '#/components/schemas/StackVersionStatus'}
+        sourceSystemId: {$ref: '#/components/schemas/StackID'}
+        sourceRecordId: {$ref: '#/components/schemas/StackSourceRecordID'}
+        revision: {type: integer, format: int64, minimum: 1}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    CreateStackVersionRequest:
+      type: object
+      additionalProperties: false
+      required: [productId, name]
+      properties:
+        id: {$ref: '#/components/schemas/StackID'}
+        productId: {$ref: '#/components/schemas/StackID'}
+        name: {type: string, minLength: 1, maxLength: 100}
+        releasedOn: {type: string, format: date-time}
+        status: {$ref: '#/components/schemas/StackVersionStatus'}
+        sourceSystemId: {$ref: '#/components/schemas/StackID'}
+        sourceRecordId: {$ref: '#/components/schemas/StackSourceRecordID'}
+      dependentRequired: {sourceSystemId: [sourceRecordId], sourceRecordId: [sourceSystemId]}
+    UpdateStackVersionStatusRequest:
+      type: object
+      additionalProperties: false
+      required: [status, revision]
+      properties:
+        status: {$ref: '#/components/schemas/StackVersionStatus'}
+        revision: {type: integer, format: int64, minimum: 1}
+    StackInstallation:
+      type: object
+      additionalProperties: false
+      required: [id, organizationId, versionId, assetId, status, usageState, installedAt, revision, createdAt, updatedAt]
+      properties:
+        id: {$ref: '#/components/schemas/StackID'}
+        organizationId: {$ref: '#/components/schemas/StackID'}
+        versionId: {$ref: '#/components/schemas/StackID'}
+        assetId: {$ref: '#/components/schemas/StackID'}
+        status: {$ref: '#/components/schemas/StackInstallationStatus'}
+        usageState: {$ref: '#/components/schemas/StackUsageState'}
+        installedAt: {type: string, format: date-time}
+        lastUsedAt: {type: string, format: date-time}
+        removedAt: {type: string, format: date-time}
+        sourceSystemId: {$ref: '#/components/schemas/StackID'}
+        sourceRecordId: {$ref: '#/components/schemas/StackSourceRecordID'}
+        revision: {type: integer, format: int64, minimum: 1}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    RecordStackInstallationRequest:
+      type: object
+      additionalProperties: false
+      required: [versionId, assetId, installedAt]
+      properties:
+        id: {$ref: '#/components/schemas/StackID'}
+        versionId: {$ref: '#/components/schemas/StackID'}
+        assetId: {$ref: '#/components/schemas/StackID'}
+        status: {$ref: '#/components/schemas/StackInstallationStatus'}
+        usageState: {$ref: '#/components/schemas/StackUsageState'}
+        installedAt: {type: string, format: date-time}
+        lastUsedAt: {type: string, format: date-time}
+        removedAt: {type: string, format: date-time}
+        sourceSystemId: {$ref: '#/components/schemas/StackID'}
+        sourceRecordId: {$ref: '#/components/schemas/StackSourceRecordID'}
+      dependentRequired: {sourceSystemId: [sourceRecordId], sourceRecordId: [sourceSystemId]}
+    UpdateStackInstallationStateRequest:
+      type: object
+      additionalProperties: false
+      required: [status, usageState, revision]
+      properties:
+        status: {$ref: '#/components/schemas/StackInstallationStatus'}
+        usageState: {$ref: '#/components/schemas/StackUsageState'}
+        lastUsedAt: {type: string, format: date-time}
+        removedAt: {type: string, format: date-time}
+        revision: {type: integer, format: int64, minimum: 1}
+    StackLicense:
+      type: object
+      additionalProperties: false
+      required: [id, organizationId, productId, name, entitlementMetric, quantity, status, documentIds, revision, createdAt, updatedAt]
+      properties:
+        id: {$ref: '#/components/schemas/StackID'}
+        organizationId: {$ref: '#/components/schemas/StackID'}
+        productId: {$ref: '#/components/schemas/StackID'}
+        versionId: {$ref: '#/components/schemas/StackID'}
+        name: {type: string, minLength: 1, maxLength: 200}
+        entitlementMetric: {$ref: '#/components/schemas/StackEntitlementMetric'}
+        quantity: {type: integer, format: int64, minimum: 1, maximum: 1000000000}
+        status: {$ref: '#/components/schemas/StackLicenseStatus'}
+        startsOn: {type: string, format: date-time}
+        expiresOn: {type: string, format: date-time}
+        vendorId: {$ref: '#/components/schemas/StackID'}
+        purchaseOrderId: {$ref: '#/components/schemas/StackID'}
+        contractId: {$ref: '#/components/schemas/StackID'}
+        costRecordId: {$ref: '#/components/schemas/StackID'}
+        documentIds: {type: array, maxItems: 100, uniqueItems: true, items: {$ref: '#/components/schemas/StackID'}}
+        sourceSystemId: {$ref: '#/components/schemas/StackID'}
+        sourceRecordId: {$ref: '#/components/schemas/StackSourceRecordID'}
+        revision: {type: integer, format: int64, minimum: 1}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    CreateStackLicenseRequest:
+      type: object
+      additionalProperties: false
+      required: [productId, name, entitlementMetric, quantity]
+      properties:
+        id: {$ref: '#/components/schemas/StackID'}
+        productId: {$ref: '#/components/schemas/StackID'}
+        versionId: {$ref: '#/components/schemas/StackID'}
+        name: {type: string, minLength: 1, maxLength: 200}
+        entitlementMetric: {$ref: '#/components/schemas/StackEntitlementMetric'}
+        quantity: {type: integer, format: int64, minimum: 1, maximum: 1000000000}
+        status: {$ref: '#/components/schemas/StackLicenseStatus'}
+        startsOn: {type: string, format: date-time}
+        expiresOn: {type: string, format: date-time}
+        vendorId: {$ref: '#/components/schemas/StackID'}
+        purchaseOrderId: {$ref: '#/components/schemas/StackID'}
+        contractId: {$ref: '#/components/schemas/StackID'}
+        costRecordId: {$ref: '#/components/schemas/StackID'}
+        documentIds: {type: array, maxItems: 100, uniqueItems: true, items: {$ref: '#/components/schemas/StackID'}}
+        sourceSystemId: {$ref: '#/components/schemas/StackID'}
+        sourceRecordId: {$ref: '#/components/schemas/StackSourceRecordID'}
+      dependentRequired: {sourceSystemId: [sourceRecordId], sourceRecordId: [sourceSystemId]}
+    UpdateStackLicenseEntitlementRequest:
+      type: object
+      additionalProperties: false
+      required: [quantity, status, revision]
+      properties:
+        quantity: {type: integer, format: int64, minimum: 1, maximum: 1000000000}
+        status: {$ref: '#/components/schemas/StackLicenseStatus'}
+        startsOn: {type: string, format: date-time}
+        expiresOn: {type: string, format: date-time}
+        revision: {type: integer, format: int64, minimum: 1}
+    StackAssignment:
+      type: object
+      additionalProperties: false
+      required: [id, organizationId, licenseId, assigneeKind, assigneeId, seats, usageState, assignedAt, revision, createdAt, updatedAt]
+      properties:
+        id: {$ref: '#/components/schemas/StackID'}
+        organizationId: {$ref: '#/components/schemas/StackID'}
+        licenseId: {$ref: '#/components/schemas/StackID'}
+        assigneeKind: {$ref: '#/components/schemas/StackAssigneeKind'}
+        assigneeId: {$ref: '#/components/schemas/StackID'}
+        seats: {type: integer, format: int64, minimum: 1, maximum: 1000000000}
+        usageState: {$ref: '#/components/schemas/StackUsageState'}
+        assignedAt: {type: string, format: date-time}
+        lastUsedAt: {type: string, format: date-time}
+        endedAt: {type: string, format: date-time}
+        sourceSystemId: {$ref: '#/components/schemas/StackID'}
+        sourceRecordId: {$ref: '#/components/schemas/StackSourceRecordID'}
+        revision: {type: integer, format: int64, minimum: 1}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    CreateStackAssignmentRequest:
+      type: object
+      additionalProperties: false
+      required: [licenseId, assigneeKind, assigneeId, seats, assignedAt]
+      properties:
+        id: {$ref: '#/components/schemas/StackID'}
+        licenseId: {$ref: '#/components/schemas/StackID'}
+        assigneeKind: {$ref: '#/components/schemas/StackAssigneeKind'}
+        assigneeId: {$ref: '#/components/schemas/StackID'}
+        seats: {type: integer, format: int64, minimum: 1, maximum: 1000000000}
+        usageState: {$ref: '#/components/schemas/StackUsageState'}
+        assignedAt: {type: string, format: date-time}
+        lastUsedAt: {type: string, format: date-time}
+        endedAt: {type: string, format: date-time}
+        sourceSystemId: {$ref: '#/components/schemas/StackID'}
+        sourceRecordId: {$ref: '#/components/schemas/StackSourceRecordID'}
+      dependentRequired: {sourceSystemId: [sourceRecordId], sourceRecordId: [sourceSystemId]}
+    UpdateStackAssignmentUsageRequest:
+      type: object
+      additionalProperties: false
+      required: [usageState, revision]
+      properties:
+        usageState: {$ref: '#/components/schemas/StackUsageState'}
+        lastUsedAt: {type: string, format: date-time}
+        revision: {type: integer, format: int64, minimum: 1}
+    EndStackAssignmentRequest:
+      type: object
+      additionalProperties: false
+      required: [endedAt, revision]
+      properties:
+        endedAt: {type: string, format: date-time}
+        revision: {type: integer, format: int64, minimum: 1}
+    StackSnapshot:
+      type: object
+      additionalProperties: false
+      required: [products, versions, installations, licenses, assignments]
+      properties:
+        products: {type: array, items: {$ref: '#/components/schemas/StackProduct'}}
+        versions: {type: array, items: {$ref: '#/components/schemas/StackVersion'}}
+        installations: {type: array, items: {$ref: '#/components/schemas/StackInstallation'}}
+        licenses: {type: array, items: {$ref: '#/components/schemas/StackLicense'}}
+        assignments: {type: array, items: {$ref: '#/components/schemas/StackAssignment'}}
+    StackCondition:
+      type: object
+      additionalProperties: false
+      required: [code, severity, productId, humanReadableState]
+      properties:
+        code: {type: string, enum: [expired, expiring, over_assigned, under_used, missing_license]}
+        severity: {type: string, enum: [critical, warning, info]}
+        productId: {$ref: '#/components/schemas/StackID'}
+        versionId: {$ref: '#/components/schemas/StackID'}
+        licenseId: {$ref: '#/components/schemas/StackID'}
+        assetId: {$ref: '#/components/schemas/StackID'}
+        entitledQuantity: {type: integer, format: int64, minimum: 0}
+        assignedQuantity: {type: integer, format: int64, minimum: 0}
+        underusedQuantity: {type: integer, format: int64, minimum: 0}
+        daysUntilExpiry: {type: integer, format: int64}
+        humanReadableState: {type: string, minLength: 1, maxLength: 500}
+    StackAnalytics:
+      type: object
+      additionalProperties: false
+      required: [asOf, expiringWithinDays, products, activeInstallations, activeLicenses, entitledQuantity, assignedQuantity, underusedAssignments, complianceConditions]
+      properties:
+        asOf: {type: string, format: date-time}
+        expiringWithinDays: {type: integer, format: int64, minimum: 1, maximum: 3660}
+        products: {type: integer, minimum: 0}
+        activeInstallations: {type: integer, minimum: 0}
+        activeLicenses: {type: integer, minimum: 0}
+        entitledQuantity: {type: integer, format: int64, minimum: 0}
+        assignedQuantity: {type: integer, format: int64, minimum: 0}
+        underusedAssignments: {type: integer, minimum: 0}
+        complianceConditions: {type: array, items: {$ref: '#/components/schemas/StackCondition'}}
+    StackExchangeRecord:
+      type: object
+      additionalProperties: false
+      required: [type, id, revision, dependencies, payload]
+      properties:
+        type: {type: string, enum: [stack.product, stack.version, stack.license, stack.installation, stack.assignment]}
+        id: {$ref: '#/components/schemas/StackID'}
+        revision: {type: integer, format: int64, minimum: 1}
+        dependencies: {type: array, maxItems: 102, uniqueItems: true, items: {type: string, minLength: 3, maxLength: 256}}
+        payload: {type: object}
+    StackExchangeExport:
+      type: object
+      additionalProperties: false
+      required: [records]
+      properties:
+        records: {type: array, maxItems: 100000, items: {$ref: '#/components/schemas/StackExchangeRecord'}}
+    StackExchangeImportRequest:
+      type: object
+      additionalProperties: false
+      required: [sourceSystemId, records]
+      properties:
+        sourceSystemId: {$ref: '#/components/schemas/StackID'}
+        records: {type: array, minItems: 1, maxItems: 10000, items: {$ref: '#/components/schemas/StackExchangeRecord'}}
+    StackImportResult:
+      type: object
+      additionalProperties: false
+      required: [created, unchanged]
+      properties:
+        created: {type: integer, minimum: 0}
+        unchanged: {type: integer, minimum: 0}
     Tag:
       type: object
       additionalProperties: false

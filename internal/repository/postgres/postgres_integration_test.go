@@ -3,7 +3,7 @@ package postgres
 // Requirements: REQ-FOUNDATION-001, SEC-GUARD-001, REQ-PEOPLE-001,
 // REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-ATLAS-001, REQ-ATLAS-MODELS-001,
 // REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-HORIZON-001,
-// REQ-ATLAS-CODES-001, REQ-PATTERNS-001.
+// REQ-ATLAS-CODES-001, REQ-PATTERNS-001, REQ-STACK-001.
 // Features: lifecycle.planning, inventory.models, inventory.identifiers, templates.schemas.
 
 import (
@@ -573,4 +573,50 @@ func TestHorizonStoreIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	contracttest.HorizonStore(t, store, organizationID, assetID, suffix)
+}
+
+func TestStackStoreIntegration(t *testing.T) {
+	databaseURL := os.Getenv("STEWARDMESH_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("STEWARDMESH_TEST_DATABASE_URL is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	database, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := Migrate(ctx, database); err != nil {
+		t.Fatal(err)
+	}
+	organizations, err := NewOrganizationRepository(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	organizationID := fmt.Sprintf("stack-integration-%d", time.Now().UnixNano())
+	organizationService, err := bootstrap.NewOrganizationService(organizations)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := organizationService.EnsureOrganization(ctx, organizationID, "Stack Integration"); err != nil {
+		t.Fatal(err)
+	}
+	suffix := fmt.Sprintf("postgres-%d", time.Now().UnixNano())
+	assetStore, err := NewAtlasStore(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, time.August, 13, 12, 0, 0, 0, time.UTC)
+	assetID := "asset-" + suffix
+	asset := domain.Asset{ID: assetID, OrganizationID: organizationID, Name: "Stack contract asset", Kind: "computer", Status: "active", Revision: 1, CreatedAt: now, UpdatedAt: now}
+	lifecycle := domain.AssetLifecycleEvent{ID: fmt.Sprintf("%032x", time.Now().UnixNano()), OrganizationID: organizationID, AssetID: assetID, ToStatus: "active", Revision: 1, ActorID: "integration", OccurredAt: now}
+	if _, err := assetStore.CreateAsset(ctx, asset, lifecycle); err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStackStore(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contracttest.StackStore(t, store, organizationID, suffix)
 }

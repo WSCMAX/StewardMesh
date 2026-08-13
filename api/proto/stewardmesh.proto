@@ -167,6 +167,26 @@ service LedgerService {
   rpc ExportCSV(ExportLedgerCSVRequest) returns (ExportLedgerCSVResponse);
 }
 
+// Organization-scoped software inventory, entitlements, and compliance.
+// Requirement: REQ-STACK-001. Feature: software.licenses.
+service StackService {
+  rpc GetSnapshot(GetStackSnapshotRequest) returns (StackSnapshot);
+  rpc GetAnalytics(GetStackAnalyticsRequest) returns (StackAnalytics);
+  rpc CreateProduct(CreateStackProductRequest) returns (StackProduct);
+  rpc UpdateProductStatus(UpdateStackProductStatusRequest) returns (StackProduct);
+  rpc CreateVersion(CreateStackVersionRequest) returns (StackVersion);
+  rpc UpdateVersionStatus(UpdateStackVersionStatusRequest) returns (StackVersion);
+  rpc RecordInstallation(RecordStackInstallationRequest) returns (StackInstallation);
+  rpc UpdateInstallationState(UpdateStackInstallationStateRequest) returns (StackInstallation);
+  rpc CreateLicense(CreateStackLicenseRequest) returns (StackLicense);
+  rpc UpdateLicenseEntitlement(UpdateStackLicenseEntitlementRequest) returns (StackLicense);
+  rpc CreateAssignment(CreateStackAssignmentRequest) returns (StackAssignment);
+  rpc UpdateAssignmentUsage(UpdateStackAssignmentUsageRequest) returns (StackAssignment);
+  rpc EndAssignment(EndStackAssignmentRequest) returns (StackAssignment);
+  rpc ExportRecords(ExportStackRecordsRequest) returns (ExportStackRecordsResponse);
+  rpc ImportRecords(ImportStackRecordsRequest) returns (StackImportResult);
+}
+
 message GetOrganizationRequest {}
 
 message Organization {
@@ -1733,4 +1753,264 @@ message ExportLedgerCSVResponse {
   bytes content = 1;
   string media_type = 2;
   string filename = 3;
+}
+
+message GetStackSnapshotRequest {}
+
+message StackProduct {
+  string id = 1;
+  string organization_id = 2;
+  string name = 3;
+  string publisher = 4;
+  string category = 5;
+  string status = 6;
+  string source_system_id = 7;
+  string source_record_id = 8;
+  int64 revision = 9;
+  google.protobuf.Timestamp created_at = 10;
+  google.protobuf.Timestamp updated_at = 11;
+}
+
+message CreateStackProductRequest {
+  string id = 1;
+  string name = 2;
+  string publisher = 3;
+  string category = 4;
+  string status = 5;
+  string source_system_id = 6;
+  string source_record_id = 7;
+}
+
+message UpdateStackProductStatusRequest {
+  string product_id = 1;
+  string status = 2;
+  int64 revision = 3;
+}
+
+message StackVersion {
+  string id = 1;
+  string organization_id = 2;
+  string product_id = 3;
+  string name = 4;
+  google.protobuf.Timestamp released_on = 5;
+  string status = 6;
+  string source_system_id = 7;
+  string source_record_id = 8;
+  int64 revision = 9;
+  google.protobuf.Timestamp created_at = 10;
+  google.protobuf.Timestamp updated_at = 11;
+}
+
+message CreateStackVersionRequest {
+  string id = 1;
+  string product_id = 2;
+  string name = 3;
+  google.protobuf.Timestamp released_on = 4;
+  string status = 5;
+  string source_system_id = 6;
+  string source_record_id = 7;
+}
+
+message UpdateStackVersionStatusRequest {
+  string version_id = 1;
+  string status = 2;
+  int64 revision = 3;
+}
+
+message StackInstallation {
+  string id = 1;
+  string organization_id = 2;
+  string version_id = 3;
+  string asset_id = 4;
+  string status = 5;
+  string usage_state = 6;
+  google.protobuf.Timestamp installed_at = 7;
+  google.protobuf.Timestamp last_used_at = 8;
+  google.protobuf.Timestamp removed_at = 9;
+  string source_system_id = 10;
+  string source_record_id = 11;
+  int64 revision = 12;
+  google.protobuf.Timestamp created_at = 13;
+  google.protobuf.Timestamp updated_at = 14;
+}
+
+message RecordStackInstallationRequest {
+  string id = 1;
+  string version_id = 2;
+  string asset_id = 3;
+  string status = 4;
+  string usage_state = 5;
+  google.protobuf.Timestamp installed_at = 6;
+  google.protobuf.Timestamp last_used_at = 7;
+  google.protobuf.Timestamp removed_at = 8;
+  string source_system_id = 9;
+  string source_record_id = 10;
+}
+
+message UpdateStackInstallationStateRequest {
+  string installation_id = 1;
+  string status = 2;
+  string usage_state = 3;
+  google.protobuf.Timestamp last_used_at = 4;
+  google.protobuf.Timestamp removed_at = 5;
+  int64 revision = 6;
+}
+
+message StackLicense {
+  string id = 1;
+  string organization_id = 2;
+  string product_id = 3;
+  string version_id = 4;
+  string name = 5;
+  string entitlement_metric = 6;
+  int64 quantity = 7;
+  string status = 8;
+  google.protobuf.Timestamp starts_on = 9;
+  google.protobuf.Timestamp expires_on = 10;
+  string vendor_id = 11;
+  string purchase_order_id = 12;
+  string contract_id = 13;
+  string cost_record_id = 14;
+  repeated string document_ids = 15;
+  string source_system_id = 16;
+  string source_record_id = 17;
+  int64 revision = 18;
+  google.protobuf.Timestamp created_at = 19;
+  google.protobuf.Timestamp updated_at = 20;
+}
+
+message CreateStackLicenseRequest {
+  string id = 1;
+  string product_id = 2;
+  string version_id = 3;
+  string name = 4;
+  string entitlement_metric = 5;
+  int64 quantity = 6;
+  string status = 7;
+  google.protobuf.Timestamp starts_on = 8;
+  google.protobuf.Timestamp expires_on = 9;
+  string vendor_id = 10;
+  string purchase_order_id = 11;
+  string contract_id = 12;
+  string cost_record_id = 13;
+  repeated string document_ids = 14;
+  string source_system_id = 15;
+  string source_record_id = 16;
+}
+
+message UpdateStackLicenseEntitlementRequest {
+  string license_id = 1;
+  int64 quantity = 2;
+  string status = 3;
+  google.protobuf.Timestamp starts_on = 4;
+  google.protobuf.Timestamp expires_on = 5;
+  int64 revision = 6;
+}
+
+message StackAssignment {
+  string id = 1;
+  string organization_id = 2;
+  string license_id = 3;
+  string assignee_kind = 4;
+  string assignee_id = 5;
+  int64 seats = 6;
+  string usage_state = 7;
+  google.protobuf.Timestamp assigned_at = 8;
+  google.protobuf.Timestamp last_used_at = 9;
+  google.protobuf.Timestamp ended_at = 10;
+  string source_system_id = 11;
+  string source_record_id = 12;
+  int64 revision = 13;
+  google.protobuf.Timestamp created_at = 14;
+  google.protobuf.Timestamp updated_at = 15;
+}
+
+message CreateStackAssignmentRequest {
+  string id = 1;
+  string license_id = 2;
+  string assignee_kind = 3;
+  string assignee_id = 4;
+  int64 seats = 5;
+  string usage_state = 6;
+  google.protobuf.Timestamp assigned_at = 7;
+  google.protobuf.Timestamp last_used_at = 8;
+  string source_system_id = 9;
+  string source_record_id = 10;
+  google.protobuf.Timestamp ended_at = 11;
+}
+
+message UpdateStackAssignmentUsageRequest {
+  string assignment_id = 1;
+  string usage_state = 2;
+  google.protobuf.Timestamp last_used_at = 3;
+  int64 revision = 4;
+}
+
+message EndStackAssignmentRequest {
+  string assignment_id = 1;
+  google.protobuf.Timestamp ended_at = 2;
+  int64 revision = 3;
+}
+
+message StackSnapshot {
+  repeated StackProduct products = 1;
+  repeated StackVersion versions = 2;
+  repeated StackInstallation installations = 3;
+  repeated StackLicense licenses = 4;
+  repeated StackAssignment assignments = 5;
+}
+
+message GetStackAnalyticsRequest {
+  google.protobuf.Timestamp as_of = 1;
+  int64 expiring_within_days = 2;
+}
+
+message StackCondition {
+  string code = 1;
+  string severity = 2;
+  string product_id = 3;
+  string version_id = 4;
+  string license_id = 5;
+  string asset_id = 6;
+  int64 entitled_quantity = 7;
+  int64 assigned_quantity = 8;
+  int64 underused_quantity = 9;
+  int64 days_until_expiry = 10;
+  string human_readable_state = 11;
+}
+
+message StackAnalytics {
+  google.protobuf.Timestamp as_of = 1;
+  int64 expiring_within_days = 2;
+  int32 products = 3;
+  int32 active_installations = 4;
+  int32 active_licenses = 5;
+  int64 entitled_quantity = 6;
+  int64 assigned_quantity = 7;
+  int32 underused_assignments = 8;
+  repeated StackCondition compliance_conditions = 9;
+}
+
+message StackExchangeRecord {
+  string type = 1;
+  string id = 2;
+  int64 revision = 3;
+  repeated string dependencies = 4;
+  google.protobuf.Struct payload = 5;
+}
+
+message ExportStackRecordsRequest {}
+
+message ExportStackRecordsResponse {
+  repeated StackExchangeRecord records = 1;
+}
+
+message ImportStackRecordsRequest {
+  string source_system_id = 1;
+  repeated StackExchangeRecord records = 2;
+}
+
+message StackImportResult {
+  int32 created = 1;
+  int32 unchanged = 2;
 }

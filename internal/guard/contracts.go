@@ -1,5 +1,6 @@
 // Package guard implements StewardMesh authentication and authorization.
-// Requirements: REQ-DIRECTORY-EXPANSION-002, REQ-PLATFORM-VALKEY-001, REQ-LEDGER-001, REQ-HORIZON-001, SEC-GUARD-001, SEC-HTTP-001.
+// Requirements: REQ-DIRECTORY-EXPANSION-002, REQ-PLATFORM-VALKEY-001, REQ-LEDGER-001, REQ-STACK-001, REQ-HORIZON-001, SEC-GUARD-001, SEC-HTTP-001.
+// Feature: software.licenses.
 package guard
 
 import (
@@ -52,6 +53,8 @@ const (
 	PermissionStorageWrite      Permission = "storage.write"
 	PermissionFinanceRead       Permission = "finance.read"
 	PermissionFinanceWrite      Permission = "finance.write"
+	PermissionSoftwareRead      Permission = "software.read"
+	PermissionSoftwareWrite     Permission = "software.write"
 	PermissionPlanningRead      Permission = "planning.read"
 	PermissionPlanningWrite     Permission = "planning.write"
 	PermissionIntegrationsRead  Permission = "integrations.read"
@@ -72,6 +75,8 @@ func AdministratorBundlePermissions() []Permission {
 		PermissionStorageWrite,
 		PermissionFinanceRead,
 		PermissionFinanceWrite,
+		PermissionSoftwareRead,
+		PermissionSoftwareWrite,
 		PermissionPlanningRead,
 		PermissionPlanningWrite,
 		PermissionIntegrationsRead,
@@ -94,6 +99,8 @@ func SupportedPermissions() []Permission {
 		PermissionStorageWrite,
 		PermissionFinanceRead,
 		PermissionFinanceWrite,
+		PermissionSoftwareRead,
+		PermissionSoftwareWrite,
 		PermissionPlanningRead,
 		PermissionPlanningWrite,
 		PermissionIntegrationsRead,

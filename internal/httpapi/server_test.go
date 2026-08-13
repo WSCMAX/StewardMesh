@@ -1,7 +1,7 @@
 package httpapi
 
 // Requirements: REQ-FOUNDATION-001, REQ-WORKSPACE-001, REQ-ATLAS-001, REQ-ATLAS-MODELS-001, REQ-ATLAS-CODES-001, REQ-PEOPLE-001,
-// REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-HORIZON-001, REQ-PLATFORM-VALKEY-001,
+// REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-STACK-001, REQ-HORIZON-001, REQ-PLATFORM-VALKEY-001,
 // SEC-GUARD-001, SEC-HTTP-001. Features include experience.workspace.
 
 import (
@@ -33,6 +33,7 @@ import (
 	"github.com/maxlemke/stewardmesh/internal/patterns"
 	"github.com/maxlemke/stewardmesh/internal/people"
 	"github.com/maxlemke/stewardmesh/internal/repository"
+	"github.com/maxlemke/stewardmesh/internal/stack"
 	"github.com/maxlemke/stewardmesh/internal/storage"
 	"github.com/maxlemke/stewardmesh/internal/threads"
 )
@@ -75,6 +76,17 @@ type allowHTTPLedgerReferences struct{}
 func (allowHTTPLedgerReferences) ValidateAssets(context.Context, []string) error          { return nil }
 func (allowHTTPLedgerReferences) ValidateDocuments(context.Context, []string) error       { return nil }
 func (allowHTTPLedgerReferences) ValidateDirectory(context.Context, string, string) error { return nil }
+
+type allowHTTPStackReferences struct{}
+
+func (allowHTTPStackReferences) ResolveAsset(_ context.Context, id string) (stack.AssetContext, error) {
+	return stack.AssetContext{ID: id}, nil
+}
+func (allowHTTPStackReferences) ValidateAssignee(context.Context, string, string) error { return nil }
+func (allowHTTPStackReferences) ValidateFinancialReferences(context.Context, string, string, string, string) error {
+	return nil
+}
+func (allowHTTPStackReferences) ValidateDocuments(context.Context, []string) error { return nil }
 
 type fakeHTTPOIDCAuthenticator struct {
 	state         string
@@ -344,6 +356,83 @@ func TestLedgerFinanceWorkflowVarianceReconciliationAndExport(t *testing.T) {
 	handler.ServeHTTP(snapshotResponse, snapshotRequest)
 	if snapshotResponse.Code != http.StatusOK || !strings.Contains(snapshotResponse.Body.String(), "Managed service") || !strings.Contains(snapshotResponse.Body.String(), "Three-year managed service") {
 		t.Fatalf("unexpected Ledger snapshot %d: %s", snapshotResponse.Code, snapshotResponse.Body.String())
+	}
+}
+
+func TestStackSoftwareLicenseWorkflowAnalyticsExchangeAndProtection(t *testing.T) {
+	handler := newGuardServer(t)
+	session := bootstrapAdministrator(t, handler)
+	product := createPeopleRecord[stack.Product](t, handler, session, "/api/v1/stack/products", map[string]any{
+		"id": "writer", "name": "Steward Writer", "publisher": "Example Publisher", "category": "productivity",
+	})
+	version := createPeopleRecord[stack.Version](t, handler, session, "/api/v1/stack/versions", map[string]any{
+		"id": "writer-v1", "productId": product.ID, "name": "1.0", "releasedOn": "2026-01-01T00:00:00Z",
+	})
+	license := createPeopleRecord[stack.License](t, handler, session, "/api/v1/stack/licenses", map[string]any{
+		"id": "writer-license", "productId": product.ID, "versionId": version.ID, "name": "Device subscription",
+		"entitlementMetric": "device", "quantity": 1, "expiresOn": "2026-09-01T00:00:00Z",
+		"vendorId": "vendor-1", "purchaseOrderId": "po-1", "contractId": "contract-1", "costRecordId": "cost-1",
+		"documentIds": []string{"license-document"},
+	})
+	for _, assetID := range []string{"asset-covered", "asset-unlicensed"} {
+		createPeopleRecord[stack.Installation](t, handler, session, "/api/v1/stack/installations", map[string]any{
+			"id": "installation-" + assetID, "versionId": version.ID, "assetId": assetID,
+			"installedAt": "2026-08-01T00:00:00Z", "usageState": "used",
+		})
+	}
+	assignment := createPeopleRecord[stack.Assignment](t, handler, session, "/api/v1/stack/assignments", map[string]any{
+		"id": "assignment-covered", "licenseId": license.ID, "assigneeKind": "asset", "assigneeId": "asset-covered",
+		"seats": 2, "usageState": "unused", "assignedAt": "2026-08-01T00:00:00Z",
+	})
+
+	analytics := httptest.NewRecorder()
+	handler.ServeHTTP(analytics, authenticatedRequest(http.MethodGet, "/api/v1/stack/analytics?asOf=2026-08-13T00%3A00%3A00Z&expiringWithinDays=30", nil, session))
+	for _, expected := range []string{`"code":"expiring"`, `"code":"missing_license"`, `"code":"over_assigned"`, `"code":"under_used"`} {
+		if !strings.Contains(analytics.Body.String(), expected) {
+			t.Fatalf("expected analytics condition %s, got %d: %s", expected, analytics.Code, analytics.Body.String())
+		}
+	}
+	if analytics.Code != http.StatusOK || analytics.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("unexpected Stack analytics response %d headers=%v", analytics.Code, analytics.Header())
+	}
+
+	usagePayload, _ := json.Marshal(map[string]any{"usageState": "used", "lastUsedAt": "2026-08-13T00:00:00Z", "revision": assignment.Revision})
+	usage := httptest.NewRecorder()
+	handler.ServeHTTP(usage, authenticatedRequest(http.MethodPut, "/api/v1/stack/assignments/"+assignment.ID+"/usage", bytes.NewReader(usagePayload), session))
+	if usage.Code != http.StatusOK || !strings.Contains(usage.Body.String(), `"usageState":"used"`) || !strings.Contains(usage.Body.String(), `"revision":2`) {
+		t.Fatalf("unexpected Stack usage response %d: %s", usage.Code, usage.Body.String())
+	}
+	licensePayload, _ := json.Marshal(map[string]any{"quantity": 3, "status": "active", "expiresOn": "2026-10-01T00:00:00Z", "revision": license.Revision})
+	licenseUpdate := httptest.NewRecorder()
+	handler.ServeHTTP(licenseUpdate, authenticatedRequest(http.MethodPut, "/api/v1/stack/licenses/"+license.ID+"/entitlement", bytes.NewReader(licensePayload), session))
+	if licenseUpdate.Code != http.StatusOK || !strings.Contains(licenseUpdate.Body.String(), `"quantity":3`) || !strings.Contains(licenseUpdate.Body.String(), `"revision":2`) {
+		t.Fatalf("unexpected Stack entitlement response %d: %s", licenseUpdate.Code, licenseUpdate.Body.String())
+	}
+	endPayload, _ := json.Marshal(map[string]any{"endedAt": "2026-08-14T00:00:00Z", "revision": 2})
+	ended := httptest.NewRecorder()
+	handler.ServeHTTP(ended, authenticatedRequest(http.MethodPut, "/api/v1/stack/assignments/"+assignment.ID+"/end", bytes.NewReader(endPayload), session))
+	if ended.Code != http.StatusOK || !strings.Contains(ended.Body.String(), `"endedAt":"2026-08-14T00:00:00Z"`) || !strings.Contains(ended.Body.String(), `"revision":3`) {
+		t.Fatalf("unexpected Stack assignment end response %d: %s", ended.Code, ended.Body.String())
+	}
+
+	snapshot := httptest.NewRecorder()
+	handler.ServeHTTP(snapshot, authenticatedRequest(http.MethodGet, "/api/v1/stack", nil, session))
+	if snapshot.Code != http.StatusOK || snapshot.Header().Get("Cache-Control") != "no-store" || !strings.Contains(snapshot.Body.String(), "Steward Writer") {
+		t.Fatalf("unexpected Stack snapshot %d headers=%v body=%s", snapshot.Code, snapshot.Header(), snapshot.Body.String())
+	}
+	exchange := httptest.NewRecorder()
+	handler.ServeHTTP(exchange, authenticatedRequest(http.MethodGet, "/api/v1/stack/exchange", nil, session))
+	if exchange.Code != http.StatusOK || exchange.Header().Get("Content-Disposition") != `attachment; filename="stewardmesh-stack.json"` ||
+		!strings.Contains(exchange.Body.String(), `"type":"stack.product"`) || !strings.Contains(exchange.Body.String(), `"dependencies"`) {
+		t.Fatalf("unexpected Stack exchange %d: %s", exchange.Code, exchange.Body.String())
+	}
+
+	missingCSRF := authenticatedRequest(http.MethodPost, "/api/v1/stack/products", bytes.NewBufferString(`{"name":"Denied","publisher":"Denied"}`), session)
+	missingCSRF.Header.Del(csrfHeader)
+	denied := httptest.NewRecorder()
+	handler.ServeHTTP(denied, missingCSRF)
+	if denied.Code != http.StatusForbidden || !strings.Contains(denied.Body.String(), "csrf_failed") {
+		t.Fatalf("expected Stack writes to require CSRF, got %d: %s", denied.Code, denied.Body.String())
 	}
 }
 
@@ -1732,6 +1821,15 @@ func newGuardServerWithDirectory(t *testing.T, limiter guard.AttemptLimiter, oid
 	if err != nil {
 		t.Fatal(err)
 	}
+	stackService, err := stack.NewService(repository.NewMemoryStackStore(), allowHTTPStackReferences{}, foundation.NopAuditor{}, stack.ServiceConfig{
+		OrganizationID: organization.ID,
+		Now: func() time.Time {
+			return time.Date(2026, time.August, 13, 0, 0, 0, 0, time.UTC)
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	horizonService, err := horizon.NewService(repository.NewMemoryHorizonStore(), atlasService, ledgerService, threadsService, foundation.NopAuditor{}, horizon.ServiceConfig{OrganizationID: organization.ID})
 	if err != nil {
 		t.Fatal(err)
@@ -1748,6 +1846,7 @@ func newGuardServerWithDirectory(t *testing.T, limiter guard.AttemptLimiter, oid
 		Threads:          threadsService,
 		Vault:            vaultService,
 		Ledger:           ledgerService,
+		Stack:            stackService,
 		Horizon:          horizonService,
 		Patterns:         patternsService,
 		Guard:            service,

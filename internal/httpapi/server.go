@@ -1,7 +1,7 @@
 package httpapi
 
 // Requirements: REQ-FOUNDATION-001, REQ-WORKSPACE-001, REQ-ATLAS-001, REQ-ATLAS-CODES-001, REQ-PEOPLE-001,
-// REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-HORIZON-001, REQ-PLATFORM-VALKEY-001,
+// REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-STACK-001, REQ-HORIZON-001, REQ-PLATFORM-VALKEY-001,
 // SEC-GUARD-001, SEC-HTTP-001. Features include experience.workspace and inventory.models.
 
 import (
@@ -32,6 +32,7 @@ import (
 	"github.com/maxlemke/stewardmesh/internal/ledger"
 	"github.com/maxlemke/stewardmesh/internal/patterns"
 	"github.com/maxlemke/stewardmesh/internal/people"
+	"github.com/maxlemke/stewardmesh/internal/stack"
 	"github.com/maxlemke/stewardmesh/internal/storage"
 	"github.com/maxlemke/stewardmesh/internal/threads"
 )
@@ -55,6 +56,7 @@ type Dependencies struct {
 	Threads             *threads.Service
 	Vault               *storage.Service
 	Ledger              *ledger.Service
+	Stack               *stack.Service
 	Horizon             *horizon.Service
 	Patterns            *patterns.Service
 	Guard               *guard.Service
@@ -72,6 +74,7 @@ type Server struct {
 	threads             *threads.Service
 	vault               *storage.Service
 	ledger              *ledger.Service
+	stack               *stack.Service
 	horizon             *horizon.Service
 	patterns            *patterns.Service
 	guard               *guard.Service
@@ -154,6 +157,7 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 		threads:             deps.Threads,
 		vault:               deps.Vault,
 		ledger:              deps.Ledger,
+		stack:               deps.Stack,
 		horizon:             deps.Horizon,
 		patterns:            deps.Patterns,
 		guard:               deps.Guard,
@@ -264,6 +268,21 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 	mux.Handle("POST /api/v1/ledger/costs/reconcile", server.protected(guard.PermissionFinanceWrite, true, server.reconcileLedgerCost))
 	mux.Handle("GET /api/v1/ledger/budget-variance", server.protected(guard.PermissionFinanceRead, false, server.getLedgerBudgetVariance))
 	mux.Handle("GET /api/v1/ledger/export.csv", server.protected(guard.PermissionFinanceRead, false, server.exportLedgerCSV))
+	mux.Handle("GET /api/v1/stack", server.protected(guard.PermissionSoftwareRead, false, server.getStackSnapshot))
+	mux.Handle("GET /api/v1/stack/analytics", server.protected(guard.PermissionSoftwareRead, false, server.getStackAnalytics))
+	mux.Handle("POST /api/v1/stack/products", server.protected(guard.PermissionSoftwareWrite, true, server.createStackProduct))
+	mux.Handle("PUT /api/v1/stack/products/{productID}/status", server.protected(guard.PermissionSoftwareWrite, true, server.updateStackProductStatus))
+	mux.Handle("POST /api/v1/stack/versions", server.protected(guard.PermissionSoftwareWrite, true, server.createStackVersion))
+	mux.Handle("PUT /api/v1/stack/versions/{versionID}/status", server.protected(guard.PermissionSoftwareWrite, true, server.updateStackVersionStatus))
+	mux.Handle("POST /api/v1/stack/installations", server.protected(guard.PermissionSoftwareWrite, true, server.recordStackInstallation))
+	mux.Handle("PUT /api/v1/stack/installations/{installationID}", server.protected(guard.PermissionSoftwareWrite, true, server.updateStackInstallationState))
+	mux.Handle("POST /api/v1/stack/licenses", server.protected(guard.PermissionSoftwareWrite, true, server.createStackLicense))
+	mux.Handle("PUT /api/v1/stack/licenses/{licenseID}/entitlement", server.protected(guard.PermissionSoftwareWrite, true, server.updateStackLicenseEntitlement))
+	mux.Handle("POST /api/v1/stack/assignments", server.protected(guard.PermissionSoftwareWrite, true, server.createStackAssignment))
+	mux.Handle("PUT /api/v1/stack/assignments/{assignmentID}/usage", server.protected(guard.PermissionSoftwareWrite, true, server.updateStackAssignmentUsage))
+	mux.Handle("PUT /api/v1/stack/assignments/{assignmentID}/end", server.protected(guard.PermissionSoftwareWrite, true, server.endStackAssignment))
+	mux.Handle("GET /api/v1/stack/exchange", server.protected(guard.PermissionSoftwareRead, false, server.exportStackRecords))
+	mux.Handle("POST /api/v1/stack/exchange/import", server.protected(guard.PermissionSoftwareWrite, true, server.importStackRecords))
 	mux.Handle("GET /api/v1/horizon/plans", server.protected(guard.PermissionPlanningRead, false, server.listHorizonPlans))
 	mux.Handle("POST /api/v1/horizon/plans", server.protected(guard.PermissionPlanningWrite, true, server.createHorizonPlan))
 	mux.Handle("PUT /api/v1/horizon/plans/{planID}", server.protected(guard.PermissionPlanningWrite, true, server.updateHorizonPlan))
@@ -756,6 +775,320 @@ func writeLedgerError(w http.ResponseWriter, r *http.Request, err error) {
 		writeError(w, r, http.StatusConflict, "conflict", "this Ledger record conflicts with current data")
 	default:
 		writeError(w, r, http.StatusInternalServerError, "ledger_error", "the Ledger operation could not be completed")
+	}
+}
+
+// Stack handlers implement REQ-STACK-001 / software.licenses.
+func (s *Server) getStackSnapshot(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.stack == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "stack_unavailable", "Stack software inventory is unavailable")
+		return
+	}
+	snapshot, err := s.stack.Snapshot(r.Context())
+	if err != nil {
+		writeStackError(w, r, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, snapshot)
+}
+
+func (s *Server) getStackAnalytics(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.stack == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "stack_unavailable", "Stack software inventory is unavailable")
+		return
+	}
+	var asOf time.Time
+	if value := strings.TrimSpace(r.URL.Query().Get("asOf")); value != "" {
+		parsed, err := time.Parse(time.RFC3339, value)
+		if err != nil {
+			writeError(w, r, http.StatusBadRequest, "validation_failed", "asOf must be an RFC 3339 timestamp")
+			return
+		}
+		asOf = parsed
+	}
+	days := int64(0)
+	if value := strings.TrimSpace(r.URL.Query().Get("expiringWithinDays")); value != "" {
+		parsed, err := strconv.ParseInt(value, 10, 64)
+		if err != nil {
+			writeError(w, r, http.StatusBadRequest, "validation_failed", "expiringWithinDays must be an integer")
+			return
+		}
+		days = parsed
+	}
+	report, err := s.stack.Analytics(r.Context(), asOf, days)
+	if err != nil {
+		writeStackError(w, r, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, report)
+}
+
+func (s *Server) createStackProduct(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.stack == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "stack_unavailable", "Stack software inventory is unavailable")
+		return
+	}
+	var input stack.CreateProductInput
+	if err := decodeJSON(w, r, 32<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid Stack product payload")
+		return
+	}
+	created, err := s.stack.CreateProduct(r.Context(), input)
+	if err != nil {
+		writeStackError(w, r, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusCreated, created)
+}
+
+func (s *Server) createStackVersion(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.stack == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "stack_unavailable", "Stack software inventory is unavailable")
+		return
+	}
+	var input stack.CreateVersionInput
+	if err := decodeJSON(w, r, 32<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid Stack version payload")
+		return
+	}
+	created, err := s.stack.CreateVersion(r.Context(), input)
+	if err != nil {
+		writeStackError(w, r, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusCreated, created)
+}
+
+func (s *Server) updateStackProductStatus(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.stack == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "stack_unavailable", "Stack software inventory is unavailable")
+		return
+	}
+	var input stack.UpdateProductStatusInput
+	if err := decodeJSON(w, r, 16<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid Stack product status payload")
+		return
+	}
+	input.ID = r.PathValue("productID")
+	updated, err := s.stack.UpdateProductStatus(r.Context(), input)
+	if err != nil {
+		writeStackError(w, r, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, updated)
+}
+
+func (s *Server) updateStackVersionStatus(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.stack == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "stack_unavailable", "Stack software inventory is unavailable")
+		return
+	}
+	var input stack.UpdateVersionStatusInput
+	if err := decodeJSON(w, r, 16<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid Stack version status payload")
+		return
+	}
+	input.ID = r.PathValue("versionID")
+	updated, err := s.stack.UpdateVersionStatus(r.Context(), input)
+	if err != nil {
+		writeStackError(w, r, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, updated)
+}
+
+func (s *Server) recordStackInstallation(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.stack == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "stack_unavailable", "Stack software inventory is unavailable")
+		return
+	}
+	var input stack.RecordInstallationInput
+	if err := decodeJSON(w, r, 64<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid Stack installation payload")
+		return
+	}
+	created, err := s.stack.RecordInstallation(r.Context(), input)
+	if err != nil {
+		writeStackError(w, r, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusCreated, created)
+}
+
+func (s *Server) createStackLicense(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.stack == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "stack_unavailable", "Stack software inventory is unavailable")
+		return
+	}
+	var input stack.CreateLicenseInput
+	if err := decodeJSON(w, r, 128<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid Stack license payload")
+		return
+	}
+	created, err := s.stack.CreateLicense(r.Context(), input)
+	if err != nil {
+		writeStackError(w, r, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusCreated, created)
+}
+
+func (s *Server) updateStackInstallationState(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.stack == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "stack_unavailable", "Stack software inventory is unavailable")
+		return
+	}
+	var input stack.UpdateInstallationStateInput
+	if err := decodeJSON(w, r, 32<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid Stack installation state payload")
+		return
+	}
+	input.ID = r.PathValue("installationID")
+	updated, err := s.stack.UpdateInstallationState(r.Context(), input)
+	if err != nil {
+		writeStackError(w, r, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, updated)
+}
+
+func (s *Server) updateStackLicenseEntitlement(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.stack == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "stack_unavailable", "Stack software inventory is unavailable")
+		return
+	}
+	var input stack.UpdateLicenseEntitlementInput
+	if err := decodeJSON(w, r, 32<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid Stack license entitlement payload")
+		return
+	}
+	input.ID = r.PathValue("licenseID")
+	updated, err := s.stack.UpdateLicenseEntitlement(r.Context(), input)
+	if err != nil {
+		writeStackError(w, r, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, updated)
+}
+
+func (s *Server) createStackAssignment(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.stack == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "stack_unavailable", "Stack software inventory is unavailable")
+		return
+	}
+	var input stack.CreateAssignmentInput
+	if err := decodeJSON(w, r, 64<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid Stack assignment payload")
+		return
+	}
+	created, err := s.stack.CreateAssignment(r.Context(), input)
+	if err != nil {
+		writeStackError(w, r, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusCreated, created)
+}
+
+func (s *Server) updateStackAssignmentUsage(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.stack == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "stack_unavailable", "Stack software inventory is unavailable")
+		return
+	}
+	var input stack.UpdateAssignmentUsageInput
+	if err := decodeJSON(w, r, 32<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid Stack assignment usage payload")
+		return
+	}
+	input.ID = r.PathValue("assignmentID")
+	updated, err := s.stack.UpdateAssignmentUsage(r.Context(), input)
+	if err != nil {
+		writeStackError(w, r, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, updated)
+}
+
+func (s *Server) endStackAssignment(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.stack == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "stack_unavailable", "Stack software inventory is unavailable")
+		return
+	}
+	var input stack.EndAssignmentInput
+	if err := decodeJSON(w, r, 16<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid Stack assignment end payload")
+		return
+	}
+	input.ID = r.PathValue("assignmentID")
+	updated, err := s.stack.EndAssignment(r.Context(), input)
+	if err != nil {
+		writeStackError(w, r, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, updated)
+}
+
+func (s *Server) exportStackRecords(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.stack == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "stack_unavailable", "Stack software inventory is unavailable")
+		return
+	}
+	records, err := s.stack.ExportRecords(r.Context())
+	if err != nil {
+		writeStackError(w, r, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Disposition", `attachment; filename="stewardmesh-stack.json"`)
+	writeJSON(w, http.StatusOK, map[string]any{"records": records})
+}
+
+func (s *Server) importStackRecords(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.stack == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "stack_unavailable", "Stack software inventory is unavailable")
+		return
+	}
+	var input struct {
+		SourceSystemID string                 `json:"sourceSystemId"`
+		Records        []stack.ExchangeRecord `json:"records"`
+	}
+	if err := decodeJSON(w, r, 10<<20, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid Stack exchange payload")
+		return
+	}
+	result, err := s.stack.ImportRecords(r.Context(), input.SourceSystemID, input.Records)
+	if err != nil {
+		writeStackError(w, r, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, result)
+}
+
+func writeStackError(w http.ResponseWriter, r *http.Request, err error) {
+	switch {
+	case errors.Is(err, stack.ErrInvalidInput):
+		writeError(w, r, http.StatusBadRequest, "validation_failed", "Stack software or license details are invalid")
+	case errors.Is(err, stack.ErrReferenceMissing):
+		writeError(w, r, http.StatusUnprocessableEntity, "reference_missing", "a referenced Stack, Atlas, People, Ledger, or Vault record is unavailable")
+	case errors.Is(err, stack.ErrNotFound):
+		writeError(w, r, http.StatusNotFound, "not_found", "the requested Stack record was not found")
+	case errors.Is(err, stack.ErrConflict):
+		writeError(w, r, http.StatusConflict, "conflict", "this Stack record conflicts with current data")
+	default:
+		writeError(w, r, http.StatusInternalServerError, "stack_error", "the Stack operation could not be completed")
 	}
 }
 

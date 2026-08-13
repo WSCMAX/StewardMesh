@@ -678,6 +678,8 @@ func (s *Service) audit(ctx context.Context, attempt Attempt, batch Batch, actio
 		requirementID = SailPointRequirementID
 	case SyntheticProvider:
 		requirementID = SyntheticRequirementID
+	case PeopleSoftProvider:
+		requirementID = PeopleSoftRequirementID
 	}
 	eventID := digestStrings(requirementID, batch.ID, action, operationKey)[:32]
 	return s.auditor.Record(foundation.WithScope(ctx, foundation.Scope{OrganizationID: s.organizationID, ActorID: actorID, CorrelationID: correlationID}), foundation.AuditEvent{

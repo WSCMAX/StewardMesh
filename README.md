@@ -198,6 +198,15 @@ runtime seeds nothing. To initialize the local demo database once, run
 The optional Grouper fixture is not contacted by this initializer. See
 [Directory Expansion](docs/features/directory-expansion.md#synthetic-demo-dataset).
 
+Bridge can also import PeopleSoft Campus Solutions organizations, locations,
+buildings, departments, and their hierarchy through four institution-owned,
+read-only Query Access Service queries. Deployment configuration owns the fixed
+endpoint, least-privilege credential, query names, and strict qualified-selector
+to JSON-alias map. QAS results remain partial so missing rows never cause
+implicit deactivation; the browser receives only the source ID and a non-secret
+configuration revision. See [PeopleSoft Campus Solutions synchronization](docs/features/directory-expansion.md#peoplesoft-campus-solutions-synchronization)
+for the query contract and secure setup.
+
 Guide provides contextual module help and examples, dismissible and replayable
 permission-aware walkthroughs, a WCAG 2.2 AA branding-color gate with safe
 fallbacks, and sanitized issue-report context. See

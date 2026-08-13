@@ -1,6 +1,6 @@
 package contracttest
 
-// Requirements: REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003.
+// Requirements: REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-006.
 // Features: integrations.protocols, identity.directory.
 
 import (

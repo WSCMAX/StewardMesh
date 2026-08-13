@@ -1,6 +1,6 @@
 package config
 
-// Requirements: REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005, REQ-DIRECTORY-EXPANSION-007, REQ-STORAGE-001, REQ-REACH-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
+// Requirements: REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005, REQ-DIRECTORY-EXPANSION-006, REQ-DIRECTORY-EXPANSION-007, REQ-STORAGE-001, REQ-REACH-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
 
 import (
 	"strings"
@@ -101,6 +101,87 @@ func TestLoadSupportsOptionalSailPointConnector(t *testing.T) {
 		t.Fatalf("unexpected SailPoint configuration %#v", configuration)
 	}
 }
+
+func TestLoadSupportsOptionalPeopleSoftConnectorAndInstitutionMappings(t *testing.T) {
+	t.Setenv("STEWARDMESH_REPOSITORY_DRIVER", "memory")
+	t.Setenv("STEWARDMESH_PEOPLESOFT_SOURCE_SYSTEM_ID", "campus-solutions")
+	t.Setenv("STEWARDMESH_PEOPLESOFT_BASE_URL", "https://peoplesoft.example.test/PSIGW/RESTListeningConnector/CAMPUS/ExecuteQuery.v1")
+	t.Setenv("STEWARDMESH_PEOPLESOFT_USERNAME", "integration-reader")
+	t.Setenv("STEWARDMESH_PEOPLESOFT_PASSWORD", "secret-manager-password")
+	t.Setenv("STEWARDMESH_PEOPLESOFT_ORGANIZATION_QUERY", "SM_ORGANIZATIONS")
+	t.Setenv("STEWARDMESH_PEOPLESOFT_LOCATION_QUERY", "SM_LOCATIONS")
+	t.Setenv("STEWARDMESH_PEOPLESOFT_BUILDING_QUERY", "SM_BUILDINGS")
+	t.Setenv("STEWARDMESH_PEOPLESOFT_DEPARTMENT_QUERY", "SM_DEPARTMENTS")
+	t.Setenv("STEWARDMESH_PEOPLESOFT_FIELD_MAPPINGS_JSON", testPeopleSoftMappings)
+	t.Setenv("STEWARDMESH_PEOPLESOFT_MAXIMUM_ROWS", "200")
+	t.Setenv("STEWARDMESH_PEOPLESOFT_MAXIMUM_RESPONSE_BYTES", "4096")
+	t.Setenv("STEWARDMESH_PEOPLESOFT_TIMEOUT", "10s")
+	configuration, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	connectorConfig := configuration.PeopleSoftConnectorConfig()
+	if !configuration.PeopleSoftEnabled() || configuration.PeopleSoftSourceSystemID != "campus-solutions" ||
+		connectorConfig.QueryOwner != "public" || connectorConfig.MaximumRows != 200 ||
+		connectorConfig.MaximumResponseBytes != 4096 || connectorConfig.Timeout != 10*time.Second {
+		t.Fatalf("unexpected PeopleSoft configuration %#v", configuration)
+	}
+}
+
+func TestValidateRejectsUnsafePeopleSoftConfigurationWithoutLeakingSecrets(t *testing.T) {
+	secret := "super-secret-peoplesoft-password"
+	valid := FromEnv()
+	valid.RepositoryDriver = RepositoryDriverMemory
+	valid.PeopleSoftSourceSystemID = "campus-solutions"
+	valid.PeopleSoftBaseURL = "https://peoplesoft.example.test/PSIGW/RESTListeningConnector/CAMPUS/ExecuteQuery.v1"
+	valid.PeopleSoftUsername = "integration-reader"
+	valid.PeopleSoftPassword = secret
+	valid.PeopleSoftQueryOwner = "public"
+	valid.PeopleSoftOrganizationQuery = "SM_ORGANIZATIONS"
+	valid.PeopleSoftLocationQuery = "SM_LOCATIONS"
+	valid.PeopleSoftBuildingQuery = "SM_BUILDINGS"
+	valid.PeopleSoftDepartmentQuery = "SM_DEPARTMENTS"
+	valid.PeopleSoftFieldMappingsJSON = testPeopleSoftMappings
+	valid.PeopleSoftMaximumRows = 200
+	valid.PeopleSoftResponseBytes = 4096
+	valid.PeopleSoftTimeout = 10 * time.Second
+	tests := []struct {
+		name   string
+		mutate func(*Config)
+	}{
+		{name: "missing endpoint", mutate: func(c *Config) { c.PeopleSoftBaseURL = "" }},
+		{name: "plaintext endpoint", mutate: func(c *Config) {
+			c.PeopleSoftBaseURL = "http://peoplesoft.example.test/PSIGW/RESTListeningConnector/CAMPUS/ExecuteQuery.v1"
+		}},
+		{name: "wrong path", mutate: func(c *Config) { c.PeopleSoftBaseURL = "https://peoplesoft.example.test/arbitrary" }},
+		{name: "credentialed URL", mutate: func(c *Config) {
+			c.PeopleSoftBaseURL = "https://user:super-secret@peoplesoft.example.test/PSIGW/RESTListeningConnector/CAMPUS/ExecuteQuery.v1"
+		}},
+		{name: "missing password", mutate: func(c *Config) { c.PeopleSoftPassword = "" }},
+		{name: "ambiguous basic username", mutate: func(c *Config) { c.PeopleSoftUsername = "integration:reader" }},
+		{name: "mixed authentication", mutate: func(c *Config) { c.PeopleSoftBearerToken = "secret-token" }},
+		{name: "missing query", mutate: func(c *Config) { c.PeopleSoftDepartmentQuery = "" }},
+		{name: "malformed mapping", mutate: func(c *Config) { c.PeopleSoftFieldMappingsJSON = `{not-json` }},
+		{name: "unbounded rows", mutate: func(c *Config) { c.PeopleSoftMaximumRows = 10000 }},
+		{name: "unbounded response", mutate: func(c *Config) { c.PeopleSoftResponseBytes = 1 << 30 }},
+		{name: "unbounded timeout", mutate: func(c *Config) { c.PeopleSoftTimeout = time.Minute }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			configuration := valid
+			test.mutate(&configuration)
+			err := configuration.Validate()
+			if err == nil {
+				t.Fatal("expected invalid PeopleSoft configuration")
+			}
+			if strings.Contains(err.Error(), "super-secret") {
+				t.Fatalf("PeopleSoft configuration error leaked a credential: %v", err)
+			}
+		})
+	}
+}
+
+const testPeopleSoftMappings = `{"organization":{"setId":{"selector":"A.SETID","alias":"SETID"},"id":{"selector":"A.ORG_ID","alias":"ORG_ID"},"name":{"selector":"A.DESCR","alias":"DESCR"},"status":{"selector":"A.EFF_STATUS","alias":"EFF_STATUS"}},"location":{"setId":{"selector":"A.SETID","alias":"SETID"},"id":{"selector":"A.LOCATION","alias":"LOCATION"},"name":{"selector":"A.DESCR","alias":"DESCR"},"status":{"selector":"A.EFF_STATUS","alias":"EFF_STATUS"},"organizationId":{"selector":"A.ORG_ID","alias":"ORG_ID"}},"building":{"setId":{"selector":"A.SETID","alias":"SETID"},"id":{"selector":"A.BUILDING","alias":"BUILDING"},"name":{"selector":"A.DESCR","alias":"DESCR"},"status":{"selector":"A.EFF_STATUS","alias":"EFF_STATUS"},"locationId":{"selector":"A.LOCATION","alias":"LOCATION"}},"department":{"setId":{"selector":"A.SETID","alias":"SETID"},"id":{"selector":"A.DEPTID","alias":"DEPTID"},"name":{"selector":"A.DESCR","alias":"DESCR"},"status":{"selector":"A.EFF_STATUS","alias":"EFF_STATUS"},"organizationId":{"selector":"A.ORG_ID","alias":"ORG_ID"},"locationId":{"selector":"A.LOCATION","alias":"LOCATION"}}}`
 
 func TestValidateRejectsUnsafeSailPointConfigurationWithoutLeakingSecrets(t *testing.T) {
 	secret := "super-secret-sailpoint-credential"

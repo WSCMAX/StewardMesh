@@ -31,6 +31,8 @@ const (
 	MaximumGrouperRetries                = 3
 )
 
+var errDirectoryResponseTooLarge = errors.New("directory provider response is too large")
+
 type GrouperConnectorConfig struct {
 	SourceSystemID       string
 	BaseURL              string
@@ -297,7 +299,7 @@ func readBoundedResponse(body io.Reader, maximum int64) ([]byte, error) {
 		return nil, err
 	}
 	if int64(len(result)) > maximum {
-		return nil, errors.New("response is too large")
+		return nil, errDirectoryResponseTooLarge
 	}
 	return result, nil
 }

@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, expect, test, vi } from 'vitest'
 import DirectoryImportManager from './DirectoryImportManager'
 
-// Requirements: REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005, A11Y-001, SEC-GUARD-001.
+// Requirements: REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005, REQ-DIRECTORY-EXPANSION-006, A11Y-001, SEC-GUARD-001.
 
 const batchID = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
 const itemID = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
@@ -12,6 +12,7 @@ const now = '2026-08-13T12:00:00Z'
 
 const source = { id: 'entra-primary', provider: 'entra', configRevision: 'entra-1234567890abcdef' }
 const sailPointSource = { id: 'sailpoint-primary', provider: 'sailpoint', configRevision: 'sailpoint-1234567890abcdef' }
+const peopleSoftSource = { id: 'campus-solutions', provider: 'peoplesoft', configRevision: 'peoplesoft-1234567890abcdef' }
 const counts = { created: 2, updated: 0, unchanged: 0, deactivated: 0, conflicts: 0, failed: 0 }
 const previewedBatch = { id: batchID, sourceSystemId: source.id, provider: 'entra', configRevision: source.configRevision, status: 'previewed', completeSnapshot: true, counts, createdAt: now, updatedAt: now, completedAt: now }
 const appliedBatch = { ...previewedBatch, status: 'applied' }
@@ -41,7 +42,7 @@ test('previews and applies the exact Entra plan with CSRF, idempotency, audit de
   const onApplied = vi.fn()
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input)
-    if (path === '/api/v1/directory-import-sources' && !init?.method) return jsonResponse({ items: [source, sailPointSource] })
+    if (path === '/api/v1/directory-import-sources' && !init?.method) return jsonResponse({ items: [source, sailPointSource, peopleSoftSource] })
     if (path === '/api/v1/directory-imports?limit=50' && !init?.method) return jsonResponse({ batches: currentBatch ? [currentBatch] : [] })
     if (path === '/api/v1/directory-imports/preview' && init?.method === 'POST') {
       currentBatch = previewedBatch
@@ -61,6 +62,7 @@ test('previews and applies the exact Entra plan with CSRF, idempotency, audit de
 
   expect(await screen.findByRole('option', { name: 'entra-primary · Microsoft Entra ID' })).toBeInTheDocument()
   expect(screen.getByRole('option', { name: 'sailpoint-primary · SailPoint Identity Security Cloud' })).toBeInTheDocument()
+  expect(screen.getByRole('option', { name: 'campus-solutions · PeopleSoft Campus Solutions' })).toBeInTheDocument()
   fireEvent.click(screen.getByRole('button', { name: 'Preview import' }))
   expect(await screen.findByText('Ada Example')).toBeInTheDocument()
   expect(screen.getByText('Technology')).toBeInTheDocument()

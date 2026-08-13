@@ -1,6 +1,6 @@
 package application
 
-// Requirements: REQ-FOUNDATION-001, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005, REQ-DIRECTORY-EXPANSION-007, REQ-PATTERNS-001, REQ-STORAGE-001, REQ-HORIZON-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001.
+// Requirements: REQ-FOUNDATION-001, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005, REQ-DIRECTORY-EXPANSION-006, REQ-DIRECTORY-EXPANSION-007, REQ-DIRECTORY-EXPANSION-008, REQ-PATTERNS-001, REQ-STORAGE-001, REQ-HORIZON-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001.
 // Features: lifecycle.planning, templates.schemas.
 
 import (
@@ -80,6 +80,27 @@ func TestNewRegistersOptionalSailPointConnectorWithoutStartupNetworkWrites(t *te
 	cfg.SailPointBaseURL = "https://example.api.identitynow.com"
 	cfg.SailPointClientID = "0123456789abcdef"
 	cfg.SailPointClientSecret = "abcdef0123456789"
+	app, err := New(context.Background(), cfg, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := app.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestNewRegistersOptionalPeopleSoftConnectorWithoutStartupNetworkWrites(t *testing.T) {
+	cfg := memoryConfiguration(t)
+	cfg.PeopleSoftSourceSystemID = "peoplesoft-primary"
+	cfg.PeopleSoftBaseURL = "https://peoplesoft.example.test/PSIGW/RESTListeningConnector/CAMPUS/ExecuteQuery.v1"
+	cfg.PeopleSoftUsername = "integration-reader"
+	cfg.PeopleSoftPassword = "secret-manager-password"
+	cfg.PeopleSoftQueryOwner = "public"
+	cfg.PeopleSoftOrganizationQuery = "SM_ORGANIZATIONS"
+	cfg.PeopleSoftLocationQuery = "SM_LOCATIONS"
+	cfg.PeopleSoftBuildingQuery = "SM_BUILDINGS"
+	cfg.PeopleSoftDepartmentQuery = "SM_DEPARTMENTS"
+	cfg.PeopleSoftFieldMappingsJSON = `{"organization":{"setId":{"selector":"A.SETID","alias":"SETID"},"id":{"selector":"A.ORG_ID","alias":"ORG_ID"},"name":{"selector":"A.DESCR","alias":"DESCR"},"status":{"selector":"A.EFF_STATUS","alias":"EFF_STATUS"}},"location":{"setId":{"selector":"A.SETID","alias":"SETID"},"id":{"selector":"A.LOCATION","alias":"LOCATION"},"name":{"selector":"A.DESCR","alias":"DESCR"},"status":{"selector":"A.EFF_STATUS","alias":"EFF_STATUS"},"organizationId":{"selector":"A.ORG_ID","alias":"ORG_ID"}},"building":{"setId":{"selector":"A.SETID","alias":"SETID"},"id":{"selector":"A.BUILDING","alias":"BUILDING"},"name":{"selector":"A.DESCR","alias":"DESCR"},"status":{"selector":"A.EFF_STATUS","alias":"EFF_STATUS"},"locationId":{"selector":"A.LOCATION","alias":"LOCATION"}},"department":{"setId":{"selector":"A.SETID","alias":"SETID"},"id":{"selector":"A.DEPTID","alias":"DEPTID"},"name":{"selector":"A.DESCR","alias":"DESCR"},"status":{"selector":"A.EFF_STATUS","alias":"EFF_STATUS"},"organizationId":{"selector":"A.ORG_ID","alias":"ORG_ID"},"locationId":{"selector":"A.LOCATION","alias":"LOCATION"}}}`
 	app, err := New(context.Background(), cfg, Options{})
 	if err != nil {
 		t.Fatal(err)
@@ -427,6 +448,21 @@ func memoryConfiguration(t *testing.T) config.Config {
 	cfg.GrouperTimeout = directoryexpansion.DefaultGrouperTimeout
 	cfg.GrouperAllowPrivateNetwork = false
 	cfg.ExchangeSourceSystemID = "application-test"
+	cfg.PeopleSoftSourceSystemID = "peoplesoft"
+	cfg.PeopleSoftBaseURL = ""
+	cfg.PeopleSoftUsername = ""
+	cfg.PeopleSoftPassword = ""
+	cfg.PeopleSoftBearerToken = ""
+	cfg.PeopleSoftQueryOwner = "public"
+	cfg.PeopleSoftOrganizationQuery = ""
+	cfg.PeopleSoftLocationQuery = ""
+	cfg.PeopleSoftBuildingQuery = ""
+	cfg.PeopleSoftDepartmentQuery = ""
+	cfg.PeopleSoftFieldMappingsJSON = ""
+	cfg.PeopleSoftMaximumRows = directoryexpansion.DefaultPeopleSoftMaximumRows
+	cfg.PeopleSoftResponseBytes = directoryexpansion.DefaultPeopleSoftResponseBytes
+	cfg.PeopleSoftTimeout = directoryexpansion.DefaultPeopleSoftTimeout
+	cfg.PeopleSoftAllowPrivate = false
 	return cfg
 }
 

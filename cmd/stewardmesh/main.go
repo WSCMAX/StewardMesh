@@ -1,6 +1,6 @@
 package main
 
-// Requirements: REQ-FOUNDATION-001, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-007, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001.
+// Requirements: REQ-FOUNDATION-001, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-006, REQ-DIRECTORY-EXPANSION-007, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001.
 
 import (
 	"context"
@@ -48,6 +48,8 @@ func main() {
 	cfg.SailPointClientSecret = ""
 	cfg.GrouperPassword = ""
 	cfg.GrouperBearerToken = ""
+	cfg.PeopleSoftPassword = ""
+	cfg.PeopleSoftBearerToken = ""
 	if err != nil {
 		logger.Error("initialize application", "error", err)
 		os.Exit(1)

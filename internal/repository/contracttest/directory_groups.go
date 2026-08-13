@@ -1,6 +1,6 @@
 package contracttest
 
-// Requirement: REQ-DIRECTORY-EXPANSION-005. Feature: integrations.protocols.
+// Requirements: REQ-DIRECTORY-EXPANSION-005, REQ-DIRECTORY-EXPANSION-006. Feature: integrations.protocols.
 
 import (
 	"context"

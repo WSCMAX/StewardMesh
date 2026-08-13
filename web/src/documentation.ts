@@ -432,7 +432,7 @@ export const documentationPages: readonly DocumentationPage[] = [
     summary: 'Organize places, departments, identities, and effective-dated asset assignments without mixing directory ownership into Atlas.',
     appHref: '#workspace-people',
     appLabel: 'Open People',
-    searchTerms: ['person', 'identity', 'site', 'building', 'room', 'department', 'assignment', 'location', 'grouper', 'nested group', 'directory import', 'relationship graph', 'connected records', 'cycles', 'synthetic demo', 'demo seed'],
+    searchTerms: ['person', 'identity', 'site', 'building', 'room', 'department', 'assignment', 'location', 'grouper', 'nested group', 'peoplesoft', 'campus solutions', 'query access service', 'directory import', 'relationship graph', 'connected records', 'cycles', 'synthetic demo', 'demo seed'],
     sections: [
       {
         id: 'directory',
@@ -473,6 +473,13 @@ export const documentationPages: readonly DocumentationPage[] = [
         paragraphs: ['Synthetic locations, people, groups, mappings, and relationships are disabled by default. Operators must set the strict seed flag and use a demo-prefixed organization ID; repeated startup replays the same versioned dataset.'],
         bullets: ['Every visible name starts with [Synthetic Demo], email addresses use the non-routable example.invalid domain, and provider mappings use a dedicated synthetic source.', 'A mismatched local record with a reserved demo label stops setup instead of being changed.', 'The one-shot Compose demo initializer needs PostgreSQL but does not contact or require Grouper or Valkey.'],
         callout: { title: 'Never enable in production', body: 'The application rejects synthetic seeding for any organization ID that does not begin with demo-. Keep the flag false in normal deployments.', tone: 'warning' },
+      },
+      {
+        id: 'peoplesoft-sync',
+        title: 'Review optional PeopleSoft Campus Solutions synchronization',
+        paragraphs: ['Administrators can preview a configured, read-only PeopleSoft source that maps institution-owned organization, location, building, and department queries into the shared directory graph.'],
+        bullets: ['Deployment configuration owns the fixed Query Access Service endpoint, credential, query names, and qualified-selector to JSON-alias mappings; none enter the browser.', 'Review the returned hierarchy, explicit inactive rows, updates, and local-ownership conflicts before applying the exact persisted plan.', 'QAS previews remain partial: missing rows never trigger implicit deactivation, while source mappings and audit attempts remain durable and raw responses are discarded.'],
+        callout: { title: 'PeopleSoft remains read-only', body: 'The adapter executes only synchronous JSON/NONFILE GET queries and has no PeopleSoft write operation.', tone: 'info' },
       },
     ],
     related: ['atlas', 'workspace', 'guard'],

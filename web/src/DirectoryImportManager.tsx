@@ -2,7 +2,7 @@ import { type FormEvent, useCallback, useEffect, useRef, useState } from 'react'
 import { ApiRequestError, requestJSON } from './api'
 import { buttonClass, inputClass, labelClass, secondaryButtonClass, subpanelClass } from './ui'
 
-// Requirements: REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005, A11Y-001.
+// Requirements: REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005, REQ-DIRECTORY-EXPANSION-006, A11Y-001.
 // Feature: identity.directory.
 
 type Source = { id: string; provider: string; configRevision: string }
@@ -196,7 +196,7 @@ export default function DirectoryImportManager({ csrfToken, permissions, onAppli
 	  {status && <p aria-live="polite" className="mt-4 rounded-xl border border-steward-primary/40 bg-steward-primary/10 p-4 text-sm text-steward-mist" role="status">{status}</p>}
 
       {sources.length === 0 && !loading ? (
-        <p className="mt-4 rounded-xl border border-dashed border-steward-ink-800 p-5 text-sm leading-6 text-steward-mist-muted">No read-only directory source is configured. Add an Entra, SailPoint, or Grouper source through deployment configuration, then restart the service.</p>
+        <p className="mt-4 rounded-xl border border-dashed border-steward-ink-800 p-5 text-sm leading-6 text-steward-mist-muted">No read-only directory source is configured. Add an Entra, SailPoint, Grouper, or PeopleSoft source through deployment configuration, then restart the service.</p>
       ) : (
         <form aria-label="Preview a directory import" className={`${subpanelClass} mt-4 grid gap-4 p-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-end`} onSubmit={preview}>
           <div>
@@ -376,6 +376,7 @@ function providerLabel(value: string) {
   if (value === 'entra') return 'Microsoft Entra ID'
   if (value === 'sailpoint') return 'SailPoint Identity Security Cloud'
   if (value === 'grouper') return 'Internet2 Grouper'
+  if (value === 'peoplesoft') return 'PeopleSoft Campus Solutions'
   return value
 }
 function formatDate(value: string) { return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) }

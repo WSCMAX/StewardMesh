@@ -1,6 +1,6 @@
 package directoryexpansion
 
-// Requirements: REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005. Features: identity.directory, integrations.protocols.
+// Requirements: REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005, REQ-DIRECTORY-EXPANSION-006. Features: identity.directory, integrations.protocols.
 
 import (
 	"context"

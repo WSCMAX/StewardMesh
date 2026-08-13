@@ -4,7 +4,7 @@
   `integrations.protocols` for directory imports, and
   `threads.relationships` for the cross-record graph
 - **Current requirements:** `REQ-DIRECTORY-EXPANSION-001` through
-  `REQ-DIRECTORY-EXPANSION-005`, plus `REQ-DIRECTORY-EXPANSION-007` and
+  `REQ-DIRECTORY-EXPANSION-006`, plus `REQ-DIRECTORY-EXPANSION-007` and
   `REQ-DIRECTORY-EXPANSION-008`
 - **Roadmap issues:** [#24](https://github.com/WSCMAX/StewardMesh/issues/24),
   [#25](https://github.com/WSCMAX/StewardMesh/issues/25),
@@ -268,14 +268,148 @@ inactive states, every normalized object type, transient retry, malformed and
 oversized data, duplicate records/memberships, configuration validation,
 cross-provider conflict, safe errors, and the no-write method invariant.
 
+## PeopleSoft Campus Solutions synchronization
+
+The optional PeopleSoft adapter uses the delivered provider-neutral import
+engine for `REQ-DIRECTORY-EXPANSION-006`. It executes four institution-owned
+PeopleSoft Query Access Service queries in a fixed order: organizations,
+locations, buildings, and departments. Every provider call is a synchronous
+`GET` requesting `JSON/NONFILE`; the connector has no POST, PUT, PATCH, or
+DELETE provider path. Oracle documents this read operation as
+[`QAS_EXECUTEQRY_REST_GET`](https://docs.oracle.com/cd/G36972_01/pt861pbr5/eng/pt/trws/QueryAccessServiceOperations-1f7e36.html)
+and defines the JSON row response and case-sensitive filter fields in
+[`Executing the Query`](https://docs.oracle.com/cd/G10810_01/pt860pbr4/eng/pt/trws/ExecutingtheQuery-5e7fb0.html).
+
+Configure a dedicated PeopleSoft user with access only to the four public or
+private read queries and the REST execution operation. Do not grant Query
+creation/save operations or Campus Solutions update services. Use exactly one
+server-side authentication mode: Basic username/password or a bearer token
+issued by the institution's gateway. Secrets belong in the deployment secret
+manager and are cleared from the application's working configuration after the
+connector is constructed.
+
+The base URL must identify the fixed Integration Broker endpoint
+`https://<host>/PSIGW/RESTListeningConnector/<node>/ExecuteQuery.v1`, without
+credentials, query, or fragment. HTTPS is required except for an explicitly
+enabled loopback test fixture. Private HTTPS destinations require the separate
+private-network opt-in. The default transport ignores ambient proxy variables,
+re-checks resolved IP addresses before dialing, blocks link-local, multicast,
+unspecified, loopback, and private destinations unless explicitly permitted,
+rejects redirects, uses a 15-second timeout, and limits each body to 2 MiB.
+Only GET network failures, HTTP 429, and transient 5xx responses retry, at most
+three attempts. Provider bodies, URLs, query fields, and credentials never
+appear in returned errors or audits.
+
+Set these deployment values to enable one source:
+
+```text
+STEWARDMESH_PEOPLESOFT_SOURCE_SYSTEM_ID=peoplesoft
+STEWARDMESH_PEOPLESOFT_BASE_URL=https://ps.example.edu/PSIGW/RESTListeningConnector/CAMPUS/ExecuteQuery.v1
+STEWARDMESH_PEOPLESOFT_USERNAME=<least-privilege query user>
+STEWARDMESH_PEOPLESOFT_PASSWORD=<secret-manager value>
+STEWARDMESH_PEOPLESOFT_QUERY_OWNER=public
+STEWARDMESH_PEOPLESOFT_ORGANIZATION_QUERY=SM_ORGANIZATIONS
+STEWARDMESH_PEOPLESOFT_LOCATION_QUERY=SM_LOCATIONS
+STEWARDMESH_PEOPLESOFT_BUILDING_QUERY=SM_BUILDINGS
+STEWARDMESH_PEOPLESOFT_DEPARTMENT_QUERY=SM_DEPARTMENTS
+```
+
+Because institutions choose their own records and aliases, one strict JSON
+mapping binds each query field twice: `selector` is the unique, qualified QAS
+field sent in `filterfields` (for example, `A.SETID`), while `alias` is the
+unqualified key returned by `JSON/NONFILE` (for example, `SETID`). `setId`,
+`id`, `name`, and `status` are required for every kind; a location requires
+`organizationId`, a building requires `locationId`, and a department requires
+`organizationId` with optional `locationId`. Descriptions and location address
+fields are optional. A selector or alias cannot ambiguously identify two
+different fields. `activeValues` and `inactiveValues` can replace the default
+`A/active/enabled/true/1` and `I/inactive/disabled/false/0` sets.
+
+```json
+{
+  "organization": {
+    "setId": {"selector":"A.SETID","alias":"SETID"},
+    "id": {"selector":"A.ORG_ID","alias":"ORG_ID"},
+    "name": {"selector":"A.DESCR","alias":"DESCR"},
+    "status": {"selector":"A.EFF_STATUS","alias":"EFF_STATUS"}
+  },
+  "location": {
+    "setId": {"selector":"A.SETID","alias":"SETID"},
+    "id": {"selector":"A.LOCATION","alias":"LOCATION"},
+    "name": {"selector":"A.DESCR","alias":"DESCR"},
+    "status": {"selector":"A.EFF_STATUS","alias":"EFF_STATUS"},
+    "organizationId": {"selector":"A.ORG_ID","alias":"ORG_ID"},
+    "city": {"selector":"A.CITY","alias":"CITY"}
+  },
+  "building": {
+    "setId": {"selector":"A.SETID","alias":"SETID"},
+    "id": {"selector":"A.BUILDING","alias":"BUILDING"},
+    "name": {"selector":"A.DESCR","alias":"DESCR"},
+    "status": {"selector":"A.EFF_STATUS","alias":"EFF_STATUS"},
+    "locationId": {"selector":"A.LOCATION","alias":"LOCATION"}
+  },
+  "department": {
+    "setId": {"selector":"A.SETID","alias":"SETID"},
+    "id": {"selector":"A.DEPTID","alias":"DEPTID"},
+    "name": {"selector":"A.DESCR","alias":"DESCR"},
+    "status": {"selector":"A.EFF_STATUS","alias":"EFF_STATUS"},
+    "organizationId": {"selector":"A.ORG_ID","alias":"ORG_ID"},
+    "locationId": {"selector":"A.LOCATION","alias":"LOCATION"}
+  }
+}
+```
+
+Store the compact JSON value in
+`STEWARDMESH_PEOPLESOFT_FIELD_MAPPINGS_JSON`. The normalized mapping, query
+names, owner, endpoint, row limit, and a nonreversible fingerprint of the
+authenticated principal form a non-secret configuration revision. Basic
+password rotation does not change the revision, while a different Basic
+username does; neither the principal nor any credential is exposed. Each query
+requests only mapped selectors and one row beyond its configured limit.
+Explicit warnings, truncation/more-row markers, unknown response-envelope
+metadata, omitted row arrays, inconsistent counts, and over-limit results fail
+closed.
+
+QAS and the authenticated user's query-security profile can each impose a row
+cap that the response cannot prove absent. The connector therefore treats every
+successful four-query result as a partial snapshot even when all reported
+counts are internally consistent. Explicit inactive rows still reconcile, but
+a missing row never plans an implicit deactivation. One connector run remains
+capped by the shared 5,000-record exact-plan limit.
+
+Organizations, locations, buildings, and departments become typed managed
+groups. Organization-to-location, location-to-building,
+organization-to-department, and optional location-to-department relationships
+become durable group memberships in the shared graph. Source IDs include the
+object kind, SETID, and raw ID, so identical raw IDs in different SETIDs remain
+distinct. Parent lookups use that same SETID scope, and a department-to-location
+relationship is rejected if the two objects do not belong to the same
+organization. Raw unmapped columns are discarded, and address fields are an
+allowlisted metadata projection. Unknown status values, non-scalar mapped
+fields, duplicate scoped IDs or relationships, missing hierarchy parents,
+inconsistent row counts or query names, malformed/multiple JSON values, and
+oversized results fail the preview before mutation.
+
+Operators use **People > Directory import** to preview, inspect, and apply the
+persisted partial plan. Returned inactive records and updates remain explicit;
+missing-source deactivations are never planned from QAS. Locally claimed
+managed records produce explicit conflicts, and retries never re-pull after a
+successful preview. Source
+mappings, attempts, conflicts, and audit history reuse the authoritative
+memory/PostgreSQL provider-neutral stores; no migration is needed for this
+adapter. Fake QAS tests cover all four queries, mapping variants, deterministic
+four-query collection traversal, duplicate raw IDs across SETIDs,
+update/inactive/conflict behavior, missing and inconsistent parents,
+warning/truncation/malformed/oversized responses, safe status and mid-body read
+retries, authentication-before-read, audit redaction, and the GET-only
+invariant.
+
 ## Planned provider slices
 
 Remaining provider connectors are deliberately read-only and plug into the
-delivered source-system contract. PeopleSoft Campus Solutions provides
-configurable organization and location records. Each
-provider-specific mapper must retain source IDs, use an explicit configuration
-revision, produce the bounded complete snapshot, and report conflicts instead
-of silently overwriting records.
+delivered source-system contract. Each provider-specific mapper must retain
+source IDs, use an explicit configuration revision, produce a bounded complete
+snapshot, and report conflicts instead of silently overwriting records.
 
 Synthetic data is disabled by default. It is intended only for isolated
 demonstrations and integration tests. The Grouper container is available only

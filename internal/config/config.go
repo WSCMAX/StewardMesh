@@ -1,5 +1,5 @@
 // Package config loads and validates provider-neutral StewardMesh settings.
-// Requirements: REQ-FOUNDATION-001, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005, REQ-DIRECTORY-EXPANSION-007, REQ-STORAGE-001, REQ-REACH-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
+// Requirements: REQ-FOUNDATION-001, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005, REQ-DIRECTORY-EXPANSION-006, REQ-DIRECTORY-EXPANSION-007, REQ-STORAGE-001, REQ-REACH-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
 package config
 
 import (
@@ -108,6 +108,21 @@ type Config struct {
 	GrouperMaximumResponseBytes int64
 	GrouperTimeout              time.Duration
 	GrouperAllowPrivateNetwork  bool
+	PeopleSoftSourceSystemID    string
+	PeopleSoftBaseURL           string
+	PeopleSoftUsername          string
+	PeopleSoftPassword          string
+	PeopleSoftBearerToken       string
+	PeopleSoftQueryOwner        string
+	PeopleSoftOrganizationQuery string
+	PeopleSoftLocationQuery     string
+	PeopleSoftBuildingQuery     string
+	PeopleSoftDepartmentQuery   string
+	PeopleSoftFieldMappingsJSON string
+	PeopleSoftMaximumRows       int
+	PeopleSoftResponseBytes     int64
+	PeopleSoftTimeout           time.Duration
+	PeopleSoftAllowPrivate      bool
 	validationError             error
 }
 
@@ -137,6 +152,10 @@ func FromEnv() Config {
 	grouperTimeout, grouperTimeoutErr := envDuration("STEWARDMESH_GROUPER_TIMEOUT", directoryexpansion.DefaultGrouperTimeout)
 	grouperPageSize, grouperPageErr := envInt64("STEWARDMESH_GROUPER_PAGE_SIZE", directoryexpansion.DefaultGrouperPageSize)
 	grouperResponseBytes, grouperResponseErr := envInt64("STEWARDMESH_GROUPER_MAXIMUM_RESPONSE_BYTES", directoryexpansion.DefaultGrouperResponseBytes)
+	peopleSoftAllowPrivate, peopleSoftPrivateErr := envBool("STEWARDMESH_PEOPLESOFT_ALLOW_PRIVATE_NETWORK", false)
+	peopleSoftTimeout, peopleSoftTimeoutErr := envDuration("STEWARDMESH_PEOPLESOFT_TIMEOUT", directoryexpansion.DefaultPeopleSoftTimeout)
+	peopleSoftMaximumRows, peopleSoftRowsErr := envInt64("STEWARDMESH_PEOPLESOFT_MAXIMUM_ROWS", directoryexpansion.DefaultPeopleSoftMaximumRows)
+	peopleSoftResponseBytes, peopleSoftResponseErr := envInt64("STEWARDMESH_PEOPLESOFT_MAXIMUM_RESPONSE_BYTES", directoryexpansion.DefaultPeopleSoftResponseBytes)
 	grouperURL := strings.TrimSpace(os.Getenv("STEWARDMESH_GROUPER_URL"))
 	grouperSourceSystemID := strings.TrimSpace(os.Getenv("STEWARDMESH_GROUPER_SOURCE_SYSTEM_ID"))
 	grouperRevision := strings.TrimSpace(os.Getenv("STEWARDMESH_GROUPER_CONFIG_REVISION"))
@@ -218,7 +237,24 @@ func FromEnv() Config {
 		GrouperMaximumResponseBytes: grouperResponseBytes,
 		GrouperTimeout:              grouperTimeout,
 		GrouperAllowPrivateNetwork:  grouperAllowPrivate,
-		validationError:             errors.Join(secureErr, ttlErr, blobTTLErr, blobSizeErr, s3PathStyleErr, oidcVerifiedEmailErr, seedSyntheticErr, grouperPrivateErr, grouperTimeoutErr, grouperPageErr, grouperResponseErr),
+		PeopleSoftSourceSystemID:    envOr("STEWARDMESH_PEOPLESOFT_SOURCE_SYSTEM_ID", "peoplesoft"),
+		PeopleSoftBaseURL:           os.Getenv("STEWARDMESH_PEOPLESOFT_BASE_URL"),
+		PeopleSoftUsername:          os.Getenv("STEWARDMESH_PEOPLESOFT_USERNAME"),
+		PeopleSoftPassword:          os.Getenv("STEWARDMESH_PEOPLESOFT_PASSWORD"),
+		PeopleSoftBearerToken:       os.Getenv("STEWARDMESH_PEOPLESOFT_BEARER_TOKEN"),
+		PeopleSoftQueryOwner:        envOr("STEWARDMESH_PEOPLESOFT_QUERY_OWNER", "public"),
+		PeopleSoftOrganizationQuery: os.Getenv("STEWARDMESH_PEOPLESOFT_ORGANIZATION_QUERY"),
+		PeopleSoftLocationQuery:     os.Getenv("STEWARDMESH_PEOPLESOFT_LOCATION_QUERY"),
+		PeopleSoftBuildingQuery:     os.Getenv("STEWARDMESH_PEOPLESOFT_BUILDING_QUERY"),
+		PeopleSoftDepartmentQuery:   os.Getenv("STEWARDMESH_PEOPLESOFT_DEPARTMENT_QUERY"),
+		PeopleSoftFieldMappingsJSON: os.Getenv("STEWARDMESH_PEOPLESOFT_FIELD_MAPPINGS_JSON"),
+		PeopleSoftMaximumRows:       int(peopleSoftMaximumRows),
+		PeopleSoftResponseBytes:     peopleSoftResponseBytes,
+		PeopleSoftTimeout:           peopleSoftTimeout,
+		PeopleSoftAllowPrivate:      peopleSoftAllowPrivate,
+		validationError: errors.Join(secureErr, ttlErr, blobTTLErr, blobSizeErr, s3PathStyleErr, oidcVerifiedEmailErr,
+			seedSyntheticErr, grouperPrivateErr, grouperTimeoutErr, grouperPageErr, grouperResponseErr,
+			peopleSoftPrivateErr, peopleSoftTimeoutErr, peopleSoftRowsErr, peopleSoftResponseErr),
 	}
 }
 
@@ -324,6 +360,9 @@ func (c Config) Validate() error {
 	if err := c.validateGrouper(); err != nil {
 		return err
 	}
+	if err := c.validatePeopleSoft(); err != nil {
+		return err
+	}
 	if len(c.ReachEndpointsFile) > 1024 || strings.ContainsRune(c.ReachEndpointsFile, '\x00') {
 		return errors.New("STEWARDMESH_REACH_ENDPOINTS_FILE is invalid")
 	}
@@ -386,6 +425,36 @@ func stableConfigurationID(value string) bool {
 		return false
 	}
 	return true
+}
+
+func (c Config) PeopleSoftEnabled() bool { return strings.TrimSpace(c.PeopleSoftBaseURL) != "" }
+
+func (c Config) PeopleSoftConnectorConfig() directoryexpansion.PeopleSoftConnectorConfig {
+	return directoryexpansion.PeopleSoftConnectorConfig{
+		SourceSystemID: c.PeopleSoftSourceSystemID, BaseURL: c.PeopleSoftBaseURL,
+		Username: c.PeopleSoftUsername, Password: c.PeopleSoftPassword, BearerToken: c.PeopleSoftBearerToken,
+		QueryOwner: c.PeopleSoftQueryOwner, OrganizationQuery: c.PeopleSoftOrganizationQuery,
+		LocationQuery: c.PeopleSoftLocationQuery, BuildingQuery: c.PeopleSoftBuildingQuery,
+		DepartmentQuery: c.PeopleSoftDepartmentQuery, FieldMappingsJSON: c.PeopleSoftFieldMappingsJSON,
+		MaximumRows: c.PeopleSoftMaximumRows, MaximumResponseBytes: c.PeopleSoftResponseBytes,
+		Timeout: c.PeopleSoftTimeout, AllowPrivateNetwork: c.PeopleSoftAllowPrivate,
+	}
+}
+
+func (c Config) validatePeopleSoft() error {
+	if !c.PeopleSoftEnabled() {
+		if c.PeopleSoftUsername != "" || c.PeopleSoftPassword != "" || c.PeopleSoftBearerToken != "" ||
+			c.PeopleSoftOrganizationQuery != "" || c.PeopleSoftLocationQuery != "" ||
+			c.PeopleSoftBuildingQuery != "" || c.PeopleSoftDepartmentQuery != "" || c.PeopleSoftFieldMappingsJSON != "" ||
+			c.PeopleSoftAllowPrivate {
+			return errors.New("STEWARDMESH_PEOPLESOFT_BASE_URL is required when PeopleSoft settings are configured")
+		}
+		return nil
+	}
+	if _, err := directoryexpansion.NewPeopleSoftConnector(c.PeopleSoftConnectorConfig()); err != nil {
+		return errors.New("PeopleSoft Query Access Service configuration is invalid")
+	}
+	return nil
 }
 
 func (c Config) OIDCEnabled() bool {

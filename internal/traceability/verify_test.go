@@ -1,7 +1,7 @@
 package traceability
 
 // Requirements: REQ-FOUNDATION-001, REQ-ATLAS-CATALOG-001.
-// Features: platform.foundation, inventory.products.
+// Features: platform.foundation, inventory.catalog.
 
 import (
 	"os"

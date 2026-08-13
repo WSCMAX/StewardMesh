@@ -3,7 +3,8 @@
 - **Canonical ID:** `inventory.assets`
 - **Requirement:** `REQ-ATLAS-001`
 - **GitHub issue:** [#2 — Atlas asset inventory](https://github.com/WSCMAX/StewardMesh/issues/2)
-- **Product catalog extension:** [Atlas Catalog](atlas-catalog.md) (`REQ-ATLAS-CATALOG-001`)
+- **Model catalog extension:** [Atlas Models](atlas-models.md) (`REQ-ATLAS-MODELS-001`, [GitHub #68](https://github.com/WSCMAX/StewardMesh/issues/68))
+- **Lifecycle catalog extension:** [Atlas Catalog](atlas-catalog.md) (`REQ-ATLAS-CATALOG-001`)
 - **Identification extension:** [Atlas Codes](atlas-codes.md) (`REQ-ATLAS-CODES-001`, [GitHub #60](https://github.com/WSCMAX/StewardMesh/issues/60))
 
 ## Purpose
@@ -29,9 +30,11 @@ Locations use People-owned site, building, and room records. Buildings require t
 
 Purchase dates are stored as calendar dates. Updates require the current revision, so a stale browser or integration receives a conflict rather than silently overwriting a newer record.
 
+Shared product models are implemented through the separately traceable Atlas Models extension. An asset may reference one active model while retaining its own tag, serial, hostname, lifecycle, location, user, and override fields.
+
 Barcode and QR identifiers are implemented through the separately traceable Atlas Codes extension. Its association model supports multiple active or historical identifiers without overloading asset tags or serial numbers.
 
-Reusable manufacturer/model facts, configurations, prices, and upgrade paths belong to Atlas Catalog rather than to individual asset categories. A later association slice will let an asset reference a catalog product and optional configuration while preserving item-specific identity, ownership, location, purchase facts, and lifecycle history in Atlas.
+Configurations, effective-dated prices, and upgrade paths extend Atlas Models through Atlas Catalog rather than creating a second product record. A later association slice will let an asset optionally select one configuration of its existing `modelId` while preserving item-specific identity, ownership, location, purchase facts, and lifecycle history in Atlas.
 
 ## Lifecycle history and audit
 
@@ -52,7 +55,7 @@ REST endpoints:
 - `GET|PUT /api/v1/assets/{assetId}`
 - `GET /api/v1/assets/{assetId}/lifecycle`
 
-List filters include bounded search, kind, status, site, department, user, and limit. Search covers name, asset tag, serial number, and hostname. OpenAPI and protobuf contracts carry the same fields and optimistic revision boundary.
+List filters include bounded search, model, kind, status, site, department, user, and limit. Search covers name, asset tag, serial number, and hostname. OpenAPI and protobuf contracts carry the same fields and optimistic revision boundary.
 
 The `atlas.Store` interface is the adapter contract for memory, PostgreSQL, and a future DynamoDB implementation. Repository conformance tests cover create, retrieve, search, update, stale revisions, conflicts, and lifecycle ordering. Exchange and future provider imports must call the Atlas service rather than bypassing normalization, reference checks, revision behavior, or audits.
 

@@ -34,8 +34,14 @@ service GuardService {
 // authorization metadata. The bearer is never repeated in request bodies.
 
 // Requirements: REQ-ATLAS-001, REQ-ATLAS-CODES-001.
-// Features: inventory.assets, inventory.identifiers.
+// Features: inventory.assets, inventory.models, inventory.identifiers.
+// Requirements: REQ-ATLAS-001, REQ-ATLAS-MODELS-001, REQ-ATLAS-CODES-001.
 service AssetService {
+  rpc ListAssetModels(ListAssetModelsRequest) returns (ListAssetModelsResponse);
+  rpc GetAssetModel(GetAssetModelRequest) returns (AssetModel);
+  rpc CreateAssetModel(CreateAssetModelRequest) returns (AssetModel);
+  rpc UpdateAssetModel(UpdateAssetModelRequest) returns (AssetModel);
+  rpc RetireAssetModel(RetireAssetModelRequest) returns (AssetModel);
   rpc ListAssets(ListAssetsRequest) returns (ListAssetsResponse);
   rpc GetAsset(GetAssetRequest) returns (Asset);
   rpc CreateAsset(CreateAssetRequest) returns (Asset);
@@ -302,6 +308,35 @@ message ListAssetsRequest {
   string department_id = 5;
   string user_id = 6;
   int32 limit = 7;
+  string model_id = 8;
+}
+
+message ListAssetModelsRequest {
+  string search = 1;
+  string kind = 2;
+  string status = 3;
+  int32 limit = 4;
+}
+
+message ListAssetModelsResponse {
+  repeated AssetModel items = 1;
+}
+
+message CreateAssetModelRequest {
+  AssetModel model = 1;
+}
+
+message GetAssetModelRequest {
+  string model_id = 1;
+}
+
+message UpdateAssetModelRequest {
+  AssetModel model = 1;
+}
+
+message RetireAssetModelRequest {
+  string model_id = 1;
+  int64 revision = 2;
 }
 
 message ListAssetsResponse {
@@ -449,6 +484,28 @@ message Asset {
   google.protobuf.Timestamp created_at = 15;
   google.protobuf.Timestamp updated_at = 16;
   string organization_id = 17;
+  string model_id = 18;
+}
+
+message AssetModel {
+  string id = 1;
+  string organization_id = 2;
+  string manufacturer = 3;
+  string name = 4;
+  string model_number = 5;
+  string kind = 6;
+  string vendor_identifier = 7;
+  map<string, string> specifications = 8;
+  string support_url = 9;
+  int32 warranty_months = 10;
+  int32 useful_life_months = 11;
+  string status = 12;
+  string source_system_id = 13;
+  string source_record_id = 14;
+  int32 instance_count = 15;
+  int64 revision = 16;
+  google.protobuf.Timestamp created_at = 17;
+  google.protobuf.Timestamp updated_at = 18;
 }
 
 message AssetLifecycleEvent {

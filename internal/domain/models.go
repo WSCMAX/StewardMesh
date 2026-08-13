@@ -2,9 +2,11 @@ package domain
 
 import "time"
 
+// Requirements: REQ-ATLAS-001, REQ-ATLAS-MODELS-001.
 type Asset struct {
 	ID             string     `json:"id"`
 	OrganizationID string     `json:"organizationId"`
+	ModelID        string     `json:"modelId,omitempty"`
 	Name           string     `json:"name"`
 	Kind           string     `json:"kind"`
 	AssetTag       string     `json:"assetTag,omitempty"`
@@ -20,6 +22,27 @@ type Asset struct {
 	Revision       int64      `json:"revision"`
 	CreatedAt      time.Time  `json:"createdAt"`
 	UpdatedAt      time.Time  `json:"updatedAt"`
+}
+
+type AssetModel struct {
+	ID               string            `json:"id"`
+	OrganizationID   string            `json:"organizationId"`
+	Manufacturer     string            `json:"manufacturer"`
+	Name             string            `json:"name"`
+	ModelNumber      string            `json:"modelNumber,omitempty"`
+	Kind             string            `json:"kind"`
+	VendorIdentifier string            `json:"vendorIdentifier,omitempty"`
+	Specifications   map[string]string `json:"specifications,omitempty"`
+	SupportURL       string            `json:"supportUrl,omitempty"`
+	WarrantyMonths   int               `json:"warrantyMonths,omitempty"`
+	UsefulLifeMonths int               `json:"usefulLifeMonths,omitempty"`
+	Status           string            `json:"status"`
+	SourceSystemID   string            `json:"sourceSystemId,omitempty"`
+	SourceRecordID   string            `json:"sourceRecordId,omitempty"`
+	InstanceCount    int               `json:"instanceCount"`
+	Revision         int64             `json:"revision"`
+	CreatedAt        time.Time         `json:"createdAt"`
+	UpdatedAt        time.Time         `json:"updatedAt"`
 }
 
 type AssetLifecycleEvent struct {

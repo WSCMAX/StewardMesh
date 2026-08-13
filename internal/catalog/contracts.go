@@ -1,17 +1,19 @@
-// Package catalog implements reusable Atlas product, configuration, pricing,
+// Package catalog extends reusable Atlas Models with configurations, pricing,
 // and upgrade-path records.
-// Requirement: REQ-ATLAS-CATALOG-001. Feature: inventory.products.
+// Requirement: REQ-ATLAS-CATALOG-001. Feature: inventory.catalog.
 package catalog
 
 import (
 	"context"
 	"errors"
 	"time"
+
+	"github.com/maxlemke/stewardmesh/internal/domain"
 )
 
 const (
 	RequirementID          = "REQ-ATLAS-CATALOG-001"
-	FeatureID              = "inventory.products"
+	FeatureID              = "inventory.catalog"
 	MaximumExactMinorUnits = int64(9_007_199_254_740_991)
 )
 
@@ -46,24 +48,10 @@ const (
 	UpgradeKindUpgrade     UpgradeKind = "upgrade"
 )
 
-type Product struct {
-	ID                      string            `json:"id"`
-	OrganizationID          string            `json:"organizationId"`
-	Manufacturer            string            `json:"manufacturer"`
-	Model                   string            `json:"model"`
-	AssetKind               string            `json:"assetKind"`
-	Status                  Status            `json:"status"`
-	Specifications          map[string]string `json:"specifications"`
-	DefaultUsefulLifeMonths int               `json:"defaultUsefulLifeMonths,omitempty"`
-	Revision                int64             `json:"revision"`
-	CreatedAt               time.Time         `json:"createdAt"`
-	UpdatedAt               time.Time         `json:"updatedAt"`
-}
-
 type Configuration struct {
 	ID             string            `json:"id"`
 	OrganizationID string            `json:"organizationId"`
-	ProductID      string            `json:"productId"`
+	ModelID        string            `json:"modelId"`
 	Name           string            `json:"name"`
 	SKU            string            `json:"sku,omitempty"`
 	Status         Status            `json:"status"`
@@ -78,7 +66,7 @@ type Configuration struct {
 type Price struct {
 	ID              string     `json:"id"`
 	OrganizationID  string     `json:"organizationId"`
-	ProductID       string     `json:"productId"`
+	ModelID         string     `json:"modelId"`
 	ConfigurationID string     `json:"configurationId,omitempty"`
 	Kind            PriceKind  `json:"kind"`
 	AmountMinor     int64      `json:"amountMinor"`
@@ -93,9 +81,9 @@ type Price struct {
 type UpgradePath struct {
 	ID                  string      `json:"id"`
 	OrganizationID      string      `json:"organizationId"`
-	FromProductID       string      `json:"fromProductId"`
+	FromModelID         string      `json:"fromModelId"`
 	FromConfigurationID string      `json:"fromConfigurationId,omitempty"`
-	ToProductID         string      `json:"toProductId"`
+	ToModelID           string      `json:"toModelId"`
 	ToConfigurationID   string      `json:"toConfigurationId,omitempty"`
 	Kind                UpgradeKind `json:"kind"`
 	EffectiveFrom       time.Time   `json:"effectiveFrom"`
@@ -103,26 +91,9 @@ type UpgradePath struct {
 	CreatedAt           time.Time   `json:"createdAt"`
 }
 
-type ProductQuery struct {
-	Search    string
-	AssetKind string
-	Status    Status
-	Limit     int
-}
-
-type CreateProductInput struct {
-	ID                      string            `json:"id,omitempty"`
-	Manufacturer            string            `json:"manufacturer"`
-	Model                   string            `json:"model"`
-	AssetKind               string            `json:"assetKind"`
-	Status                  Status            `json:"status,omitempty"`
-	Specifications          map[string]string `json:"specifications,omitempty"`
-	DefaultUsefulLifeMonths int               `json:"defaultUsefulLifeMonths,omitempty"`
-}
-
 type CreateConfigurationInput struct {
 	ID             string            `json:"id,omitempty"`
-	ProductID      string            `json:"productId"`
+	ModelID        string            `json:"modelId"`
 	Name           string            `json:"name"`
 	SKU            string            `json:"sku,omitempty"`
 	Status         Status            `json:"status,omitempty"`
@@ -131,7 +102,7 @@ type CreateConfigurationInput struct {
 
 type RecordPriceInput struct {
 	ID              string     `json:"id,omitempty"`
-	ProductID       string     `json:"productId"`
+	ModelID         string     `json:"modelId"`
 	ConfigurationID string     `json:"configurationId,omitempty"`
 	Kind            PriceKind  `json:"kind"`
 	AmountMinor     int64      `json:"amountMinor"`
@@ -143,36 +114,38 @@ type RecordPriceInput struct {
 
 type CreateUpgradePathInput struct {
 	ID                  string      `json:"id,omitempty"`
-	FromProductID       string      `json:"fromProductId"`
+	FromModelID         string      `json:"fromModelId"`
 	FromConfigurationID string      `json:"fromConfigurationId,omitempty"`
-	ToProductID         string      `json:"toProductId"`
+	ToModelID           string      `json:"toModelId"`
 	ToConfigurationID   string      `json:"toConfigurationId,omitempty"`
 	Kind                UpgradeKind `json:"kind"`
 	EffectiveFrom       time.Time   `json:"effectiveFrom"`
 }
 
 type ResolvePriceInput struct {
-	ProductID       string
+	ModelID         string
 	ConfigurationID string
 	AsOf            time.Time
 	Currency        string
 	Kind            PriceKind
 }
 
-// Store is the provider-neutral catalog persistence boundary. Price records
-// and upgrade paths are append-only in the foundation slice.
-type Store interface {
-	ListProducts(ctx context.Context, organizationID string, query ProductQuery) ([]Product, error)
-	GetProduct(ctx context.Context, organizationID, productID string) (Product, error)
-	CreateProduct(ctx context.Context, product Product) (Product, error)
+// ModelReader keeps Atlas Models authoritative while Catalog validates stable
+// model references without reading provider tables directly.
+type ModelReader interface {
+	GetModel(ctx context.Context, id string) (domain.AssetModel, error)
+}
 
-	ListConfigurations(ctx context.Context, organizationID, productID string) ([]Configuration, error)
+// Store is the provider-neutral catalog extension persistence boundary. Price
+// records and upgrade paths are append-only in the foundation slice.
+type Store interface {
+	ListConfigurations(ctx context.Context, organizationID, modelID string) ([]Configuration, error)
 	GetConfiguration(ctx context.Context, organizationID, configurationID string) (Configuration, error)
 	CreateConfiguration(ctx context.Context, configuration Configuration) (Configuration, error)
 
-	ListPrices(ctx context.Context, organizationID, productID, configurationID string) ([]Price, error)
+	ListPrices(ctx context.Context, organizationID, modelID, configurationID string) ([]Price, error)
 	CreatePrice(ctx context.Context, price Price) (Price, error)
 
-	ListUpgradePaths(ctx context.Context, organizationID, fromProductID, fromConfigurationID string) ([]UpgradePath, error)
+	ListUpgradePaths(ctx context.Context, organizationID, fromModelID, fromConfigurationID string) ([]UpgradePath, error)
 	CreateUpgradePath(ctx context.Context, path UpgradePath) (UpgradePath, error)
 }

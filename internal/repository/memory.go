@@ -58,6 +58,17 @@ func sortAssets(items []domain.Asset) {
 	})
 }
 
+func sortAssetModels(items []domain.AssetModel) {
+	sort.Slice(items, func(i, j int) bool {
+		left := strings.ToLower(items[i].Manufacturer + "\x00" + items[i].Name + "\x00" + items[i].ModelNumber)
+		right := strings.ToLower(items[j].Manufacturer + "\x00" + items[j].Name + "\x00" + items[j].ModelNumber)
+		if left == right {
+			return items[i].ID < items[j].ID
+		}
+		return left < right
+	})
+}
+
 func sortLifecycle(items []domain.AssetLifecycleEvent) {
 	sort.Slice(items, func(i, j int) bool {
 		if items[i].Revision == items[j].Revision {

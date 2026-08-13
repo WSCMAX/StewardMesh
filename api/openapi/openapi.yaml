@@ -494,6 +494,114 @@ paths:
         '400': {$ref: '#/components/responses/InvalidRequest'}
         '401': {$ref: '#/components/responses/Unauthorized'}
         '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/asset-models:
+    get:
+      summary: List asset models
+      operationId: listAssetModels
+      tags: [Atlas]
+      x-requirement: REQ-ATLAS-MODELS-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - {in: query, name: q, schema: {type: string, maxLength: 200}}
+        - {in: query, name: kind, schema: {$ref: '#/components/schemas/AssetKind'}}
+        - {in: query, name: status, schema: {$ref: '#/components/schemas/AssetModelStatus'}}
+        - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 100, default: 50}}
+      responses:
+        '200':
+          description: Asset model collection
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AssetModelCollection'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+    post:
+      summary: Create an asset model
+      operationId: createAssetModel
+      tags: [Atlas]
+      x-requirement: REQ-ATLAS-MODELS-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateAssetModelRequest'}
+      responses:
+        '201':
+          description: Asset model created
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AssetModel'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/asset-models/{modelId}:
+    parameters:
+      - $ref: '#/components/parameters/AssetModelID'
+    get:
+      summary: Get an asset model
+      operationId: getAssetModel
+      tags: [Atlas]
+      x-requirement: REQ-ATLAS-MODELS-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200':
+          description: Asset model detail
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AssetModel'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    put:
+      summary: Update an asset model
+      operationId: updateAssetModel
+      tags: [Atlas]
+      x-requirement: REQ-ATLAS-MODELS-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/UpdateAssetModelRequest'}
+      responses:
+        '200':
+          description: Asset model updated
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AssetModel'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/asset-models/{modelId}/retire:
+    parameters:
+      - $ref: '#/components/parameters/AssetModelID'
+      - {in: query, name: revision, required: true, schema: {type: integer, format: int64, minimum: 1}}
+    post:
+      summary: Retire an asset model
+      operationId: retireAssetModel
+      tags: [Atlas]
+      x-requirement: REQ-ATLAS-MODELS-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        '200':
+          description: Asset model retired
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AssetModel'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
   /api/v1/assets:
     get:
       summary: List assets
@@ -505,6 +613,7 @@ paths:
         - {in: query, name: q, schema: {type: string, maxLength: 200}}
         - {in: query, name: kind, schema: {$ref: '#/components/schemas/AssetKind'}}
         - {in: query, name: status, schema: {$ref: '#/components/schemas/AssetStatus'}}
+        - {in: query, name: modelId, schema: {$ref: '#/components/schemas/AssetModelID'}}
         - {in: query, name: siteId, schema: {$ref: '#/components/schemas/DirectoryReferenceID'}}
         - {in: query, name: departmentId, schema: {$ref: '#/components/schemas/DirectoryReferenceID'}}
         - {in: query, name: userId, schema: {$ref: '#/components/schemas/DirectoryReferenceID'}}
@@ -1873,6 +1982,11 @@ components:
       name: assetId
       required: true
       schema: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+    AssetModelID:
+      in: path
+      name: modelId
+      required: true
+      schema: {$ref: '#/components/schemas/AssetModelID'}
     AssetIdentifierID:
       in: path
       name: identifierId
@@ -2269,6 +2383,7 @@ components:
       properties:
         id: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
         organizationId: {type: string}
+        modelId: {$ref: '#/components/schemas/AssetModelID'}
         name: {type: string, minLength: 1, maxLength: 200}
         kind: {$ref: '#/components/schemas/AssetKind'}
         assetTag: {type: string, maxLength: 128}
@@ -2386,6 +2501,7 @@ components:
       required: [name, kind]
       properties:
         id: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        modelId: {$ref: '#/components/schemas/AssetModelID'}
         name: {type: string, minLength: 1, maxLength: 200}
         kind: {$ref: '#/components/schemas/AssetKind'}
         assetTag: {type: string, maxLength: 128}
@@ -2412,6 +2528,73 @@ components:
     AssetStatus:
       type: string
       enum: [draft, active, inactive, retired, disposed]
+    AssetModelID:
+      type: string
+      pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+    AssetModelStatus:
+      type: string
+      enum: [active, retired]
+    AssetModel:
+      type: object
+      additionalProperties: false
+      required: [id, organizationId, manufacturer, name, kind, status, instanceCount, revision, createdAt, updatedAt]
+      properties:
+        id: {$ref: '#/components/schemas/AssetModelID'}
+        organizationId: {type: string}
+        manufacturer: {type: string, minLength: 1, maxLength: 120}
+        name: {type: string, minLength: 1, maxLength: 160}
+        modelNumber: {type: string, maxLength: 120}
+        kind: {$ref: '#/components/schemas/AssetKind'}
+        vendorIdentifier: {type: string, maxLength: 160}
+        specifications:
+          type: object
+          additionalProperties: {type: string, maxLength: 500}
+          maxProperties: 25
+        supportUrl: {type: string, format: uri, maxLength: 500}
+        warrantyMonths: {type: integer, minimum: 0, maximum: 1200}
+        usefulLifeMonths: {type: integer, minimum: 0, maximum: 1200}
+        status: {$ref: '#/components/schemas/AssetModelStatus'}
+        sourceSystemId: {type: string, maxLength: 120}
+        sourceRecordId: {type: string, maxLength: 160}
+        instanceCount: {type: integer, minimum: 0}
+        revision: {type: integer, format: int64, minimum: 1}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    CreateAssetModelRequest:
+      type: object
+      additionalProperties: false
+      required: [manufacturer, name, kind]
+      properties:
+        id: {$ref: '#/components/schemas/AssetModelID'}
+        manufacturer: {type: string, minLength: 1, maxLength: 120}
+        name: {type: string, minLength: 1, maxLength: 160}
+        modelNumber: {type: string, maxLength: 120}
+        kind: {$ref: '#/components/schemas/AssetKind'}
+        vendorIdentifier: {type: string, maxLength: 160}
+        specifications:
+          type: object
+          additionalProperties: {type: string, maxLength: 500}
+          maxProperties: 25
+        supportUrl: {type: string, format: uri, maxLength: 500}
+        warrantyMonths: {type: integer, minimum: 0, maximum: 1200}
+        usefulLifeMonths: {type: integer, minimum: 0, maximum: 1200}
+        sourceSystemId: {type: string, maxLength: 120}
+        sourceRecordId: {type: string, maxLength: 160}
+    UpdateAssetModelRequest:
+      allOf:
+        - $ref: '#/components/schemas/CreateAssetModelRequest'
+        - type: object
+          required: [revision]
+          properties:
+            revision: {type: integer, format: int64, minimum: 1}
+    AssetModelCollection:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/AssetModel'}
     DirectoryReferenceID:
       type: string
       pattern: '^[a-f0-9]{32}$'

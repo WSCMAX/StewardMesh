@@ -10,7 +10,7 @@ Horizon turns Atlas inventory and Ledger financial facts into organization-scope
 
 Each plan currently belongs to one Atlas asset and one normalized scenario. A plan records a lifecycle stage, useful-life target, replacement timing, and exact manual replacement cost. Changes create durable versions so users can reproduce which assumption was effective at a point in time instead of silently replacing planning history.
 
-[Atlas Catalog](atlas-catalog.md) (`REQ-ATLAS-CATALOG-001`, `inventory.products`) introduces the reusable product, configuration, effective-price, and upgrade-path records needed to move the normal replacement-cost flow above the individual asset. The follow-on Horizon integration will let a plan select a target product or configuration, resolve the price effective for the forecast date, and preserve that price provenance while retaining an explicit manual override for exceptional assets. The current per-plan amount remains authoritative until that integration lands.
+[Atlas Models](atlas-models.md) provides the reusable product record and [Atlas Catalog](atlas-catalog.md) (`REQ-ATLAS-CATALOG-001`, `inventory.catalog`) adds configurations, effective prices, and upgrade paths needed to move the normal replacement-cost flow above the individual asset. The follow-on Horizon integration will let a plan select a target model or configuration, resolve the price effective for the forecast date, and preserve that price provenance while retaining an explicit manual override for exceptional assets. The current per-plan amount remains authoritative until that integration lands.
 
 ## Roles and permissions
 

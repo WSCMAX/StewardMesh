@@ -25,6 +25,7 @@ const iconForPage: Record<DocumentationTopicID, AreaIconName> = {
   horizon: 'horizon',
   ledger: 'ledger',
   stack: 'stack',
+  signals: 'signals',
   threads: 'threads',
   vault: 'vault',
   people: 'people',

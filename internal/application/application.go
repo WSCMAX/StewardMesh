@@ -1,6 +1,6 @@
 // Package application constructs StewardMesh's transport-neutral HTTP
 // application and owns the lifecycle of its shared runtime dependencies.
-// Requirements: REQ-FOUNDATION-001, REQ-ATLAS-001, REQ-ATLAS-CODES-001, REQ-DIRECTORY-EXPANSION-002, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-STACK-001, REQ-HORIZON-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001.
+// Requirements: REQ-FOUNDATION-001, REQ-ATLAS-001, REQ-ATLAS-CODES-001, REQ-DIRECTORY-EXPANSION-002, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-STACK-001, REQ-HORIZON-001, REQ-SIGNALS-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001.
 package application
 
 import (
@@ -28,6 +28,7 @@ import (
 	"github.com/maxlemke/stewardmesh/internal/people"
 	"github.com/maxlemke/stewardmesh/internal/repository"
 	postgresrepository "github.com/maxlemke/stewardmesh/internal/repository/postgres"
+	"github.com/maxlemke/stewardmesh/internal/signals"
 	"github.com/maxlemke/stewardmesh/internal/stack"
 	"github.com/maxlemke/stewardmesh/internal/storage"
 	"github.com/maxlemke/stewardmesh/internal/threads"
@@ -212,6 +213,10 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 	if err != nil {
 		return fail(fmt.Errorf("initialize Horizon: %w", err))
 	}
+	signalsService, err := signals.NewService(runtime.signalsStore, signalsEvaluator{ledger: ledgerService, stack: stackService, horizon: horizonService}, runtime.auditor, signals.ServiceConfig{OrganizationID: cfg.OrganizationID})
+	if err != nil {
+		return fail(fmt.Errorf("initialize Signals: %w", err))
+	}
 	patternsService, err := patterns.NewService(runtime.patternsStore, runtime.auditor, patterns.ServiceConfig{OrganizationID: cfg.OrganizationID})
 	if err != nil {
 		return fail(fmt.Errorf("initialize Patterns: %w", err))
@@ -232,6 +237,7 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 		Ledger:              ledgerService,
 		Stack:               stackService,
 		Horizon:             horizonService,
+		Signals:             signalsService,
 		Patterns:            patternsService,
 		Guard:               guardService,
 		OIDC:                oidcFlow,
@@ -285,6 +291,7 @@ type foundationRuntime struct {
 	ledgerStore          ledger.Store
 	stackStore           stack.Store
 	horizonStore         horizon.Store
+	signalsStore         signals.Store
 	patternsStore        patterns.Store
 	guardStore           guard.Store
 	peopleStore          people.Store
@@ -353,6 +360,7 @@ func initializeFoundation(ctx context.Context, cfg config.Config, runMigrations 
 		ledgerStore          ledger.Store
 		stackStore           stack.Store
 		horizonStore         horizon.Store
+		signalsStore         signals.Store
 		patternsStore        patterns.Store
 		guardStore           guard.Store
 		peopleStore          people.Store
@@ -373,6 +381,7 @@ func initializeFoundation(ctx context.Context, cfg config.Config, runMigrations 
 		ledgerStore = repository.NewMemoryLedgerStore()
 		stackStore = repository.NewMemoryStackStore()
 		horizonStore = repository.NewMemoryHorizonStore()
+		signalsStore = repository.NewMemorySignalsStore()
 		patternsStore = repository.NewMemoryPatternsStore()
 	case config.RepositoryDriverPostgres:
 		database, err := postgresrepository.Open(ctx, cfg.DatabaseURL)
@@ -446,6 +455,11 @@ func initializeFoundation(ctx context.Context, cfg config.Config, runMigrations 
 			_ = database.Close()
 			return foundationRuntime{}, err
 		}
+		signalsStore, err = postgresrepository.NewSignalsStore(database)
+		if err != nil {
+			_ = database.Close()
+			return foundationRuntime{}, err
+		}
 		patternsStore, err = postgresrepository.NewPatternsStore(database)
 		if err != nil {
 			_ = database.Close()
@@ -506,6 +520,7 @@ func initializeFoundation(ctx context.Context, cfg config.Config, runMigrations 
 		ledgerStore:          ledgerStore,
 		stackStore:           stackStore,
 		horizonStore:         horizonStore,
+		signalsStore:         signalsStore,
 		patternsStore:        patternsStore,
 		guardStore:           guardStore,
 		peopleStore:          peopleStore,

@@ -11,7 +11,7 @@ test('creates fixed same-host documentation deep links', () => {
 })
 
 test('keeps every local documentation page complete and connected', () => {
-  expect(documentationPages).toHaveLength(11)
+  expect(documentationPages).toHaveLength(12)
   for (const page of documentationPages) {
     expect(page.sections.length).toBeGreaterThan(0)
     expect(page.related.length).toBeGreaterThan(0)
@@ -23,6 +23,7 @@ test('keeps every local documentation page complete and connected', () => {
 test('searches titles, summaries, and product vocabulary', () => {
   expect(searchDocumentation('budget').map((page) => page.id)).toContain('ledger')
   expect(searchDocumentation('entitlement').map((page) => page.id)).toContain('stack')
+  expect(searchDocumentation('renewal').map((page) => page.id)).toContain('signals')
   expect(searchDocumentation('barcode').map((page) => page.id)).toEqual(['atlas'])
   expect(searchDocumentation('scoped grants').map((page) => page.id)).toContain('guard')
   expect(searchDocumentation('')).toEqual(documentationPages)

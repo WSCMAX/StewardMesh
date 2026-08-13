@@ -7,23 +7,44 @@ import (
 
 // Requirements: REQ-FOUNDATION-001, SEC-GUARD-001, REQ-PEOPLE-001,
 // REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-ATLAS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001,
-// REQ-HORIZON-001, REQ-ATLAS-CODES-001, REQ-ATLAS-MODELS-001, REQ-ATLAS-CATALOG-001, REQ-PATTERNS-001, REQ-STACK-001.
-// Features: lifecycle.planning, inventory.identifiers, inventory.models, inventory.catalog, templates.schemas, software.licenses.
+// REQ-HORIZON-001, REQ-ATLAS-CODES-001, REQ-ATLAS-MODELS-001, REQ-ATLAS-CATALOG-001, REQ-PATTERNS-001, REQ-STACK-001, REQ-SIGNALS-001.
+// Features: lifecycle.planning, inventory.identifiers, inventory.models, inventory.catalog, templates.schemas, software.licenses, alerts.rules.
 func TestEmbeddedMigrationsAreOrderedAndChecksummed(t *testing.T) {
 	migrations, err := loadMigrations()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(migrations) != 29 {
-		t.Fatalf("expected 29 platform migrations, got %d", len(migrations))
+	if len(migrations) != 30 {
+		t.Fatalf("expected 30 platform migrations, got %d", len(migrations))
 	}
 	for index, migration := range migrations {
 		expectedVersion := int64(index + 1)
+		if index == 29 {
+			expectedVersion = 31 // 0030 is reserved for the parallel Grouper graph slice.
+		}
 		if migration.version != expectedVersion {
 			t.Fatalf("expected migration %d, got %d", expectedVersion, migration.version)
 		}
 		if len(migration.checksum) != 64 {
 			t.Fatalf("expected SHA-256 checksum for migration %d", migration.version)
+		}
+	}
+}
+
+func TestSignalsMigrationAddsDurableRulesAlertsHistoryAndDeliveryQueue(t *testing.T) {
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents := migrations[len(migrations)-1].contents
+	for _, expected := range []string{
+		"REQ-SIGNALS-001", "alerts.rules", "GitHub: #11", "CREATE TABLE signal_rules",
+		"forecast_over_budget", "CREATE TABLE signal_alerts", "deduplication_key",
+		"CREATE TABLE signal_alert_history", "CREATE TABLE signal_subscriptions",
+		"CREATE TABLE signal_deliveries", "signals.read", "signals.write",
+	} {
+		if !strings.Contains(contents, expected) {
+			t.Fatalf("Signals migration is missing %q", expected)
 		}
 	}
 }

@@ -1,4 +1,6 @@
-export type DocumentationTopicID = 'overview' | 'workspace' | 'atlas' | 'horizon' | 'ledger' | 'stack' | 'threads' | 'vault' | 'people' | 'guard' | 'guide'
+// Requirements: REQ-SIGNALS-001, DOC-001. Features: alerts.rules, experience.help.
+
+export type DocumentationTopicID = 'overview' | 'workspace' | 'atlas' | 'horizon' | 'ledger' | 'stack' | 'signals' | 'threads' | 'vault' | 'people' | 'guard' | 'guide'
 
 export type DocumentationStep = {
   title: string
@@ -41,7 +43,7 @@ export const documentationPages: readonly DocumentationPage[] = [
       {
         id: 'start',
         title: 'Start with one focused task',
-        paragraphs: ['StewardMesh organizes inventory, planning, finance, relationships, files, people, and access into focused product areas. Begin in Workspace, choose the area that owns the task, and use Guide when you need contextual help.'],
+        paragraphs: ['StewardMesh organizes inventory, planning, finance, software, alerts, relationships, files, people, and access into focused product areas. Begin in Workspace, choose the area that owns the task, and use Guide when you need contextual help.'],
         steps: [
           { title: 'Sign in through Guard', body: 'Use your organization account. A new local installation first asks an authorized operator to create the initial administrator.' },
           { title: 'Choose a product area', body: 'Open Atlas, Horizon, Ledger, Threads, Vault, People, or Guard from Workspace. Your current grants determine which records and actions are available.' },
@@ -55,6 +57,8 @@ export const documentationPages: readonly DocumentationPage[] = [
           'Atlas owns assets, reusable product models, identifiers, locations on asset records, and lifecycle history.',
           'Horizon owns useful-life assumptions, replacement timing, scenarios, and forecasts.',
           'Ledger owns vendors, purchases, contracts, commitments, costs, and budgets.',
+          'Stack owns software products, installations, entitlements, assignments, and compliance conditions.',
+          'Signals owns operational and financial alert rules, acknowledgment, assignment, and delivery handoffs.',
           'Threads owns hierarchical tags, strategic goals, links, and inheritance provenance.',
           'Vault owns private evidence metadata, integrity checks, and authorized downloads.',
           'People owns sites, buildings, rooms, departments, identities, and assignments.',
@@ -242,6 +246,42 @@ export const documentationPages: readonly DocumentationPage[] = [
       },
     ],
     related: ['atlas', 'ledger', 'people'],
+  },
+  {
+    id: 'signals',
+    group: 'Product areas',
+    kicker: 'Alerts and action queue',
+    title: 'Signals',
+    summary: 'Evaluate operational and financial conditions, keep repeated observations deduplicated, and preserve action history until each alert is resolved.',
+    appHref: '#workspace-signals',
+    appLabel: 'Open Signals',
+    searchTerms: ['alert', 'rule', 'renewal', 'expiration', 'over budget', 'overdue', 'unpaid', 'reconciliation', 'subscription'],
+    sections: [
+      {
+        id: 'rules',
+        title: 'Configure bounded rules',
+        paragraphs: ['Rules evaluate over-budget, forecast-over-budget, unpaid, overdue, expiration, renewal, unused-commitment, and reconciliation conditions against authoritative Ledger, Horizon, and Stack records. Optional fiscal period and scenario filters keep evaluation explicit.'],
+        bullets: ['Renewal and expiration rules default to 180, 90, 60, and 30 days.', 'Unpaid, overdue, and unused-commitment rules default to 30 days.', 'An administrator may provide up to eight unique thresholds from 0 through 3660 days.', 'Disabled rules remain visible but do not evaluate.'],
+      },
+      {
+        id: 'queue',
+        title: 'Work the alert queue',
+        paragraphs: ['The same rule and target produce one durable alert. A repeated observation refreshes that alert; a missing observation resolves it; and a later recurrence reopens it with history intact.'],
+        bullets: ['Severity and status always include readable labels.', 'Acknowledgment records the actor and timestamp.', 'Assignments name an existing identity or group by configured ID.', 'CSV exports protect formula-significant cells before spreadsheet use.'],
+      },
+      {
+        id: 'delivery',
+        title: 'Route through Reach safely',
+        paragraphs: ['Signals creates durable provider-neutral delivery work for enabled group and webhook subscriptions. Reach can process pending work with bounded exponential retries while Signals retains only stable target references and sanitized error codes.'],
+        callout: { title: 'Do not paste delivery secrets', body: 'The Signals interface accepts configured subscriber IDs, never webhook URLs, OAuth tokens, provider credentials, or provider response bodies.', tone: 'warning' },
+      },
+      {
+        id: 'access',
+        title: 'Respect access and audit boundaries',
+        paragraphs: ['Signals reads require signals.read and every rule, evaluation, acknowledgment, assignment, and subscription change requires signals.write plus the current CSRF token. Audit records identify the requirement and feature without copying sensitive source payloads.'],
+      },
+    ],
+    related: ['ledger', 'horizon', 'stack'],
   },
   {
     id: 'threads',

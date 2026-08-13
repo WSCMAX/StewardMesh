@@ -192,6 +192,28 @@ service StackService {
   rpc ImportRecords(ImportStackRecordsRequest) returns (StackImportResult);
 }
 
+// Durable, deduplicated operational and financial alerts with a provider-
+// neutral Reach delivery handoff. Requirement: REQ-SIGNALS-001.
+// Feature: alerts.rules. Every read requires signals.read; rule, evaluation,
+// acknowledgment, assignment, subscription, and delivery changes require
+// signals.write. Subscriber values are configured IDs, never URLs or secrets.
+service SignalsService {
+  rpc ListRules(ListSignalRulesRequest) returns (ListSignalRulesResponse);
+  rpc CreateRule(CreateSignalRuleRequest) returns (SignalRule);
+  rpc UpdateRule(UpdateSignalRuleRequest) returns (SignalRule);
+  rpc ListAlerts(ListSignalAlertsRequest) returns (ListSignalAlertsResponse);
+  rpc ListAlertHistory(ListSignalAlertHistoryRequest) returns (ListSignalAlertHistoryResponse);
+  rpc Evaluate(EvaluateSignalsRequest) returns (SignalEvaluationResult);
+  rpc AcknowledgeAlert(AcknowledgeSignalAlertRequest) returns (SignalAlert);
+  rpc AssignAlert(AssignSignalAlertRequest) returns (SignalAlert);
+  rpc ListSubscriptions(ListSignalSubscriptionsRequest) returns (ListSignalSubscriptionsResponse);
+  rpc CreateSubscription(CreateSignalSubscriptionRequest) returns (SignalSubscription);
+  rpc DeleteSubscription(DeleteSignalSubscriptionRequest) returns (DeleteSignalSubscriptionResponse);
+  rpc ListPendingDeliveries(ListPendingSignalDeliveriesRequest) returns (ListPendingSignalDeliveriesResponse);
+  rpc RecordDeliveryAttempt(RecordSignalDeliveryAttemptRequest) returns (SignalDelivery);
+  rpc ExportCSV(ExportSignalsCSVRequest) returns (ExportSignalsCSVResponse);
+}
+
 message GetOrganizationRequest {}
 
 message Organization {
@@ -2092,4 +2114,209 @@ message ImportStackRecordsRequest {
 message StackImportResult {
   int32 created = 1;
   int32 unchanged = 2;
+}
+
+message ListSignalRulesRequest {}
+
+message ListSignalRulesResponse {
+  repeated SignalRule items = 1;
+}
+
+message SignalRule {
+  string id = 1;
+  string organization_id = 2;
+  string name = 3;
+  string condition = 4;
+  string severity = 5;
+  bool enabled = 6;
+  repeated int32 threshold_days = 7;
+  string fiscal_period = 8;
+  string scenario = 9;
+  string created_by = 10;
+  int64 revision = 11;
+  google.protobuf.Timestamp created_at = 12;
+  google.protobuf.Timestamp updated_at = 13;
+}
+
+message CreateSignalRuleRequest {
+  string id = 1;
+  string name = 2;
+  // One of over_budget, forecast_over_budget, unpaid, overdue, expiration,
+  // renewal, unused_commitment, or reconciliation.
+  string condition = 3;
+  // One of info, warning, or critical.
+  string severity = 4;
+  // has_enabled distinguishes omission, which defaults true, from false.
+  bool enabled = 5;
+  bool has_enabled = 6;
+  repeated int32 threshold_days = 7;
+  string fiscal_period = 8;
+  string scenario = 9;
+}
+
+message UpdateSignalRuleRequest {
+  string rule_id = 1;
+  string name = 2;
+  string condition = 3;
+  string severity = 4;
+  bool enabled = 5;
+  repeated int32 threshold_days = 6;
+  string fiscal_period = 7;
+  string scenario = 8;
+  int64 revision = 9;
+}
+
+message ListSignalAlertsRequest {
+  string status = 1;
+  string severity = 2;
+  string condition = 3;
+  int32 limit = 4;
+}
+
+message ListSignalAlertsResponse {
+  repeated SignalAlert items = 1;
+}
+
+message SignalAlert {
+  string id = 1;
+  string organization_id = 2;
+  string rule_id = 3;
+  string condition = 4;
+  string severity = 5;
+  string status = 6;
+  string title = 7;
+  string summary = 8;
+  string target_type = 9;
+  string target_id = 10;
+  google.protobuf.Timestamp due_at = 11;
+  int32 threshold_days = 12;
+  string assigned_kind = 13;
+  string assigned_id = 14;
+  string acknowledged_by = 15;
+  google.protobuf.Timestamp acknowledged_at = 16;
+  google.protobuf.Timestamp first_detected_at = 17;
+  google.protobuf.Timestamp last_observed_at = 18;
+  google.protobuf.Timestamp resolved_at = 19;
+  int64 revision = 20;
+}
+
+message ListSignalAlertHistoryRequest {
+  string alert_id = 1;
+}
+
+message ListSignalAlertHistoryResponse {
+  repeated SignalAlertHistory items = 1;
+}
+
+message SignalAlertHistory {
+  string id = 1;
+  string alert_id = 2;
+  string action = 3;
+  string actor_id = 4;
+  google.protobuf.Timestamp occurred_at = 5;
+  int64 revision = 6;
+}
+
+message EvaluateSignalsRequest {
+  // Empty uses the service UTC clock.
+  google.protobuf.Timestamp as_of = 1;
+}
+
+message SignalEvaluationResult {
+  google.protobuf.Timestamp as_of = 1;
+  int32 rules = 2;
+  int32 created = 3;
+  int32 refreshed = 4;
+  int32 resolved = 5;
+}
+
+message AcknowledgeSignalAlertRequest {
+  string alert_id = 1;
+  int64 revision = 2;
+}
+
+message AssignSignalAlertRequest {
+  string alert_id = 1;
+  // One of identity or group.
+  string kind = 2;
+  string target_id = 3;
+  int64 revision = 4;
+}
+
+message ListSignalSubscriptionsRequest {}
+
+message ListSignalSubscriptionsResponse {
+  repeated SignalSubscription items = 1;
+}
+
+message SignalSubscription {
+  string id = 1;
+  string organization_id = 2;
+  string rule_id = 3;
+  // One of group or webhook.
+  string target_kind = 4;
+  // Stable deployment-configured reference, never a URL or credential.
+  string target_id = 5;
+  bool enabled = 6;
+  string created_by = 7;
+  google.protobuf.Timestamp created_at = 8;
+}
+
+message CreateSignalSubscriptionRequest {
+  string id = 1;
+  string rule_id = 2;
+  string target_kind = 3;
+  string target_id = 4;
+}
+
+message DeleteSignalSubscriptionRequest {
+  string subscription_id = 1;
+}
+
+message DeleteSignalSubscriptionResponse {
+  bool deleted = 1;
+}
+
+message SignalDelivery {
+  string id = 1;
+  string alert_id = 2;
+  string subscription_id = 3;
+  string target_kind = 4;
+  string target_id = 5;
+  string status = 6;
+  int32 attempts = 7;
+  google.protobuf.Timestamp next_attempt_at = 8;
+  // Sanitized stable code only; provider response bodies are prohibited.
+  string last_error_code = 9;
+  google.protobuf.Timestamp created_at = 10;
+  google.protobuf.Timestamp updated_at = 11;
+}
+
+message ListPendingSignalDeliveriesRequest {
+  google.protobuf.Timestamp as_of = 1;
+  int32 limit = 2;
+}
+
+message ListPendingSignalDeliveriesResponse {
+  repeated SignalDelivery items = 1;
+}
+
+message RecordSignalDeliveryAttemptRequest {
+  string delivery_id = 1;
+  bool succeeded = 2;
+  bool retryable = 3;
+  string error_code = 4;
+}
+
+message ExportSignalsCSVRequest {
+  string status = 1;
+  string severity = 2;
+  string condition = 3;
+  int32 limit = 4;
+}
+
+message ExportSignalsCSVResponse {
+  bytes content = 1;
+  string media_type = 2;
+  string filename = 3;
 }

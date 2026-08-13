@@ -1,4 +1,4 @@
-# Requirements: REQ-ATLAS-001, REQ-ATLAS-MODELS-001, REQ-ATLAS-CODES-001, REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-HORIZON-001, REQ-LEDGER-001, REQ-STACK-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
+# Requirements: REQ-ATLAS-001, REQ-ATLAS-MODELS-001, REQ-ATLAS-CODES-001, REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-HORIZON-001, REQ-LEDGER-001, REQ-STACK-001, REQ-SIGNALS-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
 openapi: 3.1.0
 info:
   title: StewardMesh API
@@ -2738,6 +2738,185 @@ paths:
         '403': {$ref: '#/components/responses/Forbidden'}
         '409': {$ref: '#/components/responses/Conflict'}
         '422': {$ref: '#/components/responses/UnprocessableEntity'}
+  /api/v1/signals/rules:
+    get:
+      summary: List organization alert rules
+      operationId: listSignalRules
+      tags: [Signals]
+      x-requirement: REQ-SIGNALS-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200': {description: Bounded alert rules, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/SignalRuleCollection'}}}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+    post:
+      summary: Create an operational or financial alert rule
+      operationId: createSignalRule
+      tags: [Signals]
+      x-requirement: REQ-SIGNALS-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CreateSignalRuleRequest'}}}}
+      responses:
+        '201': {description: Alert rule created, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/SignalRule'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/signals/rules/{ruleId}:
+    parameters: [{in: path, name: ruleId, required: true, schema: {$ref: '#/components/schemas/SignalID'}}]
+    put:
+      summary: Update an alert rule with optimistic concurrency
+      operationId: updateSignalRule
+      tags: [Signals]
+      x-requirement: REQ-SIGNALS-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UpdateSignalRuleRequest'}}}}
+      responses:
+        '200': {description: Alert rule updated, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/SignalRule'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/signals/alerts:
+    get:
+      summary: List deduplicated organization alerts
+      operationId: listSignalAlerts
+      tags: [Signals]
+      x-requirement: REQ-SIGNALS-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - {in: query, name: status, required: false, schema: {$ref: '#/components/schemas/SignalAlertStatus'}}
+        - {in: query, name: severity, required: false, schema: {$ref: '#/components/schemas/SignalSeverity'}}
+        - {in: query, name: condition, required: false, schema: {$ref: '#/components/schemas/SignalCondition'}}
+        - {in: query, name: limit, required: false, schema: {type: integer, minimum: 1, maximum: 500, default: 100}}
+      responses:
+        '200': {description: Filtered alert queue, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/SignalAlertCollection'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /api/v1/signals/alerts/{alertId}/history:
+    parameters: [{in: path, name: alertId, required: true, schema: {$ref: '#/components/schemas/SignalID'}}]
+    get:
+      summary: List immutable alert action history
+      operationId: listSignalAlertHistory
+      tags: [Signals]
+      x-requirement: REQ-SIGNALS-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200': {description: Alert history newest first, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/SignalAlertHistoryCollection'}}}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/signals/evaluate:
+    post:
+      summary: Evaluate every enabled alert rule at a UTC instant
+      operationId: evaluateSignals
+      tags: [Signals]
+      x-requirement: REQ-SIGNALS-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/EvaluateSignalsRequest'}}}}
+      responses:
+        '200': {description: 'Deterministic creation, refresh, and resolution totals', headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/SignalEvaluationResult'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/signals/alerts/{alertId}/acknowledge:
+    parameters: [{in: path, name: alertId, required: true, schema: {$ref: '#/components/schemas/SignalID'}}]
+    post:
+      summary: Acknowledge an active alert
+      operationId: acknowledgeSignalAlert
+      tags: [Signals]
+      x-requirement: REQ-SIGNALS-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/SignalRevisionRequest'}}}}
+      responses:
+        '200': {description: Alert acknowledged, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/SignalAlert'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/signals/alerts/{alertId}/assignment:
+    parameters: [{in: path, name: alertId, required: true, schema: {$ref: '#/components/schemas/SignalID'}}]
+    put:
+      summary: Assign an active or acknowledged alert
+      operationId: assignSignalAlert
+      tags: [Signals]
+      x-requirement: REQ-SIGNALS-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/AssignSignalAlertRequest'}}}}
+      responses:
+        '200': {description: Alert assignment updated, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/SignalAlert'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/signals/subscriptions:
+    get:
+      summary: List configured Signals subscriber references
+      operationId: listSignalSubscriptions
+      tags: [Signals]
+      x-requirement: REQ-SIGNALS-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200': {description: Credential-free subscriber references, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/SignalSubscriptionCollection'}}}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+    post:
+      summary: Subscribe a configured group or webhook target
+      description: Target IDs resolve through deployment configuration; raw URLs and provider credentials are not accepted.
+      operationId: createSignalSubscription
+      tags: [Signals]
+      x-requirement: REQ-SIGNALS-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CreateSignalSubscriptionRequest'}}}}
+      responses:
+        '201': {description: Subscriber reference created, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/SignalSubscription'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/signals/subscriptions/{subscriptionId}:
+    parameters: [{in: path, name: subscriptionId, required: true, schema: {$ref: '#/components/schemas/SignalID'}}]
+    delete:
+      summary: Remove a Signals subscriber reference
+      operationId: deleteSignalSubscription
+      tags: [Signals]
+      x-requirement: REQ-SIGNALS-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      responses:
+        '204': {description: Subscriber reference removed, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/signals/report.csv:
+    get:
+      summary: Export the filtered Signals queue as spreadsheet-safe CSV
+      operationId: exportSignalsReport
+      tags: [Signals]
+      x-requirement: REQ-SIGNALS-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - {in: query, name: status, required: false, schema: {$ref: '#/components/schemas/SignalAlertStatus'}}
+        - {in: query, name: severity, required: false, schema: {$ref: '#/components/schemas/SignalSeverity'}}
+        - {in: query, name: condition, required: false, schema: {$ref: '#/components/schemas/SignalCondition'}}
+        - {in: query, name: limit, required: false, schema: {type: integer, minimum: 1, maximum: 500, default: 100}}
+      responses:
+        '200': {description: RFC 4180-compatible alert report with formula-significant cells escaped, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {text/csv: {schema: {type: string}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
 components:
   securitySchemes:
     localCookieAuth:
@@ -4939,6 +5118,180 @@ components:
       properties:
         created: {type: integer, minimum: 0}
         unchanged: {type: integer, minimum: 0}
+    SignalID:
+      type: string
+      pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+    SignalCondition:
+      type: string
+      enum: [over_budget, forecast_over_budget, unpaid, overdue, expiration, renewal, unused_commitment, reconciliation]
+    SignalSeverity:
+      type: string
+      enum: [info, warning, critical]
+    SignalAlertStatus:
+      type: string
+      enum: [active, acknowledged, resolved]
+    SignalThresholdDays:
+      type: array
+      maxItems: 8
+      uniqueItems: true
+      items: {type: integer, minimum: 0, maximum: 3660}
+    SignalRule:
+      type: object
+      additionalProperties: false
+      required: [id, organizationId, name, condition, severity, enabled, thresholdDays, createdBy, revision, createdAt, updatedAt]
+      properties:
+        id: {$ref: '#/components/schemas/SignalID'}
+        organizationId: {$ref: '#/components/schemas/SignalID'}
+        name: {type: string, minLength: 1, maxLength: 160}
+        condition: {$ref: '#/components/schemas/SignalCondition'}
+        severity: {$ref: '#/components/schemas/SignalSeverity'}
+        enabled: {type: boolean}
+        thresholdDays: {$ref: '#/components/schemas/SignalThresholdDays'}
+        fiscalPeriod: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,31}$'}
+        scenario: {type: string, pattern: '^[a-z0-9][a-z0-9._-]{0,63}$'}
+        createdBy: {type: string, minLength: 1, maxLength: 200}
+        revision: {type: integer, format: int64, minimum: 1}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    SignalRuleCollection:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items: {type: array, maxItems: 100, items: {$ref: '#/components/schemas/SignalRule'}}
+    CreateSignalRuleRequest:
+      type: object
+      additionalProperties: false
+      required: [name, condition, severity]
+      properties:
+        id: {$ref: '#/components/schemas/SignalID'}
+        name: {type: string, minLength: 1, maxLength: 160}
+        condition: {$ref: '#/components/schemas/SignalCondition'}
+        severity: {$ref: '#/components/schemas/SignalSeverity'}
+        enabled: {type: boolean, default: true}
+        thresholdDays: {$ref: '#/components/schemas/SignalThresholdDays'}
+        fiscalPeriod: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,31}$'}
+        scenario: {type: string, pattern: '^[a-z0-9][a-z0-9._-]{0,63}$'}
+    UpdateSignalRuleRequest:
+      type: object
+      additionalProperties: false
+      required: [name, condition, severity, enabled, revision]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 160}
+        condition: {$ref: '#/components/schemas/SignalCondition'}
+        severity: {$ref: '#/components/schemas/SignalSeverity'}
+        enabled: {type: boolean}
+        thresholdDays: {$ref: '#/components/schemas/SignalThresholdDays'}
+        fiscalPeriod: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,31}$'}
+        scenario: {type: string, pattern: '^[a-z0-9][a-z0-9._-]{0,63}$'}
+        revision: {type: integer, format: int64, minimum: 1}
+    SignalAlert:
+      type: object
+      additionalProperties: false
+      required: [id, organizationId, ruleId, condition, severity, status, title, summary, targetType, targetId, thresholdDays, firstDetectedAt, lastObservedAt, revision]
+      properties:
+        id: {$ref: '#/components/schemas/SignalID'}
+        organizationId: {$ref: '#/components/schemas/SignalID'}
+        ruleId: {$ref: '#/components/schemas/SignalID'}
+        condition: {$ref: '#/components/schemas/SignalCondition'}
+        severity: {$ref: '#/components/schemas/SignalSeverity'}
+        status: {$ref: '#/components/schemas/SignalAlertStatus'}
+        title: {type: string, minLength: 1, maxLength: 200}
+        summary: {type: string, minLength: 1, maxLength: 500}
+        targetType: {type: string, pattern: '^[a-z][a-z0-9._-]{0,63}$'}
+        targetId: {$ref: '#/components/schemas/SignalID'}
+        dueAt: {type: string, format: date-time}
+        thresholdDays: {type: integer, minimum: 0, maximum: 3660}
+        assignedKind: {type: string, enum: [identity, group]}
+        assignedId: {$ref: '#/components/schemas/SignalID'}
+        acknowledgedBy: {type: string, minLength: 1, maxLength: 200}
+        acknowledgedAt: {type: string, format: date-time}
+        firstDetectedAt: {type: string, format: date-time}
+        lastObservedAt: {type: string, format: date-time}
+        resolvedAt: {type: string, format: date-time}
+        revision: {type: integer, format: int64, minimum: 1}
+    SignalAlertCollection:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items: {type: array, maxItems: 500, items: {$ref: '#/components/schemas/SignalAlert'}}
+    SignalAlertHistory:
+      type: object
+      additionalProperties: false
+      required: [id, alertId, action, actorId, occurredAt, revision]
+      properties:
+        id: {type: string, pattern: '^[a-f0-9]{32}$'}
+        alertId: {$ref: '#/components/schemas/SignalID'}
+        action: {type: string, enum: [created, refreshed, reopened, resolved, acknowledged, assigned]}
+        actorId: {type: string, minLength: 1, maxLength: 200}
+        occurredAt: {type: string, format: date-time}
+        revision: {type: integer, format: int64, minimum: 1}
+    SignalAlertHistoryCollection:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items: {type: array, maxItems: 10000, items: {$ref: '#/components/schemas/SignalAlertHistory'}}
+    SignalRevisionRequest:
+      type: object
+      additionalProperties: false
+      required: [revision]
+      properties:
+        revision: {type: integer, format: int64, minimum: 1}
+    AssignSignalAlertRequest:
+      type: object
+      additionalProperties: false
+      required: [kind, targetId, revision]
+      properties:
+        kind: {type: string, enum: [identity, group]}
+        targetId: {$ref: '#/components/schemas/SignalID'}
+        revision: {type: integer, format: int64, minimum: 1}
+    EvaluateSignalsRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        asOf: {type: string, format: date-time, description: Omission uses the service UTC clock.}
+    SignalEvaluationResult:
+      type: object
+      additionalProperties: false
+      required: [asOf, rules, created, refreshed, resolved]
+      properties:
+        asOf: {type: string, format: date-time}
+        rules: {type: integer, minimum: 0, maximum: 100}
+        created: {type: integer, minimum: 0}
+        refreshed: {type: integer, minimum: 0}
+        resolved: {type: integer, minimum: 0}
+    SignalSubscription:
+      type: object
+      additionalProperties: false
+      required: [id, organizationId, targetKind, targetId, enabled, createdBy, createdAt]
+      properties:
+        id: {$ref: '#/components/schemas/SignalID'}
+        organizationId: {$ref: '#/components/schemas/SignalID'}
+        ruleId: {$ref: '#/components/schemas/SignalID'}
+        targetKind: {type: string, enum: [group, webhook]}
+        targetId: {$ref: '#/components/schemas/SignalID'}
+        enabled: {type: boolean}
+        createdBy: {type: string, minLength: 1, maxLength: 200}
+        createdAt: {type: string, format: date-time}
+    SignalSubscriptionCollection:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items: {type: array, maxItems: 100, items: {$ref: '#/components/schemas/SignalSubscription'}}
+    CreateSignalSubscriptionRequest:
+      type: object
+      additionalProperties: false
+      required: [targetKind, targetId]
+      properties:
+        id: {$ref: '#/components/schemas/SignalID'}
+        ruleId: {$ref: '#/components/schemas/SignalID'}
+        targetKind: {type: string, enum: [group, webhook]}
+        targetId:
+          allOf: [{$ref: '#/components/schemas/SignalID'}]
+          description: Stable configured target reference, never a URL or provider credential.
     Tag:
       type: object
       additionalProperties: false

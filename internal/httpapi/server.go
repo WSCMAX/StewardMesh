@@ -1,7 +1,7 @@
 package httpapi
 
 // Requirements: REQ-FOUNDATION-001, REQ-WORKSPACE-001, REQ-ATLAS-001, REQ-ATLAS-CODES-001, REQ-PEOPLE-001,
-// REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-STACK-001, REQ-HORIZON-001, REQ-PLATFORM-VALKEY-001,
+// REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-STACK-001, REQ-HORIZON-001, REQ-SIGNALS-001, REQ-PLATFORM-VALKEY-001,
 // SEC-GUARD-001, SEC-HTTP-001. Features include experience.workspace and inventory.models.
 
 import (
@@ -32,6 +32,7 @@ import (
 	"github.com/maxlemke/stewardmesh/internal/ledger"
 	"github.com/maxlemke/stewardmesh/internal/patterns"
 	"github.com/maxlemke/stewardmesh/internal/people"
+	"github.com/maxlemke/stewardmesh/internal/signals"
 	"github.com/maxlemke/stewardmesh/internal/stack"
 	"github.com/maxlemke/stewardmesh/internal/storage"
 	"github.com/maxlemke/stewardmesh/internal/threads"
@@ -60,6 +61,7 @@ type Dependencies struct {
 	Stack               *stack.Service
 	Horizon             *horizon.Service
 	Patterns            *patterns.Service
+	Signals             *signals.Service
 	Guard               *guard.Service
 	OIDC                *identity.OIDCFlow
 	SAML                *identity.SAMLFlow
@@ -79,6 +81,7 @@ type Server struct {
 	stack               *stack.Service
 	horizon             *horizon.Service
 	patterns            *patterns.Service
+	signals             *signals.Service
 	guard               *guard.Service
 	oidc                *identity.OIDCFlow
 	saml                *identity.SAMLFlow
@@ -163,6 +166,7 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 		stack:               deps.Stack,
 		horizon:             deps.Horizon,
 		patterns:            deps.Patterns,
+		signals:             deps.Signals,
 		guard:               deps.Guard,
 		oidc:                deps.OIDC,
 		saml:                deps.SAML,
@@ -294,6 +298,18 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 	mux.Handle("GET /api/v1/horizon/plans/{planID}/history", server.protected(guard.PermissionPlanningRead, false, server.listHorizonPlanHistory))
 	mux.Handle("GET /api/v1/horizon/forecast", server.protected(guard.PermissionPlanningRead, false, server.getHorizonForecast))
 	mux.Handle("GET /api/v1/horizon/export.csv", server.protected(guard.PermissionPlanningRead, false, server.exportHorizonCSV))
+	mux.Handle("GET /api/v1/signals/rules", server.protected(guard.PermissionSignalsRead, false, server.listSignalRules))
+	mux.Handle("POST /api/v1/signals/rules", server.protected(guard.PermissionSignalsWrite, true, server.createSignalRule))
+	mux.Handle("PUT /api/v1/signals/rules/{ruleID}", server.protected(guard.PermissionSignalsWrite, true, server.updateSignalRule))
+	mux.Handle("GET /api/v1/signals/alerts", server.protected(guard.PermissionSignalsRead, false, server.listSignalAlerts))
+	mux.Handle("GET /api/v1/signals/alerts/{alertID}/history", server.protected(guard.PermissionSignalsRead, false, server.listSignalAlertHistory))
+	mux.Handle("POST /api/v1/signals/evaluate", server.protected(guard.PermissionSignalsWrite, true, server.evaluateSignals))
+	mux.Handle("POST /api/v1/signals/alerts/{alertID}/acknowledge", server.protected(guard.PermissionSignalsWrite, true, server.acknowledgeSignalAlert))
+	mux.Handle("PUT /api/v1/signals/alerts/{alertID}/assignment", server.protected(guard.PermissionSignalsWrite, true, server.assignSignalAlert))
+	mux.Handle("GET /api/v1/signals/subscriptions", server.protected(guard.PermissionSignalsRead, false, server.listSignalSubscriptions))
+	mux.Handle("POST /api/v1/signals/subscriptions", server.protected(guard.PermissionSignalsWrite, true, server.createSignalSubscription))
+	mux.Handle("DELETE /api/v1/signals/subscriptions/{subscriptionID}", server.protected(guard.PermissionSignalsWrite, true, server.deleteSignalSubscription))
+	mux.Handle("GET /api/v1/signals/report.csv", server.protected(guard.PermissionSignalsRead, false, server.exportSignalsCSV))
 	mux.Handle("GET /api/v1/graph", server.protected("", false, server.graphView))
 	return server.correlation(server.securityHeaders(server.cors(mux)))
 }

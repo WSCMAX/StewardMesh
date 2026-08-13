@@ -7,3 +7,5 @@ Cross-feature navigation, responsive composition, reusable related-record workfl
 Reusable product models are documented in [Atlas Models](atlas-models.md); their configurations, prices, and lifecycle upgrade paths are documented in [Atlas Catalog](atlas-catalog.md).
 
 Versioned built-in and custom record schemas, typed validation, visible holding references, and CSV form metadata are documented in [Patterns](patterns.md).
+
+Operational and financial alert rules, deduplicated action history, assignment, reports, and the credential-free Reach handoff are documented in [Signals](signals.md).

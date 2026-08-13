@@ -139,6 +139,16 @@ share one provider-neutral financial contract. See
 [Ledger](docs/features/ledger.md) for money semantics, status transitions,
 permissions, APIs, security boundaries, and validation coverage.
 
+Stack connects software products and versions to Atlas assets, preserves
+purchased entitlements and assignments, and calculates explicit expiration,
+over-assignment, under-use, and missing-license conditions. Signals
+(`REQ-SIGNALS-001`, `alerts.rules`) evaluates those conditions alongside Ledger
+and Horizon state as durable, deduplicated
+alerts with acknowledgment, assignment, formula-safe reports, and a
+credential-free delivery handoff to Reach. See [Stack](docs/features/stack.md)
+and [Signals](docs/features/signals.md) for their ownership boundaries,
+permissions, APIs, security reviews, and validation coverage.
+
 People now provides sites, departments, person/shared/public/lab identities,
 structured site addresses, buildings and rooms, scoped directory search, and
 effective-dated multi-user asset assignments.

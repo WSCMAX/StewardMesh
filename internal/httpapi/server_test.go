@@ -1,7 +1,7 @@
 package httpapi
 
 // Requirements: REQ-FOUNDATION-001, REQ-WORKSPACE-001, REQ-ATLAS-001, REQ-ATLAS-MODELS-001, REQ-ATLAS-CODES-001, REQ-PEOPLE-001,
-// REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-STACK-001, REQ-HORIZON-001, REQ-PLATFORM-VALKEY-001,
+// REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-STACK-001, REQ-HORIZON-001, REQ-SIGNALS-001, REQ-PLATFORM-VALKEY-001,
 // SEC-GUARD-001, SEC-HTTP-001. Features include experience.workspace.
 
 import (
@@ -33,6 +33,7 @@ import (
 	"github.com/maxlemke/stewardmesh/internal/patterns"
 	"github.com/maxlemke/stewardmesh/internal/people"
 	"github.com/maxlemke/stewardmesh/internal/repository"
+	"github.com/maxlemke/stewardmesh/internal/signals"
 	"github.com/maxlemke/stewardmesh/internal/stack"
 	"github.com/maxlemke/stewardmesh/internal/storage"
 	"github.com/maxlemke/stewardmesh/internal/threads"
@@ -87,6 +88,13 @@ func (allowHTTPStackReferences) ValidateFinancialReferences(context.Context, str
 	return nil
 }
 func (allowHTTPStackReferences) ValidateDocuments(context.Context, []string) error { return nil }
+
+type httpSignalsEvaluator struct{}
+
+func (httpSignalsEvaluator) Evaluate(_ context.Context, rule signals.Rule, asOf time.Time) ([]signals.Candidate, error) {
+	due := asOf.AddDate(0, 0, 30)
+	return []signals.Candidate{{TargetType: "contract", TargetID: "support-contract", Title: "Contract renewal decision is approaching", Summary: "Support contract renews in 30 days.", DueAt: &due, ThresholdDays: 30}}, nil
+}
 
 type fakeHTTPOIDCAuthenticator struct {
 	state         string
@@ -483,6 +491,81 @@ func TestHorizonLifecyclePlanForecastHistoryAndExport(t *testing.T) {
 	if exportResponse.Code != http.StatusOK || !strings.HasPrefix(exportResponse.Header().Get("Content-Type"), "text/csv") ||
 		!strings.Contains(exportResponse.Header().Get("Content-Disposition"), "horizon-forecast") || !strings.Contains(exportResponse.Body.String(), "FY2027") {
 		t.Fatalf("unexpected Horizon export %d headers=%v body=%s", exportResponse.Code, exportResponse.Header(), exportResponse.Body.String())
+	}
+}
+
+func TestSignalsRuleEvaluationActionHistoryDeliveryAndProtection(t *testing.T) {
+	handler := newGuardServer(t)
+	session := bootstrapAdministrator(t, handler)
+	rule := createPeopleRecord[signals.Rule](t, handler, session, "/api/v1/signals/rules", map[string]any{
+		"id": "renewals", "name": "Contract renewals", "condition": "renewal", "severity": "warning",
+	})
+	if len(rule.ThresholdDays) != 4 || rule.ThresholdDays[0] != 180 {
+		t.Fatalf("unexpected Signals default thresholds %#v", rule)
+	}
+	subscription := createPeopleRecord[signals.Subscription](t, handler, session, "/api/v1/signals/subscriptions", map[string]any{
+		"id": "finance-group", "ruleId": rule.ID, "targetKind": "group", "targetId": "finance-owners",
+	})
+	if subscription.TargetID != "finance-owners" {
+		t.Fatalf("unexpected Signals subscription %#v", subscription)
+	}
+
+	evaluation := httptest.NewRecorder()
+	handler.ServeHTTP(evaluation, authenticatedRequest(http.MethodPost, "/api/v1/signals/evaluate", bytes.NewBufferString(`{"asOf":"2026-08-13T12:00:00Z"}`), session))
+	if evaluation.Code != http.StatusOK || !strings.Contains(evaluation.Body.String(), `"created":1`) {
+		t.Fatalf("unexpected Signals evaluation %d: %s", evaluation.Code, evaluation.Body.String())
+	}
+	queue := httptest.NewRecorder()
+	handler.ServeHTTP(queue, authenticatedRequest(http.MethodGet, "/api/v1/signals/alerts?status=active&limit=10", nil, session))
+	var body struct {
+		Items []signals.Alert `json:"items"`
+	}
+	if queue.Code != http.StatusOK || json.Unmarshal(queue.Body.Bytes(), &body) != nil || len(body.Items) != 1 {
+		t.Fatalf("unexpected Signals alert queue %d: %s", queue.Code, queue.Body.String())
+	}
+	alert := body.Items[0]
+	if alert.Condition != signals.ConditionRenewal || alert.Status != signals.StatusActive {
+		t.Fatalf("unexpected Signals alert %#v", alert)
+	}
+
+	ackPayload, _ := json.Marshal(map[string]any{"revision": alert.Revision})
+	ack := httptest.NewRecorder()
+	handler.ServeHTTP(ack, authenticatedRequest(http.MethodPost, "/api/v1/signals/alerts/"+alert.ID+"/acknowledge", bytes.NewReader(ackPayload), session))
+	var acknowledged signals.Alert
+	if ack.Code != http.StatusOK || json.Unmarshal(ack.Body.Bytes(), &acknowledged) != nil || acknowledged.Status != signals.StatusAcknowledged {
+		t.Fatalf("unexpected Signals acknowledgment %d: %s", ack.Code, ack.Body.String())
+	}
+	assignmentPayload, _ := json.Marshal(map[string]any{"kind": "group", "targetId": "finance-owners", "revision": acknowledged.Revision})
+	assignment := httptest.NewRecorder()
+	handler.ServeHTTP(assignment, authenticatedRequest(http.MethodPut, "/api/v1/signals/alerts/"+alert.ID+"/assignment", bytes.NewReader(assignmentPayload), session))
+	if assignment.Code != http.StatusOK || !strings.Contains(assignment.Body.String(), `"assignedId":"finance-owners"`) {
+		t.Fatalf("unexpected Signals assignment %d: %s", assignment.Code, assignment.Body.String())
+	}
+	history := httptest.NewRecorder()
+	handler.ServeHTTP(history, authenticatedRequest(http.MethodGet, "/api/v1/signals/alerts/"+alert.ID+"/history", nil, session))
+	for _, action := range []string{`"action":"created"`, `"action":"acknowledged"`, `"action":"assigned"`} {
+		if history.Code != http.StatusOK || !strings.Contains(history.Body.String(), action) {
+			t.Fatalf("Signals history missing %s: %d %s", action, history.Code, history.Body.String())
+		}
+	}
+	report := httptest.NewRecorder()
+	handler.ServeHTTP(report, authenticatedRequest(http.MethodGet, "/api/v1/signals/report.csv?limit=10", nil, session))
+	if report.Code != http.StatusOK || report.Header().Get("Content-Type") != "text/csv; charset=utf-8" || !strings.Contains(report.Body.String(), "support-contract") || report.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("unexpected Signals CSV %d headers=%v body=%s", report.Code, report.Header(), report.Body.String())
+	}
+
+	missingCSRF := authenticatedRequest(http.MethodPost, "/api/v1/signals/evaluate", bytes.NewBufferString(`{}`), session)
+	missingCSRF.Header.Del(csrfHeader)
+	denied := httptest.NewRecorder()
+	handler.ServeHTTP(denied, missingCSRF)
+	if denied.Code != http.StatusForbidden || !strings.Contains(denied.Body.String(), "csrf_failed") {
+		t.Fatalf("expected Signals evaluation to require CSRF, got %d: %s", denied.Code, denied.Body.String())
+	}
+	unsafeSubscriber := httptest.NewRecorder()
+	unsafePayload := bytes.NewBufferString(`{"targetKind":"webhook","targetId":"https://secret.example.test/token"}`)
+	handler.ServeHTTP(unsafeSubscriber, authenticatedRequest(http.MethodPost, "/api/v1/signals/subscriptions", unsafePayload, session))
+	if unsafeSubscriber.Code != http.StatusBadRequest || !strings.Contains(unsafeSubscriber.Body.String(), "validation_failed") {
+		t.Fatalf("expected Signals to reject webhook URLs, got %d: %s", unsafeSubscriber.Code, unsafeSubscriber.Body.String())
 	}
 }
 
@@ -2091,6 +2174,13 @@ func newGuardServerWithDirectory(t *testing.T, limiter guard.AttemptLimiter, oid
 	if err != nil {
 		t.Fatal(err)
 	}
+	signalsService, err := signals.NewService(repository.NewMemorySignalsStore(), httpSignalsEvaluator{}, foundation.NopAuditor{}, signals.ServiceConfig{
+		OrganizationID: organization.ID,
+		Now:            func() time.Time { return time.Date(2026, time.August, 13, 12, 0, 0, 0, time.UTC) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	atlasLabelsService, err := atlascodes.NewLabelService(atlasCodesService, atlasService, patternsService, atlascodes.DefaultLabelRenderers(), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -2107,6 +2197,7 @@ func newGuardServerWithDirectory(t *testing.T, limiter guard.AttemptLimiter, oid
 		Stack:            stackService,
 		Horizon:          horizonService,
 		Patterns:         patternsService,
+		Signals:          signalsService,
 		Guard:            service,
 		OIDC:             oidcFlow,
 		SAML:             samlFlow,

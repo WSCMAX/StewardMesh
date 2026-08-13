@@ -1,6 +1,6 @@
 package application
 
-// Requirements: REQ-FOUNDATION-001, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005, REQ-PATTERNS-001, REQ-STORAGE-001, REQ-HORIZON-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001.
+// Requirements: REQ-FOUNDATION-001, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005, REQ-DIRECTORY-EXPANSION-007, REQ-PATTERNS-001, REQ-STORAGE-001, REQ-HORIZON-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001.
 // Features: lifecycle.planning, templates.schemas.
 
 import (
@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -85,6 +86,72 @@ func TestNewRegistersOptionalSailPointConnectorWithoutStartupNetworkWrites(t *te
 	}
 	if err := app.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestNewSeedsClearlyLabeledSyntheticDemoLocationsPeopleMappingsAndRelationships(t *testing.T) {
+	cfg := memoryConfiguration(t)
+	cfg.OrganizationID = "demo-application"
+	cfg.OrganizationName = "[Synthetic Demo] Application"
+	cfg.ExchangeSourceSystemID = cfg.OrganizationID
+	cfg.SeedSynthetic = true
+	app, err := New(context.Background(), cfg, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := app.Close(); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	cookie, csrfToken := bootstrapApplicationAdministrator(t, app, cfg.AllowedOrigin)
+	get := func(path string, target any) {
+		t.Helper()
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		request.AddCookie(cookie)
+		response := httptest.NewRecorder()
+		app.Handler().ServeHTTP(response, request)
+		if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), target) != nil {
+			t.Fatalf("GET %s: %d %s", path, response.Code, response.Body.String())
+		}
+	}
+	_ = csrfToken // Bootstrap also proves the synthetic seed did not create an authentication account.
+
+	var sources struct {
+		Items []directoryexpansion.SourceSystem `json:"items"`
+	}
+	get("/api/v1/directory-import-sources", &sources)
+	if len(sources.Items) != 1 || sources.Items[0].ID != directoryexpansion.SyntheticSourceSystemID || sources.Items[0].Provider != directoryexpansion.SyntheticProvider {
+		t.Fatalf("unexpected synthetic source catalog %#v", sources.Items)
+	}
+	var sites struct {
+		Items []struct {
+			ID, Name string
+		} `json:"items"`
+	}
+	get("/api/v1/sites", &sites)
+	if len(sites.Items) != 1 || !strings.HasPrefix(sites.Items[0].Name, "[Synthetic Demo]") {
+		t.Fatalf("unexpected synthetic site response %#v", sites.Items)
+	}
+	var identities struct {
+		Items []struct {
+			DisplayName, Provider, ProviderSubject string
+		} `json:"items"`
+	}
+	get("/api/v1/identities?limit=100", &identities)
+	if len(identities.Items) != 3 {
+		t.Fatalf("unexpected synthetic identities %#v", identities.Items)
+	}
+	for _, identity := range identities.Items {
+		if !strings.HasPrefix(identity.DisplayName, "[Synthetic Demo]") || !strings.HasPrefix(identity.Provider, "directory.") || identity.ProviderSubject == "" {
+			t.Fatalf("synthetic identity is not labeled and provider-isolated: %#v", identity)
+		}
+	}
+	var graph directoryexpansion.Graph
+	get("/api/v1/graph", &graph)
+	if len(graph.Nodes) != 4 || len(graph.Edges) != 3 {
+		t.Fatalf("unexpected synthetic graph %#v", graph)
 	}
 }
 
@@ -321,6 +388,7 @@ func memoryConfiguration(t *testing.T) config.Config {
 	cfg.SessionCookieSecure = false
 	cfg.BootstrapToken = ""
 	cfg.SessionTTL = time.Hour
+	cfg.SeedSynthetic = false
 	cfg.OrganizationID = "application-test"
 	cfg.OrganizationName = "Application Test"
 	cfg.GrouperURL = ""
@@ -335,4 +403,21 @@ func memoryConfiguration(t *testing.T) config.Config {
 	cfg.GrouperAllowPrivateNetwork = false
 	cfg.ExchangeSourceSystemID = "application-test"
 	return cfg
+}
+
+func bootstrapApplicationAdministrator(t *testing.T, app *Application, allowedOrigin string) (*http.Cookie, string) {
+	t.Helper()
+	payload := bytes.NewBufferString(`{"username":"administrator","email":"administrator@example.test","displayName":"Administrator","password":"correct horse battery staple"}`)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/auth/bootstrap", payload)
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Origin", allowedOrigin)
+	response := httptest.NewRecorder()
+	app.Handler().ServeHTTP(response, request)
+	var credentials struct {
+		CSRFToken string `json:"csrfToken"`
+	}
+	if response.Code != http.StatusCreated || json.Unmarshal(response.Body.Bytes(), &credentials) != nil || credentials.CSRFToken == "" || len(response.Result().Cookies()) != 1 {
+		t.Fatalf("bootstrap application administrator: %d %s", response.Code, response.Body.String())
+	}
+	return response.Result().Cookies()[0], credentials.CSRFToken
 }

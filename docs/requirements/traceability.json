@@ -1073,6 +1073,45 @@
       }
     },
     {
+      "requirementId": "REQ-DIRECTORY-EXPANSION-007",
+      "featureId": "platform.foundation",
+      "artifacts": {
+        "documentation": [
+          ".env.example",
+          "README.md",
+          "docs/features/dictionary.md",
+          "docs/features/directory-expansion.md",
+          "docs/requirements/initial.md"
+        ],
+        "api": [
+          "api/openapi/openapi.yaml"
+        ],
+        "code": [
+          "cmd/stewardmesh/main.go",
+          "internal/application/application.go",
+          "internal/config/config.go",
+          "internal/directoryexpansion/importer.go",
+          "internal/directoryexpansion/synthetic.go"
+        ],
+        "schema": [
+          ".env.example",
+          "deploy/docker-compose.yml"
+        ],
+        "tests": [
+          ".github/workflows/ci.yml",
+          "cmd/stewardmesh/main_test.go",
+          "internal/application/application_test.go",
+          "internal/config/config_test.go",
+          "internal/directoryexpansion/contracts_test.go",
+          "internal/directoryexpansion/synthetic_test.go",
+          "web/src/documentation.test.ts"
+        ],
+        "ui": [
+          "web/src/documentation.ts"
+        ]
+      }
+    },
+    {
       "requirementId": "REQ-PLATFORM-VALKEY-001",
       "featureId": "platform.runtime",
       "artifacts": {

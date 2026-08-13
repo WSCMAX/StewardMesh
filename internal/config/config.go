@@ -1,5 +1,5 @@
 // Package config loads and validates provider-neutral StewardMesh settings.
-// Requirements: REQ-FOUNDATION-001, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005, REQ-STORAGE-001, REQ-REACH-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
+// Requirements: REQ-FOUNDATION-001, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005, REQ-DIRECTORY-EXPANSION-007, REQ-STORAGE-001, REQ-REACH-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
 package config
 
 import (
@@ -132,6 +132,7 @@ func FromEnv() Config {
 	blobMaximumBytes, blobSizeErr := envInt64("STEWARDMESH_BLOB_MAXIMUM_BYTES", 25<<20)
 	s3ForcePathStyle, s3PathStyleErr := envBool("STEWARDMESH_S3_FORCE_PATH_STYLE", false)
 	oidcRequireVerifiedEmail, oidcVerifiedEmailErr := envBool("STEWARDMESH_OIDC_REQUIRE_VERIFIED_EMAIL", true)
+	seedSynthetic, seedSyntheticErr := envBool("STEWARDMESH_SEED_SYNTHETIC", false)
 	grouperAllowPrivate, grouperPrivateErr := envBool("STEWARDMESH_GROUPER_ALLOW_PRIVATE_NETWORK", false)
 	grouperTimeout, grouperTimeoutErr := envDuration("STEWARDMESH_GROUPER_TIMEOUT", directoryexpansion.DefaultGrouperTimeout)
 	grouperPageSize, grouperPageErr := envInt64("STEWARDMESH_GROUPER_PAGE_SIZE", directoryexpansion.DefaultGrouperPageSize)
@@ -206,7 +207,7 @@ func FromEnv() Config {
 		BootstrapToken:              os.Getenv("STEWARDMESH_BOOTSTRAP_TOKEN"),
 		SessionCookieSecure:         sessionCookieSecure,
 		SessionTTL:                  sessionTTL,
-		SeedSynthetic:               envBoolDefault("STEWARDMESH_SEED_SYNTHETIC"),
+		SeedSynthetic:               seedSynthetic,
 		GrouperURL:                  grouperURL,
 		GrouperSourceSystemID:       grouperSourceSystemID,
 		GrouperUsername:             os.Getenv("STEWARDMESH_GROUPER_USERNAME"),
@@ -217,12 +218,8 @@ func FromEnv() Config {
 		GrouperMaximumResponseBytes: grouperResponseBytes,
 		GrouperTimeout:              grouperTimeout,
 		GrouperAllowPrivateNetwork:  grouperAllowPrivate,
-		validationError:             errors.Join(secureErr, ttlErr, blobTTLErr, blobSizeErr, s3PathStyleErr, oidcVerifiedEmailErr, grouperPrivateErr, grouperTimeoutErr, grouperPageErr, grouperResponseErr),
+		validationError:             errors.Join(secureErr, ttlErr, blobTTLErr, blobSizeErr, s3PathStyleErr, oidcVerifiedEmailErr, seedSyntheticErr, grouperPrivateErr, grouperTimeoutErr, grouperPageErr, grouperResponseErr),
 	}
-}
-
-func envBoolDefault(key string) bool {
-	return strings.EqualFold(os.Getenv(key), "true")
 }
 
 func (c Config) Validate() error {
@@ -241,6 +238,9 @@ func (c Config) Validate() error {
 	}
 	if strings.TrimSpace(c.OrganizationName) == "" {
 		return errors.New("STEWARDMESH_ORGANIZATION_NAME is required")
+	}
+	if c.SeedSynthetic && !strings.HasPrefix(strings.ToLower(strings.TrimSpace(c.OrganizationID)), "demo-") {
+		return errors.New("STEWARDMESH_SEED_SYNTHETIC requires a demo-* STEWARDMESH_ORGANIZATION_ID")
 	}
 	if !stableConfigurationID(c.ExchangeSourceSystemID) {
 		return errors.New("STEWARDMESH_EXCHANGE_SOURCE_SYSTEM_ID must be a stable identifier")

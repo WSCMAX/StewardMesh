@@ -3,12 +3,14 @@
 - **Canonical IDs:** `identity.directory` for locations and
   `integrations.protocols` for directory imports
 - **Current requirements:** `REQ-DIRECTORY-EXPANSION-001` through
-  `REQ-DIRECTORY-EXPANSION-005`
+  `REQ-DIRECTORY-EXPANSION-005`, plus `REQ-DIRECTORY-EXPANSION-007`
 - **Roadmap issues:** [#24](https://github.com/WSCMAX/StewardMesh/issues/24),
   [#25](https://github.com/WSCMAX/StewardMesh/issues/25),
   [#26](https://github.com/WSCMAX/StewardMesh/issues/26),
-  [#27](https://github.com/WSCMAX/StewardMesh/issues/27), and
-  [#28](https://github.com/WSCMAX/StewardMesh/issues/28)
+  [#27](https://github.com/WSCMAX/StewardMesh/issues/27),
+  [#28](https://github.com/WSCMAX/StewardMesh/issues/28),
+  [#29](https://github.com/WSCMAX/StewardMesh/issues/29), and
+  [#30](https://github.com/WSCMAX/StewardMesh/issues/30)
 
 Directory Expansion extends People with hierarchical locations, optional
 read-only institutional provider connectors, synthetic demo data, and a
@@ -339,3 +341,35 @@ use the permission-scoped relationship graph to inspect semantic group and
 subject nodes plus nested edges. Replaying an idempotency key returns the
 original result; removing a fixture membership and completing a new preview
 produces an explicit deactivation instead of deleting history.
+
+## Synthetic demo dataset
+
+Synthetic setup is disabled by default. Set `STEWARDMESH_SEED_SYNTHETIC=true`
+only with an organization ID beginning with `demo-`; invalid booleans and
+non-demo organization IDs fail startup before any data is written. The
+versioned, network-free source creates a `[Synthetic Demo]` site, building,
+room, department, three identities, two groups, and three direct or nested
+memberships. Example-domain email addresses end in `.invalid` and cannot route.
+
+Locations use collision-safe People writes: a matching label is reused only
+when its complete expected location data matches, while a mismatched local
+record fails closed. People, groups, memberships, provider mappings, imported
+ownership locks, and relationship edges use the regular durable directory
+preview/apply engine under the isolated `synthetic-demo-v1` source. Fixed
+dataset-version idempotency keys make repeated startup an exact replay rather
+than a duplicate seed. Audit events contain stable IDs and safe dataset/source
+labels, never names, addresses, or email values.
+
+The optional Compose initializer is a one-shot command. It starts PostgreSQL as
+its only required dependency, seeds the `demo-local` organization, and exits:
+
+```sh
+docker compose -f deploy/docker-compose.yml --profile demo run --rm demo-seed
+```
+
+The default Compose profile contains no demo initializer. The `demo` profile
+also makes Valkey and the development Grouper fixture available, but synthetic
+seeding does not contact or require either service. Use the separate
+`integrations` profile when testing only Grouper. Never enable the synthetic
+flag for a production organization or treat the committed fixture credential
+as a deployable secret.

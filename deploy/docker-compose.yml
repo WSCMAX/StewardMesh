@@ -1,4 +1,4 @@
-# REQ-PLATFORM-VALKEY-001 / platform.runtime; REQ-DIRECTORY-EXPANSION-005 / integrations.protocols
+# REQ-PLATFORM-VALKEY-001 / platform.runtime; REQ-DIRECTORY-EXPANSION-005 / integrations.protocols; REQ-DIRECTORY-EXPANSION-007 / platform.foundation
 services:
   postgres:
     image: postgres:18.4-alpine
@@ -55,6 +55,36 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+
+  # Explicit one-shot initializer for the clearly labeled synthetic dataset.
+  # It is absent from the default profile and never needs the Grouper fixture.
+  demo-seed:
+    profiles: ["demo"]
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      target: stewardmesh
+    image: stewardmesh:local
+    command: ["seed-demo"]
+    environment:
+      STEWARDMESH_ADDR: 127.0.0.1:8080
+      STEWARDMESH_ALLOWED_ORIGIN: http://localhost:5173
+      STEWARDMESH_SESSION_COOKIE_SECURE: "false"
+      STEWARDMESH_REPOSITORY_DRIVER: postgres
+      STEWARDMESH_DATABASE_URL: postgres://stewardmesh:stewardmesh@postgres:5432/stewardmesh?sslmode=disable
+      STEWARDMESH_CACHE_DRIVER: none
+      STEWARDMESH_STORAGE_DRIVER: local
+      STEWARDMESH_BLOB_DIR: /tmp/stewardmesh-demo-blobs
+      STEWARDMESH_ORGANIZATION_ID: demo-local
+      STEWARDMESH_ORGANIZATION_NAME: "[Synthetic Demo] StewardMesh Local"
+      STEWARDMESH_SEED_SYNTHETIC: "true"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    restart: "no"
 
 volumes:
   stewardmesh-postgres:

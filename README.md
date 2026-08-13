@@ -1,4 +1,4 @@
-<!-- REQ-DIRECTORY-EXPANSION-005 / integrations.protocols -->
+<!-- REQ-DIRECTORY-EXPANSION-005 / integrations.protocols; REQ-DIRECTORY-EXPANSION-007 / platform.foundation -->
 # StewardMesh
 
 **StewardMesh by Binary Cornfield** is an open-source inventory and lifecycle management platform for everything an organization owns, funds, and operates.
@@ -188,6 +188,15 @@ secret-manager-injected bearer token or Basic credential; a bounded loopback
 fixture is available only under the Compose `integrations` profile. See
 [Directory Expansion](docs/features/directory-expansion.md#grouper-rest-synchronization)
 for the secure setup and fixture walkthrough.
+
+An isolated synthetic dataset is available only for explicit demonstrations.
+It requires `STEWARDMESH_SEED_SYNTHETIC=true` together with a `demo-*`
+organization ID, uses clearly labeled `.invalid` data and the regular durable
+directory mapping/ownership workflow, and replays idempotently. The default
+runtime seeds nothing. To initialize the local demo database once, run
+`docker compose -f deploy/docker-compose.yml --profile demo run --rm demo-seed`.
+The optional Grouper fixture is not contacted by this initializer. See
+[Directory Expansion](docs/features/directory-expansion.md#synthetic-demo-dataset).
 
 Guide provides contextual module help and examples, dismissible and replayable
 permission-aware walkthroughs, a WCAG 2.2 AA branding-color gate with safe

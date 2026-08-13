@@ -1,9 +1,10 @@
 package main
 
-// Requirements: REQ-FOUNDATION-001, REQ-DIRECTORY-EXPANSION-004, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001.
+// Requirements: REQ-FOUNDATION-001, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-007, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001.
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"os"
@@ -17,9 +18,18 @@ import (
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	seedDemoOnly, err := parseCommand(os.Args)
+	if err != nil {
+		logger.Error("parse command", "error", err)
+		os.Exit(2)
+	}
 	cfg, err := config.Load()
 	if err != nil {
 		logger.Error("load configuration", "error", err)
+		os.Exit(1)
+	}
+	if seedDemoOnly && !cfg.SeedSynthetic {
+		logger.Error("seed synthetic demo data", "error", "STEWARDMESH_SEED_SYNTHETIC must be true for seed-demo")
 		os.Exit(1)
 	}
 
@@ -47,6 +57,10 @@ func main() {
 			logger.Error("close application", "error", err)
 		}
 	}()
+	if seedDemoOnly {
+		logger.Info("Synthetic demo data initialized", "organization_id", app.Organization().ID)
+		return
+	}
 	server := &http.Server{
 		Addr:              cfg.Addr,
 		Handler:           app.Handler(),
@@ -77,4 +91,14 @@ func main() {
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		logger.Error("server shutdown", "error", err)
 	}
+}
+
+func parseCommand(args []string) (bool, error) {
+	if len(args) == 1 {
+		return false, nil
+	}
+	if len(args) == 2 && args[1] == "seed-demo" {
+		return true, nil
+	}
+	return false, errors.New("usage: stewardmesh [seed-demo]")
 }

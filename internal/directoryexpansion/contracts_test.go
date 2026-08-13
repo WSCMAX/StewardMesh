@@ -1,6 +1,6 @@
 package directoryexpansion_test
 
-// Requirements: REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004.
+// Requirements: REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-007.
 // Features: integrations.protocols, identity.directory.
 
 import (
@@ -866,13 +866,12 @@ func testDigest(values ...string) string {
 }
 
 func TestSyntheticSeederRequiresExplicitEnablement(t *testing.T) {
-	graph, err := (SyntheticSeeder{}).Seed(context.Background())
-	if err != nil || len(graph.Nodes) != 0 {
+	result, err := (SyntheticSeeder{}).Seed(context.Background())
+	if err != nil || result.Enabled {
 		t.Fatalf("synthetic data enabled unexpectedly")
 	}
-	graph, err = (SyntheticSeeder{Enabled: true}).Seed(context.Background())
-	if err != nil || len(graph.Nodes) == 0 {
-		t.Fatalf("synthetic data was not seeded")
+	if _, err = (SyntheticSeeder{Enabled: true, OrganizationID: "production"}).Seed(context.Background()); err == nil {
+		t.Fatal("synthetic data accepted an incomplete production configuration")
 	}
 }
 

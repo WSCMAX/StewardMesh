@@ -1,6 +1,6 @@
 // Package application constructs StewardMesh's transport-neutral HTTP
 // application and owns the lifecycle of its shared runtime dependencies.
-// Requirements: REQ-API-001, REQ-FOUNDATION-001, REQ-ATLAS-001, REQ-ATLAS-CODES-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-STACK-001, REQ-HORIZON-001, REQ-SIGNALS-001, REQ-REACH-001, REQ-EXCHANGE-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001.
+// Requirements: REQ-API-001, REQ-FOUNDATION-001, REQ-ATLAS-001, REQ-ATLAS-CODES-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005, REQ-DIRECTORY-EXPANSION-007, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-STACK-001, REQ-HORIZON-001, REQ-SIGNALS-001, REQ-REACH-001, REQ-EXCHANGE-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001.
 // Features: integrations.protocols, migration.packages.
 package application
 
@@ -194,6 +194,9 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 		return fail(fmt.Errorf("initialize People: %w", err))
 	}
 	directoryConnectors := append([]directoryexpansion.Connector(nil), options.DirectoryConnectors...)
+	if cfg.SeedSynthetic {
+		directoryConnectors = append(directoryConnectors, directoryexpansion.SyntheticConnector{})
+	}
 	if cfg.EntraEnabled() {
 		entraConfiguration := cfg.EntraConfig()
 		cfg.EntraClientSecret = ""
@@ -243,6 +246,13 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 	})
 	if err != nil {
 		return fail(fmt.Errorf("initialize directory imports: %w", err))
+	}
+	if cfg.SeedSynthetic {
+		if _, err := (directoryexpansion.SyntheticSeeder{
+			Enabled: cfg.SeedSynthetic, OrganizationID: cfg.OrganizationID, People: peopleService, Directory: directoryService, Auditor: runtime.auditor,
+		}).Seed(ctx); err != nil {
+			return fail(fmt.Errorf("seed synthetic demo data: %w", err))
+		}
 	}
 	directoryGraph, err := directoryexpansion.NewManagedGraphStore(runtime.directoryImportStore, cfg.OrganizationID)
 	if err != nil {

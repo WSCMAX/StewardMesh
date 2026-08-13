@@ -1,6 +1,6 @@
 package config
 
-// Requirements: REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005, REQ-STORAGE-001, REQ-REACH-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
+// Requirements: REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005, REQ-DIRECTORY-EXPANSION-007, REQ-STORAGE-001, REQ-REACH-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
 
 import (
 	"strings"
@@ -22,6 +22,32 @@ func TestLoadSupportsMemoryDevelopmentMode(t *testing.T) {
 	}
 	if configuration.ExchangeSourceSystemID != "test-organization" {
 		t.Fatalf("expected Exchange source identity to follow the organization by default, got %q", configuration.ExchangeSourceSystemID)
+	}
+}
+
+func TestSyntheticDemoSeedFlagIsStrictOptInAndRestrictedToDemoOrganizations(t *testing.T) {
+	t.Setenv("STEWARDMESH_REPOSITORY_DRIVER", "memory")
+	t.Setenv("STEWARDMESH_SEED_SYNTHETIC", "")
+	disabled, err := Load()
+	if err != nil || disabled.SeedSynthetic {
+		t.Fatalf("synthetic demo data must be disabled by default: enabled=%t err=%v", disabled.SeedSynthetic, err)
+	}
+
+	t.Setenv("STEWARDMESH_SEED_SYNTHETIC", "true")
+	t.Setenv("STEWARDMESH_ORGANIZATION_ID", "demo-training")
+	t.Setenv("STEWARDMESH_ORGANIZATION_NAME", "[Synthetic Demo] Training")
+	enabled, err := Load()
+	if err != nil || !enabled.SeedSynthetic {
+		t.Fatalf("expected explicit demo seed enablement, config=%#v err=%v", enabled, err)
+	}
+
+	t.Setenv("STEWARDMESH_ORGANIZATION_ID", "production")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "demo-*") {
+		t.Fatalf("expected production organization seed rejection, got %v", err)
+	}
+	t.Setenv("STEWARDMESH_SEED_SYNTHETIC", "yes-please")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "must be true or false") {
+		t.Fatalf("expected malformed seed flag rejection, got %v", err)
 	}
 }
 

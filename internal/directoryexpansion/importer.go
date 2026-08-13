@@ -1,6 +1,6 @@
 package directoryexpansion
 
-// Requirements: REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-005.
+// Requirements: REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-005, REQ-DIRECTORY-EXPANSION-007.
 // Features: integrations.protocols, identity.directory.
 
 import (
@@ -676,6 +676,8 @@ func (s *Service) audit(ctx context.Context, attempt Attempt, batch Batch, actio
 		requirementID = GrouperRequirementID
 	case SailPointProvider:
 		requirementID = SailPointRequirementID
+	case SyntheticProvider:
+		requirementID = SyntheticRequirementID
 	}
 	eventID := digestStrings(requirementID, batch.ID, action, operationKey)[:32]
 	return s.auditor.Record(foundation.WithScope(ctx, foundation.Scope{OrganizationID: s.organizationID, ActorID: actorID, CorrelationID: correlationID}), foundation.AuditEvent{

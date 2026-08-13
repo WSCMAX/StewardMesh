@@ -1,7 +1,7 @@
 import { expect, test } from 'vitest'
 import { documentationByID, documentationHref, documentationPages, documentationTopicFromHash, searchDocumentation } from './documentation'
 
-// Requirements: A11Y-001, DOC-001, REQ-DIRECTORY-EXPANSION-005, REQ-EXCHANGE-001. Features: experience.help, integrations.protocols, migration.packages.
+// Requirements: A11Y-001, DOC-001, REQ-DIRECTORY-EXPANSION-005, REQ-DIRECTORY-EXPANSION-007, REQ-EXCHANGE-001. Features: experience.help, platform.foundation, integrations.protocols, migration.packages.
 
 test('creates fixed same-host documentation deep links', () => {
   expect(documentationHref('atlas')).toBe('#docs/atlas')
@@ -24,6 +24,11 @@ test('documents the optional read-only Grouper workflow', () => {
   const results = searchDocumentation('grouper')
   expect(results.map((page) => page.id)).toContain('people')
   expect(documentationByID.people.sections.some((section) => section.id === 'grouper-sync')).toBe(true)
+})
+
+test('documents strict opt-in synthetic demo setup', () => {
+  expect(searchDocumentation('synthetic demo').map((page) => page.id)).toContain('people')
+  expect(documentationByID.people.sections.some((section) => section.id === 'synthetic-demo')).toBe(true)
 })
 
 test('searches titles, summaries, and product vocabulary', () => {

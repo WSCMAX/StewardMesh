@@ -1,4 +1,4 @@
-// Requirements: REQ-API-001, SEC-MCP-001, REQ-DIRECTORY-EXPANSION-005, REQ-SIGNALS-001, REQ-REACH-001, REQ-EXCHANGE-001, DOC-001. Features: integrations.protocols, alerts.rules, messaging.delivery, migration.packages, experience.help.
+// Requirements: REQ-API-001, SEC-MCP-001, REQ-DIRECTORY-EXPANSION-005, REQ-DIRECTORY-EXPANSION-007, REQ-SIGNALS-001, REQ-REACH-001, REQ-EXCHANGE-001, DOC-001. Features: platform.foundation, integrations.protocols, alerts.rules, messaging.delivery, migration.packages, experience.help.
 
 export type DocumentationTopicID = 'overview' | 'workspace' | 'atlas' | 'horizon' | 'ledger' | 'stack' | 'signals' | 'reach' | 'threads' | 'vault' | 'exchange' | 'people' | 'bridge' | 'guard' | 'guide'
 
@@ -432,7 +432,7 @@ export const documentationPages: readonly DocumentationPage[] = [
     summary: 'Organize places, departments, identities, and effective-dated asset assignments without mixing directory ownership into Atlas.',
     appHref: '#workspace-people',
     appLabel: 'Open People',
-    searchTerms: ['person', 'identity', 'site', 'building', 'room', 'department', 'assignment', 'location', 'grouper', 'nested group', 'directory import'],
+    searchTerms: ['person', 'identity', 'site', 'building', 'room', 'department', 'assignment', 'location', 'grouper', 'nested group', 'directory import', 'synthetic demo', 'demo seed'],
     sections: [
       {
         id: 'directory',
@@ -459,6 +459,13 @@ export const documentationPages: readonly DocumentationPage[] = [
         paragraphs: ['Administrators can preview a configured, read-only Internet2 Grouper source before applying its normalized groups, nested groups, and memberships. The default local setup does not start or require Grouper.'],
         bullets: ['Use preview counts and item actions to review creates, updates, deactivations, and conflicts before apply.', 'Nested groups and direct subjects appear as semantic member-of relationships in the permission-scoped graph.', 'Provider credentials, endpoints, and raw responses stay server-side and never appear in browser forms or import detail.'],
         callout: { title: 'Source reads remain read-only', body: 'StewardMesh uses GET-only source reads. Fixture create and delete routes exist only in the explicit local integrations profile.', tone: 'info' },
+      },
+      {
+        id: 'synthetic-demo',
+        title: 'Initialize an isolated synthetic demo',
+        paragraphs: ['Synthetic locations, people, groups, mappings, and relationships are disabled by default. Operators must set the strict seed flag and use a demo-prefixed organization ID; repeated startup replays the same versioned dataset.'],
+        bullets: ['Every visible name starts with [Synthetic Demo], email addresses use the non-routable example.invalid domain, and provider mappings use a dedicated synthetic source.', 'A mismatched local record with a reserved demo label stops setup instead of being changed.', 'The one-shot Compose demo initializer needs PostgreSQL but does not contact or require Grouper or Valkey.'],
+        callout: { title: 'Never enable in production', body: 'The application rejects synthetic seeding for any organization ID that does not begin with demo-. Keep the flag false in normal deployments.', tone: 'warning' },
       },
     ],
     related: ['atlas', 'workspace', 'guard'],

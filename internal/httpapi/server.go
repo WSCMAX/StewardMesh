@@ -1942,8 +1942,8 @@ func (s *Server) listGuardAccess(w http.ResponseWriter, r *http.Request, authent
 	for _, role := range directory.Roles {
 		roles = append(roles, guardRoleResponse{
 			ID: role.ID, Name: role.Name, Description: role.Description,
-			Permissions:     append([]guard.Permission(nil), role.Permissions...),
-			PolicyBundleIDs: append([]string(nil), role.PolicyBundleIDs...),
+			Permissions:     append([]guard.Permission{}, role.Permissions...),
+			PolicyBundleIDs: append([]string{}, role.PolicyBundleIDs...),
 			Source:          role.Source, Managed: role.Source == guard.BuiltInRoleSource,
 		})
 	}
@@ -1987,8 +1987,8 @@ func (s *Server) createGuardRole(w http.ResponseWriter, r *http.Request, authent
 	}
 	writeJSON(w, http.StatusCreated, guardRoleResponse{
 		ID: role.ID, Name: role.Name, Description: role.Description,
-		Permissions:     append([]guard.Permission(nil), role.Permissions...),
-		PolicyBundleIDs: append([]string(nil), role.PolicyBundleIDs...),
+		Permissions:     append([]guard.Permission{}, role.Permissions...),
+		PolicyBundleIDs: append([]string{}, role.PolicyBundleIDs...),
 		Source:          role.Source, Managed: false,
 	})
 }

@@ -1145,6 +1145,19 @@ func TestGuardAccessAPIManagesScopedAssignmentsAndProtectsLastAdministrator(t *t
 		len(createdRole.Permissions) != 2 || len(createdRole.PolicyBundleIDs) != 1 {
 		t.Fatalf("unexpected custom role %#v", createdRole)
 	}
+	directRolePayload, err := json.Marshal(map[string]any{
+		"name": "Directory reader", "description": "Reads directory records.",
+		"permissions": []string{"organization.read", "directory.read", "integrations.read"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	directRoleRequest := authenticatedRequest(http.MethodPost, "/api/v1/guard/roles", bytes.NewReader(directRolePayload), session)
+	directRoleResponse := httptest.NewRecorder()
+	handler.ServeHTTP(directRoleResponse, directRoleRequest)
+	if directRoleResponse.Code != http.StatusCreated || !strings.Contains(directRoleResponse.Body.String(), `"policyBundleIds":[]`) {
+		t.Fatalf("expected a direct-only role to return an empty JSON array, got %d: %s", directRoleResponse.Code, directRoleResponse.Body.String())
+	}
 	duplicateRolePayload := bytes.Replace(rolePayload, []byte("Asset steward"), []byte("ASSET STEWARD"), 1)
 	duplicateRoleRequest := authenticatedRequest(http.MethodPost, "/api/v1/guard/roles", bytes.NewReader(duplicateRolePayload), session)
 	duplicateRoleResponse := httptest.NewRecorder()

@@ -134,11 +134,12 @@ boundaries, API behavior, and validation coverage.
 Exchange provides selectable, dependency-aware `.openinventory` archives for
 Stack and Vault records, with schema/version metadata, earliest provenance,
 record and archive checksums, explicit metadata-only or included-file handling,
-idempotent imports, visible holding results, and Guard write locks until local
-ownership is explicitly claimed. Packages are bounded and never carry storage
-credentials, private object keys, or signed URLs. Configure a stable deployment
-identity with `STEWARDMESH_EXCHANGE_SOURCE_SYSTEM_ID` (defaulting to the
-organization ID). See [Exchange](docs/features/exchange.md), its
+idempotent imports, per-record durable intents and fenced provider retries,
+heartbeat-based stale-worker recovery, visible holding results, and Guard write
+locks until local ownership is explicitly claimed. Packages are bounded and
+never carry storage credentials, private object keys, or signed URLs. Configure
+a stable deployment identity with `STEWARDMESH_EXCHANGE_SOURCE_SYSTEM_ID`
+(defaulting to the organization ID). See [Exchange](docs/features/exchange.md), its
 [security review](docs/validation/exchange-security-review.md), and
 [release validation](docs/validation/exchange-release.md).
 

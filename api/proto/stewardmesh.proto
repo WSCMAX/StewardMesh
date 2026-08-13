@@ -2610,7 +2610,9 @@ message ExchangePackage {
   int32 created_count = 11;
   int32 unchanged_count = 12;
   int32 holding_count = 13;
-  // At most 10,000 results; list history itself is bounded to 100 packages.
+  // At most 10,000 results; processing and failed receipts retain checkpointed
+  // created/unchanged outcomes, while completed/holding receipts are complete.
+  // List history itself is bounded to 100 packages.
   repeated ExchangeRecordOutcome records = 14;
   string error_code = 15;
   google.protobuf.Timestamp created_at = 16;
@@ -2620,8 +2622,9 @@ message ExchangePackage {
 message ImportExchangePackageResponse {
   ExchangePackage package = 1;
   // True only when the same package ID and archive checksum were previously
-  // completed; no provider writes are repeated. Holding and failed receipts
-  // may safely retry the exact archive after their blocker is resolved.
+  // completed; no provider writes are repeated. Holding and failed receipts,
+  // plus processing receipts after their five-minute lease expires, may safely
+  // retry the exact archive without repeating checkpointed provider work.
   bool replay = 2;
 }
 

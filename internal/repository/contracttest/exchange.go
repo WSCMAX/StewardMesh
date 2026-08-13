@@ -90,8 +90,69 @@ func ExchangeStore(t *testing.T, store exchange.Store, organizationID, suffix st
 		t.Fatalf("retry failed Exchange package: %v", err)
 	}
 
+	progress := value
+	progress.PackageID += "-progress"
+	progress.ArchiveSHA256 = strings.Repeat("e", 64)
+	progress.RecordCount = 2
+	if _, ok, err := store.CreatePackage(ctx, progress); err != nil || !ok {
+		t.Fatalf("create progressing Exchange package: ok=%t err=%v", ok, err)
+	}
+	unprovenOutcome := progress
+	unprovenOutcome.CreatedCount = 1
+	unprovenOutcome.Records = []exchange.RecordOutcome{{
+		Type: "stack.product", ID: "created-product", Revision: 1, Checksum: strings.Repeat("f", 64),
+		Status: exchange.OutcomeCreated, MissingDependencies: []exchange.Reference{}, WriteLocked: true,
+	}}
+	unprovenOutcome.UpdatedAt = createdAt.Add(time.Millisecond)
+	if _, err := store.UpdatePackage(ctx, unprovenOutcome, createdAt); !errors.Is(err, exchange.ErrConflict) {
+		t.Fatalf("expected successful outcome without committed recovery state to conflict, got %v", err)
+	}
+	progress.Progress = []exchange.ImportProgress{{
+		Type: "stack.product", ID: "created-product", Checksum: strings.Repeat("f", 64),
+		OperationToken: "operation-token", Phase: "intent", ExpectedCreated: true,
+	}}
+	progress.UpdatedAt = createdAt.Add(time.Second)
+	intentStored, err := store.UpdatePackage(ctx, progress, createdAt)
+	if err != nil || len(intentStored.Progress) != 1 || intentStored.Progress[0].OperationToken != "operation-token" {
+		t.Fatalf("persist Exchange import intent: %#v err=%v", intentStored, err)
+	}
+	intentStored.Progress[0].OperationToken = "mutated-token"
+	loadedIntent, err := store.GetPackage(ctx, organizationID, exchange.DirectionImport, progress.PackageID)
+	if err != nil || len(loadedIntent.Progress) != 1 || loadedIntent.Progress[0].OperationToken != "operation-token" {
+		t.Fatalf("Exchange import intent was not defensively copied: %#v err=%v", loadedIntent, err)
+	}
+	progress = loadedIntent
+	progress.CreatedCount = 1
+	progress.Records = []exchange.RecordOutcome{{
+		Type: "stack.product", ID: "created-product", Revision: 1, Checksum: strings.Repeat("f", 64),
+		Status: exchange.OutcomeCreated, MissingDependencies: []exchange.Reference{}, WriteLocked: true,
+	}}
+	progress.Progress[0].Phase = "committed"
+	progress.Progress[0].OwnershipReady = true
+	progress.Progress[0].OwnershipCreated = true
+	progress.Progress[0].WriteLocked = true
+	progress.UpdatedAt = createdAt.Add(2 * time.Second)
+	progressed, err := store.UpdatePackage(ctx, progress, intentStored.UpdatedAt)
+	if err != nil {
+		t.Fatalf("checkpoint Exchange progress: %v", err)
+	}
+	rollback := progressed
+	rollback.CreatedCount = 0
+	rollback.Records = []exchange.RecordOutcome{}
+	rollback.Progress = []exchange.ImportProgress{}
+	rollback.UpdatedAt = progressed.UpdatedAt.Add(time.Second)
+	if _, err := store.UpdatePackage(ctx, rollback, progressed.UpdatedAt); !errors.Is(err, exchange.ErrConflict) {
+		t.Fatalf("expected Exchange progress rollback conflict, got %v", err)
+	}
+	progressed.Status = exchange.StatusFailed
+	progressed.ErrorCode = "import_failed"
+	progressed.UpdatedAt = progressed.UpdatedAt.Add(time.Second)
+	if _, err := store.UpdatePackage(ctx, progressed, createdAt.Add(2*time.Second)); err != nil {
+		t.Fatalf("persist partial failed Exchange receipt: %v", err)
+	}
+
 	listed, err := store.ListPackages(ctx, organizationID, exchange.MaximumHistory)
-	if err != nil || len(listed) != 2 {
+	if err != nil || len(listed) != 3 {
 		t.Fatalf("list Exchange packages: %#v err=%v", listed, err)
 	}
 	other, err := store.ListPackages(ctx, "other-organization", exchange.MaximumHistory)

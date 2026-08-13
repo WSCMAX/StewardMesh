@@ -5,6 +5,8 @@ package stack
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -92,9 +94,9 @@ func (s *Service) CreateProduct(ctx context.Context, input CreateProductInput) (
 	if err != nil {
 		return Product{}, err
 	}
-	if created {
+	if created || hasExchangeImportOperation(ctx) {
 		if err := s.audit(ctx, "stack.product.created", "software_product", product.ID, map[string]string{"status": product.Status}); err != nil {
-			return Product{}, fmt.Errorf("audit Stack product creation: %w", err)
+			return Product{}, committedStackError(created, "audit Stack product creation", err)
 		}
 	}
 	return product, nil
@@ -131,9 +133,9 @@ func (s *Service) CreateVersion(ctx context.Context, input CreateVersionInput) (
 	if err != nil {
 		return Version{}, err
 	}
-	if created {
+	if created || hasExchangeImportOperation(ctx) {
 		if err := s.audit(ctx, "stack.version.created", "software_version", version.ID, map[string]string{"productId": version.ProductID, "status": version.Status}); err != nil {
-			return Version{}, fmt.Errorf("audit Stack version creation: %w", err)
+			return Version{}, committedStackError(created, "audit Stack version creation", err)
 		}
 	}
 	return version, nil
@@ -188,11 +190,11 @@ func (s *Service) RecordInstallation(ctx context.Context, input RecordInstallati
 	if err != nil {
 		return Installation{}, err
 	}
-	if created {
+	if created || hasExchangeImportOperation(ctx) {
 		if err := s.audit(ctx, "stack.installation.recorded", "software_installation", installation.ID, map[string]string{
 			"versionId": installation.VersionID, "assetId": installation.AssetID, "status": installation.Status,
 		}); err != nil {
-			return Installation{}, fmt.Errorf("audit Stack installation: %w", err)
+			return Installation{}, committedStackError(created, "audit Stack installation", err)
 		}
 	}
 	return installation, nil
@@ -260,11 +262,11 @@ func (s *Service) CreateLicense(ctx context.Context, input CreateLicenseInput) (
 	if err != nil {
 		return License{}, err
 	}
-	if created {
+	if created || hasExchangeImportOperation(ctx) {
 		if err := s.audit(ctx, "stack.license.created", "software_license", license.ID, map[string]string{
 			"productId": license.ProductID, "metric": license.EntitlementMetric, "quantity": strconv.FormatInt(license.Quantity, 10), "status": license.Status,
 		}); err != nil {
-			return License{}, fmt.Errorf("audit Stack license creation: %w", err)
+			return License{}, committedStackError(created, "audit Stack license creation", err)
 		}
 	}
 	return license, nil
@@ -323,11 +325,11 @@ func (s *Service) CreateAssignment(ctx context.Context, input CreateAssignmentIn
 	if err != nil {
 		return Assignment{}, err
 	}
-	if created {
+	if created || hasExchangeImportOperation(ctx) {
 		if err := s.audit(ctx, "stack.assignment.created", "software_license_assignment", assignment.ID, map[string]string{
 			"licenseId": assignment.LicenseID, "assigneeKind": assignment.AssigneeKind, "seats": strconv.FormatInt(assignment.Seats, 10),
 		}); err != nil {
-			return Assignment{}, fmt.Errorf("audit Stack assignment creation: %w", err)
+			return Assignment{}, committedStackError(created, "audit Stack assignment creation", err)
 		}
 	}
 	return assignment, nil
@@ -712,25 +714,11 @@ func (s *Service) ExportRecords(ctx context.Context) ([]ExchangeRecord, error) {
 	}
 	records := make([]ExchangeRecord, 0, len(snapshot.Products)+len(snapshot.Versions)+len(snapshot.Installations)+len(snapshot.Licenses)+len(snapshot.Assignments))
 	appendRecord := func(recordType, id string, revision int64, dependencies []string, value any) error {
-		payload, marshalErr := json.Marshal(value)
-		if marshalErr != nil {
-			return marshalErr
+		record, err := portableExchangeRecord(recordType, id, revision, dependencies, value)
+		if err == nil {
+			records = append(records, record)
 		}
-		if len(payload) > 1<<20 {
-			return ErrInvalidInput
-		}
-		if dependencies == nil {
-			dependencies = []string{}
-		}
-		sourceSystemID, sourceRecordID, ok := portableProvenance(value)
-		if !ok {
-			return ErrInvalidInput
-		}
-		records = append(records, ExchangeRecord{
-			Type: recordType, ID: id, Revision: revision, Dependencies: dependencies,
-			SourceSystemID: sourceSystemID, SourceRecordID: sourceRecordID, Payload: payload,
-		})
-		return nil
+		return err
 	}
 	for _, product := range snapshot.Products {
 		if err := appendRecord("stack.product", product.ID, product.Revision, nil, product); err != nil {
@@ -759,6 +747,66 @@ func (s *Service) ExportRecords(ctx context.Context) ([]ExchangeRecord, error) {
 		}
 	}
 	return records, nil
+}
+
+// ExportRecord performs a bounded keyed lookup for Exchange idempotency checks.
+// It avoids loading the complete Stack inventory for each imported package row.
+func (s *Service) ExportRecord(ctx context.Context, recordType, id string) (ExchangeRecord, error) {
+	if !stableIDPattern.MatchString(id) {
+		return ExchangeRecord{}, ErrInvalidInput
+	}
+	switch recordType {
+	case "stack.product":
+		value, err := s.store.GetProduct(ctx, s.organizationID, id)
+		if err != nil {
+			return ExchangeRecord{}, err
+		}
+		return portableExchangeRecord(recordType, value.ID, value.Revision, nil, value)
+	case "stack.version":
+		value, err := s.store.GetVersion(ctx, s.organizationID, id)
+		if err != nil {
+			return ExchangeRecord{}, err
+		}
+		return portableExchangeRecord(recordType, value.ID, value.Revision, []string{"stack.product:" + value.ProductID}, value)
+	case "stack.license":
+		value, err := s.store.GetLicense(ctx, s.organizationID, id)
+		if err != nil {
+			return ExchangeRecord{}, err
+		}
+		return portableExchangeRecord(recordType, value.ID, value.Revision, portableLicenseDependencies(value), value)
+	case "stack.installation":
+		value, err := s.store.GetInstallation(ctx, s.organizationID, id)
+		if err != nil {
+			return ExchangeRecord{}, err
+		}
+		return portableExchangeRecord(recordType, value.ID, value.Revision, []string{"stack.version:" + value.VersionID, "atlas.asset:" + value.AssetID}, value)
+	case "stack.assignment":
+		value, err := s.store.GetAssignment(ctx, s.organizationID, id)
+		if err != nil {
+			return ExchangeRecord{}, err
+		}
+		return portableExchangeRecord(recordType, value.ID, value.Revision, portableAssignmentDependencies(value), value)
+	default:
+		return ExchangeRecord{}, ErrInvalidInput
+	}
+}
+
+func portableExchangeRecord(recordType, id string, revision int64, dependencies []string, value any) (ExchangeRecord, error) {
+	payload, err := json.Marshal(value)
+	if err != nil || len(payload) > 1<<20 {
+		return ExchangeRecord{}, ErrInvalidInput
+	}
+	if dependencies == nil {
+		dependencies = []string{}
+	}
+	sourceSystemID, sourceRecordID, ok := portableProvenance(value)
+	if !ok {
+		return ExchangeRecord{}, ErrInvalidInput
+	}
+	return ExchangeRecord{
+		Type: recordType, ID: id, Revision: revision, Dependencies: dependencies,
+		SourceSystemID: sourceSystemID, SourceRecordID: sourceRecordID, Payload: payload,
+	}, nil
 }
 
 func (s *Service) ImportRecords(ctx context.Context, sourceSystemID string, records []ExchangeRecord) (ImportResult, error) {
@@ -820,6 +868,54 @@ func (s *Service) ImportRecords(ctx context.Context, sourceSystemID string, reco
 		}
 	}
 	return result, nil
+}
+
+type exchangeImportContextKey struct{}
+
+type exchangeCommittedError struct {
+	created bool
+	cause   error
+}
+
+func (e *exchangeCommittedError) Error() string { return e.cause.Error() }
+func (e *exchangeCommittedError) Unwrap() error { return e.cause }
+
+func committedStackError(created bool, operation string, cause error) error {
+	return &exchangeCommittedError{created: created, cause: fmt.Errorf("%s: %w", operation, cause)}
+}
+
+func hasExchangeImportOperation(ctx context.Context) bool {
+	_, ok := ctx.Value(exchangeImportContextKey{}).(ExchangeImportOperation)
+	return ok
+}
+
+func normalizeExchangeImportOperation(operation ExchangeImportOperation) (ExchangeImportOperation, error) {
+	operation.Token = strings.TrimSpace(operation.Token)
+	operation.OccurredAt = operation.OccurredAt.UTC()
+	if !stableIDPattern.MatchString(operation.Token) || operation.OccurredAt.IsZero() || operation.OccurredAt.Year() < 2000 || operation.OccurredAt.Year() > 9999 {
+		return ExchangeImportOperation{}, ErrInvalidInput
+	}
+	return operation, nil
+}
+
+// ImportExchangeRecord gives Exchange a deterministic audit/idempotency token
+// and reports whether the domain mutation committed even when audit delivery
+// fails afterward. Retrying the same token repairs the exact audit event.
+func (s *Service) ImportExchangeRecord(ctx context.Context, operation ExchangeImportOperation, sourceSystemID string, record ExchangeRecord) (ExchangeImportResult, error) {
+	operation, err := normalizeExchangeImportOperation(operation)
+	if err != nil {
+		return ExchangeImportResult{}, ErrInvalidInput
+	}
+	ctx = context.WithValue(ctx, exchangeImportContextKey{}, operation)
+	result, err := s.ImportRecords(ctx, sourceSystemID, []ExchangeRecord{record})
+	if err == nil {
+		return ExchangeImportResult{Committed: true, Created: result.Created == 1}, nil
+	}
+	var committed *exchangeCommittedError
+	if errors.As(err, &committed) {
+		return ExchangeImportResult{Committed: true, Created: committed.created}, err
+	}
+	return ExchangeImportResult{}, err
 }
 
 type portableRecord struct {
@@ -1167,6 +1263,19 @@ func actorFromContext(ctx context.Context) string {
 }
 
 func (s *Service) audit(ctx context.Context, action, resourceType, resourceID string, metadata map[string]string) error {
+	if operation, ok := ctx.Value(exchangeImportContextKey{}).(ExchangeImportOperation); ok {
+		if metadata == nil {
+			metadata = make(map[string]string)
+		}
+		metadata["requirementId"] = RequirementID
+		digest := sha256.Sum256([]byte(strings.Join([]string{s.organizationID, action, resourceType, resourceID, operation.Token}, "\x00")))
+		scope := foundation.Scope{OrganizationID: s.organizationID, ActorID: "system:exchange", CorrelationID: operation.Token}
+		return s.auditor.Record(foundation.WithScope(ctx, scope), foundation.AuditEvent{
+			ID: hex.EncodeToString(digest[:]), OrganizationID: s.organizationID, ActorID: scope.ActorID,
+			CorrelationID: operation.Token, Action: action, ResourceType: resourceType, ResourceID: resourceID,
+			OccurredAt: operation.OccurredAt, Metadata: metadata,
+		})
+	}
 	scope, ok := foundation.ScopeFromContext(ctx)
 	if !ok || scope.CorrelationID == "" {
 		correlationID, err := foundation.NewCorrelationID()

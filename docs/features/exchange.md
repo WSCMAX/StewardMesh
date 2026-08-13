@@ -65,12 +65,18 @@ Every export explicitly chooses one file mode:
 
 - **Metadata only** carries the safe Vault record, filename, media type, size,
   checksum, provider name, provenance, and relationships, but no bytes or
-  private S3-compatible object key. A target that cannot resolve the content
-  places that Vault record in holding with an `exchange.file` dependency.
+  private S3-compatible object key. An exact target Vault record is unchanged;
+  otherwise the missing exact content places that record in holding with an
+  `exchange.file` dependency.
 - **Include file bytes** reads content through Vault's integrity-checking
   service, verifies its stored size and checksum, and embeds it under the fixed
   content-addressed path. Import writes through Vault's local or S3-compatible
   adapter using a deterministic private key and re-verifies the stored object.
+
+For both modes, an exact-target check opens and hashes the target object rather
+than trusting metadata alone. The import operation repeats that verification
+immediately before it reports `unchanged`, so missing content or same-size
+tampering cannot pass through a metadata-only time-of-check/time-of-use gap.
 
 The choice is the same for local and S3-compatible Vault adapters. Exchange
 never exports AWS access keys, session tokens, role credentials, download
@@ -88,6 +94,23 @@ retry the exact archive after its blocker is resolved; domain providers retain
 their own exact source identity and payload replay checks, so work completed
 before a later holding or failure is unchanged rather than duplicated.
 
+Before each provider call, Exchange persists a private per-record intent with a
+deterministic idempotency/fencing token and the exact pre-write created-versus-
+unchanged expectation. Guard registration is checkpointed on that intent. If a
+domain write commits but its audit delivery fails, the provider reports the
+committed result, Exchange persists the truthful visible outcome, and the Guard
+lock remains in place. Retrying the receipt reuses the token to repair the same
+deterministic provider audit event before clearing the intent; it does not
+attribute the already-created record as unchanged.
+
+Receipt changes use compare-and-swap updates. Failed receipts therefore retain
+durable created and unchanged outcomes as well as any private recovery intent.
+Every checkpoint renews a five-minute processing lease, and Exchange also sends
+lease heartbeats while a provider call is running. A concurrent request cannot
+take over an active slow write; after an actual crash or terminal receipt-update
+failure, the exact archive can claim an expired lease and resume with the same
+provider token.
+
 Each record has one of three visible outcomes:
 
 - `created` means the target provider created the exact record;
@@ -101,8 +124,10 @@ marks them write-locked. An organization administrator with `guard.manage` must
 explicitly claim the resource in Guard before a mutating domain operation can
 change it. Guard's imported-resource table shows the earliest source, current
 lock state, and an explicit claim action. A claim is durable, audited, and
-cannot be silently reversed by a later import. If the provider write fails, a
-newly created lock is compensated; an existing or already claimed ownership
+cannot be silently reversed by a later import. If the provider proves that no
+domain write committed, a newly created lock is compensated; if the domain
+write committed but audit delivery failed, the lock and created truth are
+retained for deterministic repair. An existing or already claimed ownership
 record is never deleted.
 
 Holding is intentionally non-destructive. The receipt names each missing typed
@@ -207,10 +232,15 @@ are revoked on replacement and unmount.
 
 Automated coverage includes dependency closure and ordering, package round
 trips, duplicate selections and records, missing and unknown references,
-metadata-only files, exact replay and changed-package conflicts, failed retry,
+metadata-only files with missing and exact target content, exact replay and
+changed-package conflicts, missing and same-size-tampered target objects,
+stale-lease recovery, lease heartbeats around a blocked provider, second-record
+failure with durable saga progress, committed Stack/Vault audit-failure repair,
+bounded keyed Stack lookup for full Exchange imports, failed retry,
 ownership registration/claim behavior, compensation, corruption, path
-traversal, duplicate ZIP entries, checksum tampering, secret/signed-URL
-rejection, compressed and expanded limits, memory/PostgreSQL repository
+traversal, duplicate ZIP entries, checksum tampering, mixed-case HTTP(S)
+credential and signed-URL rejection, compressed and expanded limits,
+memory/PostgreSQL repository
 conformance, organization isolation, HTTP authentication/permission/CSRF/media
 type/no-store/error behavior, OpenAPI/protobuf parity, accessible React states,
 and narrow-width containment.

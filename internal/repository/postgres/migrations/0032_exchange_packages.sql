@@ -17,6 +17,7 @@ CREATE TABLE exchange_packages (
     unchanged_count INTEGER NOT NULL DEFAULT 0 CHECK (unchanged_count >= 0),
     holding_count INTEGER NOT NULL DEFAULT 0 CHECK (holding_count >= 0),
     records JSONB NOT NULL DEFAULT '[]'::jsonb CHECK (jsonb_typeof(records) = 'array' AND jsonb_array_length(records) <= 10000),
+    progress JSONB NOT NULL DEFAULT '[]'::jsonb CHECK (jsonb_typeof(progress) = 'array' AND jsonb_array_length(progress) <= 10000),
     error_code TEXT CHECK (error_code ~ '^[a-z][a-z0-9_]{0,63}$'),
     created_by TEXT NOT NULL CHECK (char_length(created_by) BETWEEN 1 AND 128),
     created_at TIMESTAMPTZ NOT NULL,
@@ -25,10 +26,11 @@ CREATE TABLE exchange_packages (
     CHECK (created_count + unchanged_count + holding_count <= record_count),
     CHECK ((status = 'holding') = (holding_count > 0)),
     CHECK ((status = 'failed') = (error_code IS NOT NULL)),
-	CHECK (status <> 'processing' OR (created_count = 0 AND unchanged_count = 0 AND holding_count = 0 AND jsonb_array_length(records) = 0)),
-	CHECK (status NOT IN ('completed', 'holding') OR jsonb_array_length(records) = record_count),
-	CHECK (status <> 'failed' OR (created_count = 0 AND unchanged_count = 0 AND holding_count = 0 AND jsonb_array_length(records) = 0)),
-	CHECK (direction <> 'export' OR (status = 'completed' AND created_count = 0 AND holding_count = 0 AND unchanged_count = record_count)),
+    CHECK (jsonb_array_length(records) = created_count + unchanged_count + holding_count),
+    CHECK (status NOT IN ('completed', 'holding') OR jsonb_array_length(progress) = 0),
+    CHECK (status NOT IN ('processing', 'failed') OR holding_count = 0),
+    CHECK (status NOT IN ('completed', 'holding') OR jsonb_array_length(records) = record_count),
+    CHECK (direction <> 'export' OR (status = 'completed' AND created_count = 0 AND holding_count = 0 AND unchanged_count = record_count)),
     CHECK (updated_at >= created_at)
 );
 

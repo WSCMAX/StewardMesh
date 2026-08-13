@@ -15,7 +15,9 @@ final feature tree before its single signed commit was created.
 The branch contains schema `1.0` dependency-aware `.openinventory` ZIP
 packages, Stack and Vault providers, metadata-only/included-file choices,
 checksummed bounded decoding, durable memory/PostgreSQL receipts, exact replay
-and safe holding/failed retry, explicit missing-dependency outcomes, Guard
+and safe holding/failed retry, per-record durable intents with deterministic
+provider tokens, slow-write lease heartbeats, stale processing lease takeover,
+committed audit repair, explicit missing-dependency outcomes, Guard
 write locks and claim flow, integration-permission REST and gRPC contracts,
 redacted audits, accessible Workspace and documentation surfaces, configuration,
 requirements, and traceability.
@@ -29,9 +31,9 @@ or broaden a Guard policy permission; Exchange deliberately reuses the existing
 
 | Scenario | Evidence |
 |---|---|
-| Dependency selection, closure, order, cycles, missing references, holding retry, created/unchanged replay | `internal/exchange/service_test.go` |
-| ZIP round trip, corrupt archive, checksum tamper, duplicate/path entries, secret/signed URL rejection, archive/file/manifest/payload/decompression limits | `internal/exchange/archive_test.go` |
-| Stack earliest-provenance round trip and Vault included/metadata-only modes with private-data exclusion | `internal/exchange/providers_test.go`, `internal/stack/service_test.go` |
+| Dependency selection, closure, order, cycles, missing references, holding retry, created/unchanged replay, second-record failure checkpoints, crash between provider commit and receipt checkpoint, committed-result recovery, deterministic token reuse, blocked-provider heartbeats, active-lease exclusion, stale takeover after terminal-update failure | `internal/exchange/service_test.go` |
+| ZIP round trip, corrupt archive, checksum tamper, duplicate/path entries, case-insensitive HTTP(S) credential/signed URL rejection, archive/file/manifest/payload/decompression limits | `internal/exchange/archive_test.go` |
+| Stack earliest-provenance round trip, full-import operation counts with zero inventory snapshots, Stack/Vault post-commit audit repair, and Vault included/metadata-only modes with missing, exact, and content-verified targets | `internal/exchange/providers_test.go`, `internal/stack/service_test.go`, `internal/storage/service_test.go` |
 | Ownership registration, compensation, durable write lock, explicit claim, mutation rejection before claim | `internal/exchange/service_test.go`, `internal/httpapi/exchange_test.go`, `internal/httpapi/server_test.go` |
 | Exact package collision, compare-and-swap transitions, defensive copies, organization isolation, migration constraints | `internal/repository/contracttest/exchange.go`, `internal/repository/memory_exchange_test.go`, `internal/repository/postgres/migrate_test.go`, `internal/repository/postgres/postgres_integration_test.go` |
 | Authentication, permission, CSRF, no-store, exact media type, content encoding, 32-MiB cap, attachment headers, stable errors | `internal/httpapi/exchange_test.go`, `internal/httpapi/server_test.go` |

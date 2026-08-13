@@ -90,14 +90,12 @@ function isExchangePackage(value: unknown): value is ExchangePackage {
     || !isInstant(candidate.createdAt) || !isInstant(candidate.updatedAt)) return false
   if (candidate.createdCount + candidate.unchangedCount + candidate.holdingCount > candidate.recordCount) return false
   if ((candidate.status === 'holding') !== (candidate.holdingCount > 0)) return false
-  if ((candidate.status === 'failed') !== (candidate.errorCode !== undefined)) return false
-  if (Date.parse(candidate.updatedAt) < Date.parse(candidate.createdAt)) return false
-  if ((candidate.status === 'completed' || candidate.status === 'holding') && candidate.records.length !== candidate.recordCount) return false
-  if (candidate.status === 'completed' || candidate.status === 'holding') {
-    const outcomes = candidate.records.reduce((totals, record) => ({ ...totals, [record.status]: totals[record.status] + 1 }), { created: 0, unchanged: 0, holding: 0 })
-    if (outcomes.created !== candidate.createdCount || outcomes.unchanged !== candidate.unchangedCount || outcomes.holding !== candidate.holdingCount) return false
-  }
-  return true
+	if ((candidate.status === 'failed') !== (candidate.errorCode !== undefined)) return false
+	if (Date.parse(candidate.updatedAt) < Date.parse(candidate.createdAt)) return false
+	if ((candidate.status === 'completed' || candidate.status === 'holding') && candidate.records.length !== candidate.recordCount) return false
+	const outcomes = candidate.records.reduce((totals, record) => ({ ...totals, [record.status]: totals[record.status] + 1 }), { created: 0, unchanged: 0, holding: 0 })
+	if (outcomes.created !== candidate.createdCount || outcomes.unchanged !== candidate.unchangedCount || outcomes.holding !== candidate.holdingCount) return false
+	return true
 }
 
 export function parseExchangeRecords(value: unknown): ExchangeRecord[] {

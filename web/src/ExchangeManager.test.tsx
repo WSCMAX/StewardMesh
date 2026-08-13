@@ -32,6 +32,11 @@ const holdingPackage = {
   createdAt: '2026-08-13T13:00:00Z', updatedAt: '2026-08-13T13:00:01Z',
 } as const
 
+const partialFailedPackage = {
+  ...holdingPackage, packageId: 'package-partial-failure', status: 'failed', recordCount: 2, fileCount: 0,
+  createdCount: 1, holdingCount: 0, records: [holdingPackage.records[0]], errorCode: 'import_failed',
+} as const
+
 function jsonResponse(value: unknown, status = 200) { return new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } }) }
 
 beforeEach(() => {
@@ -153,8 +158,10 @@ test('does not request protected collections without integrations.read', () => {
 })
 
 test('rejects malformed and internally inconsistent Exchange responses', () => {
-  expect(() => parseExchangeRecords({ items: [{ ...records[0], revision: 0 }] })).toThrow('invalid Exchange record response')
-  expect(() => parseExchangePackages({ items: [{ ...holdingPackage, holdingCount: 0 }] })).toThrow('invalid Exchange package response')
+	expect(parseExchangePackages({ items: [partialFailedPackage] })).toEqual([partialFailedPackage])
+	expect(() => parseExchangeRecords({ items: [{ ...records[0], revision: 0 }] })).toThrow('invalid Exchange record response')
+	expect(() => parseExchangePackages({ items: [{ ...holdingPackage, holdingCount: 0 }] })).toThrow('invalid Exchange package response')
+	expect(() => parseExchangePackages({ items: [{ ...partialFailedPackage, createdCount: 0 }] })).toThrow('invalid Exchange package response')
   expect(() => parseExchangePackages({ items: [{ ...completedPackage, archiveSha256: 'not-a-checksum' }] })).toThrow('invalid Exchange package response')
   expect(() => parseExchangeImport({ package: completedPackage, replay: false })).toThrow('invalid Exchange import response')
 })

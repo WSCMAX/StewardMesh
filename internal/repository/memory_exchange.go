@@ -101,7 +101,7 @@ func (s *MemoryExchangeStore) UpdatePackage(_ context.Context, value exchange.Pa
 	if !ok {
 		return exchange.Package{}, exchange.ErrNotFound
 	}
-	if !existing.UpdatedAt.Equal(expectedUpdatedAt) || !sameExchangePackageIdentity(existing, value) || !validExchangeTransition(existing.Status, value.Status) {
+	if !existing.UpdatedAt.Equal(expectedUpdatedAt) || !sameExchangePackageIdentity(existing, value) || value.ValidateTransitionFrom(existing) != nil {
 		return exchange.Package{}, exchange.ErrConflict
 	}
 	s.packages[key] = cloneExchangePackage(value)
@@ -115,15 +115,9 @@ func sameExchangePackageIdentity(left, right exchange.Package) bool {
 		left.FileCount == right.FileCount && left.CreatedBy == right.CreatedBy && left.CreatedAt.Equal(right.CreatedAt)
 }
 
-func validExchangeTransition(from, to exchange.PackageStatus) bool {
-	if from == exchange.StatusProcessing {
-		return to == exchange.StatusCompleted || to == exchange.StatusHolding || to == exchange.StatusFailed
-	}
-	return (from == exchange.StatusFailed || from == exchange.StatusHolding) && to == exchange.StatusProcessing
-}
-
 func cloneExchangePackage(value exchange.Package) exchange.Package {
 	value.Records = append([]exchange.RecordOutcome(nil), value.Records...)
+	value.Progress = append([]exchange.ImportProgress(nil), value.Progress...)
 	for index := range value.Records {
 		value.Records[index].MissingDependencies = append([]exchange.Reference{}, value.Records[index].MissingDependencies...)
 	}

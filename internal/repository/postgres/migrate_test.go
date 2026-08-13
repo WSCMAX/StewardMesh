@@ -73,7 +73,10 @@ func TestExchangeMigrationAddsBoundedPackageReceiptsWithoutExpandingRoles(t *tes
 	for _, expected := range []string{
 		"REQ-EXCHANGE-001", "migration.packages", "GitHub: #9", "CREATE TABLE exchange_packages",
 		"archive_sha256", "size_bytes BETWEEN 1 AND 33554432", "jsonb_array_length(records) <= 10000",
-		"status IN ('processing', 'completed', 'holding', 'failed')", "exchange_packages_history_idx",
+		"jsonb_array_length(progress) <= 10000", "status NOT IN ('completed', 'holding') OR jsonb_array_length(progress) = 0",
+		"status IN ('processing', 'completed', 'holding', 'failed')",
+		"jsonb_array_length(records) = created_count + unchanged_count + holding_count",
+		"status NOT IN ('processing', 'failed') OR holding_count = 0", "exchange_packages_history_idx",
 	} {
 		if !strings.Contains(contents, expected) {
 			t.Fatalf("Exchange migration is missing %q", expected)

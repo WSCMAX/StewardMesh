@@ -29,6 +29,9 @@ const (
 	MaximumOutcomeDependencies = MaximumDependencies + 2
 	MaximumFiles               = 1_000
 	MaximumHistory             = 100
+	// ProcessingLease bounds how long a crashed importer can strand a receipt.
+	// Every durable progress checkpoint renews the lease through UpdatedAt.
+	ProcessingLease = 5 * time.Minute
 )
 
 var (
@@ -160,6 +163,29 @@ type RecordOutcome struct {
 	WriteLocked         bool          `json:"writeLocked"`
 }
 
+const (
+	progressIntent    = "intent"
+	progressCommitted = "committed"
+)
+
+// ImportProgress is private durable recovery state. It is persisted with the
+// receipt but never serialized through REST or gRPC. The operation token is the
+// provider idempotency/fencing identity; ExpectedCreated preserves truthful
+// outcome attribution across a crash after a domain commit.
+type ImportProgress struct {
+	Type             string `json:"type"`
+	ID               string `json:"id"`
+	Checksum         string `json:"checksum"`
+	OperationToken   string `json:"operationToken"`
+	Phase            string `json:"phase"`
+	ExpectedCreated  bool   `json:"expectedCreated"`
+	OwnershipReady   bool   `json:"ownershipReady"`
+	OwnershipCreated bool   `json:"ownershipCreated"`
+	WriteLocked      bool   `json:"writeLocked"`
+}
+
+func (p ImportProgress) key() string { return Reference{Type: p.Type, ID: p.ID}.Key() }
+
 type Package struct {
 	OrganizationID string           `json:"-"`
 	PackageID      string           `json:"packageId"`
@@ -176,6 +202,7 @@ type Package struct {
 	UnchangedCount int              `json:"unchangedCount"`
 	HoldingCount   int              `json:"holdingCount"`
 	Records        []RecordOutcome  `json:"records"`
+	Progress       []ImportProgress `json:"-"`
 	ErrorCode      string           `json:"errorCode,omitempty"`
 	CreatedBy      string           `json:"-"`
 	CreatedAt      time.Time        `json:"createdAt"`
@@ -204,10 +231,7 @@ func (p Package) Validate() error {
 	if p.ErrorCode != "" && !errorCodePattern.MatchString(p.ErrorCode) {
 		return ErrInvalidInput
 	}
-	if p.Status == StatusProcessing && (len(p.Records) != 0 || p.CreatedCount != 0 || p.UnchangedCount != 0 || p.HoldingCount != 0) {
-		return ErrInvalidInput
-	}
-	if p.Status == StatusFailed && (len(p.Records) != 0 || p.CreatedCount != 0 || p.UnchangedCount != 0 || p.HoldingCount != 0) {
+	if (p.Status == StatusProcessing || p.Status == StatusFailed) && p.HoldingCount != 0 {
 		return ErrInvalidInput
 	}
 	if p.Direction == DirectionExport && (p.Status != StatusCompleted || p.CreatedCount != 0 || p.HoldingCount != 0 || p.UnchangedCount != p.RecordCount) {
@@ -215,6 +239,7 @@ func (p Package) Validate() error {
 	}
 	counts := map[OutcomeStatus]int{OutcomeCreated: 0, OutcomeUnchanged: 0, OutcomeHolding: 0}
 	seen := make(map[string]struct{}, len(p.Records))
+	outcomes := make(map[string]RecordOutcome, len(p.Records))
 	for _, record := range p.Records {
 		if !resourceTypePattern.MatchString(record.Type) || !stableIDPattern.MatchString(record.ID) || record.Revision < 1 ||
 			!sha256Pattern.MatchString(record.Checksum) ||
@@ -227,6 +252,7 @@ func (p Package) Validate() error {
 			return ErrInvalidInput
 		}
 		seen[key] = struct{}{}
+		outcomes[Reference{Type: record.Type, ID: record.ID}.Key()] = record
 		counts[record.Status]++
 		if record.Status == OutcomeHolding && (record.WriteLocked || len(record.MissingDependencies) == 0) {
 			return ErrInvalidInput
@@ -242,16 +268,233 @@ func (p Package) Validate() error {
 			previous = dependency.Key()
 		}
 	}
-	if (p.Status == StatusCompleted || p.Status == StatusHolding) &&
-		(counts[OutcomeCreated] != p.CreatedCount || counts[OutcomeUnchanged] != p.UnchangedCount || counts[OutcomeHolding] != p.HoldingCount) {
+	if len(p.Progress) > p.RecordCount || (p.Status == StatusCompleted || p.Status == StatusHolding || p.Direction == DirectionExport) && len(p.Progress) != 0 {
+		return ErrInvalidInput
+	}
+	progressSeen := make(map[string]struct{}, len(p.Progress))
+	for _, progress := range p.Progress {
+		if !resourceTypePattern.MatchString(progress.Type) || !stableIDPattern.MatchString(progress.ID) ||
+			!sha256Pattern.MatchString(progress.Checksum) || !stableIDPattern.MatchString(progress.OperationToken) ||
+			(progress.Phase != progressIntent && progress.Phase != progressCommitted) || (!progress.OwnershipReady && (progress.OwnershipCreated || progress.WriteLocked)) {
+			return ErrInvalidInput
+		}
+		if _, duplicate := progressSeen[progress.key()]; duplicate {
+			return ErrInvalidInput
+		}
+		progressSeen[progress.key()] = struct{}{}
+		if progress.Phase == progressCommitted {
+			if !progress.OwnershipReady {
+				return ErrInvalidInput
+			}
+			outcome, ok := outcomes[progress.key()]
+			if !ok || outcome.Status == OutcomeHolding || outcome.Checksum != progress.Checksum || outcome.WriteLocked != progress.WriteLocked {
+				return ErrInvalidInput
+			}
+			if (progress.ExpectedCreated && outcome.Status != OutcomeCreated) || (!progress.ExpectedCreated && outcome.Status != OutcomeUnchanged) {
+				return ErrInvalidInput
+			}
+		} else if _, hasOutcome := outcomes[progress.key()]; hasOutcome {
+			return ErrInvalidInput
+		}
+	}
+	if counts[OutcomeCreated] != p.CreatedCount || counts[OutcomeUnchanged] != p.UnchangedCount || counts[OutcomeHolding] != p.HoldingCount {
 		return ErrInvalidInput
 	}
 	return nil
 }
 
+// ValidateTransitionFrom protects receipt progress from rollback. Processing
+// checkpoints may only add successful outcomes, terminal states must retain
+// them, and retries keep the successful subset while re-evaluating holdings.
+func (p Package) ValidateTransitionFrom(previous Package) error {
+	if err := p.Validate(); err != nil {
+		return err
+	}
+	switch previous.Status {
+	case StatusProcessing:
+		if p.Status != StatusProcessing && p.Status != StatusCompleted && p.Status != StatusHolding && p.Status != StatusFailed {
+			return ErrConflict
+		}
+		if !containsSuccessfulOutcomes(p.Records, previous.Records) {
+			return ErrConflict
+		}
+		if !validProgressTransition(p, previous, false) {
+			return ErrConflict
+		}
+		if !successfulOutcomesHaveRecoveryState(p, previous) {
+			return ErrConflict
+		}
+	case StatusHolding, StatusFailed:
+		if p.Status != StatusProcessing || !sameOutcomes(p.Records, successfulOutcomes(previous.Records)) {
+			return ErrConflict
+		}
+		if !validProgressTransition(p, previous, true) {
+			return ErrConflict
+		}
+	default:
+		return ErrConflict
+	}
+	return nil
+}
+
+func successfulOutcomesHaveRecoveryState(next, previous Package) bool {
+	previousOutcomes := make(map[string]struct{}, len(previous.Records))
+	for _, outcome := range previous.Records {
+		if outcome.Status != OutcomeHolding {
+			previousOutcomes[Reference{Type: outcome.Type, ID: outcome.ID}.Key()] = struct{}{}
+		}
+	}
+	nextProgress := make(map[string]ImportProgress, len(next.Progress))
+	for _, progress := range next.Progress {
+		nextProgress[progress.key()] = progress
+	}
+	for _, outcome := range next.Records {
+		if outcome.Status == OutcomeHolding {
+			continue
+		}
+		key := Reference{Type: outcome.Type, ID: outcome.ID}.Key()
+		if _, alreadyDurable := previousOutcomes[key]; alreadyDurable {
+			continue
+		}
+		progress, ok := nextProgress[key]
+		if !ok || progress.Phase != progressCommitted || progress.Checksum != outcome.Checksum {
+			return false
+		}
+	}
+	return true
+}
+
+func validProgressTransition(next, previous Package, retry bool) bool {
+	nextByKey := make(map[string]ImportProgress, len(next.Progress))
+	for _, progress := range next.Progress {
+		nextByKey[progress.key()] = progress
+	}
+	previousByKey := make(map[string]ImportProgress, len(previous.Progress))
+	for _, progress := range previous.Progress {
+		previousByKey[progress.key()] = progress
+	}
+	for key, before := range previousByKey {
+		after, ok := nextByKey[key]
+		if !ok {
+			if next.Status == StatusCompleted || next.Status == StatusHolding {
+				continue
+			}
+			if before.Phase == progressCommitted {
+				outcome, durable := successfulOutcomeFor(next.Records, key)
+				if durable && outcome.Checksum == before.Checksum {
+					continue
+				}
+			}
+			if before.Phase == progressIntent && (next.Status == StatusFailed || next.Status == StatusProcessing) {
+				continue
+			}
+			return false
+		}
+		if before.Type != after.Type || before.ID != after.ID || before.Checksum != after.Checksum ||
+			before.OperationToken != after.OperationToken || before.ExpectedCreated != after.ExpectedCreated ||
+			(before.OwnershipReady && !after.OwnershipReady) || (before.OwnershipCreated && !after.OwnershipCreated) ||
+			(before.WriteLocked && !after.WriteLocked) || before.Phase == progressCommitted && after.Phase != progressCommitted {
+			return false
+		}
+		if retry && before != after {
+			return false
+		}
+	}
+	if retry && len(nextByKey) != len(previousByKey) {
+		return false
+	}
+	for key := range nextByKey {
+		if _, existed := previousByKey[key]; !existed && next.Status != StatusProcessing {
+			return false
+		}
+	}
+	return true
+}
+
+func successfulOutcomeFor(values []RecordOutcome, key string) (RecordOutcome, bool) {
+	for _, outcome := range values {
+		if (Reference{Type: outcome.Type, ID: outcome.ID}).Key() == key && outcome.Status != OutcomeHolding {
+			return outcome, true
+		}
+	}
+	return RecordOutcome{}, false
+}
+
+func containsSuccessfulOutcomes(next, previous []RecordOutcome) bool {
+	byKey := make(map[string]RecordOutcome, len(next))
+	for _, outcome := range next {
+		byKey[Reference{Type: outcome.Type, ID: outcome.ID}.Key()] = outcome
+	}
+	for _, outcome := range previous {
+		if outcome.Status == OutcomeHolding {
+			continue
+		}
+		candidate, ok := byKey[Reference{Type: outcome.Type, ID: outcome.ID}.Key()]
+		if !ok || !sameOutcome(candidate, outcome) {
+			return false
+		}
+	}
+	return true
+}
+
+func successfulOutcomes(values []RecordOutcome) []RecordOutcome {
+	result := make([]RecordOutcome, 0, len(values))
+	for _, outcome := range values {
+		if outcome.Status != OutcomeHolding {
+			result = append(result, cloneOutcome(outcome))
+		}
+	}
+	return result
+}
+
+func sameOutcomes(left, right []RecordOutcome) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if !sameOutcome(left[index], right[index]) {
+			return false
+		}
+	}
+	return true
+}
+
+func sameOutcome(left, right RecordOutcome) bool {
+	if left.Type != right.Type || left.ID != right.ID || left.Revision != right.Revision || left.Checksum != right.Checksum ||
+		left.Status != right.Status || left.WriteLocked != right.WriteLocked || len(left.MissingDependencies) != len(right.MissingDependencies) {
+		return false
+	}
+	for index := range left.MissingDependencies {
+		if left.MissingDependencies[index] != right.MissingDependencies[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func cloneOutcome(value RecordOutcome) RecordOutcome {
+	value.MissingDependencies = append([]Reference(nil), value.MissingDependencies...)
+	return value
+}
+
 type ImportResult struct {
 	Package Package `json:"package"`
 	Replay  bool    `json:"replay"`
+}
+
+type ProviderImportOperation struct {
+	Token           string
+	Repair          bool
+	ExpectedCreated bool
+	OccurredAt      time.Time
+}
+
+type ProviderImportResult struct {
+	// Committed means the exact domain record is durable even if Err reports a
+	// post-commit audit failure. Exchange must retain Guard ownership and expose
+	// the truthful created/unchanged outcome before retrying repair.
+	Committed bool
+	Created   bool
 }
 
 // Provider keeps Exchange independent from PostgreSQL, HTTP, and concrete
@@ -260,11 +503,21 @@ type Provider interface {
 	Types() []string
 	ListRecords(ctx context.Context) ([]Record, error)
 	Exists(ctx context.Context, reference Reference) (bool, error)
-	ImportRecord(ctx context.Context, sourceSystemID string, record Record, file []byte) (created bool, err error)
+	// ImportRecordExists performs an exact, read-only provider comparison
+	// before an intent is reserved. It never audits or mutates a target.
+	ImportRecordExists(ctx context.Context, record Record, file []byte) (bool, error)
+	ImportRecord(ctx context.Context, operation ProviderImportOperation, sourceSystemID string, record Record, file []byte) (ProviderImportResult, error)
 }
 
 type FileReader interface {
 	ReadRecordFile(ctx context.Context, record Record) ([]byte, error)
+}
+
+// MetadataOnlyResolver lets a file-backed provider prove that the exact target
+// already exists without requiring package bytes. A false result is held as a
+// missing exchange.file dependency; implementations must never create data.
+type MetadataOnlyResolver interface {
+	MetadataOnlyRecordExists(ctx context.Context, record Record) (bool, error)
 }
 
 // DependencyResolver lets a provider verify relationships owned by another

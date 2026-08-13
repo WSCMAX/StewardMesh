@@ -24,8 +24,8 @@ func NewExchangeStore(database *sql.DB) (*ExchangeStore, error) {
 }
 
 const exchangePackageSelect = `SELECT organization_id, package_id, direction, schema_version, source_system_id,
-	archive_sha256, size_bytes, file_mode, status, record_count, file_count, created_count, unchanged_count,
-	holding_count, records, COALESCE(error_code, ''), created_by, created_at, updated_at FROM exchange_packages`
+		archive_sha256, size_bytes, file_mode, status, record_count, file_count, created_count, unchanged_count,
+		holding_count, records, progress, COALESCE(error_code, ''), created_by, created_at, updated_at FROM exchange_packages`
 
 func (s *ExchangeStore) ListPackages(ctx context.Context, organizationID string, limit int) ([]exchange.Package, error) {
 	if organizationID == "" || limit < 1 || limit > exchange.MaximumHistory {
@@ -71,19 +71,27 @@ func (s *ExchangeStore) CreatePackage(ctx context.Context, value exchange.Packag
 	if err != nil {
 		return exchange.Package{}, false, exchange.ErrInvalidInput
 	}
+	progressValues := value.Progress
+	if progressValues == nil {
+		progressValues = []exchange.ImportProgress{}
+	}
+	progress, err := json.Marshal(progressValues)
+	if err != nil {
+		return exchange.Package{}, false, exchange.ErrInvalidInput
+	}
 	created, err := scanExchangePackage(s.database.QueryRowContext(ctx, `
 		INSERT INTO exchange_packages (
 			organization_id, direction, package_id, schema_version, source_system_id, archive_sha256,
 			size_bytes, file_mode, status, record_count, file_count, created_count, unchanged_count,
-			holding_count, records, error_code, created_by, created_at, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb,NULLIF($16,''),$17,$18,$19)
+			holding_count, records, progress, error_code, created_by, created_at, updated_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb,$16::jsonb,NULLIF($17,''),$18,$19,$20)
 		ON CONFLICT DO NOTHING
 		RETURNING organization_id, package_id, direction, schema_version, source_system_id, archive_sha256,
 			size_bytes, file_mode, status, record_count, file_count, created_count, unchanged_count,
-			holding_count, records, COALESCE(error_code, ''), created_by, created_at, updated_at
+				holding_count, records, progress, COALESCE(error_code, ''), created_by, created_at, updated_at
 	`, value.OrganizationID, value.Direction, value.PackageID, value.SchemaVersion, value.SourceSystemID, value.ArchiveSHA256,
 		value.SizeBytes, value.FileMode, value.Status, value.RecordCount, value.FileCount, value.CreatedCount, value.UnchangedCount,
-		value.HoldingCount, string(records), value.ErrorCode, value.CreatedBy, value.CreatedAt, value.UpdatedAt))
+		value.HoldingCount, string(records), string(progress), value.ErrorCode, value.CreatedBy, value.CreatedAt, value.UpdatedAt))
 	if err == nil {
 		return created, true, nil
 	}
@@ -117,21 +125,29 @@ func (s *ExchangeStore) UpdatePackage(ctx context.Context, value exchange.Packag
 	if err != nil {
 		return exchange.Package{}, err
 	}
-	if !existing.UpdatedAt.Equal(expectedUpdatedAt) || !samePostgresExchangeIdentity(existing, value) || !validPostgresExchangeTransition(existing.Status, value.Status) {
+	if !existing.UpdatedAt.Equal(expectedUpdatedAt) || !samePostgresExchangeIdentity(existing, value) || value.ValidateTransitionFrom(existing) != nil {
 		return exchange.Package{}, exchange.ErrConflict
 	}
 	records, err := json.Marshal(value.Records)
 	if err != nil {
 		return exchange.Package{}, exchange.ErrInvalidInput
 	}
+	progressValues := value.Progress
+	if progressValues == nil {
+		progressValues = []exchange.ImportProgress{}
+	}
+	progress, err := json.Marshal(progressValues)
+	if err != nil {
+		return exchange.Package{}, exchange.ErrInvalidInput
+	}
 	updated, err := scanExchangePackage(s.database.QueryRowContext(ctx, `
 		UPDATE exchange_packages SET status=$1, created_count=$2, unchanged_count=$3, holding_count=$4,
-			records=$5::jsonb, error_code=NULLIF($6,''), updated_at=$7
-		WHERE organization_id=$8 AND direction=$9 AND package_id=$10 AND updated_at=$11
+			records=$5::jsonb, progress=$6::jsonb, error_code=NULLIF($7,''), updated_at=$8
+		WHERE organization_id=$9 AND direction=$10 AND package_id=$11 AND updated_at=$12
 		RETURNING organization_id, package_id, direction, schema_version, source_system_id, archive_sha256,
 			size_bytes, file_mode, status, record_count, file_count, created_count, unchanged_count,
-			holding_count, records, COALESCE(error_code, ''), created_by, created_at, updated_at
-	`, value.Status, value.CreatedCount, value.UnchangedCount, value.HoldingCount, string(records), value.ErrorCode, value.UpdatedAt,
+			holding_count, records, progress, COALESCE(error_code, ''), created_by, created_at, updated_at
+	`, value.Status, value.CreatedCount, value.UnchangedCount, value.HoldingCount, string(records), string(progress), value.ErrorCode, value.UpdatedAt,
 		value.OrganizationID, value.Direction, value.PackageID, expectedUpdatedAt))
 	if errors.Is(err, sql.ErrNoRows) {
 		return exchange.Package{}, exchange.ErrConflict
@@ -147,10 +163,11 @@ type exchangeRowScanner interface{ Scan(...any) error }
 func scanExchangePackage(row exchangeRowScanner) (exchange.Package, error) {
 	var value exchange.Package
 	var records []byte
+	var progress []byte
 	if err := row.Scan(
 		&value.OrganizationID, &value.PackageID, &value.Direction, &value.SchemaVersion, &value.SourceSystemID,
 		&value.ArchiveSHA256, &value.SizeBytes, &value.FileMode, &value.Status, &value.RecordCount, &value.FileCount,
-		&value.CreatedCount, &value.UnchangedCount, &value.HoldingCount, &records, &value.ErrorCode,
+		&value.CreatedCount, &value.UnchangedCount, &value.HoldingCount, &records, &progress, &value.ErrorCode,
 		&value.CreatedBy, &value.CreatedAt, &value.UpdatedAt,
 	); err != nil {
 		return exchange.Package{}, err
@@ -160,6 +177,12 @@ func scanExchangePackage(row exchangeRowScanner) (exchange.Package, error) {
 	}
 	if value.Records == nil {
 		value.Records = []exchange.RecordOutcome{}
+	}
+	if err := json.Unmarshal(progress, &value.Progress); err != nil {
+		return exchange.Package{}, fmt.Errorf("decode Exchange progress: %w", err)
+	}
+	if value.Progress == nil {
+		value.Progress = []exchange.ImportProgress{}
 	}
 	for index := range value.Records {
 		if value.Records[index].MissingDependencies == nil {
@@ -177,13 +200,6 @@ func samePostgresExchangeIdentity(left, right exchange.Package) bool {
 		left.SchemaVersion == right.SchemaVersion && left.SourceSystemID == right.SourceSystemID && left.ArchiveSHA256 == right.ArchiveSHA256 &&
 		left.SizeBytes == right.SizeBytes && left.FileMode == right.FileMode && left.RecordCount == right.RecordCount &&
 		left.FileCount == right.FileCount && left.CreatedBy == right.CreatedBy && left.CreatedAt.Equal(right.CreatedAt)
-}
-
-func validPostgresExchangeTransition(from, to exchange.PackageStatus) bool {
-	if from == exchange.StatusProcessing {
-		return to == exchange.StatusCompleted || to == exchange.StatusHolding || to == exchange.StatusFailed
-	}
-	return (from == exchange.StatusFailed || from == exchange.StatusHolding) && to == exchange.StatusProcessing
 }
 
 func translateExchangeWriteError(operation string, err error) error {

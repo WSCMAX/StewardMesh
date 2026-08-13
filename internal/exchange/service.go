@@ -4,6 +4,8 @@ package exchange
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"sort"
@@ -14,10 +16,13 @@ import (
 	"github.com/maxlemke/stewardmesh/internal/guard"
 )
 
+var errProcessingLeaseLost = errors.New("Exchange processing lease was lost")
+
 type ServiceConfig struct {
-	OrganizationID string
-	SourceSystemID string
-	Now            func() time.Time
+	OrganizationID  string
+	SourceSystemID  string
+	Now             func() time.Time
+	ProcessingLease time.Duration
 }
 
 type ownershipManager interface {
@@ -27,14 +32,15 @@ type ownershipManager interface {
 }
 
 type Service struct {
-	store          Store
-	auditor        foundation.Auditor
-	guard          ownershipManager
-	organizationID string
-	sourceSystemID string
-	now            func() time.Time
-	providers      map[string]Provider
-	providerList   []Provider
+	store           Store
+	auditor         foundation.Auditor
+	guard           ownershipManager
+	organizationID  string
+	sourceSystemID  string
+	now             func() time.Time
+	processingLease time.Duration
+	providers       map[string]Provider
+	providerList    []Provider
 }
 
 func NewService(store Store, auditor foundation.Auditor, ownership ownershipManager, configuration ServiceConfig, providers ...Provider) (*Service, error) {
@@ -46,9 +52,13 @@ func NewService(store Store, auditor foundation.Auditor, ownership ownershipMana
 	if configuration.Now == nil {
 		configuration.Now = func() time.Time { return time.Now().UTC() }
 	}
+	if configuration.ProcessingLease <= 0 {
+		configuration.ProcessingLease = ProcessingLease
+	}
 	service := &Service{
 		store: store, auditor: auditor, guard: ownership, organizationID: configuration.OrganizationID,
-		sourceSystemID: configuration.SourceSystemID, now: configuration.Now, providers: make(map[string]Provider),
+		sourceSystemID: configuration.SourceSystemID, now: configuration.Now, processingLease: configuration.ProcessingLease,
+		providers: make(map[string]Provider),
 	}
 	for _, provider := range providers {
 		if provider == nil || len(provider.Types()) == 0 {
@@ -244,7 +254,6 @@ func (s *Service) Import(ctx context.Context, actorID string, contents []byte) (
 		return ImportResult{}, fmt.Errorf("reserve Exchange import: %w", err)
 	}
 	pending = stored
-	priorOutcomes := make(map[string]RecordOutcome)
 	if !created {
 		if stored.ArchiveSHA256 != archiveChecksum || stored.SourceSystemID != decoded.Manifest.SourceSystemID ||
 			stored.SchemaVersion != decoded.Manifest.SchemaVersion || stored.SizeBytes != int64(len(contents)) ||
@@ -256,18 +265,17 @@ func (s *Service) Import(ctx context.Context, actorID string, contents []byte) (
 		case StatusCompleted:
 			return ImportResult{Package: stored, Replay: true}, nil
 		case StatusProcessing:
-			return ImportResult{}, ErrConflict
-		case StatusHolding, StatusFailed:
-			for _, outcome := range stored.Records {
-				priorOutcomes[Reference{Type: outcome.Type, ID: outcome.ID}.Key()] = outcome
+			if now.Before(stored.UpdatedAt.Add(s.processingLease)) {
+				return ImportResult{}, ErrConflict
 			}
-			pending.Status = StatusProcessing
-			pending.CreatedCount = 0
-			pending.UnchangedCount = 0
-			pending.HoldingCount = 0
-			pending.Records = []RecordOutcome{}
-			pending.ErrorCode = ""
-			pending.UpdatedAt = nextUpdatedAt(s.now(), stored.UpdatedAt)
+			pending = retryPackage(stored, now)
+			stored, err = s.store.UpdatePackage(ctx, pending, stored.UpdatedAt)
+			if err != nil {
+				return ImportResult{}, fmt.Errorf("take over stale Exchange import: %w", err)
+			}
+			pending = stored
+		case StatusHolding, StatusFailed:
+			pending = retryPackage(stored, now)
 			stored, err = s.store.UpdatePackage(ctx, pending, stored.UpdatedAt)
 			if err != nil {
 				return ImportResult{}, fmt.Errorf("retry Exchange import: %w", err)
@@ -286,26 +294,72 @@ func (s *Service) Import(ctx context.Context, actorID string, contents []byte) (
 		return ImportResult{}, s.failImport(ctx, actorID, pending, err)
 	}
 	outcomesByKey := make(map[string]RecordOutcome, len(ordered))
-	outcomes := make([]RecordOutcome, 0, len(ordered))
+	for _, outcome := range pending.Records {
+		outcomesByKey[Reference{Type: outcome.Type, ID: outcome.ID}.Key()] = cloneOutcome(outcome)
+	}
+	progressByKey := make(map[string]ImportProgress, len(pending.Progress))
+	for _, progress := range pending.Progress {
+		progressByKey[progress.key()] = progress
+	}
 	for _, record := range ordered {
 		key := Reference{Type: record.Type, ID: record.ID}.Key()
-		missing, dependencyErr := s.missingDependencies(ctx, record, recordMap, outcomesByKey)
-		if dependencyErr != nil {
-			return ImportResult{}, s.failImport(ctx, actorID, pending, dependencyErr)
+		progress, hasProgress := progressByKey[key]
+		if _, alreadyDurable := outcomesByKey[key]; alreadyDurable && !hasProgress {
+			continue
 		}
 		provider := s.providers[record.Type]
+		if !hasProgress {
+			missing, dependencyErr := s.missingDependencies(ctx, record, recordMap, outcomesByKey)
+			if dependencyErr != nil {
+				return ImportResult{}, s.failImport(ctx, actorID, pending, dependencyErr)
+			}
+			if provider == nil {
+				missing = append(missing, Reference{Type: "provider", ID: record.Type})
+			}
+			if provider != nil && record.File != nil && record.File.Entry == "" {
+				exact := false
+				if resolver, ok := provider.(MetadataOnlyResolver); ok {
+					exact, dependencyErr = resolver.MetadataOnlyRecordExists(ctx, record)
+					if dependencyErr != nil {
+						return ImportResult{}, s.failImport(ctx, actorID, pending, dependencyErr)
+					}
+				}
+				if !exact {
+					missing = append(missing, Reference{Type: "exchange.file", ID: record.File.SHA256})
+				}
+			}
+			missing = normalizeReferences(missing)
+			if len(missing) > 0 {
+				outcome := RecordOutcome{Type: record.Type, ID: record.ID, Revision: record.Revision, Checksum: record.Checksum, Status: OutcomeHolding, MissingDependencies: missing}
+				outcomesByKey[key] = outcome
+				continue
+			}
+		}
 		if provider == nil {
-			missing = append(missing, Reference{Type: "provider", ID: record.Type})
+			return ImportResult{}, s.failImport(ctx, actorID, pending, ErrConflict)
 		}
-		if record.File != nil && record.File.Entry == "" {
-			missing = append(missing, Reference{Type: "exchange.file", ID: record.File.SHA256})
+		var file []byte
+		if record.File != nil {
+			file = decoded.Files[record.File.Entry]
 		}
-		missing = normalizeReferences(missing)
-		if len(missing) > 0 {
-			outcome := RecordOutcome{Type: record.Type, ID: record.ID, Revision: record.Revision, Checksum: record.Checksum, Status: OutcomeHolding, MissingDependencies: missing}
-			outcomesByKey[key] = outcome
-			outcomes = append(outcomes, outcome)
-			continue
+		if !hasProgress {
+			exact, inspectErr := provider.ImportRecordExists(ctx, record, file)
+			if inspectErr != nil {
+				return ImportResult{}, s.failImport(ctx, actorID, pending, inspectErr)
+			}
+			progress = ImportProgress{
+				Type: record.Type, ID: record.ID, Checksum: record.Checksum,
+				OperationToken: importOperationToken(pending, record), Phase: progressIntent,
+				ExpectedCreated: !exact,
+			}
+			candidate := pending
+			upsertImportProgress(&candidate, progress)
+			checkpointed, checkpointErr := s.checkpointImport(ctx, candidate, ordered, outcomesByKey)
+			if checkpointErr != nil {
+				return ImportResult{}, s.failImport(ctx, actorID, pending, fmt.Errorf("reserve Exchange record intent: %w", checkpointErr))
+			}
+			pending = checkpointed
+			progressByKey[key] = progress
 		}
 		provenance := record.Provenance
 		if provenance.SourceSystemID == "" {
@@ -319,51 +373,104 @@ func (s *Service) Import(ctx context.Context, actorID string, contents []byte) (
 			SourceSystemID: provenance.SourceSystemID, SourceRecordID: provenance.SourceRecordID,
 		})
 		if lockErr != nil {
-			return ImportResult{}, s.failImport(ctx, actorID, pending, lockErr)
-		}
-		var file []byte
-		if record.File != nil {
-			file = decoded.Files[record.File.Entry]
-		}
-		wasCreated, importErr := provider.ImportRecord(ctx, decoded.Manifest.SourceSystemID, record, file)
-		if importErr != nil {
-			if ownershipCreated {
-				importErr = errors.Join(importErr, s.guard.DeleteImportedResourceOwnership(ctx, ownership))
+			candidate := pending
+			if progress.Phase == progressIntent && !progress.OwnershipReady {
+				removeImportProgress(&candidate, key)
 			}
+			return ImportResult{}, s.failImport(ctx, actorID, candidate, lockErr)
+		}
+		if !progress.OwnershipReady || ownershipCreated || progress.WriteLocked != ownership.WriteLocked {
+			progress.OwnershipReady = true
+			progress.OwnershipCreated = progress.OwnershipCreated || ownershipCreated
+			progress.WriteLocked = ownership.WriteLocked
+			candidate := pending
+			upsertImportProgress(&candidate, progress)
+			checkpointed, checkpointErr := s.checkpointImport(ctx, candidate, ordered, outcomesByKey)
+			if checkpointErr != nil {
+				var cleanupErr error
+				if ownershipCreated {
+					cleanupErr = s.guard.DeleteImportedResourceOwnership(ctx, ownership)
+				}
+				failureCandidate := pending
+				if cleanupErr == nil {
+					removeImportProgress(&failureCandidate, key)
+				}
+				return ImportResult{}, s.failImport(ctx, actorID, failureCandidate, errors.Join(fmt.Errorf("checkpoint Exchange ownership intent: %w", checkpointErr), cleanupErr))
+			}
+			pending = checkpointed
+			progressByKey[key] = progress
+		}
+		providerResult, refreshed, importErr := s.importRecordWithHeartbeat(ctx, pending, provider, ProviderImportOperation{
+			Token: progress.OperationToken, Repair: progress.Phase == progressCommitted,
+			ExpectedCreated: progress.ExpectedCreated, OccurredAt: pending.CreatedAt,
+		}, decoded.Manifest.SourceSystemID, record, file)
+		pending = refreshed
+		if providerResult.Committed {
+			status := OutcomeUnchanged
+			if progress.ExpectedCreated {
+				status = OutcomeCreated
+			}
+			outcome := RecordOutcome{
+				Type: record.Type, ID: record.ID, Revision: record.Revision, Checksum: record.Checksum,
+				Status: status, MissingDependencies: []Reference{}, WriteLocked: progress.WriteLocked,
+			}
+			outcomesByKey[key] = outcome
+			progress.Phase = progressCommitted
+			candidate := pending
+			upsertImportProgress(&candidate, progress)
+			checkpointed, checkpointErr := s.checkpointImport(ctx, candidate, ordered, outcomesByKey)
+			if checkpointErr != nil {
+				setPackageOutcomes(&candidate, orderedOutcomes(ordered, outcomesByKey, false))
+				return ImportResult{}, s.failImport(ctx, actorID, candidate, errors.Join(importErr, fmt.Errorf("checkpoint committed Exchange record: %w", checkpointErr)))
+			}
+			pending = checkpointed
+			progressByKey[key] = progress
+			if importErr != nil {
+				return ImportResult{}, s.failImport(ctx, actorID, pending, importErr)
+			}
+			candidate = pending
+			removeImportProgress(&candidate, key)
+			checkpointed, checkpointErr = s.checkpointImport(ctx, candidate, ordered, outcomesByKey)
+			if checkpointErr != nil {
+				return ImportResult{}, s.failImport(ctx, actorID, pending, fmt.Errorf("complete Exchange record intent: %w", checkpointErr))
+			}
+			pending = checkpointed
+			delete(progressByKey, key)
+			continue
+		}
+		if importErr != nil {
+			if errors.Is(importErr, errProcessingLeaseLost) {
+				return ImportResult{}, errors.Join(ErrConflict, importErr)
+			}
+			var cleanupErr error
+			if progress.OwnershipCreated {
+				cleanupErr = s.guard.DeleteImportedResourceOwnership(ctx, ownership)
+			}
+			if cleanupErr != nil {
+				return ImportResult{}, s.failImport(ctx, actorID, pending, errors.Join(importErr, cleanupErr))
+			}
+			candidate := pending
+			removeImportProgress(&candidate, key)
 			if errors.Is(importErr, ErrDependencyMissing) {
+				checkpointed, checkpointErr := s.checkpointImport(ctx, candidate, ordered, outcomesByKey)
+				if checkpointErr != nil {
+					return ImportResult{}, s.failImport(ctx, actorID, candidate, errors.Join(importErr, fmt.Errorf("compensate Exchange record intent: %w", checkpointErr)))
+				}
+				pending = checkpointed
+				delete(progressByKey, key)
 				outcome := RecordOutcome{Type: record.Type, ID: record.ID, Revision: record.Revision, Checksum: record.Checksum, Status: OutcomeHolding, MissingDependencies: append([]Reference(nil), record.Dependencies...)}
 				outcomesByKey[key] = outcome
-				outcomes = append(outcomes, outcome)
 				continue
 			}
-			return ImportResult{}, s.failImport(ctx, actorID, pending, importErr)
+			return ImportResult{}, s.failImport(ctx, actorID, candidate, importErr)
 		}
-		status := OutcomeUnchanged
-		if wasCreated {
-			status = OutcomeCreated
-		} else if prior, ok := priorOutcomes[key]; ok && prior.Status == OutcomeCreated {
-			status = OutcomeCreated
-		}
-		outcome := RecordOutcome{
-			Type: record.Type, ID: record.ID, Revision: record.Revision, Checksum: record.Checksum,
-			Status: status, MissingDependencies: []Reference{}, WriteLocked: ownership.WriteLocked,
-		}
-		outcomesByKey[key] = outcome
-		outcomes = append(outcomes, outcome)
+		return ImportResult{}, s.failImport(ctx, actorID, pending, ErrConflict)
 	}
 	expectedUpdatedAt := pending.UpdatedAt
-	pending.Records = outcomes
+	setPackageOutcomes(&pending, orderedOutcomes(ordered, outcomesByKey, true))
 	pending.Status = StatusCompleted
-	for _, outcome := range outcomes {
-		switch outcome.Status {
-		case OutcomeCreated:
-			pending.CreatedCount++
-		case OutcomeUnchanged:
-			pending.UnchangedCount++
-		case OutcomeHolding:
-			pending.HoldingCount++
-			pending.Status = StatusHolding
-		}
+	if pending.HoldingCount > 0 {
+		pending.Status = StatusHolding
 	}
 	pending.UpdatedAt = nextUpdatedAt(s.now(), expectedUpdatedAt)
 	completed, err := s.store.UpdatePackage(ctx, pending, expectedUpdatedAt)
@@ -374,6 +481,138 @@ func (s *Service) Import(ctx context.Context, actorID string, contents []byte) (
 		return ImportResult{}, fmt.Errorf("audit Exchange import: %w", err)
 	}
 	return ImportResult{Package: completed}, nil
+}
+
+func retryPackage(stored Package, now time.Time) Package {
+	pending := stored
+	pending.Status = StatusProcessing
+	pending.ErrorCode = ""
+	setPackageOutcomes(&pending, successfulOutcomes(stored.Records))
+	pending.UpdatedAt = nextUpdatedAt(now, stored.UpdatedAt)
+	return pending
+}
+
+func (s *Service) checkpointImport(ctx context.Context, pending Package, ordered []Record, outcomes map[string]RecordOutcome) (Package, error) {
+	expected := pending.UpdatedAt
+	setPackageOutcomes(&pending, orderedOutcomes(ordered, outcomes, false))
+	pending.Status = StatusProcessing
+	pending.ErrorCode = ""
+	pending.UpdatedAt = nextUpdatedAt(s.now(), expected)
+	checkpointed, err := s.store.UpdatePackage(ctx, pending, expected)
+	if err != nil {
+		return Package{}, err
+	}
+	return checkpointed, nil
+}
+
+type providerCall struct {
+	result ProviderImportResult
+	err    error
+}
+
+func (s *Service) importRecordWithHeartbeat(
+	ctx context.Context,
+	pending Package,
+	provider Provider,
+	operation ProviderImportOperation,
+	sourceSystemID string,
+	record Record,
+	file []byte,
+) (ProviderImportResult, Package, error) {
+	callContext, cancel := context.WithCancel(ctx)
+	defer cancel()
+	done := make(chan providerCall, 1)
+	go func() {
+		result, err := provider.ImportRecord(callContext, operation, sourceSystemID, record, file)
+		done <- providerCall{result: result, err: err}
+	}()
+	interval := s.processingLease / 3
+	if interval <= 0 {
+		interval = time.Millisecond
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	current := pending
+	for {
+		select {
+		case call := <-done:
+			return call.result, current, call.err
+		case <-ctx.Done():
+			cancel()
+			call := <-done
+			return call.result, current, errors.Join(call.err, ctx.Err())
+		case <-ticker.C:
+			expected := current.UpdatedAt
+			candidate := current
+			candidate.Status = StatusProcessing
+			candidate.ErrorCode = ""
+			candidate.UpdatedAt = nextUpdatedAt(s.now(), expected)
+			refreshed, err := s.store.UpdatePackage(ctx, candidate, expected)
+			if err == nil {
+				current = refreshed
+				continue
+			}
+			cancel()
+			call := <-done
+			return call.result, current, errors.Join(call.err, errProcessingLeaseLost, fmt.Errorf("renew Exchange processing lease: %w", err))
+		}
+	}
+}
+
+func importOperationToken(value Package, record Record) string {
+	digest := sha256.Sum256([]byte(strings.Join([]string{
+		value.OrganizationID, value.PackageID, value.ArchiveSHA256, record.Type, record.ID, record.Checksum,
+	}, "\x00")))
+	return hex.EncodeToString(digest[:])
+}
+
+func upsertImportProgress(value *Package, progress ImportProgress) {
+	for index := range value.Progress {
+		if value.Progress[index].key() == progress.key() {
+			value.Progress[index] = progress
+			return
+		}
+	}
+	value.Progress = append(value.Progress, progress)
+	sort.Slice(value.Progress, func(i, j int) bool { return value.Progress[i].key() < value.Progress[j].key() })
+}
+
+func removeImportProgress(value *Package, key string) {
+	for index := range value.Progress {
+		if value.Progress[index].key() == key {
+			value.Progress = append(value.Progress[:index], value.Progress[index+1:]...)
+			return
+		}
+	}
+}
+
+func orderedOutcomes(records []Record, byKey map[string]RecordOutcome, includeHolding bool) []RecordOutcome {
+	result := make([]RecordOutcome, 0, len(byKey))
+	for _, record := range records {
+		outcome, ok := byKey[Reference{Type: record.Type, ID: record.ID}.Key()]
+		if !ok || (!includeHolding && outcome.Status == OutcomeHolding) {
+			continue
+		}
+		result = append(result, cloneOutcome(outcome))
+	}
+	return result
+}
+
+func setPackageOutcomes(value *Package, outcomes []RecordOutcome) {
+	value.Records = outcomes
+	value.CreatedCount = 0
+	value.UnchangedCount = 0
+	value.HoldingCount = 0
+	for _, outcome := range outcomes {
+		switch outcome.Status {
+		case OutcomeCreated:
+			value.CreatedCount++
+		case OutcomeUnchanged:
+			value.UnchangedCount++
+		case OutcomeHolding:
+			value.HoldingCount++
+		}
+	}
 }
 
 func (s *Service) failImport(ctx context.Context, actorID string, pending Package, cause error) error {

@@ -409,7 +409,7 @@ export const documentationPages: readonly DocumentationPage[] = [
         id: 'import',
         title: 'Verify before writing',
         paragraphs: ['Exchange accepts only bounded .openinventory archives. It validates the schema version, archive structure, package identity, record and file checksums, typed relationships, duplicate identity, and dependency graph before importing records through their owning domain service.'],
-        bullets: ['Exact replays are idempotent and report unchanged records.', 'The same package identity with changed bytes is rejected as a conflict.', 'Corrupt archives, failed checksums, unsafe metadata, and oversized content are rejected.', 'Missing external references and unavailable file bytes produce visible holding outcomes instead of partial records.'],
+        bullets: ['Exact replays are idempotent and report unchanged records.', 'The same package identity with changed bytes is rejected as a conflict.', 'Corrupt archives, failed checksums, unsafe metadata, and oversized content are rejected.', 'Missing external references and unavailable file bytes produce visible holding outcomes; an exact existing Vault record remains unchanged without package bytes.'],
       },
       {
         id: 'ownership',
@@ -419,7 +419,7 @@ export const documentationPages: readonly DocumentationPage[] = [
       {
         id: 'history',
         title: 'Use receipts for review and recovery',
-        paragraphs: ['Package history shows direction, checksum, source system, record and file counts, created and unchanged totals, holding outcomes, and write-lock state. It intentionally excludes package payloads, credentials, signed URLs, and operator identity.'],
+        paragraphs: ['Package history shows direction, checksum, source system, record and file counts, checkpointed created and unchanged totals, holding outcomes, and write-lock state. An expired processing lease can resume after a crash without repeating checkpointed work. History intentionally excludes package payloads, credentials, signed URLs, and operator identity.'],
       },
     ],
     related: ['vault', 'guard', 'stack'],

@@ -5,6 +5,8 @@ package storage
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"io"
 	"strings"
@@ -104,6 +106,65 @@ func TestServiceRejectsUnsafeMetadata(t *testing.T) {
 	for _, input := range inputs {
 		if _, err := service.CreateBlob(context.Background(), input); !errors.Is(err, ErrInvalidInput) {
 			t.Fatalf("expected invalid input for %#v, got %v", input, err)
+		}
+	}
+}
+
+func TestImportBlobVerifiesStoredBytesBeforeReturningUnchanged(t *testing.T) {
+	original := []byte("original")
+	digest := sha256.Sum256(original)
+	checksum := hex.EncodeToString(digest[:])
+	for _, metadataOnly := range []bool{false, true} {
+		mode := "included"
+		if metadataOnly {
+			mode = "metadata-only"
+		}
+		for _, failure := range []string{"missing", "same-size-tamper"} {
+			t.Run(mode+"/"+failure, func(t *testing.T) {
+				objects, err := NewLocalBlobStore(t.TempDir(), 1024)
+				if err != nil {
+					t.Fatal(err)
+				}
+				service, err := NewService(newServiceMetadataStore(), objects, foundation.NopAuditor{}, ServiceConfig{OrganizationID: "replay-org"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				base := ImportBlobInput{
+					ID: strings.Repeat("a", 32), Name: "replay.txt", MediaType: "text/plain", SizeBytes: int64(len(original)), SHA256: checksum,
+					SourceSystemID: "archive", SourceRecordID: "archive:replay", Content: bytes.NewReader(original),
+				}
+				created, wasCreated, err := service.ImportBlob(context.Background(), base)
+				if err != nil || !wasCreated {
+					t.Fatalf("seed imported blob: created=%t blob=%#v err=%v", wasCreated, created, err)
+				}
+				if err := objects.Delete(context.Background(), created.objectKey); err != nil {
+					t.Fatal(err)
+				}
+				if failure == "same-size-tamper" {
+					if _, err := objects.Put(context.Background(), created.objectKey, "text/plain", strings.NewReader("tampered")); err != nil {
+						t.Fatal(err)
+					}
+				}
+				replay := base
+				replay.MetadataOnly = metadataOnly
+				if metadataOnly {
+					replay.Content = nil
+				} else {
+					replay.Content = bytes.NewReader(original)
+				}
+				_, replayCreated, replayErr := service.ImportBlob(context.Background(), replay)
+				want := ErrNotFound
+				if failure == "same-size-tamper" {
+					want = ErrIntegrity
+				}
+				if !errors.Is(replayErr, want) || replayCreated {
+					t.Fatalf("unsafe unchanged replay: created=%t err=%v want=%v", replayCreated, replayErr, want)
+				}
+				exact, inspectErr := service.ImportedBlobExists(context.Background(), replay)
+				if inspectErr != nil || exact {
+					t.Fatalf("read-only replay inspection trusted stale metadata: exact=%t err=%v", exact, inspectErr)
+				}
+			})
 		}
 	}
 }

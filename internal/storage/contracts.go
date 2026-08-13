@@ -72,6 +72,12 @@ type ImportBlobInput struct {
 	ResourceType   string
 	ResourceID     string
 	Content        io.Reader
+	// MetadataOnly requires an exact, integrity-verified existing object and
+	// never creates content. OperationToken/OperationAt make Exchange audit
+	// repair deterministic after a post-commit failure.
+	MetadataOnly   bool
+	OperationToken string
+	OperationAt    time.Time
 }
 
 type DownloadAuthorization struct {

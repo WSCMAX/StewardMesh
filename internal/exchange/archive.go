@@ -394,7 +394,7 @@ func unsafeJSONValue(value any) bool {
 		}
 	case string:
 		parsed, err := url.Parse(typed)
-		if err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") {
+		if err == nil && (strings.EqualFold(parsed.Scheme, "http") || strings.EqualFold(parsed.Scheme, "https")) {
 			if parsed.User != nil {
 				return true
 			}

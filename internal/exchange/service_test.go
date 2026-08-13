@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -211,12 +212,252 @@ func TestServiceRetriesFailedPackageAndPreservesClaimedOwnership(t *testing.T) {
 	}
 }
 
+func TestServiceTakesOverStaleProcessingReceiptAfterFinalUpdateFailure(t *testing.T) {
+	now := fixedExchangeNow()
+	record := testRecord("test.record", "leased-record", []exchange.Reference{})
+	sourceProvider := &exchangeTestProvider{types: []string{"test.record"}, records: []exchange.Record{record}}
+	source, _ := exchange.NewService(repository.NewMemoryExchangeStore(), foundation.NopAuditor{}, newExchangeOwnership("lease-source"), exchange.ServiceConfig{
+		OrganizationID: "lease-source", SourceSystemID: "lease-system", Now: func() time.Time { return now },
+	}, sourceProvider)
+	artifact, err := source.Export(context.Background(), "source-operator", exchange.ExportRequest{
+		Selection: []exchange.Reference{{Type: "test.record", ID: "leased-record"}}, FileMode: exchange.FileModeMetadata,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	baseStore := repository.NewMemoryExchangeStore()
+	store := &terminalFailureExchangeStore{Store: baseStore, failTerminal: true}
+	targetProvider := &exchangeTestProvider{types: []string{"test.record"}, exists: make(map[string]bool)}
+	target, _ := exchange.NewService(store, foundation.NopAuditor{}, newExchangeOwnership("lease-target"), exchange.ServiceConfig{
+		OrganizationID: "lease-target", SourceSystemID: "target-system", Now: func() time.Time { return now },
+	}, targetProvider)
+	if _, err := target.Import(context.Background(), "target-operator", artifact.Bytes); err == nil {
+		t.Fatal("expected the injected terminal receipt update failure")
+	}
+	history, err := target.ListPackages(context.Background(), 25)
+	if err != nil || len(history) != 1 || history[0].Status != exchange.StatusProcessing ||
+		history[0].CreatedCount != 1 || len(history[0].Records) != 1 {
+		t.Fatalf("successful provider work was not checkpointed before terminal failure: %#v err=%v", history, err)
+	}
+	if _, err := target.Import(context.Background(), "target-operator", artifact.Bytes); !errors.Is(err, exchange.ErrConflict) {
+		t.Fatalf("active processing lease was not protected, got %v", err)
+	}
+
+	now = history[0].UpdatedAt.Add(exchange.ProcessingLease)
+	recovered, err := target.Import(context.Background(), "restart-operator", artifact.Bytes)
+	if err != nil || recovered.Replay || recovered.Package.Status != exchange.StatusCompleted || recovered.Package.CreatedCount != 1 {
+		t.Fatalf("stale processing receipt was not recovered: %#v err=%v", recovered, err)
+	}
+	if len(targetProvider.imported) != 1 || targetProvider.imported[0] != "test.record:leased-record" {
+		t.Fatalf("checkpointed provider work was repeated during takeover: %#v", targetProvider.imported)
+	}
+}
+
+func TestServicePersistsPartialOutcomesAndResumesAfterSecondRecordFailure(t *testing.T) {
+	records := []exchange.Record{
+		testRecord("test.record", "record-a", []exchange.Reference{}),
+		testRecord("test.record", "record-b", []exchange.Reference{}),
+	}
+	sourceProvider := &exchangeTestProvider{types: []string{"test.record"}, records: records}
+	source, _ := exchange.NewService(repository.NewMemoryExchangeStore(), foundation.NopAuditor{}, newExchangeOwnership("saga-source"), exchange.ServiceConfig{
+		OrganizationID: "saga-source", SourceSystemID: "saga-system", Now: fixedExchangeNow,
+	}, sourceProvider)
+	artifact, err := source.Export(context.Background(), "source-operator", exchange.ExportRequest{
+		Selection: []exchange.Reference{{Type: "test.record", ID: "record-a"}, {Type: "test.record", ID: "record-b"}},
+		FileMode:  exchange.FileModeMetadata,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	store := repository.NewMemoryExchangeStore()
+	provider := &exchangeTestProvider{types: []string{"test.record"}, exists: make(map[string]bool), failOnCall: 2}
+	ownership := newExchangeOwnership("saga-target")
+	target, _ := exchange.NewService(store, foundation.NopAuditor{}, ownership, exchange.ServiceConfig{
+		OrganizationID: "saga-target", SourceSystemID: "target-system", Now: fixedExchangeNow,
+	}, provider)
+	if _, err := target.Import(context.Background(), "target-operator", artifact.Bytes); err == nil {
+		t.Fatal("expected the second provider write to fail")
+	}
+	history, err := target.ListPackages(context.Background(), 25)
+	if err != nil || len(history) != 1 || history[0].Status != exchange.StatusFailed ||
+		history[0].CreatedCount != 1 || len(history[0].Records) != 1 || history[0].Records[0].ID != "record-a" {
+		t.Fatalf("failed receipt did not expose its durable first outcome: %#v err=%v", history, err)
+	}
+	if _, exists := ownership.values["test.record:record-b"]; exists {
+		t.Fatalf("failed second record retained a new ownership lock: %#v", ownership.values)
+	}
+
+	recovered, err := target.Import(context.Background(), "retry-operator", artifact.Bytes)
+	if err != nil || recovered.Package.Status != exchange.StatusCompleted || recovered.Package.CreatedCount != 2 {
+		t.Fatalf("partial import did not resume to completion: %#v err=%v", recovered, err)
+	}
+	if strings.Join(provider.imported, ",") != "test.record:record-a,test.record:record-b" || provider.calls != 3 {
+		t.Fatalf("retry did not preserve completed provider work: imported=%#v calls=%d", provider.imported, provider.calls)
+	}
+}
+
+func TestServiceRetainsCommittedOutcomeAndOwnershipUntilProviderAuditRepairs(t *testing.T) {
+	record := testRecord("test.record", "committed-record", []exchange.Reference{})
+	sourceProvider := &exchangeTestProvider{types: []string{"test.record"}, records: []exchange.Record{record}}
+	source, _ := exchange.NewService(repository.NewMemoryExchangeStore(), foundation.NopAuditor{}, newExchangeOwnership("committed-source"), exchange.ServiceConfig{
+		OrganizationID: "committed-source", SourceSystemID: "committed-system", Now: fixedExchangeNow,
+	}, sourceProvider)
+	artifact, err := source.Export(context.Background(), "source-operator", exchange.ExportRequest{
+		Selection: []exchange.Reference{{Type: "test.record", ID: record.ID}}, FileMode: exchange.FileModeMetadata,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	provider := &exchangeTestProvider{types: []string{"test.record"}, exists: make(map[string]bool), committedFailures: 1}
+	ownership := newExchangeOwnership("committed-target")
+	target, _ := exchange.NewService(repository.NewMemoryExchangeStore(), foundation.NopAuditor{}, ownership, exchange.ServiceConfig{
+		OrganizationID: "committed-target", SourceSystemID: "target-system", Now: fixedExchangeNow,
+	}, provider)
+	if _, err := target.Import(context.Background(), "target-operator", artifact.Bytes); err == nil {
+		t.Fatal("expected the provider's post-commit audit failure")
+	}
+	history, err := target.ListPackages(context.Background(), 25)
+	if err != nil || len(history) != 1 || history[0].Status != exchange.StatusFailed || history[0].CreatedCount != 1 ||
+		len(history[0].Records) != 1 || history[0].Records[0].Status != exchange.OutcomeCreated || len(history[0].Progress) != 1 ||
+		history[0].Progress[0].Phase != "committed" {
+		t.Fatalf("committed provider truth was not recoverable: %#v err=%v", history, err)
+	}
+	if !ownership.values["test.record:committed-record"].WriteLocked {
+		t.Fatalf("committed provider failure lost its ownership fence: %#v", ownership.values)
+	}
+
+	recovered, err := target.Import(context.Background(), "retry-operator", artifact.Bytes)
+	if err != nil || recovered.Package.Status != exchange.StatusCompleted || recovered.Package.CreatedCount != 1 || len(recovered.Package.Progress) != 0 {
+		t.Fatalf("provider audit repair did not finish the receipt: %#v err=%v", recovered, err)
+	}
+	if len(provider.imported) != 1 || provider.calls != 2 || provider.repairCalls != 1 || len(provider.operationTokens) != 2 ||
+		provider.operationTokens[0] == "" || provider.operationTokens[0] != provider.operationTokens[1] {
+		t.Fatalf("provider repair was not deterministically fenced: imported=%#v calls=%d repairs=%d tokens=%#v", provider.imported, provider.calls, provider.repairCalls, provider.operationTokens)
+	}
+}
+
+func TestServiceRecoversCreatedTruthAfterCrashBetweenProviderWriteAndReceiptCheckpoint(t *testing.T) {
+	now := fixedExchangeNow()
+	record := testRecord("test.record", "crash-record", []exchange.Reference{})
+	sourceProvider := &exchangeTestProvider{types: []string{"test.record"}, records: []exchange.Record{record}}
+	source, _ := exchange.NewService(repository.NewMemoryExchangeStore(), foundation.NopAuditor{}, newExchangeOwnership("crash-source"), exchange.ServiceConfig{
+		OrganizationID: "crash-source", SourceSystemID: "crash-system", Now: func() time.Time { return now },
+	}, sourceProvider)
+	artifact, err := source.Export(context.Background(), "source-operator", exchange.ExportRequest{
+		Selection: []exchange.Reference{{Type: "test.record", ID: record.ID}}, FileMode: exchange.FileModeMetadata,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	baseStore := repository.NewMemoryExchangeStore()
+	store := &postWriteCrashExchangeStore{Store: baseStore, failFromUpdate: 3, enabled: true}
+	provider := &exchangeTestProvider{types: []string{"test.record"}, exists: make(map[string]bool)}
+	ownership := newExchangeOwnership("crash-target")
+	target, _ := exchange.NewService(store, foundation.NopAuditor{}, ownership, exchange.ServiceConfig{
+		OrganizationID: "crash-target", SourceSystemID: "target-system", Now: func() time.Time { return now },
+	}, provider)
+	if _, err := target.Import(context.Background(), "first-worker", artifact.Bytes); err == nil {
+		t.Fatal("expected receipt storage to disappear after the provider commit")
+	}
+	history, err := target.ListPackages(context.Background(), 25)
+	if err != nil || len(history) != 1 || history[0].Status != exchange.StatusProcessing || history[0].CreatedCount != 0 ||
+		len(history[0].Records) != 0 || len(history[0].Progress) != 1 || history[0].Progress[0].Phase != "intent" ||
+		!history[0].Progress[0].ExpectedCreated || !ownership.values["test.record:crash-record"].WriteLocked {
+		t.Fatalf("pre-write intent did not survive the simulated crash: history=%#v ownership=%#v err=%v", history, ownership.values, err)
+	}
+	if len(provider.imported) != 1 {
+		t.Fatalf("provider write did not commit before the crash: %#v", provider.imported)
+	}
+
+	store.enabled = false
+	now = history[0].UpdatedAt.Add(exchange.ProcessingLease)
+	recovered, err := target.Import(context.Background(), "restart-worker", artifact.Bytes)
+	if err != nil || recovered.Package.Status != exchange.StatusCompleted || recovered.Package.CreatedCount != 1 || recovered.Package.UnchangedCount != 0 {
+		t.Fatalf("crash recovery lost the original created outcome: %#v err=%v", recovered, err)
+	}
+	if len(provider.imported) != 1 || provider.calls != 2 || len(provider.operationTokens) != 2 || provider.operationTokens[0] != provider.operationTokens[1] {
+		t.Fatalf("crash recovery duplicated or unfenced the provider write: imported=%#v calls=%d tokens=%#v", provider.imported, provider.calls, provider.operationTokens)
+	}
+}
+
+func TestServiceRenewsLeaseWhileProviderWriteIsBlocked(t *testing.T) {
+	const lease = 90 * time.Millisecond
+	record := testRecord("test.record", "slow-record", []exchange.Reference{})
+	sourceProvider := &exchangeTestProvider{types: []string{"test.record"}, records: []exchange.Record{record}}
+	source, _ := exchange.NewService(repository.NewMemoryExchangeStore(), foundation.NopAuditor{}, newExchangeOwnership("slow-source"), exchange.ServiceConfig{
+		OrganizationID: "slow-source", SourceSystemID: "slow-system", Now: func() time.Time { return time.Now().UTC() },
+	}, sourceProvider)
+	artifact, err := source.Export(context.Background(), "source-operator", exchange.ExportRequest{
+		Selection: []exchange.Reference{{Type: "test.record", ID: record.ID}}, FileMode: exchange.FileModeMetadata,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	provider := newBlockingExchangeProvider()
+	store := repository.NewMemoryExchangeStore()
+	ownership := newExchangeOwnership("slow-target")
+	configuration := exchange.ServiceConfig{
+		OrganizationID: "slow-target", SourceSystemID: "target-system", Now: func() time.Time { return time.Now().UTC() }, ProcessingLease: lease,
+	}
+	firstWorker, _ := exchange.NewService(store, foundation.NopAuditor{}, ownership, configuration, provider)
+	secondWorker, _ := exchange.NewService(store, foundation.NopAuditor{}, ownership, configuration, provider)
+	firstDone := make(chan error, 1)
+	go func() {
+		_, importErr := firstWorker.Import(context.Background(), "first-worker", artifact.Bytes)
+		firstDone <- importErr
+	}()
+	select {
+	case <-provider.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first provider call did not start")
+	}
+	time.Sleep(3 * lease)
+
+	secondDone := make(chan error, 1)
+	go func() {
+		_, importErr := secondWorker.Import(context.Background(), "second-worker", artifact.Bytes)
+		secondDone <- importErr
+	}()
+	select {
+	case secondErr := <-secondDone:
+		if !errors.Is(secondErr, exchange.ErrConflict) {
+			close(provider.release)
+			<-firstDone
+			t.Fatalf("second worker bypassed the renewed lease: %v", secondErr)
+		}
+	case <-time.After(2 * time.Second):
+		close(provider.release)
+		<-firstDone
+		<-secondDone
+		t.Fatal("second worker reached the blocked provider instead of observing the active lease")
+	}
+	if calls := provider.callCount(); calls != 1 {
+		close(provider.release)
+		<-firstDone
+		t.Fatalf("two workers invoked the same provider concurrently: calls=%d", calls)
+	}
+	close(provider.release)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first worker did not finish after release: %v", err)
+	}
+}
+
 type exchangeTestProvider struct {
-	types    []string
-	records  []exchange.Record
-	exists   map[string]bool
-	imported []string
-	failures int
+	types             []string
+	records           []exchange.Record
+	exists            map[string]bool
+	imported          []string
+	failures          int
+	failOnCall        int
+	calls             int
+	committedFailures int
+	repairCalls       int
+	operationTokens   []string
 }
 
 func (p *exchangeTestProvider) Types() []string { return append([]string(nil), p.types...) }
@@ -228,21 +469,120 @@ func (p *exchangeTestProvider) ListRecords(context.Context) ([]exchange.Record, 
 func (p *exchangeTestProvider) Exists(_ context.Context, reference exchange.Reference) (bool, error) {
 	return p.exists[reference.Key()], nil
 }
-func (p *exchangeTestProvider) ImportRecord(_ context.Context, _ string, record exchange.Record, _ []byte) (bool, error) {
+func (p *exchangeTestProvider) ImportRecordExists(_ context.Context, record exchange.Record, _ []byte) (bool, error) {
+	return p.exists[exchange.Reference{Type: record.Type, ID: record.ID}.Key()], nil
+}
+func (p *exchangeTestProvider) ImportRecord(_ context.Context, operation exchange.ProviderImportOperation, _ string, record exchange.Record, _ []byte) (exchange.ProviderImportResult, error) {
+	p.calls++
+	p.operationTokens = append(p.operationTokens, operation.Token)
+	if operation.Repair {
+		p.repairCalls++
+	}
 	if p.failures > 0 {
 		p.failures--
-		return false, errors.New("transient provider failure")
+		return exchange.ProviderImportResult{}, errors.New("transient provider failure")
+	}
+	if p.failOnCall > 0 && p.calls == p.failOnCall {
+		return exchange.ProviderImportResult{}, errors.New("injected provider failure")
 	}
 	key := exchange.Reference{Type: record.Type, ID: record.ID}.Key()
 	if p.exists == nil {
 		p.exists = make(map[string]bool)
 	}
+	if p.committedFailures > 0 {
+		created := !p.exists[key]
+		p.exists[key] = true
+		if created {
+			p.imported = append(p.imported, key)
+		}
+		p.committedFailures--
+		return exchange.ProviderImportResult{Committed: true, Created: created}, errors.New("post-commit provider audit failure")
+	}
 	if p.exists[key] {
-		return false, nil
+		return exchange.ProviderImportResult{Committed: true}, nil
 	}
 	p.exists[key] = true
 	p.imported = append(p.imported, key)
-	return true, nil
+	return exchange.ProviderImportResult{Committed: true, Created: true}, nil
+}
+
+type blockingExchangeProvider struct {
+	mu      sync.Mutex
+	exists  bool
+	calls   int
+	started chan struct{}
+	release chan struct{}
+}
+
+func newBlockingExchangeProvider() *blockingExchangeProvider {
+	return &blockingExchangeProvider{started: make(chan struct{}), release: make(chan struct{})}
+}
+
+func (*blockingExchangeProvider) Types() []string { return []string{"test.record"} }
+func (*blockingExchangeProvider) ListRecords(context.Context) ([]exchange.Record, error) {
+	return []exchange.Record{}, nil
+}
+func (p *blockingExchangeProvider) Exists(_ context.Context, _ exchange.Reference) (bool, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.exists, nil
+}
+func (p *blockingExchangeProvider) ImportRecordExists(_ context.Context, _ exchange.Record, _ []byte) (bool, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.exists, nil
+}
+func (p *blockingExchangeProvider) ImportRecord(ctx context.Context, _ exchange.ProviderImportOperation, _ string, _ exchange.Record, _ []byte) (exchange.ProviderImportResult, error) {
+	p.mu.Lock()
+	p.calls++
+	first := p.calls == 1
+	p.mu.Unlock()
+	if first {
+		close(p.started)
+	}
+	select {
+	case <-p.release:
+	case <-ctx.Done():
+		return exchange.ProviderImportResult{}, ctx.Err()
+	}
+	p.mu.Lock()
+	created := !p.exists
+	p.exists = true
+	p.mu.Unlock()
+	return exchange.ProviderImportResult{Committed: true, Created: created}, nil
+}
+func (p *blockingExchangeProvider) callCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.calls
+}
+
+type terminalFailureExchangeStore struct {
+	exchange.Store
+	failTerminal bool
+}
+
+type postWriteCrashExchangeStore struct {
+	exchange.Store
+	updates        int
+	failFromUpdate int
+	enabled        bool
+}
+
+func (s *postWriteCrashExchangeStore) UpdatePackage(ctx context.Context, value exchange.Package, expected time.Time) (exchange.Package, error) {
+	s.updates++
+	if s.enabled && s.updates >= s.failFromUpdate {
+		return exchange.Package{}, errors.New("simulated receipt store outage after provider commit")
+	}
+	return s.Store.UpdatePackage(ctx, value, expected)
+}
+
+func (s *terminalFailureExchangeStore) UpdatePackage(ctx context.Context, value exchange.Package, expected time.Time) (exchange.Package, error) {
+	if s.failTerminal && (value.Status == exchange.StatusCompleted || value.Status == exchange.StatusHolding) {
+		s.failTerminal = false
+		return exchange.Package{}, errors.New("injected terminal receipt failure")
+	}
+	return s.Store.UpdatePackage(ctx, value, expected)
 }
 
 type exchangeOwnership struct {

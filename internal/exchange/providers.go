@@ -69,64 +69,75 @@ func (p *StackProvider) ListRecords(ctx context.Context) ([]Record, error) {
 }
 
 func (p *StackProvider) Exists(ctx context.Context, reference Reference) (bool, error) {
-	snapshot, err := p.service.Snapshot(ctx)
-	if err != nil {
-		return false, err
-	}
-	switch reference.Type {
-	case "stack.product":
-		return containsStackID(snapshot.Products, reference.ID, func(value stack.Product) string { return value.ID }), nil
-	case "stack.version":
-		return containsStackID(snapshot.Versions, reference.ID, func(value stack.Version) string { return value.ID }), nil
-	case "stack.license":
-		return containsStackID(snapshot.Licenses, reference.ID, func(value stack.License) string { return value.ID }), nil
-	case "stack.installation":
-		return containsStackID(snapshot.Installations, reference.ID, func(value stack.Installation) string { return value.ID }), nil
-	case "stack.assignment":
-		return containsStackID(snapshot.Assignments, reference.ID, func(value stack.Assignment) string { return value.ID }), nil
-	default:
+	if !slices.Contains(stackRecordTypes, reference.Type) {
 		return false, nil
 	}
+	_, err := p.service.ExportRecord(ctx, reference.Type, reference.ID)
+	if errors.Is(err, stack.ErrNotFound) {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 func (p *StackProvider) DependencyExists(ctx context.Context, reference Reference) (bool, bool, error) {
 	return p.service.ExchangeDependencyExists(ctx, reference.Type, reference.ID)
 }
 
-func (p *StackProvider) ImportRecord(ctx context.Context, sourceSystemID string, record Record, _ []byte) (bool, error) {
-	current, err := p.service.ExportRecords(ctx)
-	if err != nil {
+func (p *StackProvider) ImportRecordExists(ctx context.Context, record Record, _ []byte) (bool, error) {
+	current, err := p.service.ExportRecord(ctx, record.Type, record.ID)
+	if err != nil && !errors.Is(err, stack.ErrNotFound) {
 		return false, err
 	}
 	dependencies := make([]string, 0, len(record.Dependencies))
 	for _, dependency := range record.Dependencies {
 		dependencies = append(dependencies, dependency.Key())
 	}
-	for _, existing := range current {
-		payload, sanitizeErr := sanitizeStackPayload(existing.Payload)
+	if err == nil {
+		payload, sanitizeErr := sanitizeStackPayload(current.Payload)
 		if sanitizeErr != nil {
 			return false, sanitizeErr
 		}
-		if existing.Type == record.Type && existing.ID == record.ID && existing.Revision == record.Revision &&
-			slices.Equal(existing.Dependencies, dependencies) && bytes.Equal(payload, record.Payload) {
-			return false, nil
+		currentDependencies := append([]string(nil), current.Dependencies...)
+		sort.Strings(currentDependencies)
+		if current.Type == record.Type && current.ID == record.ID && current.Revision == record.Revision &&
+			slices.Equal(currentDependencies, dependencies) && bytes.Equal(payload, record.Payload) {
+			return true, nil
 		}
 	}
-	result, err := p.service.ImportRecords(ctx, sourceSystemID, []stack.ExchangeRecord{{
+	return false, nil
+}
+
+func (p *StackProvider) ImportRecord(ctx context.Context, operation ProviderImportOperation, sourceSystemID string, record Record, _ []byte) (ProviderImportResult, error) {
+	if !operation.ExpectedCreated {
+		exact, err := p.ImportRecordExists(ctx, record, nil)
+		if err != nil {
+			return ProviderImportResult{}, err
+		}
+		if !exact {
+			return ProviderImportResult{}, ErrConflict
+		}
+		return ProviderImportResult{Committed: true}, nil
+	}
+	dependencies := make([]string, 0, len(record.Dependencies))
+	for _, dependency := range record.Dependencies {
+		dependencies = append(dependencies, dependency.Key())
+	}
+	result, err := p.service.ImportExchangeRecord(ctx, stack.ExchangeImportOperation{Token: operation.Token, OccurredAt: operation.OccurredAt}, sourceSystemID, stack.ExchangeRecord{
 		Type: record.Type, ID: record.ID, Revision: record.Revision,
 		Dependencies: dependencies, SourceSystemID: record.Provenance.SourceSystemID,
 		SourceRecordID: record.Provenance.SourceRecordID, Payload: append([]byte(nil), record.Payload...),
-	}})
+	})
+	providerResult := ProviderImportResult{Committed: result.Committed, Created: result.Created}
 	if errors.Is(err, stack.ErrReferenceMissing) || errors.Is(err, stack.ErrNotFound) {
-		return false, ErrDependencyMissing
+		return providerResult, ErrDependencyMissing
 	}
 	if errors.Is(err, stack.ErrInvalidInput) {
-		return false, ErrInvalidInput
+		return providerResult, ErrInvalidInput
 	}
 	if errors.Is(err, stack.ErrConflict) {
-		return false, ErrConflict
+		return providerResult, ErrConflict
 	}
-	return result.Created == 1, err
+	return providerResult, err
 }
 
 func sanitizeStackPayload(payload []byte) ([]byte, error) {
@@ -154,15 +165,6 @@ func parseStackReference(value string) (Reference, error) {
 		return Reference{}, ErrInvalidInput
 	}
 	return Reference{Type: parts[0], ID: parts[1]}, nil
-}
-
-func containsStackID[T any](values []T, id string, identifier func(T) string) bool {
-	for _, value := range values {
-		if identifier(value) == id {
-			return true
-		}
-	}
-	return false
 }
 
 type VaultProvider struct{ service *storage.Service }
@@ -253,49 +255,86 @@ func (p *VaultProvider) ReadRecordFile(ctx context.Context, record Record) ([]by
 	return value, nil
 }
 
-func (p *VaultProvider) ImportRecord(ctx context.Context, _ string, record Record, file []byte) (bool, error) {
-	if record.Type != "vault.blob" || record.Revision != 1 || record.File == nil || len(file) > int(MaximumFileBytes) {
+func (p *VaultProvider) ImportRecordExists(ctx context.Context, record Record, _ []byte) (bool, error) {
+	input, err := vaultImportInput(record)
+	if err != nil {
+		return false, err
+	}
+	return p.service.ImportedBlobExists(ctx, input)
+}
+
+func (p *VaultProvider) ImportRecord(ctx context.Context, operation ProviderImportOperation, _ string, record Record, file []byte) (ProviderImportResult, error) {
+	if len(file) > int(MaximumFileBytes) {
+		return ProviderImportResult{}, ErrInvalidInput
+	}
+	input, err := vaultImportInput(record)
+	if err != nil {
+		return ProviderImportResult{}, err
+	}
+	input.OperationToken = operation.Token
+	input.OperationAt = operation.OccurredAt
+	input.MetadataOnly = record.File.Entry == ""
+	if !input.MetadataOnly {
+		input.Content = bytes.NewReader(file)
+	}
+	blob, created, err := p.service.ImportBlob(ctx, input)
+	result := ProviderImportResult{Committed: blob.ID != "", Created: created}
+	if errors.Is(err, storage.ErrConflict) {
+		return result, ErrConflict
+	}
+	if errors.Is(err, storage.ErrIntegrity) {
+		return result, ErrIntegrity
+	}
+	if errors.Is(err, storage.ErrInvalidInput) {
+		return result, ErrInvalidInput
+	}
+	if err != nil {
+		return result, fmt.Errorf("import Vault file: %w", err)
+	}
+	return ProviderImportResult{Committed: true, Created: created}, nil
+}
+
+func (p *VaultProvider) MetadataOnlyRecordExists(ctx context.Context, record Record) (bool, error) {
+	if record.File == nil || record.File.Entry != "" || record.File.Mode != FileModeMetadata {
 		return false, ErrInvalidInput
+	}
+	input, err := vaultImportInput(record)
+	if err != nil {
+		return false, err
+	}
+	return p.service.ImportedBlobExists(ctx, input)
+}
+
+func vaultImportInput(record Record) (storage.ImportBlobInput, error) {
+	if record.Type != "vault.blob" || record.Revision != 1 || record.File == nil {
+		return storage.ImportBlobInput{}, ErrInvalidInput
 	}
 	var value vaultPortablePayload
 	decoder := json.NewDecoder(bytes.NewReader(record.Payload))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&value); err != nil {
-		return false, ErrInvalidInput
+		return storage.ImportBlobInput{}, ErrInvalidInput
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) || value.ID != record.ID ||
 		value.Name != record.File.Name || value.MediaType != record.File.MediaType || value.SizeBytes != record.File.SizeBytes || value.SHA256 != record.File.SHA256 {
-		return false, ErrInvalidInput
+		return storage.ImportBlobInput{}, ErrInvalidInput
 	}
 	expectedDependencies := []Reference{}
 	if value.ResourceType != "" || value.ResourceID != "" {
 		if value.ResourceType == "" || value.ResourceID == "" {
-			return false, ErrInvalidInput
+			return storage.ImportBlobInput{}, ErrInvalidInput
 		}
 		expectedDependencies = append(expectedDependencies, canonicalResourceReference(value.ResourceType, value.ResourceID))
 	}
 	if !slices.Equal(record.Dependencies, expectedDependencies) {
-		return false, ErrInvalidInput
+		return storage.ImportBlobInput{}, ErrInvalidInput
 	}
-	_, created, err := p.service.ImportBlob(ctx, storage.ImportBlobInput{
+	return storage.ImportBlobInput{
 		ID: record.ID, Name: record.File.Name, MediaType: record.File.MediaType,
 		SizeBytes: record.File.SizeBytes, SHA256: record.File.SHA256,
 		SourceSystemID: record.Provenance.SourceSystemID, SourceRecordID: record.Provenance.SourceRecordID,
-		ResourceType: value.ResourceType, ResourceID: value.ResourceID, Content: bytes.NewReader(file),
-	})
-	if errors.Is(err, storage.ErrConflict) {
-		return false, ErrConflict
-	}
-	if errors.Is(err, storage.ErrIntegrity) {
-		return false, ErrIntegrity
-	}
-	if errors.Is(err, storage.ErrInvalidInput) {
-		return false, ErrInvalidInput
-	}
-	if err != nil {
-		return false, fmt.Errorf("import Vault file: %w", err)
-	}
-	return created, nil
+		ResourceType: value.ResourceType, ResourceID: value.ResourceID,
+	}, nil
 }
 
 func canonicalResourceReference(recordType, id string) Reference {

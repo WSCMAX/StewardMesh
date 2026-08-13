@@ -6222,7 +6222,7 @@ components:
     ExchangePackage:
       type: object
       additionalProperties: false
-      description: Durable organization-scoped receipt. Completed and holding receipts contain exactly recordCount outcomes; holdingCount is nonzero only for holding status and errorCode is present only for failed status.
+      description: Durable organization-scoped receipt. Processing and failed receipts retain checkpointed created and unchanged outcomes for safe recovery; completed and holding receipts contain exactly recordCount outcomes. holdingCount is nonzero only for holding status and errorCode is present only for failed status.
       required: [packageId, direction, schemaVersion, sourceSystemId, archiveSha256, sizeBytes, fileMode, status, recordCount, fileCount, createdCount, unchangedCount, holdingCount, records, createdAt, updatedAt]
       properties:
         packageId: {$ref: '#/components/schemas/ExchangeStableID'}

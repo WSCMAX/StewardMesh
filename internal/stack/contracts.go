@@ -275,6 +275,16 @@ type ImportResult struct {
 	Unchanged int `json:"unchanged"`
 }
 
+type ExchangeImportOperation struct {
+	Token      string
+	OccurredAt time.Time
+}
+
+type ExchangeImportResult struct {
+	Committed bool
+	Created   bool
+}
+
 type ReferenceValidator interface {
 	ResolveAsset(ctx context.Context, assetID string) (AssetContext, error)
 	ValidateAssignee(ctx context.Context, kind, id string) error

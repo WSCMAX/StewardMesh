@@ -98,11 +98,13 @@ func TestArchiveRejectsCorruptionDuplicateRecordsAndUnsafeEntries(t *testing.T) 
 
 func TestArchiveRejectsSecretsSignedURLsAndResourceExhaustion(t *testing.T) {
 	for name, payload := range map[string]string{
-		"credential key":     `{"clientSecret":"must-not-export"}`,
-		"API key":            `{"apiKey":"must-not-export"}`,
-		"bearer token":       `{"token":"must-not-export"}`,
-		"signed URL":         `{"download":"https://objects.example.test/file?X-Amz-Signature=abc"}`,
-		"embedded user info": `{"endpoint":"https://user:password@example.test/file"}`,
+		"credential key":        `{"clientSecret":"must-not-export"}`,
+		"API key":               `{"apiKey":"must-not-export"}`,
+		"bearer token":          `{"token":"must-not-export"}`,
+		"signed URL":            `{"download":"https://objects.example.test/file?X-Amz-Signature=abc"}`,
+		"mixed-case signed URL": `{"download":"HtTpS://objects.example.test/file?X-Amz-Signature=abc"}`,
+		"embedded user info":    `{"endpoint":"https://user:password@example.test/file"}`,
+		"mixed-case user info":  `{"endpoint":"HTTP://user:password@example.test/file"}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			record := validArchiveRecord()

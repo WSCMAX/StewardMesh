@@ -50,6 +50,8 @@ The People work area composes existing directory APIs into a three-step person t
 
 The controlled draft survives forward and backward navigation as well as step-level validation errors. A building or room resolves to its containing site because the current identity contract persists a `siteId`; the exact selected building or room remains visible through review. Inline location writes and the final person write use the synchronized CSRF token and remain independently authorized by the existing endpoints. Read-only users keep the visible location inventory and receive a clear administrator path instead of creation controls.
 
+This task is the first consumer of Workspace's reusable related-record workflow pattern. It declares People ownership and the existing identity/location API boundaries, announces asynchronous creation and confirmation, preserves inputs after a recoverable failure, offers retry, and clears temporary values on explicit cancellation. Workspace coordinates the steps but never weakens People validation or Guard authorization.
+
 ## Asset assignments
 
 People records three relationship roles:

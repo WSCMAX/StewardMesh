@@ -6,6 +6,7 @@
 - Shell and navigation delivery: #34
 - Permission-aware panels and scoped access: #35
 - Guided person-plus-location delivery: #36
+- Reusable related-record workflow pattern: #37
 
 ## Purpose
 
@@ -21,6 +22,19 @@ Workspace gives authenticated users one coherent application shell without prese
 - Guide links activate the owning work area before focusing its section. Help and issue reporting remain available from both the global header and Workspace navigation.
 - People includes a three-step person-plus-location task. Person values remain controlled while the user moves between details, location, and review; an existing visible site, building, or room can be selected, or a user with `directory.write` can create the missing location inline.
 - Building and room choices resolve to their containing site for the existing People persistence contract. The exact selected location remains visible during review so the user can confirm the relationship before the person is submitted.
+- The person-plus-location task now uses the reusable related-record workflow pattern: preserve and validate the source draft, select or create the related record, return without losing work, and explicitly confirm the relationship. Loading, failure, retry, and cancellation use the same announced states across consumers.
+
+## Reusable related-record workflow pattern
+
+Issue #37 defines a UI composition pattern for relationships among records owned by different StewardMesh features. The pattern owns only temporary in-memory workflow state. It does not own either domain record, add a combined persistence model, or call a repository directly.
+
+- **Preserve and validate:** controlled source values survive forward and backward navigation. Consumer validation identifies the owning step and leaves the draft intact.
+- **Create or select:** a readable existing record remains selectable when the caller lacks the related feature's create grant. Creation is an optional, separately authorized path.
+- **Return and confirm:** users can return to either earlier step before an explicit final confirmation. Successful completion or cancellation clears the temporary draft.
+- **Recover:** asynchronous related-record creation and final confirmation expose announced loading, focused failure, retry of the same preserved operation for transient failures, and cancellation without claiming that a failed write succeeded. Authorization and validation rejections are not blindly retried.
+- **Respect ownership:** each consumer declares the source and related feature owner, API path, and required permission. Workspace coordinates calls, while the owning APIs retain CSRF, authorization, organization scope, validation, audit, and ownership-lock enforcement.
+
+The first consumer remains People: `POST /api/v1/identities` owns person creation, while the existing site, building, and room collection APIs own location reads and writes. Both use Guard's existing `directory.read` and `directory.write` checks; Workspace introduces no bypass or replacement endpoint.
 
 ## Roles and permissions
 
@@ -78,10 +92,11 @@ Workspace stores no credentials, grants, record identifiers, or form values in U
 - `internal/httpapi/server_test.go` proves scoped session hints are returned while the organization-wide asset list remains denied.
 - `web/src/App.test.tsx` covers authenticated rendering, read/write labels, scoped collection suppression, focused navigation, deep-link updates, session expiry, context preservation, Guide entry, and automated accessibility checks.
 - `web/src/PeopleDirectory.test.tsx` covers guided draft retention, existing room selection, inline missing-room creation, containing-site submission, step-specific validation, read-only alternatives, and automated accessibility checks.
+- `web/src/RelatedRecordWorkflow.test.tsx` covers preservation, validation, selection-only fallback, return, confirmation, explicit ownership/API boundaries, loading, failure, retry, cancellation, and reset behavior.
 - `web/src/WorkspaceShell.test.tsx` covers safe hash parsing and stable deep-link generation.
 - `web/src/workspaceAccess.test.ts` covers deterministic organization, scoped, and absent grant classification.
 - Browser validation covers desktop and 320-pixel layouts, keyboard navigation, state preservation, service and permission states, console errors, and document-level overflow.
 
 ## Follow-up work
 
-Issue #37 owns reusable related-record workflows, #38 owns the broader accessibility and mobile validation pass, and #39 owns final traceability and release evidence for the parent Workspace feature.
+Issue #38 owns the broader accessibility and mobile validation pass, and #39 owns final traceability and release evidence for the parent Workspace feature.

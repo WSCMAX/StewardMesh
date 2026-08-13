@@ -93,6 +93,12 @@ export const documentationPages: readonly DocumentationPage[] = [
         callout: { title: 'Server authorization stays authoritative', body: 'Workspace uses session hints to compose the interface, but every API request is still authenticated and authorized by Guard.', tone: 'info' },
       },
       {
+        id: 'related-records',
+        title: 'Connect related records safely',
+        paragraphs: ['Guided related-record tasks preserve and validate the source draft, let you select an existing related record or create one when authorized, return to earlier steps, and ask for explicit confirmation. Loading, failure, retry, and cancellation are announced without moving record ownership into Workspace.'],
+        callout: { title: 'Owning features keep control', body: 'Each task identifies the source and related feature APIs and permissions. Those APIs still enforce validation, authorization, organization scope, and audit behavior.', tone: 'info' },
+      },
+      {
         id: 'recover',
         title: 'Recover from interruptions',
         paragraphs: ['If service health is unavailable, retained content is marked as potentially stale. If a session expires, StewardMesh clears in-memory identity, grants, CSRF material, and protected records before returning to sign-in. Invalid workspace hashes safely return to Overview.'],

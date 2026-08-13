@@ -156,6 +156,23 @@ func TestServiceExportsAndPreflightsDependencyOrderedRecordsForDurableImport(t *
 	}
 }
 
+func TestExchangeDependenciesUseCanonicalPatternsRecordTypes(t *testing.T) {
+	dependencies := portableLicenseDependencies(License{ProductID: "product", PurchaseOrderID: "purchase-order"})
+	if !reflect.DeepEqual(dependencies, []string{"ledger.purchase-order:purchase-order", "stack.product:product"}) {
+		t.Fatalf("portable license dependencies drifted from Patterns: %#v", dependencies)
+	}
+
+	references := &testReferences{}
+	service := newTestService(t, newTestStore(), references, &testAuditor{}, "source-org", time.Date(2026, time.August, 13, 12, 0, 0, 0, time.UTC))
+	handled, exists, err := service.ExchangeDependencyExists(context.Background(), "ledger.purchase-order", "purchase-order")
+	if err != nil || !handled || !exists || !reflect.DeepEqual(references.financial, []string{"|purchase-order||"}) {
+		t.Fatalf("canonical purchase-order lookup handled=%t exists=%t calls=%#v err=%v", handled, exists, references.financial, err)
+	}
+	if handled, exists, err := service.ExchangeDependencyExists(context.Background(), "ledger.purchase_order", "purchase-order"); err != nil || handled || exists {
+		t.Fatalf("legacy noncanonical purchase_order lookup handled=%t exists=%t err=%v", handled, exists, err)
+	}
+}
+
 func TestServiceRejectsTamperedPortableRecordsBeforeWriting(t *testing.T) {
 	now := time.Date(2026, time.August, 13, 12, 0, 0, 0, time.UTC)
 	source := newTestService(t, newTestStore(), &testReferences{}, &testAuditor{}, "source-org", now)

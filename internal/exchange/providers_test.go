@@ -821,7 +821,7 @@ func TestStackProviderExposesEveryCrossDomainRelationship(t *testing.T) {
 	}
 	wantLicense := []exchange.Reference{
 		{Type: "ledger.contract", ID: "contract-one"}, {Type: "ledger.cost", ID: "cost-one"},
-		{Type: "ledger.purchase_order", ID: "po-one"}, {Type: "ledger.vendor", ID: "vendor-one"},
+		{Type: "ledger.purchase-order", ID: "po-one"}, {Type: "ledger.vendor", ID: "vendor-one"},
 		{Type: "stack.product", ID: product.ID}, {Type: "stack.version", ID: version.ID},
 		{Type: "vault.blob", ID: "document-one"}, {Type: "vault.blob", ID: "document-two"},
 	}

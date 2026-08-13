@@ -1083,7 +1083,7 @@ func portableLicenseDependencies(value License) []string {
 	for _, optional := range []struct{ recordType, id string }{
 		{"stack.version", value.VersionID},
 		{"ledger.vendor", value.VendorID},
-		{"ledger.purchase_order", value.PurchaseOrderID},
+		{"ledger.purchase-order", value.PurchaseOrderID},
 		{"ledger.contract", value.ContractID},
 		{"ledger.cost", value.CostRecordID},
 	} {
@@ -1129,7 +1129,7 @@ func (s *Service) ExchangeDependencyExists(ctx context.Context, recordType, id s
 		err = s.references.ValidateAssignee(ctx, "site", id)
 	case "ledger.vendor":
 		err = s.references.ValidateFinancialReferences(ctx, id, "", "", "")
-	case "ledger.purchase_order":
+	case "ledger.purchase-order":
 		err = s.references.ValidateFinancialReferences(ctx, "", id, "", "")
 	case "ledger.contract":
 		err = s.references.ValidateFinancialReferences(ctx, "", "", id, "")

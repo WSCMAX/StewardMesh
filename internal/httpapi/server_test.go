@@ -1,7 +1,7 @@
 package httpapi
 
 // Requirements: REQ-FOUNDATION-001, REQ-WORKSPACE-001, REQ-ATLAS-001, REQ-ATLAS-MODELS-001, REQ-ATLAS-CODES-001, REQ-PEOPLE-001,
-// REQ-DIRECTORY-EXPANSION-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-HORIZON-001, REQ-PLATFORM-VALKEY-001,
+// REQ-DIRECTORY-EXPANSION-001, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-HORIZON-001, REQ-PLATFORM-VALKEY-001,
 // SEC-GUARD-001, SEC-HTTP-001. Features include experience.workspace.
 
 import (
@@ -29,6 +29,7 @@ import (
 	"github.com/maxlemke/stewardmesh/internal/horizon"
 	"github.com/maxlemke/stewardmesh/internal/identity"
 	"github.com/maxlemke/stewardmesh/internal/ledger"
+	"github.com/maxlemke/stewardmesh/internal/patterns"
 	"github.com/maxlemke/stewardmesh/internal/people"
 	"github.com/maxlemke/stewardmesh/internal/repository"
 	"github.com/maxlemke/stewardmesh/internal/storage"
@@ -146,6 +147,53 @@ func TestHealthIsPublicAndHardened(t *testing.T) {
 	}
 	if res.Header().Get("Content-Security-Policy") == "" || res.Header().Get("X-Content-Type-Options") != "nosniff" {
 		t.Fatal("expected centralized browser security headers")
+	}
+}
+
+func TestPatternsTemplateManagementSchemaValidationAndCSV(t *testing.T) {
+	handler := newGuardServer(t)
+	session := bootstrapAdministrator(t, handler)
+
+	list := httptest.NewRecorder()
+	handler.ServeHTTP(list, authenticatedRequest(http.MethodGet, "/api/v1/templates?recordType=atlas.asset", nil, session))
+	if list.Code != http.StatusOK || !strings.Contains(list.Body.String(), `"id":"builtin-atlas-asset"`) || !strings.Contains(list.Body.String(), `"accessibleLabel":"Asset name"`) {
+		t.Fatalf("expected built-in form metadata, got %d: %s", list.Code, list.Body.String())
+	}
+
+	payload := map[string]any{
+		"id": "http-intake", "recordType": "exchange.row", "name": "HTTP intake",
+		"fields": []map[string]any{
+			{"key": "name", "label": "Record name", "help": "Use the name shown by the source system.", "type": "text", "required": true},
+			{"key": "ownerId", "label": "Owner", "type": "reference", "required": true, "allowHolding": true, "referenceType": "people.identity"},
+		},
+	}
+	encoded, _ := json.Marshal(payload)
+	create := httptest.NewRecorder()
+	handler.ServeHTTP(create, authenticatedRequest(http.MethodPost, "/api/v1/templates", bytes.NewReader(encoded), session))
+	if create.Code != http.StatusCreated || !strings.Contains(create.Body.String(), `"version":1`) {
+		t.Fatalf("expected custom template creation, got %d: %s", create.Code, create.Body.String())
+	}
+
+	schema := httptest.NewRecorder()
+	handler.ServeHTTP(schema, authenticatedRequest(http.MethodGet, "/api/v1/templates/http-intake/schema?version=1", nil, session))
+	if schema.Code != http.StatusOK || !strings.Contains(schema.Body.String(), `"csvHeader":"ownerId"`) {
+		t.Fatalf("expected schema metadata, got %d: %s", schema.Code, schema.Body.String())
+	}
+
+	validationPayload, _ := json.Marshal(map[string]any{
+		"values":            map[string]any{"name": "Imported row", "ownerId": "person-404"},
+		"missingReferences": []string{"ownerId"}, "allowHoldingRecord": true,
+	})
+	validation := httptest.NewRecorder()
+	handler.ServeHTTP(validation, authenticatedRequest(http.MethodPost, "/api/v1/templates/http-intake/validate?version=1", bytes.NewReader(validationPayload), session))
+	if validation.Code != http.StatusOK || !strings.Contains(validation.Body.String(), `"status":"holding"`) || !strings.Contains(validation.Body.String(), `"field":"ownerId"`) {
+		t.Fatalf("expected visible holding result, got %d: %s", validation.Code, validation.Body.String())
+	}
+
+	csvTemplate := httptest.NewRecorder()
+	handler.ServeHTTP(csvTemplate, authenticatedRequest(http.MethodGet, "/api/v1/templates/http-intake/template.csv?version=1", nil, session))
+	if csvTemplate.Code != http.StatusOK || csvTemplate.Header().Get("Content-Type") != "text/csv; charset=utf-8" || csvTemplate.Body.String() != "name,ownerId\n" {
+		t.Fatalf("expected CSV template, got %d %q: %s", csvTemplate.Code, csvTemplate.Header().Get("Content-Type"), csvTemplate.Body.String())
 	}
 }
 
@@ -1523,6 +1571,10 @@ func newGuardServerWithIdentityAndGuard(t *testing.T, limiter guard.AttemptLimit
 	if err != nil {
 		t.Fatal(err)
 	}
+	patternsService, err := patterns.NewService(repository.NewMemoryPatternsStore(), foundation.NopAuditor{}, patterns.ServiceConfig{OrganizationID: organization.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
 	handler := NewServer(Dependencies{
 		Atlas:      atlasService,
 		AtlasCodes: atlasCodesService,
@@ -1531,6 +1583,7 @@ func newGuardServerWithIdentityAndGuard(t *testing.T, limiter guard.AttemptLimit
 		Vault:      vaultService,
 		Ledger:     ledgerService,
 		Horizon:    horizonService,
+		Patterns:   patternsService,
 		Guard:      service,
 		OIDC:       oidcFlow,
 		SAML:       samlFlow,

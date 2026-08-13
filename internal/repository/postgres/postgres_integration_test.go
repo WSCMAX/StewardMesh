@@ -1,9 +1,10 @@
 package postgres
 
 // Requirements: REQ-FOUNDATION-001, SEC-GUARD-001, REQ-PEOPLE-001,
-// REQ-DIRECTORY-EXPANSION-001, REQ-ATLAS-001, REQ-ATLAS-MODELS-001, REQ-THREADS-001,
-// REQ-STORAGE-001, REQ-LEDGER-001, REQ-HORIZON-001, REQ-ATLAS-CODES-001.
-// Features: lifecycle.planning, inventory.models, inventory.identifiers.
+// REQ-DIRECTORY-EXPANSION-001, REQ-ATLAS-001, REQ-ATLAS-MODELS-001,
+// REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-HORIZON-001,
+// REQ-ATLAS-CODES-001, REQ-PATTERNS-001.
+// Features: lifecycle.planning, inventory.models, inventory.identifiers, templates.schemas.
 
 import (
 	"context"
@@ -67,6 +68,40 @@ func TestOrganizationRepositoryIntegration(t *testing.T) {
 	if loaded.ID != id || loaded.Name != updated.Name {
 		t.Fatalf("unexpected persisted organization %#v", loaded)
 	}
+}
+
+func TestPatternsStoreIntegration(t *testing.T) {
+	databaseURL := os.Getenv("STEWARDMESH_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("STEWARDMESH_TEST_DATABASE_URL is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	database, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := Migrate(ctx, database); err != nil {
+		t.Fatal(err)
+	}
+	organizations, err := NewOrganizationRepository(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	organizationID := fmt.Sprintf("patterns-integration-%d", time.Now().UnixNano())
+	service, err := bootstrap.NewOrganizationService(organizations)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := service.EnsureOrganization(ctx, organizationID, "Patterns Integration"); err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewPatternsStore(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contracttest.PatternsStore(t, store, organizationID, fmt.Sprintf("postgres-%d", time.Now().UnixNano()))
 }
 
 func TestAuditorIntegrationTreatsEventIDAsAnIdempotencyKey(t *testing.T) {

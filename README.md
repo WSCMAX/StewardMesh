@@ -89,6 +89,13 @@ and Horizon forecasting slices will consume. See
 [Atlas Catalog](docs/features/atlas-catalog.md) for the boundary, price semantics,
 delivery slices, and current integration status.
 
+Patterns (`REQ-PATTERNS-001`, `templates.schemas`) provides immutable built-in
+schemas for every current core record type plus organization-scoped custom
+copies and versions. The same typed field metadata drives API validation,
+accessible labels and help, CSV header templates, explicit unresolved-reference
+holding results, and a provider-neutral seam for Exchange packages. See
+[Patterns](docs/features/patterns.md).
+
 Atlas Codes adds organization-scoped Code 128 and QR associations with visible
 provenance, active uniqueness, optimistic replacement and deactivation history,
 Guard ownership locks, and redacted audits. Memory and PostgreSQL providers,

@@ -6,6 +6,7 @@ import GuideExperience, { GuideInvitation, type GuideDestination } from './Guide
 import GuardAccessManager from './GuardAccessManager'
 import HorizonPlanner from './HorizonPlanner'
 import LedgerManager from './LedgerManager'
+import PatternsManager from './PatternsManager'
 import PeopleDirectory from './PeopleDirectory'
 import ThreadsManager from './ThreadsManager'
 import { AreaIcon, ChevronRightIcon, StatusBadge, buttonClass, cx, inputClass, panelClass, plainButtonClass, secondaryButtonClass, sectionKickerClass, type AreaIconName } from './ui'
@@ -14,7 +15,7 @@ import { brandingStyle, readWalkthroughStatus, resolveBranding, type Walkthrough
 import WorkspaceShell, { workspaceAreaFromHash, workspaceHash, type WorkspaceArea, type WorkspaceAreaID } from './WorkspaceShell'
 import { permissionAccess, type PermissionAccess, type SessionGrant } from './workspaceAccess'
 
-// Requirements include REQ-WORKSPACE-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-HORIZON-001, A11Y-001, DOC-001, and DOC-002.
+// Requirements include REQ-WORKSPACE-001, REQ-PATTERNS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-HORIZON-001, A11Y-001, DOC-001, and DOC-002.
 
 type WorkspaceModule = {
   id: Exclude<WorkspaceAreaID, 'overview'>
@@ -417,7 +418,7 @@ export default function App() {
     threads: <ThreadsManager assets={assets} csrfToken={csrfToken} onOpenHelp={() => openGuide({ view: 'help', topic: 'threads' })} permissions={permissions} />,
     vault: <VaultManager csrfToken={csrfToken} onOpenHelp={() => openGuide({ view: 'help', topic: 'vault' })} permissions={permissions} />,
     people: <PeopleDirectory assets={assets} csrfToken={csrfToken} issuesUrl={issuesUrl} onOpenHelp={() => openGuide({ view: 'help', topic: 'people' })} onReportIssue={() => openGuide({ view: 'report', topic: 'people' })} permissions={permissions} />,
-    guard: <GuardAccessManager csrfToken={csrfToken} onOpenHelp={() => openGuide({ view: 'help', topic: 'guard' })} />,
+    guard: <div className="grid gap-6"><GuardAccessManager csrfToken={csrfToken} onOpenHelp={() => openGuide({ view: 'help', topic: 'guard' })} /><PatternsManager csrfToken={csrfToken} /></div>,
   }
   const workspaceAreas: WorkspaceArea[] = [
     {

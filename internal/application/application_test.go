@@ -1,7 +1,7 @@
 package application
 
-// Requirements: REQ-FOUNDATION-001, REQ-STORAGE-001, REQ-HORIZON-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001.
-// Feature: lifecycle.planning.
+// Requirements: REQ-FOUNDATION-001, REQ-PATTERNS-001, REQ-STORAGE-001, REQ-HORIZON-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001.
+// Features: lifecycle.planning, templates.schemas.
 
 import (
 	"context"
@@ -45,6 +45,12 @@ func TestNewBuildsReusableMemoryApplication(t *testing.T) {
 	}
 	if body["organizationId"] != cfg.OrganizationID {
 		t.Fatalf("unexpected health response %#v", body)
+	}
+	templatesRequest := httptest.NewRequest(http.MethodGet, "/api/v1/templates", nil)
+	templatesResponse := httptest.NewRecorder()
+	app.Handler().ServeHTTP(templatesResponse, templatesRequest)
+	if templatesResponse.Code != http.StatusUnauthorized {
+		t.Fatalf("expected wired Patterns service to require authentication, got %d: %s", templatesResponse.Code, templatesResponse.Body.String())
 	}
 }
 

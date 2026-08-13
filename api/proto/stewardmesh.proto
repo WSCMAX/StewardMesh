@@ -3,12 +3,28 @@ syntax = "proto3";
 package stewardmesh.v1;
 
 import "google/protobuf/timestamp.proto";
+import "google/protobuf/struct.proto";
 
 option go_package = "github.com/maxlemke/stewardmesh/api/proto;stewardmeshv1";
 
 // Requirement: REQ-FOUNDATION-001.
 service FoundationService {
   rpc GetOrganization(GetOrganizationRequest) returns (Organization);
+}
+
+// Versioned record templates and provider-neutral typed validation.
+// Requirement: REQ-PATTERNS-001. Feature: templates.schemas.
+// The schema and validation messages are the stable Exchange seam; Exchange
+// can validate package rows without coupling to the REST or PostgreSQL layers.
+service PatternsService {
+  rpc ListTemplates(ListPatternsTemplatesRequest) returns (ListPatternsTemplatesResponse);
+  rpc CreateTemplate(CreatePatternsTemplateRequest) returns (PatternsTemplate);
+  rpc GetTemplate(GetPatternsTemplateRequest) returns (PatternsTemplate);
+  rpc GetTemplateSchema(GetPatternsTemplateSchemaRequest) returns (PatternsTemplate);
+  rpc CopyTemplate(CopyPatternsTemplateRequest) returns (PatternsTemplate);
+  rpc CreateTemplateVersion(CreatePatternsTemplateVersionRequest) returns (PatternsTemplate);
+  rpc ValidateRecord(ValidatePatternsRecordRequest) returns (PatternsValidationResult);
+  rpc ExportCSVTemplate(ExportPatternsCSVTemplateRequest) returns (ExportPatternsCSVTemplateResponse);
 }
 
 // Guard authentication contract. OpenID Connect authorization-code redirects
@@ -143,6 +159,168 @@ message Organization {
   string name = 2;
   google.protobuf.Timestamp created_at = 3;
   google.protobuf.Timestamp updated_at = 4;
+}
+
+message ListPatternsTemplatesRequest {
+  // Exact provider-neutral record family; empty returns every family.
+  string record_type = 1;
+  bool include_retired = 2;
+}
+
+message ListPatternsTemplatesResponse {
+  repeated PatternsTemplate items = 1;
+}
+
+message GetPatternsTemplateRequest {
+  string template_id = 1;
+  // Zero resolves the latest immutable version; positive values select one.
+  int64 version = 2;
+}
+
+message GetPatternsTemplateSchemaRequest {
+  string template_id = 1;
+  // Zero resolves the latest immutable version; positive values select one.
+  int64 version = 2;
+}
+
+message CreatePatternsTemplateRequest {
+  // Optional stable ID; the service generates one when empty.
+  string id = 1;
+  string record_type = 2;
+  string name = 3;
+  string description = 4;
+  repeated PatternsField fields = 5;
+}
+
+message CopyPatternsTemplateRequest {
+  string source_template_id = 1;
+  // Zero resolves the latest immutable source version.
+  int64 source_version = 2;
+  // Optional stable ID for the newly created custom template.
+  string id = 3;
+  string name = 4;
+  // Empty inherits the source version description.
+  string description = 5;
+}
+
+message CreatePatternsTemplateVersionRequest {
+  string template_id = 1;
+  // Empty inherits the current version description.
+  string description = 2;
+  repeated PatternsField fields = 3;
+}
+
+message ValidatePatternsRecordRequest {
+  string template_id = 1;
+  // Zero resolves the latest immutable version.
+  int64 version = 2;
+  // Provider-neutral JSON values keyed by PatternsField.key. This keeps the
+  // request usable by REST forms and Exchange package ingestion alike.
+  google.protobuf.Struct values = 3;
+  // Reference field keys whose resolved target is missing or not visible.
+  repeated string missing_references = 4;
+  // Missing references can enter holding only when their fields allow it.
+  bool allow_holding_record = 5;
+}
+
+message ExportPatternsCSVTemplateRequest {
+  string template_id = 1;
+  // Zero resolves the latest immutable version.
+  int64 version = 2;
+}
+
+message ExportPatternsCSVTemplateResponse {
+  bytes content = 1;
+  string media_type = 2;
+  string filename = 3;
+  string template_id = 4;
+  int64 version = 5;
+}
+
+message PatternsTemplate {
+  string id = 1;
+  // Empty for code-versioned built-ins; set for organization-owned templates.
+  string organization_id = 2;
+  string record_type = 3;
+  string name = 4;
+  string description = 5;
+  // Immutable schema version used by forms, CSV tooling, and Exchange.
+  int64 version = 6;
+  bool built_in = 7;
+  PatternsTemplateStatus status = 8;
+  repeated PatternsField fields = 9;
+  string created_by = 10;
+  google.protobuf.Timestamp created_at = 11;
+}
+
+message PatternsField {
+  string key = 1;
+  string label = 2;
+  // Concise guidance rendered beside generated controls.
+  string help = 3;
+  PatternsFieldType type = 4;
+  bool required = 5;
+  bool allow_holding = 6;
+  // Target record family for reference and attachment fields.
+  string reference_type = 7;
+  repeated string options = 8;
+  // Presence flags distinguish an omitted bound from an explicit zero bound.
+  double minimum = 9;
+  bool has_minimum = 10;
+  double maximum = 11;
+  bool has_maximum = 12;
+  uint32 maximum_length = 13;
+  string currency_field = 14;
+  // Accessible control name and validation-message prefix.
+  string accessible_label = 15;
+  // Header emitted by the CSV template in field order.
+  string csv_header = 16;
+}
+
+message PatternsFieldError {
+  string field = 1;
+  string code = 2;
+  // Accessible-label-prefixed correction guidance.
+  string message = 3;
+}
+
+message PatternsHoldingReference {
+  string field = 1;
+  string reference_type = 2;
+  // Empty when a required reference value itself was absent.
+  string value = 3;
+}
+
+message PatternsValidationResult {
+  PatternsValidationStatus status = 1;
+  google.protobuf.Struct normalized_values = 2;
+  repeated PatternsFieldError errors = 3;
+  // Non-empty when the record is otherwise valid but needs reconciliation.
+  repeated PatternsHoldingReference holding_references = 4;
+}
+
+enum PatternsFieldType {
+  PATTERNS_FIELD_TYPE_UNSPECIFIED = 0;
+  PATTERNS_FIELD_TYPE_TEXT = 1;
+  PATTERNS_FIELD_TYPE_NUMBER = 2;
+  PATTERNS_FIELD_TYPE_DATE = 3;
+  PATTERNS_FIELD_TYPE_MONEY = 4;
+  PATTERNS_FIELD_TYPE_ENUM = 5;
+  PATTERNS_FIELD_TYPE_ATTACHMENT = 6;
+  PATTERNS_FIELD_TYPE_REFERENCE = 7;
+}
+
+enum PatternsTemplateStatus {
+  PATTERNS_TEMPLATE_STATUS_UNSPECIFIED = 0;
+  PATTERNS_TEMPLATE_STATUS_ACTIVE = 1;
+  PATTERNS_TEMPLATE_STATUS_RETIRED = 2;
+}
+
+enum PatternsValidationStatus {
+  PATTERNS_VALIDATION_STATUS_UNSPECIFIED = 0;
+  PATTERNS_VALIDATION_STATUS_VALID = 1;
+  PATTERNS_VALIDATION_STATUS_HOLDING = 2;
+  PATTERNS_VALIDATION_STATUS_INVALID = 3;
 }
 
 // Requirement: SEC-GUARD-001.

@@ -1,6 +1,6 @@
 // Package application constructs StewardMesh's transport-neutral HTTP
 // application and owns the lifecycle of its shared runtime dependencies.
-// Requirements: REQ-FOUNDATION-001, REQ-ATLAS-001, REQ-ATLAS-CODES-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-HORIZON-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001.
+// Requirements: REQ-FOUNDATION-001, REQ-ATLAS-001, REQ-ATLAS-CODES-001, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-HORIZON-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001.
 package application
 
 import (
@@ -23,6 +23,7 @@ import (
 	"github.com/maxlemke/stewardmesh/internal/httpapi"
 	"github.com/maxlemke/stewardmesh/internal/identity"
 	"github.com/maxlemke/stewardmesh/internal/ledger"
+	"github.com/maxlemke/stewardmesh/internal/patterns"
 	"github.com/maxlemke/stewardmesh/internal/people"
 	"github.com/maxlemke/stewardmesh/internal/repository"
 	postgresrepository "github.com/maxlemke/stewardmesh/internal/repository/postgres"
@@ -187,6 +188,10 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 	if err != nil {
 		return fail(fmt.Errorf("initialize Horizon: %w", err))
 	}
+	patternsService, err := patterns.NewService(runtime.patternsStore, runtime.auditor, patterns.ServiceConfig{OrganizationID: cfg.OrganizationID})
+	if err != nil {
+		return fail(fmt.Errorf("initialize Patterns: %w", err))
+	}
 
 	application.handler = httpapi.NewServer(httpapi.Dependencies{
 		Atlas:               atlasService,
@@ -196,6 +201,7 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 		Vault:               vaultService,
 		Ledger:              ledgerService,
 		Horizon:             horizonService,
+		Patterns:            patternsService,
 		Guard:               guardService,
 		OIDC:                oidcFlow,
 		SAML:                samlFlow,
@@ -247,6 +253,7 @@ type foundationRuntime struct {
 	storageStore    storage.MetadataStore
 	ledgerStore     ledger.Store
 	horizonStore    horizon.Store
+	patternsStore   patterns.Store
 	guardStore      guard.Store
 	peopleStore     people.Store
 	auditor         foundation.Auditor
@@ -312,6 +319,7 @@ func initializeFoundation(ctx context.Context, cfg config.Config, runMigrations 
 		storageStore    storage.MetadataStore
 		ledgerStore     ledger.Store
 		horizonStore    horizon.Store
+		patternsStore   patterns.Store
 		guardStore      guard.Store
 		peopleStore     people.Store
 		auditor         foundation.Auditor = foundation.NopAuditor{}
@@ -328,6 +336,7 @@ func initializeFoundation(ctx context.Context, cfg config.Config, runMigrations 
 		storageStore = repository.NewMemoryStorageStore()
 		ledgerStore = repository.NewMemoryLedgerStore()
 		horizonStore = repository.NewMemoryHorizonStore()
+		patternsStore = repository.NewMemoryPatternsStore()
 	case config.RepositoryDriverPostgres:
 		database, err := postgresrepository.Open(ctx, cfg.DatabaseURL)
 		if err != nil {
@@ -390,6 +399,11 @@ func initializeFoundation(ctx context.Context, cfg config.Config, runMigrations 
 			_ = database.Close()
 			return foundationRuntime{}, err
 		}
+		patternsStore, err = postgresrepository.NewPatternsStore(database)
+		if err != nil {
+			_ = database.Close()
+			return foundationRuntime{}, err
+		}
 	default:
 		return foundationRuntime{}, fmt.Errorf("unsupported repository driver %q", cfg.RepositoryDriver)
 	}
@@ -444,6 +458,7 @@ func initializeFoundation(ctx context.Context, cfg config.Config, runMigrations 
 		storageStore:    storageStore,
 		ledgerStore:     ledgerStore,
 		horizonStore:    horizonStore,
+		patternsStore:   patternsStore,
 		guardStore:      guardStore,
 		peopleStore:     peopleStore,
 		auditor:         auditor,

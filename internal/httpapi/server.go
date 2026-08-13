@@ -1,13 +1,14 @@
 package httpapi
 
 // Requirements: REQ-FOUNDATION-001, REQ-WORKSPACE-001, REQ-ATLAS-001, REQ-ATLAS-CODES-001, REQ-PEOPLE-001,
-// REQ-DIRECTORY-EXPANSION-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-HORIZON-001, REQ-PLATFORM-VALKEY-001,
+// REQ-DIRECTORY-EXPANSION-001, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-HORIZON-001, REQ-PLATFORM-VALKEY-001,
 // SEC-GUARD-001, SEC-HTTP-001. Features include experience.workspace and inventory.models.
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"mime"
 	"net"
@@ -29,6 +30,7 @@ import (
 	"github.com/maxlemke/stewardmesh/internal/horizon"
 	"github.com/maxlemke/stewardmesh/internal/identity"
 	"github.com/maxlemke/stewardmesh/internal/ledger"
+	"github.com/maxlemke/stewardmesh/internal/patterns"
 	"github.com/maxlemke/stewardmesh/internal/people"
 	"github.com/maxlemke/stewardmesh/internal/storage"
 	"github.com/maxlemke/stewardmesh/internal/threads"
@@ -52,6 +54,7 @@ type Dependencies struct {
 	Vault               *storage.Service
 	Ledger              *ledger.Service
 	Horizon             *horizon.Service
+	Patterns            *patterns.Service
 	Guard               *guard.Service
 	OIDC                *identity.OIDCFlow
 	SAML                *identity.SAMLFlow
@@ -67,6 +70,7 @@ type Server struct {
 	vault               *storage.Service
 	ledger              *ledger.Service
 	horizon             *horizon.Service
+	patterns            *patterns.Service
 	guard               *guard.Service
 	oidc                *identity.OIDCFlow
 	saml                *identity.SAMLFlow
@@ -147,6 +151,7 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 		vault:               deps.Vault,
 		ledger:              deps.Ledger,
 		horizon:             deps.Horizon,
+		patterns:            deps.Patterns,
 		guard:               deps.Guard,
 		oidc:                deps.OIDC,
 		saml:                deps.SAML,
@@ -175,6 +180,14 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 	mux.Handle("POST /api/v1/guard/resource-ownership", server.protected(guard.PermissionGuardManage, true, server.registerGuardResourceOwnership))
 	mux.Handle("POST /api/v1/guard/resource-ownership/{resourceType}/{resourceID}/claim", server.protected(guard.PermissionGuardManage, true, server.claimGuardResourceOwnership))
 	mux.Handle("GET /api/v1/organization", server.protected(guard.PermissionOrganizationRead, false, server.getOrganization))
+	mux.Handle("GET /api/v1/templates", server.protected("", false, server.listPatternsTemplates))
+	mux.Handle("POST /api/v1/templates", server.protected(guard.PermissionGuardManage, true, server.createPatternsTemplate))
+	mux.Handle("GET /api/v1/templates/{templateID}", server.protected("", false, server.getPatternsTemplate))
+	mux.Handle("GET /api/v1/templates/{templateID}/schema", server.protected("", false, server.getPatternsTemplate))
+	mux.Handle("POST /api/v1/templates/{templateID}/copy", server.protected(guard.PermissionGuardManage, true, server.copyPatternsTemplate))
+	mux.Handle("POST /api/v1/templates/{templateID}/versions", server.protected(guard.PermissionGuardManage, true, server.createPatternsTemplateVersion))
+	mux.Handle("POST /api/v1/templates/{templateID}/validate", server.protected("", true, server.validatePatternsRecord))
+	mux.Handle("GET /api/v1/templates/{templateID}/template.csv", server.protected("", false, server.exportPatternsCSVTemplate))
 	mux.Handle("GET /api/v1/asset-models", server.protected(guard.PermissionAssetsRead, false, server.listAssetModels))
 	mux.Handle("POST /api/v1/asset-models", server.protected(guard.PermissionAssetsWrite, true, server.createAssetModel))
 	mux.Handle("GET /api/v1/asset-models/resolve", server.protected(guard.PermissionAssetsRead, false, server.resolveAssetModel))
@@ -250,6 +263,176 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 	mux.Handle("GET /api/v1/horizon/export.csv", server.protected(guard.PermissionPlanningRead, false, server.exportHorizonCSV))
 	mux.Handle("GET /api/v1/graph", server.protected("", false, server.graphView))
 	return server.correlation(server.securityHeaders(server.cors(mux)))
+}
+
+func (s *Server) listPatternsTemplates(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.patterns == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "patterns_unavailable", "Patterns templates are unavailable")
+		return
+	}
+	includeRetired := false
+	if value := strings.TrimSpace(r.URL.Query().Get("includeRetired")); value != "" {
+		parsed, err := strconv.ParseBool(value)
+		if err != nil {
+			writeError(w, r, http.StatusBadRequest, "validation_failed", "includeRetired must be true or false")
+			return
+		}
+		includeRetired = parsed
+	}
+	items, err := s.patterns.ListTemplates(r.Context(), patterns.ListQuery{RecordType: r.URL.Query().Get("recordType"), IncludeRetired: includeRetired})
+	if err != nil {
+		writePatternsError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) getPatternsTemplate(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.patterns == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "patterns_unavailable", "Patterns templates are unavailable")
+		return
+	}
+	version, ok := patternsVersion(w, r)
+	if !ok {
+		return
+	}
+	template, err := s.patterns.GetTemplate(r.Context(), r.PathValue("templateID"), version)
+	if err != nil {
+		writePatternsError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, template)
+}
+
+func (s *Server) createPatternsTemplate(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.patterns == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "patterns_unavailable", "Patterns templates are unavailable")
+		return
+	}
+	var input patterns.CreateTemplateInput
+	if err := decodeJSON(w, r, 128<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid template payload")
+		return
+	}
+	created, err := s.patterns.CreateTemplate(r.Context(), input)
+	if err != nil {
+		writePatternsError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, created)
+}
+
+func (s *Server) copyPatternsTemplate(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.patterns == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "patterns_unavailable", "Patterns templates are unavailable")
+		return
+	}
+	version, ok := patternsVersion(w, r)
+	if !ok {
+		return
+	}
+	var input patterns.CopyTemplateInput
+	if err := decodeJSON(w, r, 32<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid template copy payload")
+		return
+	}
+	created, err := s.patterns.CopyTemplate(r.Context(), r.PathValue("templateID"), version, input)
+	if err != nil {
+		writePatternsError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, created)
+}
+
+func (s *Server) createPatternsTemplateVersion(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.patterns == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "patterns_unavailable", "Patterns templates are unavailable")
+		return
+	}
+	var input patterns.NewVersionInput
+	if err := decodeJSON(w, r, 128<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid template version payload")
+		return
+	}
+	created, err := s.patterns.CreateVersion(r.Context(), r.PathValue("templateID"), input)
+	if err != nil {
+		writePatternsError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, created)
+}
+
+func (s *Server) validatePatternsRecord(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.patterns == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "patterns_unavailable", "Patterns templates are unavailable")
+		return
+	}
+	version, ok := patternsVersion(w, r)
+	if !ok {
+		return
+	}
+	var input patterns.ValidationInput
+	if err := decodeJSON(w, r, 256<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid record validation payload")
+		return
+	}
+	result, err := s.patterns.Validate(r.Context(), r.PathValue("templateID"), version, input)
+	if err != nil {
+		writePatternsError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) exportPatternsCSVTemplate(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.patterns == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "patterns_unavailable", "Patterns templates are unavailable")
+		return
+	}
+	version, ok := patternsVersion(w, r)
+	if !ok {
+		return
+	}
+	template, err := s.patterns.GetTemplate(r.Context(), r.PathValue("templateID"), version)
+	if err != nil {
+		writePatternsError(w, r, err)
+		return
+	}
+	contents, err := s.patterns.CSVTemplate(r.Context(), template.ID, template.Version)
+	if err != nil {
+		writePatternsError(w, r, err)
+		return
+	}
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="template-%s-v%d.csv"`, template.ID, template.Version))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(contents)
+}
+
+func patternsVersion(w http.ResponseWriter, r *http.Request) (int64, bool) {
+	value := strings.TrimSpace(r.URL.Query().Get("version"))
+	if value == "" {
+		return 0, true
+	}
+	version, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || version < 1 {
+		writeError(w, r, http.StatusBadRequest, "validation_failed", "version must be a positive integer")
+		return 0, false
+	}
+	return version, true
+}
+
+func writePatternsError(w http.ResponseWriter, r *http.Request, err error) {
+	switch {
+	case errors.Is(err, patterns.ErrInvalidInput):
+		writeError(w, r, http.StatusBadRequest, "validation_failed", "Patterns template or record values are invalid")
+	case errors.Is(err, patterns.ErrNotFound):
+		writeError(w, r, http.StatusNotFound, "not_found", "the requested template or version was not found")
+	case errors.Is(err, patterns.ErrConflict):
+		writeError(w, r, http.StatusConflict, "conflict", "this template conflicts with existing data or cannot be changed")
+	default:
+		writeError(w, r, http.StatusInternalServerError, "patterns_error", "the Patterns operation could not be completed")
+	}
 }
 
 func (s *Server) getLedgerSnapshot(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {

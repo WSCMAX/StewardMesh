@@ -7,15 +7,15 @@ import (
 
 // Requirements: REQ-FOUNDATION-001, SEC-GUARD-001, REQ-PEOPLE-001,
 // REQ-DIRECTORY-EXPANSION-001, REQ-ATLAS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001,
-// REQ-HORIZON-001, REQ-ATLAS-CODES-001, REQ-ATLAS-MODELS-001, REQ-ATLAS-CATALOG-001.
-// Features: lifecycle.planning, inventory.identifiers, inventory.models, inventory.catalog.
+// REQ-HORIZON-001, REQ-ATLAS-CODES-001, REQ-ATLAS-MODELS-001, REQ-ATLAS-CATALOG-001, REQ-PATTERNS-001.
+// Features: lifecycle.planning, inventory.identifiers, inventory.models, inventory.catalog, templates.schemas.
 func TestEmbeddedMigrationsAreOrderedAndChecksummed(t *testing.T) {
 	migrations, err := loadMigrations()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(migrations) != 26 {
-		t.Fatalf("expected 26 platform migrations, got %d", len(migrations))
+	if len(migrations) != 27 {
+		t.Fatalf("expected 27 platform migrations, got %d", len(migrations))
 	}
 	for index, migration := range migrations {
 		expectedVersion := int64(index + 1)
@@ -24,6 +24,22 @@ func TestEmbeddedMigrationsAreOrderedAndChecksummed(t *testing.T) {
 		}
 		if len(migration.checksum) != 64 {
 			t.Fatalf("expected SHA-256 checksum for migration %d", migration.version)
+		}
+	}
+}
+
+func TestPatternsMigrationAddsImmutableOrganizationScopedTemplateVersions(t *testing.T) {
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents := migrations[26].contents
+	for _, expected := range []string{
+		"REQ-PATTERNS-001", "templates.schemas", "GitHub: #8", "CREATE TABLE pattern_template_versions",
+		"PRIMARY KEY (organization_id, id, version)", "fields JSONB", "pattern_template_name_unique",
+	} {
+		if !strings.Contains(contents, expected) {
+			t.Fatalf("Patterns migration is missing %q", expected)
 		}
 	}
 }

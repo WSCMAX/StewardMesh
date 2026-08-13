@@ -1,6 +1,6 @@
 package exchange
 
-// Requirement: REQ-EXCHANGE-001. Feature: migration.packages. GitHub: #9.
+// Requirements: REQ-EXCHANGE-001, REQ-PATTERNS-001. Features: migration.packages, templates.schemas. GitHub: #9, #8.
 
 import (
 	"bytes"
@@ -12,6 +12,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/maxlemke/stewardmesh/internal/stack"
 	"github.com/maxlemke/stewardmesh/internal/storage"
@@ -39,7 +40,7 @@ func (p *StackProvider) ListRecords(ctx context.Context) ([]Record, error) {
 	}
 	result := make([]Record, 0, len(portable))
 	for _, item := range portable {
-		payload, err := sanitizeStackPayload(item.Payload)
+		payload, err := projectStackPayload(item.Type, item.Payload)
 		if err != nil {
 			return nil, err
 		}
@@ -52,16 +53,9 @@ func (p *StackProvider) ListRecords(ctx context.Context) ([]Record, error) {
 			dependencies = append(dependencies, reference)
 		}
 		sort.Slice(dependencies, func(i, j int) bool { return dependencies[i].Key() < dependencies[j].Key() })
-		var source struct {
-			SourceSystemID string `json:"sourceSystemId"`
-			SourceRecordID string `json:"sourceRecordId"`
-		}
-		if err := json.Unmarshal(payload, &source); err != nil {
-			return nil, stack.ErrInvalidInput
-		}
 		result = append(result, Record{
 			Type: item.Type, ID: item.ID, Revision: item.Revision, Dependencies: dependencies,
-			Provenance: Provenance{SourceSystemID: source.SourceSystemID, SourceRecordID: source.SourceRecordID},
+			Provenance: Provenance{SourceSystemID: item.SourceSystemID, SourceRecordID: item.SourceRecordID},
 			Ownership:  OwnershipMetadata{State: "local"}, Payload: payload,
 		})
 	}
@@ -93,7 +87,7 @@ func (p *StackProvider) ImportRecordExists(ctx context.Context, record Record, _
 		dependencies = append(dependencies, dependency.Key())
 	}
 	if err == nil {
-		payload, sanitizeErr := sanitizeStackPayload(current.Payload)
+		payload, sanitizeErr := projectStackPayload(current.Type, current.Payload)
 		if sanitizeErr != nil {
 			return false, sanitizeErr
 		}
@@ -122,10 +116,14 @@ func (p *StackProvider) ImportRecord(ctx context.Context, operation ProviderImpo
 	for _, dependency := range record.Dependencies {
 		dependencies = append(dependencies, dependency.Key())
 	}
+	domainPayload, err := restoreStackPayload(record)
+	if err != nil {
+		return ProviderImportResult{}, err
+	}
 	result, err := p.service.ImportExchangeRecord(ctx, stack.ExchangeImportOperation{Token: operation.Token, OccurredAt: operation.OccurredAt}, sourceSystemID, stack.ExchangeRecord{
 		Type: record.Type, ID: record.ID, Revision: record.Revision,
 		Dependencies: dependencies, SourceSystemID: record.Provenance.SourceSystemID,
-		SourceRecordID: record.Provenance.SourceRecordID, Payload: append([]byte(nil), record.Payload...),
+		SourceRecordID: record.Provenance.SourceRecordID, Payload: domainPayload,
 	})
 	providerResult := ProviderImportResult{Committed: result.Committed, Created: result.Created}
 	if errors.Is(err, stack.ErrReferenceMissing) || errors.Is(err, stack.ErrNotFound) {
@@ -140,7 +138,7 @@ func (p *StackProvider) ImportRecord(ctx context.Context, operation ProviderImpo
 	return providerResult, err
 }
 
-func sanitizeStackPayload(payload []byte) ([]byte, error) {
+func projectStackPayload(recordType string, payload []byte) ([]byte, error) {
 	var value map[string]json.RawMessage
 	decoder := json.NewDecoder(bytes.NewReader(payload))
 	if err := decoder.Decode(&value); err != nil {
@@ -149,8 +147,72 @@ func sanitizeStackPayload(payload []byte) ([]byte, error) {
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) || value == nil {
 		return nil, stack.ErrInvalidInput
 	}
-	for _, field := range []string{"organizationId", "createdAt", "updatedAt"} {
-		delete(value, field)
+	allowed := map[string][]string{
+		"stack.product":      {"name", "publisher", "category", "status"},
+		"stack.version":      {"productId", "name", "releasedOn", "status"},
+		"stack.installation": {"versionId", "assetId", "status", "usageState", "installedAt", "lastUsedAt", "removedAt"},
+		"stack.license":      {"productId", "versionId", "name", "entitlementMetric", "quantity", "status", "startsOn", "expiresOn", "vendorId", "purchaseOrderId", "contractId", "costRecordId", "documentIds"},
+		"stack.assignment":   {"licenseId", "assigneeKind", "assigneeId", "seats", "usageState", "assignedAt", "lastUsedAt", "endedAt"},
+	}[recordType]
+	if len(allowed) == 0 {
+		return nil, stack.ErrInvalidInput
+	}
+	projected := make(map[string]json.RawMessage, len(allowed))
+	for _, field := range allowed {
+		if raw, ok := value[field]; ok && string(raw) != "null" {
+			projected[field] = raw
+		}
+	}
+	for _, field := range []string{"releasedOn", "startsOn", "expiresOn"} {
+		raw, ok := projected[field]
+		if !ok {
+			continue
+		}
+		var instant time.Time
+		if err := json.Unmarshal(raw, &instant); err != nil {
+			return nil, stack.ErrInvalidInput
+		}
+		projected[field], _ = json.Marshal(instant.UTC().Format("2006-01-02"))
+	}
+	if raw, ok := projected["documentIds"]; ok {
+		var ids []string
+		if err := json.Unmarshal(raw, &ids); err != nil {
+			return nil, stack.ErrInvalidInput
+		}
+		projected["documentIds"], _ = json.Marshal(strings.Join(ids, ","))
+	}
+	result, err := json.Marshal(projected)
+	if err != nil || len(result) > MaximumPayloadBytes {
+		return nil, stack.ErrInvalidInput
+	}
+	return result, nil
+}
+
+func restoreStackPayload(record Record) ([]byte, error) {
+	var value map[string]any
+	decoder := json.NewDecoder(bytes.NewReader(record.Payload))
+	decoder.UseNumber()
+	if err := decoder.Decode(&value); err != nil || value == nil {
+		return nil, stack.ErrInvalidInput
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return nil, stack.ErrInvalidInput
+	}
+	value["id"], value["revision"] = record.ID, record.Revision
+	value["sourceSystemId"], value["sourceRecordId"] = record.Provenance.SourceSystemID, record.Provenance.SourceRecordID
+	for _, field := range []string{"releasedOn", "startsOn", "expiresOn"} {
+		if date, ok := value[field].(string); ok && date != "" {
+			value[field] = date + "T00:00:00Z"
+		}
+	}
+	if documents, ok := value["documentIds"].(string); ok {
+		ids := []string{}
+		for _, id := range strings.Split(documents, ",") {
+			if id = strings.TrimSpace(id); id != "" {
+				ids = append(ids, id)
+			}
+		}
+		value["documentIds"] = ids
 	}
 	result, err := json.Marshal(value)
 	if err != nil || len(result) > MaximumPayloadBytes {
@@ -173,7 +235,6 @@ type VaultProvider struct{ service *storage.Service }
 // identifiers as well as the server-owned object key. Provider is descriptive
 // metadata only; it is never used to address an object during import.
 type vaultPortablePayload struct {
-	ID           string `json:"id"`
 	Name         string `json:"name"`
 	MediaType    string `json:"mediaType"`
 	SizeBytes    int64  `json:"sizeBytes"`
@@ -203,7 +264,7 @@ func (p *VaultProvider) ListRecords(ctx context.Context) ([]Record, error) {
 	result := make([]Record, 0, len(items))
 	for _, item := range items {
 		payload, err := json.Marshal(vaultPortablePayload{
-			ID: item.ID, Name: item.Name, MediaType: item.MediaType, SizeBytes: item.SizeBytes,
+			Name: item.Name, MediaType: item.MediaType, SizeBytes: item.SizeBytes,
 			SHA256: item.SHA256, Provider: item.Provider, ResourceType: item.ResourceType,
 			ResourceID: item.ResourceID,
 		})
@@ -315,7 +376,7 @@ func vaultImportInput(record Record) (storage.ImportBlobInput, error) {
 	if err := decoder.Decode(&value); err != nil {
 		return storage.ImportBlobInput{}, ErrInvalidInput
 	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) || value.ID != record.ID ||
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) ||
 		value.Name != record.File.Name || value.MediaType != record.File.MediaType || value.SizeBytes != record.File.SizeBytes || value.SHA256 != record.File.SHA256 {
 		return storage.ImportBlobInput{}, ErrInvalidInput
 	}

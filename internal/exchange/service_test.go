@@ -1,6 +1,6 @@
 package exchange_test
 
-// Requirement: REQ-EXCHANGE-001. Feature: migration.packages. GitHub: #9.
+// Requirements: REQ-EXCHANGE-001, REQ-PATTERNS-001. Features: migration.packages, templates.schemas. GitHub: #9, #8.
 
 import (
 	"context"
@@ -14,6 +14,7 @@ import (
 	"github.com/maxlemke/stewardmesh/internal/exchange"
 	"github.com/maxlemke/stewardmesh/internal/foundation"
 	"github.com/maxlemke/stewardmesh/internal/guard"
+	"github.com/maxlemke/stewardmesh/internal/patterns"
 	"github.com/maxlemke/stewardmesh/internal/repository"
 )
 
@@ -24,7 +25,7 @@ func TestServiceExportsDependencyClosureImportsInOrderAndReplaysExactly(t *testi
 		testRecord("test.parent", "parent-one", []exchange.Reference{}),
 	}}
 	source, err := exchange.NewService(repository.NewMemoryExchangeStore(), foundation.NopAuditor{}, newExchangeOwnership(), exchange.ServiceConfig{
-		OrganizationID: "source-org", SourceSystemID: "steward-source", Now: fixedExchangeNow,
+		OrganizationID: "source-org", SourceSystemID: "steward-source", Schemas: newExchangePatterns(t, "test.parent", "test.child"), Now: fixedExchangeNow,
 	}, sourceProvider)
 	if err != nil {
 		t.Fatal(err)
@@ -46,7 +47,7 @@ func TestServiceExportsDependencyClosureImportsInOrderAndReplaysExactly(t *testi
 	ownership := newExchangeOwnership("target-org")
 	targetStore := repository.NewMemoryExchangeStore()
 	target, err := exchange.NewService(targetStore, foundation.NopAuditor{}, ownership, exchange.ServiceConfig{
-		OrganizationID: "target-org", SourceSystemID: "steward-target", Now: fixedExchangeNow,
+		OrganizationID: "target-org", SourceSystemID: "steward-target", Schemas: newExchangePatterns(t, "test.parent", "test.child"), Now: fixedExchangeNow,
 	}, targetProvider)
 	if err != nil {
 		t.Fatal(err)
@@ -84,7 +85,7 @@ func TestServiceKeepsMissingProvidersReferencesAndMetadataOnlyFilesVisibleInHold
 	}
 	sourceProvider := &exchangeTestProvider{types: []string{"test.child"}, records: []exchange.Record{record}}
 	source, _ := exchange.NewService(repository.NewMemoryExchangeStore(), foundation.NopAuditor{}, newExchangeOwnership("holding-source"), exchange.ServiceConfig{
-		OrganizationID: "holding-source", SourceSystemID: "holding-system", Now: fixedExchangeNow,
+		OrganizationID: "holding-source", SourceSystemID: "holding-system", Schemas: newExchangePatterns(t, "test.child"), Now: fixedExchangeNow,
 	}, sourceProvider)
 	artifact, err := source.Export(context.Background(), "source-operator", exchange.ExportRequest{
 		Selection: []exchange.Reference{{Type: "test.child", ID: "held-one"}}, FileMode: exchange.FileModeMetadata,
@@ -95,7 +96,7 @@ func TestServiceKeepsMissingProvidersReferencesAndMetadataOnlyFilesVisibleInHold
 	targetProvider := &exchangeTestProvider{types: []string{"test.child"}, exists: make(map[string]bool)}
 	ownership := newExchangeOwnership("holding-target")
 	target, _ := exchange.NewService(repository.NewMemoryExchangeStore(), foundation.NopAuditor{}, ownership, exchange.ServiceConfig{
-		OrganizationID: "holding-target", SourceSystemID: "target-system", Now: fixedExchangeNow,
+		OrganizationID: "holding-target", SourceSystemID: "target-system", Schemas: newExchangePatterns(t, "test.child"), Now: fixedExchangeNow,
 	}, targetProvider)
 	result, err := target.Import(context.Background(), "target-operator", artifact.Bytes)
 	if err != nil {
@@ -111,7 +112,7 @@ func TestServiceRetriesHoldingWhenDependenciesBecomeAvailable(t *testing.T) {
 	record := testRecord("test.child", "retry-held", []exchange.Reference{{Type: "test.parent", ID: "later-parent"}})
 	sourceProvider := &exchangeTestProvider{types: []string{"test.child"}, records: []exchange.Record{record}}
 	source, err := exchange.NewService(repository.NewMemoryExchangeStore(), foundation.NopAuditor{}, newExchangeOwnership("hold-retry-source"), exchange.ServiceConfig{
-		OrganizationID: "hold-retry-source", SourceSystemID: "hold-retry-system", Now: fixedExchangeNow,
+		OrganizationID: "hold-retry-source", SourceSystemID: "hold-retry-system", Schemas: newExchangePatterns(t, "test.child", "test.parent"), Now: fixedExchangeNow,
 	}, sourceProvider)
 	if err != nil {
 		t.Fatal(err)
@@ -126,7 +127,7 @@ func TestServiceRetriesHoldingWhenDependenciesBecomeAvailable(t *testing.T) {
 		types: []string{"test.child", "test.parent"}, exists: map[string]bool{"test.parent:later-parent": false},
 	}
 	target, err := exchange.NewService(repository.NewMemoryExchangeStore(), foundation.NopAuditor{}, newExchangeOwnership("hold-retry-target"), exchange.ServiceConfig{
-		OrganizationID: "hold-retry-target", SourceSystemID: "target-system", Now: fixedExchangeNow,
+		OrganizationID: "hold-retry-target", SourceSystemID: "target-system", Schemas: newExchangePatterns(t, "test.child", "test.parent"), Now: fixedExchangeNow,
 	}, targetProvider)
 	if err != nil {
 		t.Fatal(err)
@@ -151,7 +152,7 @@ func TestServiceRetriesFailedPackageAndPreservesClaimedOwnership(t *testing.T) {
 	record.Provenance = exchange.Provenance{SourceSystemID: "original-system", SourceRecordID: "original-record"}
 	sourceProvider := &exchangeTestProvider{types: []string{"test.record"}, records: []exchange.Record{record}}
 	source, _ := exchange.NewService(repository.NewMemoryExchangeStore(), foundation.NopAuditor{}, newExchangeOwnership("retry-source"), exchange.ServiceConfig{
-		OrganizationID: "retry-source", SourceSystemID: "immediate-source", Now: fixedExchangeNow,
+		OrganizationID: "retry-source", SourceSystemID: "immediate-source", Schemas: newExchangePatterns(t, "test.record"), Now: fixedExchangeNow,
 	}, sourceProvider)
 	artifact, err := source.Export(context.Background(), "source-operator", exchange.ExportRequest{
 		Selection: []exchange.Reference{{Type: "test.record", ID: "record-one"}}, FileMode: exchange.FileModeMetadata,
@@ -163,7 +164,7 @@ func TestServiceRetriesFailedPackageAndPreservesClaimedOwnership(t *testing.T) {
 	ownership := newExchangeOwnership("retry-target")
 	store := repository.NewMemoryExchangeStore()
 	target, _ := exchange.NewService(store, foundation.NopAuditor{}, ownership, exchange.ServiceConfig{
-		OrganizationID: "retry-target", SourceSystemID: "target-system", Now: fixedExchangeNow,
+		OrganizationID: "retry-target", SourceSystemID: "target-system", Schemas: newExchangePatterns(t, "test.record"), Now: fixedExchangeNow,
 	}, targetProvider)
 	if _, err := target.Import(context.Background(), "target-operator", artifact.Bytes); err == nil {
 		t.Fatal("expected first provider attempt to fail")
@@ -193,7 +194,7 @@ func TestServiceRetriesFailedPackageAndPreservesClaimedOwnership(t *testing.T) {
 	claimedRecord.Provenance = exchange.Provenance{SourceSystemID: "claimed-source", SourceRecordID: "claimed-record"}
 	claimedSourceProvider := &exchangeTestProvider{types: []string{"test.record"}, records: []exchange.Record{claimedRecord}}
 	claimedSource, _ := exchange.NewService(repository.NewMemoryExchangeStore(), foundation.NopAuditor{}, newExchangeOwnership("claimed-source-org"), exchange.ServiceConfig{
-		OrganizationID: "claimed-source-org", SourceSystemID: "claimed-source", Now: fixedExchangeNow,
+		OrganizationID: "claimed-source-org", SourceSystemID: "claimed-source", Schemas: newExchangePatterns(t, "test.record"), Now: fixedExchangeNow,
 	}, claimedSourceProvider)
 	claimedArtifact, err := claimedSource.Export(context.Background(), "source-operator", exchange.ExportRequest{
 		Selection: []exchange.Reference{{Type: "test.record", ID: "record-two"}}, FileMode: exchange.FileModeMetadata,
@@ -217,7 +218,7 @@ func TestServiceTakesOverStaleProcessingReceiptAfterFinalUpdateFailure(t *testin
 	record := testRecord("test.record", "leased-record", []exchange.Reference{})
 	sourceProvider := &exchangeTestProvider{types: []string{"test.record"}, records: []exchange.Record{record}}
 	source, _ := exchange.NewService(repository.NewMemoryExchangeStore(), foundation.NopAuditor{}, newExchangeOwnership("lease-source"), exchange.ServiceConfig{
-		OrganizationID: "lease-source", SourceSystemID: "lease-system", Now: func() time.Time { return now },
+		OrganizationID: "lease-source", SourceSystemID: "lease-system", Schemas: newExchangePatterns(t, "test.record"), Now: func() time.Time { return now },
 	}, sourceProvider)
 	artifact, err := source.Export(context.Background(), "source-operator", exchange.ExportRequest{
 		Selection: []exchange.Reference{{Type: "test.record", ID: "leased-record"}}, FileMode: exchange.FileModeMetadata,
@@ -230,7 +231,7 @@ func TestServiceTakesOverStaleProcessingReceiptAfterFinalUpdateFailure(t *testin
 	store := &terminalFailureExchangeStore{Store: baseStore, failTerminal: true}
 	targetProvider := &exchangeTestProvider{types: []string{"test.record"}, exists: make(map[string]bool)}
 	target, _ := exchange.NewService(store, foundation.NopAuditor{}, newExchangeOwnership("lease-target"), exchange.ServiceConfig{
-		OrganizationID: "lease-target", SourceSystemID: "target-system", Now: func() time.Time { return now },
+		OrganizationID: "lease-target", SourceSystemID: "target-system", Schemas: newExchangePatterns(t, "test.record"), Now: func() time.Time { return now },
 	}, targetProvider)
 	if _, err := target.Import(context.Background(), "target-operator", artifact.Bytes); err == nil {
 		t.Fatal("expected the injected terminal receipt update failure")
@@ -261,7 +262,7 @@ func TestServicePersistsPartialOutcomesAndResumesAfterSecondRecordFailure(t *tes
 	}
 	sourceProvider := &exchangeTestProvider{types: []string{"test.record"}, records: records}
 	source, _ := exchange.NewService(repository.NewMemoryExchangeStore(), foundation.NopAuditor{}, newExchangeOwnership("saga-source"), exchange.ServiceConfig{
-		OrganizationID: "saga-source", SourceSystemID: "saga-system", Now: fixedExchangeNow,
+		OrganizationID: "saga-source", SourceSystemID: "saga-system", Schemas: newExchangePatterns(t, "test.record"), Now: fixedExchangeNow,
 	}, sourceProvider)
 	artifact, err := source.Export(context.Background(), "source-operator", exchange.ExportRequest{
 		Selection: []exchange.Reference{{Type: "test.record", ID: "record-a"}, {Type: "test.record", ID: "record-b"}},
@@ -275,7 +276,7 @@ func TestServicePersistsPartialOutcomesAndResumesAfterSecondRecordFailure(t *tes
 	provider := &exchangeTestProvider{types: []string{"test.record"}, exists: make(map[string]bool), failOnCall: 2}
 	ownership := newExchangeOwnership("saga-target")
 	target, _ := exchange.NewService(store, foundation.NopAuditor{}, ownership, exchange.ServiceConfig{
-		OrganizationID: "saga-target", SourceSystemID: "target-system", Now: fixedExchangeNow,
+		OrganizationID: "saga-target", SourceSystemID: "target-system", Schemas: newExchangePatterns(t, "test.record"), Now: fixedExchangeNow,
 	}, provider)
 	if _, err := target.Import(context.Background(), "target-operator", artifact.Bytes); err == nil {
 		t.Fatal("expected the second provider write to fail")
@@ -302,7 +303,7 @@ func TestServiceRetainsCommittedOutcomeAndOwnershipUntilProviderAuditRepairs(t *
 	record := testRecord("test.record", "committed-record", []exchange.Reference{})
 	sourceProvider := &exchangeTestProvider{types: []string{"test.record"}, records: []exchange.Record{record}}
 	source, _ := exchange.NewService(repository.NewMemoryExchangeStore(), foundation.NopAuditor{}, newExchangeOwnership("committed-source"), exchange.ServiceConfig{
-		OrganizationID: "committed-source", SourceSystemID: "committed-system", Now: fixedExchangeNow,
+		OrganizationID: "committed-source", SourceSystemID: "committed-system", Schemas: newExchangePatterns(t, "test.record"), Now: fixedExchangeNow,
 	}, sourceProvider)
 	artifact, err := source.Export(context.Background(), "source-operator", exchange.ExportRequest{
 		Selection: []exchange.Reference{{Type: "test.record", ID: record.ID}}, FileMode: exchange.FileModeMetadata,
@@ -314,7 +315,7 @@ func TestServiceRetainsCommittedOutcomeAndOwnershipUntilProviderAuditRepairs(t *
 	provider := &exchangeTestProvider{types: []string{"test.record"}, exists: make(map[string]bool), committedFailures: 1}
 	ownership := newExchangeOwnership("committed-target")
 	target, _ := exchange.NewService(repository.NewMemoryExchangeStore(), foundation.NopAuditor{}, ownership, exchange.ServiceConfig{
-		OrganizationID: "committed-target", SourceSystemID: "target-system", Now: fixedExchangeNow,
+		OrganizationID: "committed-target", SourceSystemID: "target-system", Schemas: newExchangePatterns(t, "test.record"), Now: fixedExchangeNow,
 	}, provider)
 	if _, err := target.Import(context.Background(), "target-operator", artifact.Bytes); err == nil {
 		t.Fatal("expected the provider's post-commit audit failure")
@@ -344,7 +345,7 @@ func TestServiceRecoversCreatedTruthAfterCrashBetweenProviderWriteAndReceiptChec
 	record := testRecord("test.record", "crash-record", []exchange.Reference{})
 	sourceProvider := &exchangeTestProvider{types: []string{"test.record"}, records: []exchange.Record{record}}
 	source, _ := exchange.NewService(repository.NewMemoryExchangeStore(), foundation.NopAuditor{}, newExchangeOwnership("crash-source"), exchange.ServiceConfig{
-		OrganizationID: "crash-source", SourceSystemID: "crash-system", Now: func() time.Time { return now },
+		OrganizationID: "crash-source", SourceSystemID: "crash-system", Schemas: newExchangePatterns(t, "test.record"), Now: func() time.Time { return now },
 	}, sourceProvider)
 	artifact, err := source.Export(context.Background(), "source-operator", exchange.ExportRequest{
 		Selection: []exchange.Reference{{Type: "test.record", ID: record.ID}}, FileMode: exchange.FileModeMetadata,
@@ -358,7 +359,7 @@ func TestServiceRecoversCreatedTruthAfterCrashBetweenProviderWriteAndReceiptChec
 	provider := &exchangeTestProvider{types: []string{"test.record"}, exists: make(map[string]bool)}
 	ownership := newExchangeOwnership("crash-target")
 	target, _ := exchange.NewService(store, foundation.NopAuditor{}, ownership, exchange.ServiceConfig{
-		OrganizationID: "crash-target", SourceSystemID: "target-system", Now: func() time.Time { return now },
+		OrganizationID: "crash-target", SourceSystemID: "target-system", Schemas: newExchangePatterns(t, "test.record"), Now: func() time.Time { return now },
 	}, provider)
 	if _, err := target.Import(context.Background(), "first-worker", artifact.Bytes); err == nil {
 		t.Fatal("expected receipt storage to disappear after the provider commit")
@@ -389,7 +390,7 @@ func TestServiceRenewsLeaseWhileProviderWriteIsBlocked(t *testing.T) {
 	record := testRecord("test.record", "slow-record", []exchange.Reference{})
 	sourceProvider := &exchangeTestProvider{types: []string{"test.record"}, records: []exchange.Record{record}}
 	source, _ := exchange.NewService(repository.NewMemoryExchangeStore(), foundation.NopAuditor{}, newExchangeOwnership("slow-source"), exchange.ServiceConfig{
-		OrganizationID: "slow-source", SourceSystemID: "slow-system", Now: func() time.Time { return time.Now().UTC() },
+		OrganizationID: "slow-source", SourceSystemID: "slow-system", Schemas: newExchangePatterns(t, "test.record"), Now: func() time.Time { return time.Now().UTC() },
 	}, sourceProvider)
 	artifact, err := source.Export(context.Background(), "source-operator", exchange.ExportRequest{
 		Selection: []exchange.Reference{{Type: "test.record", ID: record.ID}}, FileMode: exchange.FileModeMetadata,
@@ -402,7 +403,7 @@ func TestServiceRenewsLeaseWhileProviderWriteIsBlocked(t *testing.T) {
 	store := repository.NewMemoryExchangeStore()
 	ownership := newExchangeOwnership("slow-target")
 	configuration := exchange.ServiceConfig{
-		OrganizationID: "slow-target", SourceSystemID: "target-system", Now: func() time.Time { return time.Now().UTC() }, ProcessingLease: lease,
+		OrganizationID: "slow-target", SourceSystemID: "target-system", Schemas: newExchangePatterns(t, "test.record"), Now: func() time.Time { return time.Now().UTC() }, ProcessingLease: lease,
 	}
 	firstWorker, _ := exchange.NewService(store, foundation.NopAuditor{}, ownership, configuration, provider)
 	secondWorker, _ := exchange.NewService(store, foundation.NopAuditor{}, ownership, configuration, provider)
@@ -447,6 +448,251 @@ func TestServiceRenewsLeaseWhileProviderWriteIsBlocked(t *testing.T) {
 	}
 }
 
+func TestServicePreflightsEveryImportSchemaBeforeFirstMutation(t *testing.T) {
+	ctx := context.Background()
+	fields := []patterns.Field{
+		{Key: "id", Label: "ID", Type: patterns.FieldText, Required: true},
+		{Key: "revision", Label: "Revision", Type: patterns.FieldNumber, Required: true},
+		{Key: "name", Label: "Name", Type: patterns.FieldText, Required: true},
+	}
+	baseSchemas := newExchangePatternSet(t, map[string]patternSchemaFixture{
+		"test.first":  {id: "first-schema", fields: fields},
+		"test.second": {id: "second-schema", fields: fields},
+	})
+	validRecords := []exchange.Record{
+		testRecord("test.first", "record-a", []exchange.Reference{}),
+		testRecord("test.second", "record-b", []exchange.Reference{}),
+	}
+
+	validArtifact := exportTestArtifact(t, baseSchemas, validRecords)
+	invalidRecords := append([]exchange.Record(nil), validRecords...)
+	invalidRecords[1] = testRecord("test.second", "record-b", []exchange.Reference{})
+	invalidRecords[1].Payload = json.RawMessage(`{"id":"record-b","revision":1}`)
+	invalidArtifact := exportTestArtifact(t, permissiveExchangePatterns{SchemaRegistry: baseSchemas}, invalidRecords)
+
+	tests := []struct {
+		name     string
+		artifact exchange.ExportArtifact
+		schemas  exchange.SchemaRegistry
+	}{
+		{name: "later schema id mismatch", artifact: validArtifact, schemas: selectiveExchangePatterns{SchemaRegistry: baseSchemas, recordType: "test.second", mismatch: true}},
+		{name: "later schema retired", artifact: validArtifact, schemas: selectiveExchangePatterns{SchemaRegistry: baseSchemas, recordType: "test.second", retired: true}},
+		{name: "later typed payload invalid", artifact: invalidArtifact, schemas: baseSchemas},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			baseStore := repository.NewMemoryExchangeStore()
+			store := &countingExchangeStore{Store: baseStore}
+			provider := &exchangeTestProvider{types: []string{"test.first", "test.second"}, exists: map[string]bool{}}
+			ownership := newExchangeOwnership("schema-preflight-target")
+			target, err := exchange.NewService(store, foundation.NopAuditor{}, ownership, exchange.ServiceConfig{
+				OrganizationID: "schema-preflight-target", SourceSystemID: "schema-preflight-target-system", Schemas: test.schemas, Now: fixedExchangeNow,
+			}, provider)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := target.Import(ctx, "target-operator", test.artifact.Bytes); !errors.Is(err, exchange.ErrInvalidInput) {
+				t.Fatalf("expected all-record schema preflight rejection, got %v", err)
+			}
+			if store.creates != 1 || store.updates != 1 {
+				t.Fatalf("schema failure made unexpected receipt mutations: creates=%d updates=%d", store.creates, store.updates)
+			}
+			history, err := target.ListPackages(ctx, 25)
+			if err != nil || len(history) != 1 || history[0].Status != exchange.StatusFailed || len(history[0].Records) != 0 || len(history[0].Progress) != 0 {
+				t.Fatalf("schema failure did not remain an empty failed receipt: %#v err=%v", history, err)
+			}
+			if provider.calls != 0 || len(provider.imported) != 0 || len(ownership.values) != 0 {
+				t.Fatalf("later schema failure mutated the first record: calls=%d imports=%#v ownership=%#v", provider.calls, provider.imported, ownership.values)
+			}
+		})
+	}
+}
+
+func TestServiceRejectsFractionalMoneyBeforeGuardOrProviderMutation(t *testing.T) {
+	fields := []patterns.Field{
+		{Key: "currency", Label: "Currency", Type: patterns.FieldText, Required: true, MaximumLength: 3},
+		{Key: "amountMinor", Label: "Amount", Type: patterns.FieldMoney, Required: true, CurrencyField: "currency"},
+	}
+	schemas := newExchangePatternTemplate(t, "test.money", "money-schema", fields)
+	for _, token := range []string{"9007199254740990.5", "1.0000000000000001", "0.99999999999999999"} {
+		t.Run(token, func(t *testing.T) {
+			record := testRecord("test.money", "money-row", nil)
+			record.Payload = json.RawMessage(`{"currency":"USD","amountMinor":` + token + `}`)
+			sourceProvider := &exchangeTestProvider{types: []string{"test.money"}, records: []exchange.Record{record}}
+			source, err := exchange.NewService(repository.NewMemoryExchangeStore(), foundation.NopAuditor{}, newExchangeOwnership("money-source"), exchange.ServiceConfig{
+				OrganizationID: "money-source", SourceSystemID: "money-system", Schemas: permissiveExchangePatterns{SchemaRegistry: schemas}, Now: fixedExchangeNow,
+			}, sourceProvider)
+			if err != nil {
+				t.Fatal(err)
+			}
+			artifact, err := source.Export(context.Background(), "operator", exchange.ExportRequest{Selection: []exchange.Reference{{Type: "test.money", ID: "money-row"}}, FileMode: exchange.FileModeMetadata})
+			if err != nil {
+				t.Fatal(err)
+			}
+			targetProvider := &exchangeTestProvider{types: []string{"test.money"}, exists: map[string]bool{}}
+			ownership := newExchangeOwnership("money-target")
+			target, err := exchange.NewService(repository.NewMemoryExchangeStore(), foundation.NopAuditor{}, ownership, exchange.ServiceConfig{
+				OrganizationID: "money-target", SourceSystemID: "money-target-system", Schemas: schemas, Now: fixedExchangeNow,
+			}, targetProvider)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := target.Import(context.Background(), "operator", artifact.Bytes); !errors.Is(err, exchange.ErrInvalidInput) {
+				t.Fatalf("expected exact-money preflight rejection, got %v", err)
+			}
+			if targetProvider.calls != 0 || len(targetProvider.imported) != 0 || len(ownership.values) != 0 {
+				t.Fatalf("fractional money reached mutation: calls=%d imported=%#v ownership=%#v", targetProvider.calls, targetProvider.imported, ownership.values)
+			}
+		})
+	}
+}
+
+func TestServiceImportsPinnedOlderCustomVersionAndPreservesCanonicalHoldingDependency(t *testing.T) {
+	schemas := newExchangePatternTemplate(t, "test.versioned", "versioned-schema", []patterns.Field{
+		{Key: "id", Label: "ID", Type: patterns.FieldText, Required: true},
+		{Key: "revision", Label: "Revision", Type: patterns.FieldNumber, Required: true},
+		{Key: "name", Label: "Name", Type: patterns.FieldText, Required: true},
+		{Key: "purchaseOrderId", Label: "Purchase order", Type: patterns.FieldReference, ReferenceType: "ledger.purchase-order", Required: true, AllowHolding: true},
+	})
+	record := testRecord("test.versioned", "versioned-row", []exchange.Reference{{Type: "ledger.purchase_order", ID: "po-1"}})
+	record.Payload = json.RawMessage(`{"id":"versioned-row","revision":1,"name":"Version one row","purchaseOrderId":"po-1"}`)
+	sourceProvider := &exchangeTestProvider{types: []string{"test.versioned", "ledger.purchase_order"}, records: []exchange.Record{record}}
+	source, err := exchange.NewService(repository.NewMemoryExchangeStore(), foundation.NopAuditor{}, newExchangeOwnership("version-source"), exchange.ServiceConfig{
+		OrganizationID: "version-source", SourceSystemID: "version-system", Schemas: schemas, Now: fixedExchangeNow,
+	}, sourceProvider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact, err := source.Export(context.Background(), "operator", exchange.ExportRequest{Selection: []exchange.Reference{{Type: "test.versioned", ID: "versioned-row"}}, FileMode: exchange.FileModeMetadata})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := schemas.CreateVersion(context.Background(), "versioned-schema", patterns.NewVersionInput{Fields: []patterns.Field{
+		{Key: "id", Label: "ID", Type: patterns.FieldText, Required: true},
+		{Key: "revision", Label: "Revision", Type: patterns.FieldNumber, Required: true},
+		{Key: "name", Label: "Name", Type: patterns.FieldText, Required: true},
+		{Key: "purchaseOrderId", Label: "Purchase order", Type: patterns.FieldReference, ReferenceType: "ledger.purchase-order", Required: true, AllowHolding: true},
+		{Key: "note", Label: "Note", Type: patterns.FieldText},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	targetProvider := &exchangeTestProvider{types: []string{"test.versioned", "ledger.purchase_order"}, exists: map[string]bool{}}
+	target, err := exchange.NewService(repository.NewMemoryExchangeStore(), foundation.NopAuditor{}, newExchangeOwnership("version-target"), exchange.ServiceConfig{
+		OrganizationID: "version-target", SourceSystemID: "version-target-system", Schemas: schemas, Now: fixedExchangeNow,
+	}, targetProvider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	held, err := target.Import(context.Background(), "operator", artifact.Bytes)
+	if err != nil || held.Package.Status != exchange.StatusHolding || len(held.Package.Records) != 1 || len(held.Package.Records[0].MissingDependencies) != 1 || held.Package.Records[0].MissingDependencies[0].Type != "ledger.purchase_order" {
+		t.Fatalf("pinned v1 was not held with the exact manifest dependency: %#v err=%v", held, err)
+	}
+	targetProvider.exists["ledger.purchase_order:po-1"] = true
+	completed, err := target.Import(context.Background(), "operator", artifact.Bytes)
+	if err != nil || completed.Package.Status != exchange.StatusCompleted || len(targetProvider.imported) != 1 || targetProvider.imported[0] != "test.versioned:versioned-row" {
+		t.Fatalf("pinned v1 did not promote after a v2 append: %#v err=%v imports=%#v", completed, err, targetProvider.imported)
+	}
+}
+
+func TestServiceRejectsOmittedRequiredReferenceEvenWhenHoldingIsAllowed(t *testing.T) {
+	fields := []patterns.Field{
+		{Key: "id", Label: "ID", Type: patterns.FieldText, Required: true},
+		{Key: "revision", Label: "Revision", Type: patterns.FieldNumber, Required: true},
+		{Key: "name", Label: "Name", Type: patterns.FieldText, Required: true},
+		{Key: "ownerId", Label: "Owner", Type: patterns.FieldReference, ReferenceType: "test.owner", Required: true, AllowHolding: true},
+	}
+	schemas := newExchangePatternTemplate(t, "test.child", "holding-schema", fields)
+	record := testRecord("test.child", "omitted-owner", []exchange.Reference{})
+	artifact := exportTestArtifact(t, permissiveExchangePatterns{SchemaRegistry: schemas}, []exchange.Record{record})
+	provider := &exchangeTestProvider{types: []string{"test.child"}, exists: map[string]bool{}}
+	ownership := newExchangeOwnership("omitted-owner-target")
+	target, err := exchange.NewService(repository.NewMemoryExchangeStore(), foundation.NopAuditor{}, ownership, exchange.ServiceConfig{
+		OrganizationID: "omitted-owner-target", SourceSystemID: "omitted-owner-system", Schemas: schemas, Now: fixedExchangeNow,
+	}, provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := target.Import(context.Background(), "target-operator", artifact.Bytes); !errors.Is(err, exchange.ErrInvalidInput) {
+		t.Fatalf("expected omitted holding-capable reference to fail without a resolvable target, got %v", err)
+	}
+	if provider.calls != 0 || len(provider.imported) != 0 || len(ownership.values) != 0 {
+		t.Fatalf("holding preflight reached a mutation: calls=%d imports=%#v ownership=%#v", provider.calls, provider.imported, ownership.values)
+	}
+}
+
+func TestServiceRejectsOmittedRequiredReferenceWhenHoldingIsDisallowed(t *testing.T) {
+	fields := []patterns.Field{
+		{Key: "id", Label: "ID", Type: patterns.FieldText, Required: true},
+		{Key: "revision", Label: "Revision", Type: patterns.FieldNumber, Required: true},
+		{Key: "name", Label: "Name", Type: patterns.FieldText, Required: true},
+		{Key: "ownerId", Label: "Owner", Type: patterns.FieldReference, ReferenceType: "test.owner", Required: true},
+	}
+	schemas := newExchangePatternTemplate(t, "test.child", "strict-schema", fields)
+	artifact := exportTestArtifact(t, permissiveExchangePatterns{SchemaRegistry: schemas}, []exchange.Record{testRecord("test.child", "missing-owner", []exchange.Reference{})})
+	provider := &exchangeTestProvider{types: []string{"test.child"}, exists: map[string]bool{}}
+	ownership := newExchangeOwnership("strict-owner-target")
+	target, err := exchange.NewService(repository.NewMemoryExchangeStore(), foundation.NopAuditor{}, ownership, exchange.ServiceConfig{
+		OrganizationID: "strict-owner-target", SourceSystemID: "strict-owner-system", Schemas: schemas, Now: fixedExchangeNow,
+	}, provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := target.Import(context.Background(), "target-operator", artifact.Bytes); !errors.Is(err, exchange.ErrInvalidInput) {
+		t.Fatalf("expected disallowed holding reference to fail closed, got %v", err)
+	}
+	if provider.calls != 0 || len(ownership.values) != 0 {
+		t.Fatalf("invalid required reference reached a mutation: calls=%d ownership=%#v", provider.calls, ownership.values)
+	}
+}
+
+func TestServicePreflightsFullExportCatalogBeforeFilesOrReceipts(t *testing.T) {
+	fields := []patterns.Field{
+		{Key: "id", Label: "ID", Type: patterns.FieldText, Required: true},
+		{Key: "revision", Label: "Revision", Type: patterns.FieldNumber, Required: true},
+		{Key: "name", Label: "Name", Type: patterns.FieldText, Required: true},
+	}
+	schemas := newExchangePatternTemplate(t, "test.record", "export-schema", fields)
+	fileRecord := testRecord("test.record", "record-a", []exchange.Reference{})
+	fileRecord.File = &exchange.FileMetadata{Mode: exchange.FileModeMetadata, Name: "row.txt", MediaType: "text/plain", SizeBytes: 4, SHA256: "9f64a747e1b97f131fabb6b447296c9b6f0201e79fb3c5356e6c77e89b6a806a"}
+	validLater := testRecord("test.record", "record-b", []exchange.Reference{})
+
+	t.Run("valid catalog exports once", func(t *testing.T) {
+		store := &countingExchangeStore{Store: repository.NewMemoryExchangeStore()}
+		provider := &exchangeTestProvider{types: []string{"test.record"}, records: []exchange.Record{fileRecord, validLater}, fileContent: map[string][]byte{"test.record:record-a": {1, 2, 3, 4}}}
+		service, err := exchange.NewService(store, foundation.NopAuditor{}, newExchangeOwnership("export-valid"), exchange.ServiceConfig{
+			OrganizationID: "export-valid", SourceSystemID: "export-valid-system", Schemas: schemas, Now: fixedExchangeNow,
+		}, provider)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := service.Export(context.Background(), "operator", exchange.ExportRequest{Selection: []exchange.Reference{{Type: "test.record", ID: "record-a"}}, FileMode: exchange.FileModeInclude}); err != nil {
+			t.Fatal(err)
+		}
+		if provider.fileReads != 1 || store.creates != 1 || store.updates != 0 {
+			t.Fatalf("valid export did not perform exactly one file read and receipt create: reads=%d creates=%d updates=%d", provider.fileReads, store.creates, store.updates)
+		}
+	})
+
+	t.Run("later invalid catalog row prevents file and receipt work", func(t *testing.T) {
+		invalidLater := validLater
+		invalidLater.Payload = json.RawMessage(`{"id":"record-b","revision":1}`)
+		store := &countingExchangeStore{Store: repository.NewMemoryExchangeStore()}
+		provider := &exchangeTestProvider{types: []string{"test.record"}, records: []exchange.Record{fileRecord, invalidLater}, fileContent: map[string][]byte{"test.record:record-a": {1, 2, 3, 4}}}
+		service, err := exchange.NewService(store, foundation.NopAuditor{}, newExchangeOwnership("export-invalid"), exchange.ServiceConfig{
+			OrganizationID: "export-invalid", SourceSystemID: "export-invalid-system", Schemas: schemas, Now: fixedExchangeNow,
+		}, provider)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := service.Export(context.Background(), "operator", exchange.ExportRequest{Selection: []exchange.Reference{{Type: "test.record", ID: "record-a"}}, FileMode: exchange.FileModeInclude}); !errors.Is(err, exchange.ErrInvalidInput) {
+			t.Fatalf("expected invalid later catalog row rejection, got %v", err)
+		}
+		if provider.fileReads != 0 || store.creates != 0 || store.updates != 0 {
+			t.Fatalf("invalid catalog reached file or receipt mutation: reads=%d creates=%d updates=%d", provider.fileReads, store.creates, store.updates)
+		}
+	})
+}
+
 type exchangeTestProvider struct {
 	types             []string
 	records           []exchange.Record
@@ -458,6 +704,8 @@ type exchangeTestProvider struct {
 	committedFailures int
 	repairCalls       int
 	operationTokens   []string
+	fileReads         int
+	fileContent       map[string][]byte
 }
 
 func (p *exchangeTestProvider) Types() []string { return append([]string(nil), p.types...) }
@@ -504,6 +752,15 @@ func (p *exchangeTestProvider) ImportRecord(_ context.Context, operation exchang
 	p.exists[key] = true
 	p.imported = append(p.imported, key)
 	return exchange.ProviderImportResult{Committed: true, Created: true}, nil
+}
+
+func (p *exchangeTestProvider) ReadRecordFile(_ context.Context, record exchange.Record) ([]byte, error) {
+	p.fileReads++
+	value, ok := p.fileContent[exchange.Reference{Type: record.Type, ID: record.ID}.Key()]
+	if !ok {
+		return nil, exchange.ErrNotFound
+	}
+	return append([]byte(nil), value...), nil
 }
 
 type blockingExchangeProvider struct {
@@ -560,6 +817,22 @@ func (p *blockingExchangeProvider) callCount() int {
 type terminalFailureExchangeStore struct {
 	exchange.Store
 	failTerminal bool
+}
+
+type countingExchangeStore struct {
+	exchange.Store
+	creates int
+	updates int
+}
+
+func (s *countingExchangeStore) CreatePackage(ctx context.Context, value exchange.Package) (exchange.Package, bool, error) {
+	s.creates++
+	return s.Store.CreatePackage(ctx, value)
+}
+
+func (s *countingExchangeStore) UpdatePackage(ctx context.Context, value exchange.Package, expected time.Time) (exchange.Package, error) {
+	s.updates++
+	return s.Store.UpdatePackage(ctx, value, expected)
 }
 
 type postWriteCrashExchangeStore struct {
@@ -630,3 +903,139 @@ func testRecord(recordType, id string, dependencies []exchange.Reference) exchan
 }
 
 func fixedExchangeNow() time.Time { return time.Date(2026, time.August, 13, 12, 0, 0, 0, time.UTC) }
+
+func newExchangePatterns(t *testing.T, recordTypes ...string) *patterns.Service {
+	t.Helper()
+	service, err := patterns.NewService(repository.NewMemoryPatternsStore(), foundation.NopAuditor{}, patterns.ServiceConfig{OrganizationID: "exchange-patterns"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, recordType := range recordTypes {
+		if _, _, builtIn := patterns.BuiltInTemplateReference(recordType); builtIn || seen[recordType] {
+			continue
+		}
+		seen[recordType] = true
+		_, err := service.CreateTemplate(context.Background(), patterns.CreateTemplateInput{
+			ID: "test-schema-" + strings.ReplaceAll(recordType, ".", "-"), RecordType: recordType, Name: "Test " + recordType,
+			Fields: []patterns.Field{
+				{Key: "id", Label: "ID", Type: patterns.FieldText, Required: true},
+				{Key: "revision", Label: "Revision", Type: patterns.FieldNumber, Required: true},
+				{Key: "name", Label: "Name", Type: patterns.FieldText, Required: true},
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	return service
+}
+
+func newExchangePatternTemplate(t *testing.T, recordType, id string, fields []patterns.Field) *patterns.Service {
+	t.Helper()
+	service, err := patterns.NewService(repository.NewMemoryPatternsStore(), foundation.NopAuditor{}, patterns.ServiceConfig{OrganizationID: "exchange-patterns"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.CreateTemplate(context.Background(), patterns.CreateTemplateInput{ID: id, RecordType: recordType, Name: "Exchange test schema", Fields: fields}); err != nil {
+		t.Fatal(err)
+	}
+	return service
+}
+
+type patternSchemaFixture struct {
+	id     string
+	fields []patterns.Field
+}
+
+func newExchangePatternSet(t *testing.T, schemas map[string]patternSchemaFixture) *patterns.Service {
+	t.Helper()
+	service, err := patterns.NewService(repository.NewMemoryPatternsStore(), foundation.NopAuditor{}, patterns.ServiceConfig{OrganizationID: "exchange-patterns"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for recordType, schema := range schemas {
+		if _, err := service.CreateTemplate(context.Background(), patterns.CreateTemplateInput{
+			ID: schema.id, RecordType: recordType, Name: "Exchange " + recordType, Fields: schema.fields,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return service
+}
+
+func exportTestArtifact(t *testing.T, schemas exchange.SchemaRegistry, records []exchange.Record) exchange.ExportArtifact {
+	t.Helper()
+	provider := &exchangeTestProvider{types: []string{"test.first", "test.second", "test.child"}, records: records}
+	service, err := exchange.NewService(repository.NewMemoryExchangeStore(), foundation.NopAuditor{}, newExchangeOwnership("schema-fixture-source"), exchange.ServiceConfig{
+		OrganizationID: "schema-fixture-source", SourceSystemID: "schema-fixture-system", Schemas: schemas, Now: fixedExchangeNow,
+	}, provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selection := make([]exchange.Reference, 0, len(records))
+	for _, record := range records {
+		selection = append(selection, exchange.Reference{Type: record.Type, ID: record.ID})
+	}
+	artifact, err := service.Export(context.Background(), "fixture-operator", exchange.ExportRequest{Selection: selection, FileMode: exchange.FileModeMetadata})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return artifact
+}
+
+type permissiveExchangePatterns struct{ exchange.SchemaRegistry }
+
+func (p permissiveExchangePatterns) Validate(_ context.Context, _ string, _ int64, input patterns.ValidationInput) (patterns.ValidationResult, error) {
+	return patterns.ValidationResult{
+		Status: patterns.ValidationValid, NormalizedValues: input.Values,
+		Errors: []patterns.FieldError{}, HoldingReferences: []patterns.HoldingReference{},
+	}, nil
+}
+
+type selectiveExchangePatterns struct {
+	exchange.SchemaRegistry
+	recordType string
+	mismatch   bool
+	retired    bool
+}
+
+func (s selectiveExchangePatterns) ActiveTemplateForRecordType(ctx context.Context, recordType string) (patterns.Template, error) {
+	template, err := s.SchemaRegistry.ActiveTemplateForRecordType(ctx, recordType)
+	if err == nil && recordType == s.recordType {
+		if s.mismatch {
+			template.ID += "-different"
+		}
+		if s.retired {
+			template.Status = patterns.StatusRetired
+		}
+	}
+	return template, err
+}
+
+func (s selectiveExchangePatterns) GetTemplate(ctx context.Context, id string, version int64) (patterns.Template, error) {
+	template, err := s.SchemaRegistry.GetTemplate(ctx, id, version)
+	if err == nil && template.RecordType == s.recordType {
+		if s.mismatch {
+			template.ID += "-different"
+		}
+		if s.retired {
+			template.Status = patterns.StatusRetired
+		}
+	}
+	return template, err
+}
+
+type retiredExchangePatterns struct{ *patterns.Service }
+
+func (r retiredExchangePatterns) ActiveTemplateForRecordType(ctx context.Context, recordType string) (patterns.Template, error) {
+	template, err := r.Service.ActiveTemplateForRecordType(ctx, recordType)
+	template.Status = patterns.StatusRetired
+	return template, err
+}
+
+func (r retiredExchangePatterns) GetTemplate(ctx context.Context, id string, version int64) (patterns.Template, error) {
+	template, err := r.Service.GetTemplate(ctx, id, version)
+	template.Status = patterns.StatusRetired
+	return template, err
+}

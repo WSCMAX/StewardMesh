@@ -1,6 +1,6 @@
 package exchange_test
 
-// Requirement: REQ-EXCHANGE-001. Feature: migration.packages. GitHub: #9.
+// Requirements: REQ-EXCHANGE-001, REQ-PATTERNS-001. Features: migration.packages, templates.schemas. GitHub: #9, #8.
 
 import (
 	"archive/zip"
@@ -46,7 +46,7 @@ func TestStackProviderRoundTripPreservesEarliestProvenance(t *testing.T) {
 	}
 	sourceProvider, _ := exchange.NewStackProvider(sourceStack)
 	source, err := exchange.NewService(repository.NewMemoryExchangeStore(), foundation.NopAuditor{}, newExchangeOwnership("stack-source"), exchange.ServiceConfig{
-		OrganizationID: "stack-source", SourceSystemID: "source-appliance", Now: func() time.Time { return now },
+		OrganizationID: "stack-source", SourceSystemID: "source-appliance", Schemas: newExchangePatterns(t), Now: func() time.Time { return now },
 	}, sourceProvider)
 	if err != nil {
 		t.Fatal(err)
@@ -73,7 +73,7 @@ func TestStackProviderRoundTripPreservesEarliestProvenance(t *testing.T) {
 	targetProvider, _ := exchange.NewStackProvider(targetStack)
 	ownership := newExchangeOwnership("stack-target")
 	target, err := exchange.NewService(repository.NewMemoryExchangeStore(), foundation.NopAuditor{}, ownership, exchange.ServiceConfig{
-		OrganizationID: "stack-target", SourceSystemID: "target-appliance", Now: func() time.Time { return now.Add(time.Hour) },
+		OrganizationID: "stack-target", SourceSystemID: "target-appliance", Schemas: newExchangePatterns(t), Now: func() time.Time { return now.Add(time.Hour) },
 	}, targetProvider)
 	if err != nil {
 		t.Fatal(err)
@@ -103,6 +103,56 @@ func TestStackProviderRoundTripPreservesEarliestProvenance(t *testing.T) {
 	}
 }
 
+func TestStackProviderRoundTripPreservesMaximumDocumentIdentifiers(t *testing.T) {
+	now := time.Date(2026, time.August, 13, 15, 5, 0, 0, time.UTC)
+	sourceStack, _ := stack.NewService(repository.NewMemoryStackStore(), allowExchangeStackReferences{}, foundation.NopAuditor{}, stack.ServiceConfig{
+		OrganizationID: "documents-source", Now: func() time.Time { return now },
+	})
+	product, err := sourceStack.CreateProduct(context.Background(), stack.CreateProductInput{ID: "documents-product", Name: "Documents product", Publisher: "Example"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	documentIDs := make([]string, 100)
+	for index := range documentIDs {
+		prefix := fmt.Sprintf("document-%03d-", index)
+		documentIDs[index] = prefix + strings.Repeat("x", 128-len(prefix))
+	}
+	license, err := sourceStack.CreateLicense(context.Background(), stack.CreateLicenseInput{
+		ID: "documents-license", ProductID: product.ID, Name: "Document-heavy license", EntitlementMetric: "device", Quantity: 100, DocumentIDs: documentIDs,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceProvider, _ := exchange.NewStackProvider(sourceStack)
+	source, _ := exchange.NewService(repository.NewMemoryExchangeStore(), foundation.NopAuditor{}, newExchangeOwnership("documents-source"), exchange.ServiceConfig{
+		OrganizationID: "documents-source", SourceSystemID: "documents-system", Schemas: newExchangePatterns(t), Now: func() time.Time { return now },
+	}, sourceProvider)
+	artifact, err := source.Export(context.Background(), "operator", exchange.ExportRequest{
+		Selection: []exchange.Reference{{Type: "stack.license", ID: license.ID}}, IncludeDependencies: true, FileMode: exchange.FileModeMetadata,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(exchangeManifestBytes(t, artifact.Bytes), []byte(strings.Join(documentIDs, ","))) {
+		t.Fatal("maximum reversible document identifier list was not exported")
+	}
+	targetStack, _ := stack.NewService(repository.NewMemoryStackStore(), allowExchangeStackReferences{}, foundation.NopAuditor{}, stack.ServiceConfig{
+		OrganizationID: "documents-target", Now: func() time.Time { return now.Add(time.Hour) },
+	})
+	targetProvider, _ := exchange.NewStackProvider(targetStack)
+	target, _ := exchange.NewService(repository.NewMemoryExchangeStore(), foundation.NopAuditor{}, newExchangeOwnership("documents-target"), exchange.ServiceConfig{
+		OrganizationID: "documents-target", SourceSystemID: "documents-target-system", Schemas: newExchangePatterns(t), Now: func() time.Time { return now.Add(time.Hour) },
+	}, targetProvider)
+	result, err := target.Import(context.Background(), "operator", artifact.Bytes)
+	if err != nil || result.Package.Status != exchange.StatusCompleted {
+		t.Fatalf("maximum document identifiers did not import: %#v err=%v", result, err)
+	}
+	snapshot, err := targetStack.Snapshot(context.Background())
+	if err != nil || len(snapshot.Licenses) != 1 || !slices.Equal(snapshot.Licenses[0].DocumentIDs, documentIDs) {
+		t.Fatalf("document identifier round trip drifted: %#v err=%v", snapshot.Licenses, err)
+	}
+}
+
 func TestStackProviderRepairsAuditAfterCommittedImportWithoutLosingCreatedTruth(t *testing.T) {
 	now := time.Date(2026, time.August, 13, 15, 10, 0, 0, time.UTC)
 	sourceStack, _ := stack.NewService(repository.NewMemoryStackStore(), allowExchangeStackReferences{}, foundation.NopAuditor{}, stack.ServiceConfig{
@@ -116,7 +166,7 @@ func TestStackProviderRepairsAuditAfterCommittedImportWithoutLosingCreatedTruth(
 	}
 	sourceProvider, _ := exchange.NewStackProvider(sourceStack)
 	source, _ := exchange.NewService(repository.NewMemoryExchangeStore(), foundation.NopAuditor{}, newExchangeOwnership("stack-audit-source"), exchange.ServiceConfig{
-		OrganizationID: "stack-audit-source", SourceSystemID: "stack-audit-system", Now: func() time.Time { return now },
+		OrganizationID: "stack-audit-source", SourceSystemID: "stack-audit-system", Schemas: newExchangePatterns(t), Now: func() time.Time { return now },
 	}, sourceProvider)
 	artifact, err := source.Export(context.Background(), "export-operator", exchange.ExportRequest{
 		Selection: []exchange.Reference{{Type: "stack.product", ID: product.ID}}, FileMode: exchange.FileModeMetadata,
@@ -132,7 +182,7 @@ func TestStackProviderRepairsAuditAfterCommittedImportWithoutLosingCreatedTruth(
 	targetProvider, _ := exchange.NewStackProvider(targetStack)
 	ownership := newExchangeOwnership("stack-audit-target")
 	target, _ := exchange.NewService(repository.NewMemoryExchangeStore(), foundation.NopAuditor{}, ownership, exchange.ServiceConfig{
-		OrganizationID: "stack-audit-target", SourceSystemID: "target-system", Now: func() time.Time { return now.Add(time.Hour) },
+		OrganizationID: "stack-audit-target", SourceSystemID: "target-system", Schemas: newExchangePatterns(t), Now: func() time.Time { return now.Add(time.Hour) },
 	}, targetProvider)
 	if _, err := target.Import(context.Background(), "import-operator", artifact.Bytes); err == nil {
 		t.Fatal("expected the injected Stack audit failure")
@@ -223,7 +273,7 @@ func TestExchangeStackImportUsesOnlyKeyedReadsAcrossDependencyChecksAndWrites(t 
 	}
 	sourceProvider, _ := exchange.NewStackProvider(sourceStack)
 	source, _ := exchange.NewService(repository.NewMemoryExchangeStore(), foundation.NopAuditor{}, newExchangeOwnership("operation-source"), exchange.ServiceConfig{
-		OrganizationID: "operation-source", SourceSystemID: "operation-system", Now: func() time.Time { return now },
+		OrganizationID: "operation-source", SourceSystemID: "operation-system", Schemas: newExchangePatterns(t), Now: func() time.Time { return now },
 	}, sourceProvider)
 	artifact, err := source.Export(context.Background(), "export-operator", exchange.ExportRequest{
 		Selection: selection, IncludeDependencies: false, FileMode: exchange.FileModeMetadata,
@@ -244,7 +294,7 @@ func TestExchangeStackImportUsesOnlyKeyedReadsAcrossDependencyChecksAndWrites(t 
 	countingStore.snapshotCalls, countingStore.exactReads = 0, 0
 	targetProvider, _ := exchange.NewStackProvider(targetStack)
 	target, _ := exchange.NewService(repository.NewMemoryExchangeStore(), foundation.NopAuditor{}, newExchangeOwnership("operation-target"), exchange.ServiceConfig{
-		OrganizationID: "operation-target", SourceSystemID: "target-system", Now: func() time.Time { return now.Add(time.Hour) },
+		OrganizationID: "operation-target", SourceSystemID: "target-system", Schemas: newExchangePatterns(t), Now: func() time.Time { return now.Add(time.Hour) },
 	}, targetProvider)
 	result, err := target.Import(context.Background(), "import-operator", artifact.Bytes)
 	if err != nil || result.Package.Status != exchange.StatusCompleted || result.Package.CreatedCount != records {
@@ -325,7 +375,7 @@ func TestVaultProviderRoundTripIncludesVerifiedBytesAndExcludesPrivateTransportD
 	}
 	sourceProvider, _ := exchange.NewVaultProvider(sourceVault)
 	source, err := exchange.NewService(repository.NewMemoryExchangeStore(), foundation.NopAuditor{}, newExchangeOwnership("vault-source"), exchange.ServiceConfig{
-		OrganizationID: "vault-source", SourceSystemID: "source-appliance", Now: func() time.Time { return now },
+		OrganizationID: "vault-source", SourceSystemID: "source-appliance", Schemas: newExchangePatterns(t), Now: func() time.Time { return now },
 	}, sourceProvider)
 	if err != nil {
 		t.Fatal(err)
@@ -355,7 +405,7 @@ func TestVaultProviderRoundTripIncludesVerifiedBytesAndExcludesPrivateTransportD
 	}
 	targetProvider, _ := exchange.NewVaultProvider(targetVault)
 	target, err := exchange.NewService(repository.NewMemoryExchangeStore(), foundation.NopAuditor{}, newExchangeOwnership("vault-target"), exchange.ServiceConfig{
-		OrganizationID: "vault-target", SourceSystemID: "target-appliance", Now: func() time.Time { return now.Add(time.Hour) },
+		OrganizationID: "vault-target", SourceSystemID: "target-appliance", Schemas: newExchangePatterns(t), Now: func() time.Time { return now.Add(time.Hour) },
 	}, targetProvider)
 	if err != nil {
 		t.Fatal(err)
@@ -390,7 +440,7 @@ func TestVaultProviderRepairsAuditAfterCommittedImportWithoutLosingCreatedTruth(
 	}
 	sourceProvider, _ := exchange.NewVaultProvider(sourceVault)
 	source, _ := exchange.NewService(repository.NewMemoryExchangeStore(), foundation.NopAuditor{}, newExchangeOwnership("vault-audit-source"), exchange.ServiceConfig{
-		OrganizationID: "vault-audit-source", SourceSystemID: "vault-audit-system", Now: func() time.Time { return now },
+		OrganizationID: "vault-audit-source", SourceSystemID: "vault-audit-system", Schemas: newExchangePatterns(t), Now: func() time.Time { return now },
 	}, sourceProvider)
 	artifact, err := source.Export(context.Background(), "export-operator", exchange.ExportRequest{
 		Selection: []exchange.Reference{{Type: "vault.blob", ID: blob.ID}}, FileMode: exchange.FileModeInclude,
@@ -406,7 +456,7 @@ func TestVaultProviderRepairsAuditAfterCommittedImportWithoutLosingCreatedTruth(
 	targetProvider, _ := exchange.NewVaultProvider(targetVault)
 	ownership := newExchangeOwnership("vault-audit-target")
 	target, _ := exchange.NewService(repository.NewMemoryExchangeStore(), foundation.NopAuditor{}, ownership, exchange.ServiceConfig{
-		OrganizationID: "vault-audit-target", SourceSystemID: "target-system", Now: func() time.Time { return now.Add(time.Hour) },
+		OrganizationID: "vault-audit-target", SourceSystemID: "target-system", Schemas: newExchangePatterns(t), Now: func() time.Time { return now.Add(time.Hour) },
 	}, targetProvider)
 	if _, err := target.Import(context.Background(), "import-operator", artifact.Bytes); err == nil {
 		t.Fatal("expected the injected Vault audit failure")
@@ -448,7 +498,7 @@ func TestVaultMetadataOnlyImportRemainsReadableInHoldingWithoutWritingBytes(t *t
 	}
 	sourceProvider, _ := exchange.NewVaultProvider(sourceVault)
 	source, _ := exchange.NewService(repository.NewMemoryExchangeStore(), foundation.NopAuditor{}, newExchangeOwnership("metadata-source"), exchange.ServiceConfig{
-		OrganizationID: "metadata-source", SourceSystemID: "metadata-system", Now: func() time.Time { return now },
+		OrganizationID: "metadata-source", SourceSystemID: "metadata-system", Schemas: newExchangePatterns(t), Now: func() time.Time { return now },
 	}, sourceProvider)
 	artifact, err := source.Export(context.Background(), "export-operator", exchange.ExportRequest{
 		Selection: []exchange.Reference{{Type: "vault.blob", ID: blob.ID}}, FileMode: exchange.FileModeMetadata,
@@ -462,7 +512,7 @@ func TestVaultMetadataOnlyImportRemainsReadableInHoldingWithoutWritingBytes(t *t
 	targetProvider, _ := exchange.NewVaultProvider(targetVault)
 	ownership := newExchangeOwnership("metadata-target")
 	target, _ := exchange.NewService(repository.NewMemoryExchangeStore(), foundation.NopAuditor{}, ownership, exchange.ServiceConfig{
-		OrganizationID: "metadata-target", SourceSystemID: "target-system", Now: func() time.Time { return now },
+		OrganizationID: "metadata-target", SourceSystemID: "target-system", Schemas: newExchangePatterns(t), Now: func() time.Time { return now },
 	}, targetProvider)
 	result, err := target.Import(context.Background(), "import-operator", artifact.Bytes)
 	if err != nil || result.Package.Status != exchange.StatusHolding || result.Package.HoldingCount != 1 ||
@@ -492,7 +542,7 @@ func TestVaultMetadataOnlyImportIsUnchangedWhenExactTargetContentExists(t *testi
 	}
 	sourceProvider, _ := exchange.NewVaultProvider(sourceVault)
 	source, _ := exchange.NewService(repository.NewMemoryExchangeStore(), foundation.NopAuditor{}, newExchangeOwnership("metadata-exact-source"), exchange.ServiceConfig{
-		OrganizationID: "metadata-exact-source", SourceSystemID: "metadata-system", Now: func() time.Time { return now },
+		OrganizationID: "metadata-exact-source", SourceSystemID: "metadata-system", Schemas: newExchangePatterns(t), Now: func() time.Time { return now },
 	}, sourceProvider)
 	artifact, err := source.Export(context.Background(), "export-operator", exchange.ExportRequest{
 		Selection: []exchange.Reference{{Type: "vault.blob", ID: blob.ID}}, FileMode: exchange.FileModeMetadata,
@@ -513,7 +563,7 @@ func TestVaultMetadataOnlyImportIsUnchangedWhenExactTargetContentExists(t *testi
 	targetProvider, _ := exchange.NewVaultProvider(targetVault)
 	ownership := newExchangeOwnership("metadata-exact-target")
 	target, _ := exchange.NewService(repository.NewMemoryExchangeStore(), foundation.NopAuditor{}, ownership, exchange.ServiceConfig{
-		OrganizationID: "metadata-exact-target", SourceSystemID: "target-system", Now: func() time.Time { return now },
+		OrganizationID: "metadata-exact-target", SourceSystemID: "target-system", Schemas: newExchangePatterns(t), Now: func() time.Time { return now },
 	}, targetProvider)
 	result, err := target.Import(context.Background(), "import-operator", artifact.Bytes)
 	if err != nil || result.Package.Status != exchange.StatusCompleted || result.Package.UnchangedCount != 1 || result.Package.HoldingCount != 0 {
@@ -548,7 +598,7 @@ func TestVaultMetadataOnlyImportHoldsWhenTargetMetadataOutlivesContent(t *testin
 	}
 	sourceProvider, _ := exchange.NewVaultProvider(sourceVault)
 	source, _ := exchange.NewService(repository.NewMemoryExchangeStore(), foundation.NopAuditor{}, newExchangeOwnership("metadata-stale-source"), exchange.ServiceConfig{
-		OrganizationID: "metadata-stale-source", SourceSystemID: "metadata-system", Now: func() time.Time { return now },
+		OrganizationID: "metadata-stale-source", SourceSystemID: "metadata-system", Schemas: newExchangePatterns(t), Now: func() time.Time { return now },
 	}, sourceProvider)
 	artifact, err := source.Export(context.Background(), "export-operator", exchange.ExportRequest{
 		Selection: []exchange.Reference{{Type: "vault.blob", ID: blob.ID}}, FileMode: exchange.FileModeMetadata,
@@ -573,7 +623,7 @@ func TestVaultMetadataOnlyImportHoldsWhenTargetMetadataOutlivesContent(t *testin
 	targetProvider, _ := exchange.NewVaultProvider(targetVault)
 	ownership := newExchangeOwnership("metadata-stale-target")
 	target, _ := exchange.NewService(repository.NewMemoryExchangeStore(), foundation.NopAuditor{}, ownership, exchange.ServiceConfig{
-		OrganizationID: "metadata-stale-target", SourceSystemID: "target-system", Now: func() time.Time { return now },
+		OrganizationID: "metadata-stale-target", SourceSystemID: "target-system", Schemas: newExchangePatterns(t), Now: func() time.Time { return now },
 	}, targetProvider)
 	result, err := target.Import(context.Background(), "import-operator", artifact.Bytes)
 	if err != nil || result.Package.Status != exchange.StatusHolding || result.Package.HoldingCount != 1 ||

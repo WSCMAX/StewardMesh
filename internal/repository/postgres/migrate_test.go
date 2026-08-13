@@ -14,18 +14,35 @@ func TestEmbeddedMigrationsAreOrderedAndChecksummed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Migration 35 is being delivered by the concurrent Patterns/Exchange
-	// closeout branch. This branch intentionally reserves 36 for Reach; verify
-	// monotonic uniqueness here and the exact aggregate count after integration.
+	if len(migrations) != 36 {
+		t.Fatalf("expected 36 platform migrations, got %d", len(migrations))
+	}
 	for index, migration := range migrations {
-		if index > 0 && migration.version <= migrations[index-1].version {
-			t.Fatalf("migrations are not strictly ordered at %d", migration.version)
-		}
-		if migration.version < 1 || migration.version > 36 || (migration.version == 35 && len(migrations) != 36) {
-			t.Fatalf("unexpected migration sequence at version %d", migration.version)
+		expectedVersion := int64(index + 1)
+		if migration.version != expectedVersion {
+			t.Fatalf("expected migration %d, got %d", expectedVersion, migration.version)
 		}
 		if len(migration.checksum) != 64 {
 			t.Fatalf("expected SHA-256 checksum for migration %d", migration.version)
+		}
+	}
+}
+
+func TestExchangePatternsMigrationPreservesLegacyReceiptsWhileAddingOnePointOne(t *testing.T) {
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents := migrations[34].contents
+	for _, expected := range []string{
+		"REQ-PATTERNS-001", "REQ-EXCHANGE-001", "ADD COLUMN progress", "jsonb_array_length(progress) <= 10000",
+		"DROP CONSTRAINT exchange_packages_check4", "DROP CONSTRAINT exchange_packages_check6",
+		"exchange_packages_records_counts_check", "exchange_packages_terminal_progress_check",
+		"exchange_packages_nonterminal_holding_check", "exchange_packages_schema_version_check",
+		"schema_version IN ('1.0', '1.1')", "Existing 1.0 rows",
+	} {
+		if !strings.Contains(contents, expected) {
+			t.Fatalf("Exchange Patterns migration is missing %q", expected)
 		}
 	}
 }
@@ -90,13 +107,15 @@ func TestExchangeMigrationAddsBoundedPackageReceiptsWithoutExpandingRoles(t *tes
 		t.Fatal(err)
 	}
 	contents := migrations[31].contents
+	if migrations[31].checksum != "628bf882c9632690c5d365cc8c9272011fc114b2b22469947d414f7b670bd0a2" {
+		t.Fatalf("applied Exchange migration 0032 changed: %s", migrations[31].checksum)
+	}
 	for _, expected := range []string{
 		"REQ-EXCHANGE-001", "migration.packages", "GitHub: #9", "CREATE TABLE exchange_packages",
 		"archive_sha256", "size_bytes BETWEEN 1 AND 33554432", "jsonb_array_length(records) <= 10000",
-		"jsonb_array_length(progress) <= 10000", "status NOT IN ('completed', 'holding') OR jsonb_array_length(progress) = 0",
 		"status IN ('processing', 'completed', 'holding', 'failed')",
-		"jsonb_array_length(records) = created_count + unchanged_count + holding_count",
-		"status NOT IN ('processing', 'failed') OR holding_count = 0", "exchange_packages_history_idx",
+		"status <> 'processing' OR (created_count = 0", "status <> 'failed' OR (created_count = 0",
+		"exchange_packages_history_idx",
 	} {
 		if !strings.Contains(contents, expected) {
 			t.Fatalf("Exchange migration is missing %q", expected)
@@ -106,6 +125,9 @@ func TestExchangeMigrationAddsBoundedPackageReceiptsWithoutExpandingRoles(t *tes
 		if strings.Contains(contents, forbidden) {
 			t.Fatalf("Exchange migration must not silently expand deployed role permissions with %q", forbidden)
 		}
+	}
+	if strings.Contains(contents, "progress JSONB") {
+		t.Fatal("immutable migration 0032 must not contain recovery state added by a later release")
 	}
 }
 

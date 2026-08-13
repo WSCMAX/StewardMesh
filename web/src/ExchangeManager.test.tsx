@@ -8,13 +8,13 @@ import ExchangeManager, { exchangeMediaType, maximumExchangePackageBytes, parseE
 const checksum = 'a'.repeat(64)
 const recordChecksum = 'b'.repeat(64)
 const records = [
-  { type: 'stack.product', id: 'product-one', revision: 2, dependencies: [], hasFile: false },
-  { type: 'stack.version', id: 'version-one', revision: 1, dependencies: [{ type: 'stack.product', id: 'product-one' }], hasFile: false },
-  { type: 'vault.blob', id: '0123456789abcdef0123456789abcdef', revision: 1, dependencies: [], hasFile: true },
+  { type: 'stack.product', id: 'product-one', revision: 2, templateId: 'builtin-stack-product', templateVersion: 1, dependencies: [], hasFile: false },
+  { type: 'stack.version', id: 'version-one', revision: 1, templateId: 'builtin-stack-version', templateVersion: 1, dependencies: [{ type: 'stack.product', id: 'product-one' }], hasFile: false },
+  { type: 'vault.blob', id: '0123456789abcdef0123456789abcdef', revision: 1, templateId: 'builtin-vault-blob', templateVersion: 1, dependencies: [], hasFile: true },
 ]
 
 const completedPackage = {
-  packageId: 'package-export', direction: 'export', schemaVersion: '1.0', sourceSystemId: 'example-org', archiveSha256: checksum,
+  packageId: 'package-export', direction: 'export', schemaVersion: '1.1', sourceSystemId: 'example-org', archiveSha256: checksum,
   sizeBytes: 512, fileMode: 'include', status: 'completed', recordCount: 1, fileCount: 0,
   createdCount: 0, unchangedCount: 1, holdingCount: 0,
   records: [{ type: 'stack.product', id: 'product-one', revision: 2, checksum: recordChecksum, status: 'unchanged', missingDependencies: [], writeLocked: false }],
@@ -22,7 +22,7 @@ const completedPackage = {
 } as const
 
 const holdingPackage = {
-  packageId: 'package-import', direction: 'import', schemaVersion: '1.0', sourceSystemId: 'remote-one', archiveSha256: checksum,
+  packageId: 'package-import', direction: 'import', schemaVersion: '1.1', sourceSystemId: 'remote-one', archiveSha256: checksum,
   sizeBytes: 1024, fileMode: 'metadata', status: 'holding', recordCount: 2, fileCount: 1,
   createdCount: 1, unchangedCount: 0, holdingCount: 1,
   records: [
@@ -52,6 +52,8 @@ test('renders selectable records and visible holding outcomes accessibly on a na
   expect(screen.getByRole('button', { name: 'Prepare export' })).toBeDisabled()
   expect(screen.getAllByText('Requires integrations.write')).toHaveLength(2)
   expect(screen.getAllByText('Holding')).toHaveLength(2)
+  expect(screen.getByText('builtin-stack-product')).toBeInTheDocument()
+  expect(screen.getAllByText('version 1').length).toBeGreaterThan(0)
   fireEvent.click(screen.getByText(/Import ·/))
   expect(screen.getByText('Write locked until claimed')).toBeInTheDocument()
   expect(screen.getByText(/atlas.asset · asset-missing/)).toBeInTheDocument()
@@ -160,6 +162,7 @@ test('does not request protected collections without integrations.read', () => {
 test('rejects malformed and internally inconsistent Exchange responses', () => {
 	expect(parseExchangePackages({ items: [partialFailedPackage] })).toEqual([partialFailedPackage])
 	expect(() => parseExchangeRecords({ items: [{ ...records[0], revision: 0 }] })).toThrow('invalid Exchange record response')
+	expect(() => parseExchangeRecords({ items: [{ ...records[0], templateId: '' }] })).toThrow('invalid Exchange record response')
 	expect(() => parseExchangePackages({ items: [{ ...holdingPackage, holdingCount: 0 }] })).toThrow('invalid Exchange package response')
 	expect(() => parseExchangePackages({ items: [{ ...partialFailedPackage, createdCount: 0 }] })).toThrow('invalid Exchange package response')
   expect(() => parseExchangePackages({ items: [{ ...completedPackage, archiveSha256: 'not-a-checksum' }] })).toThrow('invalid Exchange package response')

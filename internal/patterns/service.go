@@ -86,9 +86,17 @@ func (s *Service) ListTemplates(ctx context.Context, query ListQuery) ([]Templat
 	}
 	items := make([]Template, 0, len(s.builtIns)+len(custom))
 	for _, versions := range s.builtIns {
-		candidate := latestBuiltIn(versions)
-		if (query.RecordType == "" || candidate.RecordType == query.RecordType) && (query.IncludeRetired || candidate.Status != StatusRetired) {
-			items = append(items, cloneTemplate(candidate))
+		candidates := []Template{latestBuiltIn(versions)}
+		if query.IncludeVersions {
+			candidates = candidates[:0]
+			for _, candidate := range versions {
+				candidates = append(candidates, candidate)
+			}
+		}
+		for _, candidate := range candidates {
+			if (query.RecordType == "" || candidate.RecordType == query.RecordType) && (query.IncludeRetired || candidate.Status != StatusRetired) {
+				items = append(items, cloneTemplate(candidate))
+			}
 		}
 	}
 	for _, candidate := range custom {
@@ -101,7 +109,13 @@ func (s *Service) ListTemplates(ctx context.Context, query ListQuery) ([]Templat
 		if items[i].BuiltIn != items[j].BuiltIn {
 			return items[i].BuiltIn
 		}
-		return strings.ToLower(items[i].Name) < strings.ToLower(items[j].Name)
+		if strings.ToLower(items[i].Name) != strings.ToLower(items[j].Name) {
+			return strings.ToLower(items[i].Name) < strings.ToLower(items[j].Name)
+		}
+		if items[i].ID != items[j].ID {
+			return items[i].ID < items[j].ID
+		}
+		return items[i].Version > items[j].Version
 	})
 	return items, nil
 }
@@ -126,6 +140,38 @@ func (s *Service) GetTemplate(ctx context.Context, id string, version int64) (Te
 		return Template{}, err
 	}
 	return cloneTemplate(candidate), nil
+}
+
+// ActiveTemplateForRecordType resolves the deterministic schema that an
+// automated consumer such as Exchange must pin. A built-in always wins over
+// editable copies. Record families without a built-in are usable only when
+// exactly one active custom template exists, preventing silent schema drift.
+func (s *Service) ActiveTemplateForRecordType(ctx context.Context, recordType string) (Template, error) {
+	recordType = strings.ToLower(strings.TrimSpace(recordType))
+	if !recordTypePattern.MatchString(recordType) {
+		return Template{}, ErrInvalidInput
+	}
+	if id, version, ok := BuiltInTemplateReference(recordType); ok {
+		return s.GetTemplate(ctx, id, version)
+	}
+	items, err := s.ListTemplates(ctx, ListQuery{RecordType: recordType})
+	if err != nil {
+		return Template{}, err
+	}
+	var selected Template
+	for _, item := range items {
+		if item.Status != StatusActive {
+			continue
+		}
+		if selected.ID != "" {
+			return Template{}, ErrConflict
+		}
+		selected = item
+	}
+	if selected.ID == "" {
+		return Template{}, ErrNotFound
+	}
+	return selected, nil
 }
 
 func latestBuiltIn(versions map[int64]Template) Template {
@@ -240,12 +286,15 @@ func (s *Service) Validate(ctx context.Context, templateID string, version int64
 	for _, field := range template.Fields {
 		value, present := input.Values[field.Key]
 		if !present || value == nil || strings.TrimSpace(fmt.Sprint(value)) == "" {
+			if missing[field.Key] {
+				result.Errors = append(result.Errors, fieldError(field, "reference", "Enter the unresolved record identifier."))
+				continue
+			}
 			if field.Required {
-				if (field.Type == FieldReference || field.Type == FieldAttachment) && field.AllowHolding && input.AllowHoldingRecord {
-					result.HoldingReferences = append(result.HoldingReferences, HoldingReference{Field: field.Key, ReferenceType: field.ReferenceType})
-				} else {
-					result.Errors = append(result.Errors, fieldError(field, "required", "A value is required."))
-				}
+				// A holding record always identifies a real stable target that can
+				// later resolve. An omitted required relationship has no resolvable
+				// identity and therefore remains invalid even when holding is allowed.
+				result.Errors = append(result.Errors, fieldError(field, "required", "A value is required."))
 			}
 			continue
 		}
@@ -455,22 +504,77 @@ func normalizeValue(field Field, raw any) (any, string, string) {
 		}
 		return strings.TrimSpace(value), "", ""
 	case FieldNumber, FieldMoney:
+		if field.Type == FieldMoney {
+			value, ok := exactMoney(raw)
+			if !ok {
+				return nil, "money", "Enter an exact integer amount in minor units."
+			}
+			if field.Minimum != nil && float64(value) < *field.Minimum || field.Maximum != nil && float64(value) > *field.Maximum {
+				return nil, "range", "Enter a value within the allowed range."
+			}
+			return value, "", ""
+		}
 		value, ok := finiteNumber(raw)
 		if !ok {
 			return nil, "number", "Enter a valid number."
 		}
-		if field.Type == FieldMoney && (math.Trunc(value) != value || math.Abs(value) > 9_007_199_254_740_991) {
-			return nil, "money", "Enter an exact integer amount in minor units."
-		}
 		if field.Minimum != nil && value < *field.Minimum || field.Maximum != nil && value > *field.Maximum {
 			return nil, "range", "Enter a value within the allowed range."
-		}
-		if field.Type == FieldMoney {
-			return int64(value), "", ""
 		}
 		return value, "", ""
 	default:
 		return nil, "type", "This field type is not supported."
+	}
+}
+
+const maximumExactJSONInteger int64 = 9_007_199_254_740_991
+
+// exactMoney preserves the lexical integrity of JSON amounts. In particular,
+// decimal and exponent syntax is never rounded through float64 before it is
+// accepted as an integer amount in minor units.
+func exactMoney(raw any) (int64, bool) {
+	withinRange := func(value int64) (int64, bool) {
+		return value, value >= -maximumExactJSONInteger && value <= maximumExactJSONInteger
+	}
+	switch candidate := raw.(type) {
+	case json.Number:
+		text := candidate.String()
+		if text == "" || text == "-" || strings.ContainsAny(text, ".eE+") || text[0] == '0' && len(text) > 1 || strings.HasPrefix(text, "-0") && len(text) > 2 {
+			return 0, false
+		}
+		value, err := strconv.ParseInt(text, 10, 64)
+		if err != nil {
+			return 0, false
+		}
+		return withinRange(value)
+	case int:
+		return withinRange(int64(candidate))
+	case int8:
+		return withinRange(int64(candidate))
+	case int16:
+		return withinRange(int64(candidate))
+	case int32:
+		return withinRange(int64(candidate))
+	case int64:
+		return withinRange(candidate)
+	case uint:
+		if uint64(candidate) > uint64(maximumExactJSONInteger) {
+			return 0, false
+		}
+		return int64(candidate), true
+	case uint8:
+		return int64(candidate), true
+	case uint16:
+		return int64(candidate), true
+	case uint32:
+		return int64(candidate), true
+	case uint64:
+		if candidate > uint64(maximumExactJSONInteger) {
+			return 0, false
+		}
+		return int64(candidate), true
+	default:
+		return 0, false
 	}
 }
 

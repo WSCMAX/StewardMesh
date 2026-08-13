@@ -1,6 +1,6 @@
 package exchange
 
-// Requirement: REQ-EXCHANGE-001. Feature: migration.packages. GitHub: #9.
+// Requirements: REQ-EXCHANGE-001, REQ-PATTERNS-001. Features: migration.packages, templates.schemas. GitHub: #9, #8.
 
 import (
 	"archive/zip"
@@ -39,14 +39,16 @@ type archiveContents struct {
 }
 
 type recordChecksumEnvelope struct {
-	Type         string            `json:"type"`
-	ID           string            `json:"id"`
-	Revision     int64             `json:"revision"`
-	Dependencies []Reference       `json:"dependencies"`
-	Provenance   Provenance        `json:"provenance"`
-	Ownership    OwnershipMetadata `json:"ownership"`
-	File         *FileMetadata     `json:"file,omitempty"`
-	Payload      json.RawMessage   `json:"payload"`
+	Type            string            `json:"type"`
+	ID              string            `json:"id"`
+	Revision        int64             `json:"revision"`
+	TemplateID      string            `json:"templateId"`
+	TemplateVersion int64             `json:"templateVersion"`
+	Dependencies    []Reference       `json:"dependencies"`
+	Provenance      Provenance        `json:"provenance"`
+	Ownership       OwnershipMetadata `json:"ownership"`
+	File            *FileMetadata     `json:"file,omitempty"`
+	Payload         json.RawMessage   `json:"payload"`
 }
 
 func encodeArchive(manifest Manifest, filesByRecord map[string][]byte) (ExportArtifact, Manifest, error) {
@@ -216,10 +218,21 @@ func validateManifest(manifest Manifest, files map[string][]byte, verifyChecksum
 		!stableIDPattern.MatchString(manifest.SourceSystemID) || manifest.ExportedAt.IsZero() ||
 		manifest.ExportedAt.Year() < 2000 || manifest.ExportedAt.Year() > 9999 ||
 		(manifest.FileMode != FileModeMetadata && manifest.FileMode != FileModeInclude) ||
+		len(manifest.Schemas) == 0 || len(manifest.Schemas) > MaximumRecords ||
 		len(manifest.Records) == 0 || len(manifest.Records) > MaximumRecords || len(files) > MaximumFiles {
 		return ErrInvalidInput
 	}
+	schemas := make(map[string]SchemaReference, len(manifest.Schemas))
+	previousSchema := ""
+	for _, schema := range manifest.Schemas {
+		if !resourceTypePattern.MatchString(schema.RecordType) || !stableIDPattern.MatchString(schema.TemplateID) || schema.TemplateVersion < 1 || schema.RecordType <= previousSchema {
+			return ErrInvalidInput
+		}
+		schemas[schema.RecordType] = schema
+		previousSchema = schema.RecordType
+	}
 	seen := make(map[string]struct{}, len(manifest.Records))
+	usedSchemas := make(map[string]struct{}, len(manifest.Schemas))
 	referencedFiles := make(map[string]struct{})
 	payloadTotal := 0
 	fileCount := 0
@@ -227,6 +240,11 @@ func validateManifest(manifest Manifest, files map[string][]byte, verifyChecksum
 		if err := validateRecord(record); err != nil {
 			return err
 		}
+		schema, ok := schemas[record.Type]
+		if !ok || schema.TemplateID != record.TemplateID || schema.TemplateVersion != record.TemplateVersion {
+			return ErrInvalidInput
+		}
+		usedSchemas[record.Type] = struct{}{}
 		key := Reference{Type: record.Type, ID: record.ID}.Key()
 		if _, duplicate := seen[key]; duplicate {
 			return ErrInvalidInput
@@ -277,11 +295,15 @@ func validateManifest(manifest Manifest, files map[string][]byte, verifyChecksum
 	if len(referencedFiles) != len(files) {
 		return ErrIntegrity
 	}
+	if len(usedSchemas) != len(schemas) {
+		return ErrInvalidInput
+	}
 	return nil
 }
 
 func validateRecord(record Record) error {
-	if !resourceTypePattern.MatchString(record.Type) || !stableIDPattern.MatchString(record.ID) || record.Revision < 1 {
+	if !resourceTypePattern.MatchString(record.Type) || !stableIDPattern.MatchString(record.ID) || record.Revision < 1 ||
+		!stableIDPattern.MatchString(record.TemplateID) || record.TemplateVersion < 1 {
 		return fmt.Errorf("%w: invalid record identity or revision", ErrInvalidInput)
 	}
 	if len(record.Payload) == 0 || len(record.Payload) > MaximumPayloadBytes || !json.Valid(record.Payload) {
@@ -355,7 +377,7 @@ func safeSourceRecordID(value string) bool {
 func checksumRecord(record Record) (string, error) {
 	record.Checksum = ""
 	encoded, err := json.Marshal(recordChecksumEnvelope{
-		Type: record.Type, ID: record.ID, Revision: record.Revision, Dependencies: record.Dependencies,
+		Type: record.Type, ID: record.ID, Revision: record.Revision, TemplateID: record.TemplateID, TemplateVersion: record.TemplateVersion, Dependencies: record.Dependencies,
 		Provenance: record.Provenance, Ownership: record.Ownership, File: record.File, Payload: record.Payload,
 	})
 	if err != nil {

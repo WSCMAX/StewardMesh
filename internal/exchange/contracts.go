@@ -1,5 +1,5 @@
 // Package exchange implements bounded, dependency-aware StewardMesh migration
-// packages. Requirement: REQ-EXCHANGE-001. Feature: migration.packages.
+// packages. Requirements: REQ-EXCHANGE-001, REQ-PATTERNS-001. Features: migration.packages, templates.schemas.
 package exchange
 
 import (
@@ -9,13 +9,18 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/maxlemke/stewardmesh/internal/patterns"
 )
 
 const (
 	RequirementID = "REQ-EXCHANGE-001"
 	FeatureID     = "migration.packages"
-	SchemaVersion = "1.0"
-	MediaType     = "application/vnd.stewardmesh.openinventory+zip"
+	// LegacySchemaVersion remains readable in durable receipt history only.
+	// Archive decoding and every newly created service workflow require 1.1.
+	LegacySchemaVersion = "1.0"
+	SchemaVersion       = "1.1"
+	MediaType           = "application/vnd.stewardmesh.openinventory+zip"
 
 	MaximumArchiveBytes        = int64(32 << 20)
 	MaximumUncompressedBytes   = int64(64 << 20)
@@ -82,6 +87,15 @@ type Reference struct {
 
 func (r Reference) Key() string { return r.Type + ":" + r.ID }
 
+// SchemaReference pins the exact immutable Patterns contract used for a
+// record family. It is repeated in the manifest registry and each record so a
+// consumer never guesses from the record type or a local latest version.
+type SchemaReference struct {
+	RecordType      string `json:"recordType"`
+	TemplateID      string `json:"templateId"`
+	TemplateVersion int64  `json:"templateVersion"`
+}
+
 // Provenance preserves the earliest known source identity rather than
 // replacing it with a transport filename or an object-store URL.
 type Provenance struct {
@@ -113,32 +127,37 @@ type FileMetadata struct {
 // Record is the portable domain boundary. Payload remains typed JSON owned by
 // its provider; Exchange verifies identity, bounds, dependencies, and checksum.
 type Record struct {
-	Type         string            `json:"type"`
-	ID           string            `json:"id"`
-	Revision     int64             `json:"revision"`
-	Checksum     string            `json:"checksum"`
-	Dependencies []Reference       `json:"dependencies"`
-	Provenance   Provenance        `json:"provenance"`
-	Ownership    OwnershipMetadata `json:"ownership"`
-	File         *FileMetadata     `json:"file,omitempty"`
-	Payload      json.RawMessage   `json:"payload"`
+	Type            string            `json:"type"`
+	ID              string            `json:"id"`
+	Revision        int64             `json:"revision"`
+	TemplateID      string            `json:"templateId"`
+	TemplateVersion int64             `json:"templateVersion"`
+	Checksum        string            `json:"checksum"`
+	Dependencies    []Reference       `json:"dependencies"`
+	Provenance      Provenance        `json:"provenance"`
+	Ownership       OwnershipMetadata `json:"ownership"`
+	File            *FileMetadata     `json:"file,omitempty"`
+	Payload         json.RawMessage   `json:"payload"`
 }
 
 type RecordDescriptor struct {
-	Type         string      `json:"type"`
-	ID           string      `json:"id"`
-	Revision     int64       `json:"revision"`
-	Dependencies []Reference `json:"dependencies"`
-	HasFile      bool        `json:"hasFile"`
+	Type            string      `json:"type"`
+	ID              string      `json:"id"`
+	Revision        int64       `json:"revision"`
+	TemplateID      string      `json:"templateId"`
+	TemplateVersion int64       `json:"templateVersion"`
+	Dependencies    []Reference `json:"dependencies"`
+	HasFile         bool        `json:"hasFile"`
 }
 
 type Manifest struct {
-	SchemaVersion  string    `json:"schemaVersion"`
-	PackageID      string    `json:"packageId"`
-	SourceSystemID string    `json:"sourceSystemId"`
-	ExportedAt     time.Time `json:"exportedAt"`
-	FileMode       FileMode  `json:"fileMode"`
-	Records        []Record  `json:"records"`
+	SchemaVersion  string            `json:"schemaVersion"`
+	PackageID      string            `json:"packageId"`
+	SourceSystemID string            `json:"sourceSystemId"`
+	ExportedAt     time.Time         `json:"exportedAt"`
+	FileMode       FileMode          `json:"fileMode"`
+	Schemas        []SchemaReference `json:"schemas"`
+	Records        []Record          `json:"records"`
 }
 
 type ExportRequest struct {
@@ -211,7 +230,7 @@ type Package struct {
 
 func (p Package) Validate() error {
 	if !stableIDPattern.MatchString(p.OrganizationID) || !stableIDPattern.MatchString(p.PackageID) ||
-		!stableIDPattern.MatchString(p.SourceSystemID) || p.SchemaVersion != SchemaVersion || !sha256Pattern.MatchString(p.ArchiveSHA256) ||
+		!stableIDPattern.MatchString(p.SourceSystemID) || p.SchemaVersion != LegacySchemaVersion && p.SchemaVersion != SchemaVersion || !sha256Pattern.MatchString(p.ArchiveSHA256) ||
 		(p.Direction != DirectionExport && p.Direction != DirectionImport) ||
 		(p.FileMode != FileModeMetadata && p.FileMode != FileModeInclude) ||
 		(p.Status != StatusProcessing && p.Status != StatusCompleted && p.Status != StatusHolding && p.Status != StatusFailed) ||
@@ -507,6 +526,14 @@ type Provider interface {
 	// before an intent is reserved. It never audits or mutates a target.
 	ImportRecordExists(ctx context.Context, record Record, file []byte) (bool, error)
 	ImportRecord(ctx context.Context, operation ProviderImportOperation, sourceSystemID string, record Record, file []byte) (ProviderImportResult, error)
+}
+
+// SchemaRegistry is the Patterns seam used before archive export and before
+// any provider or ownership mutation during import.
+type SchemaRegistry interface {
+	ActiveTemplateForRecordType(context.Context, string) (patterns.Template, error)
+	GetTemplate(context.Context, string, int64) (patterns.Template, error)
+	Validate(context.Context, string, int64, patterns.ValidationInput) (patterns.ValidationResult, error)
 }
 
 type FileReader interface {

@@ -12,8 +12,9 @@ final feature tree before its single signed commit was created.
 
 ## Delivered boundary
 
-The branch contains schema `1.0` dependency-aware `.openinventory` ZIP
+The branch contains schema `1.1` dependency-aware `.openinventory` ZIP
 packages, Stack and Vault providers, metadata-only/included-file choices,
+exact immutable Patterns IDs/versions and package-wide typed preflight,
 checksummed bounded decoding, durable memory/PostgreSQL receipts, exact replay
 and safe holding/failed retry, per-record durable intents with deterministic
 provider tokens, slow-write lease heartbeats, stale processing lease takeover,
@@ -22,16 +23,20 @@ write locks and claim flow, integration-permission REST and gRPC contracts,
 redacted audits, accessible Workspace and documentation surfaces, configuration,
 requirements, and traceability.
 
-Migration `0032_exchange_packages.sql` is reserved for this feature. It creates
+Migration `0032_exchange_packages.sql` creates
 only organization-scoped package receipts/history constraints and does not add
 or broaden a Guard policy permission; Exchange deliberately reuses the existing
-`integrations.read` and `integrations.write` boundary.
+`integrations.read` and `integrations.write` boundary. Migration
+`0035_exchange_patterns_schema.sql` upgrades the receipt check to schema `1.1`
+while preserving historical `1.0` receipt rows. New `1.0` archives are rejected
+and must be re-exported; old receipt labels are not rewritten to claim
+validation they never received.
 
 ## Automated scenario evidence
 
 | Scenario | Evidence |
 |---|---|
-| Dependency selection, closure, order, cycles, missing references, holding retry, created/unchanged replay, second-record failure checkpoints, crash between provider commit and receipt checkpoint, committed-result recovery, deterministic token reuse, blocked-provider heartbeats, active-lease exclusion, stale takeover after terminal-update failure | `internal/exchange/service_test.go` |
+| Exact/mismatched/retired Patterns schemas, all-record schema preflight, dependency selection, closure, order, cycles, missing references, holding retry, created/unchanged replay, second-record failure checkpoints, crash between provider commit and receipt checkpoint, committed-result recovery, deterministic token reuse, blocked-provider heartbeats, active-lease exclusion, stale takeover after terminal-update failure | `internal/exchange/service_test.go` |
 | ZIP round trip, corrupt archive, checksum tamper, duplicate/path entries, case-insensitive HTTP(S) credential/signed URL rejection, archive/file/manifest/payload/decompression limits | `internal/exchange/archive_test.go` |
 | Stack earliest-provenance round trip, full-import operation counts with zero inventory snapshots, Stack/Vault post-commit audit repair, and Vault included/metadata-only modes with missing, exact, and content-verified targets | `internal/exchange/providers_test.go`, `internal/stack/service_test.go`, `internal/storage/service_test.go` |
 | Ownership registration, compensation, durable write lock, explicit claim, mutation rejection before claim | `internal/exchange/service_test.go`, `internal/httpapi/exchange_test.go`, `internal/httpapi/server_test.go` |

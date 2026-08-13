@@ -29,9 +29,10 @@ func (s *PatternsStore) ListTemplates(ctx context.Context, organizationID string
 		SELECT `+patternsColumns+` FROM pattern_template_versions candidate
 		WHERE organization_id = $1 AND ($2 = '' OR record_type = $2)
 		  AND ($3 OR status <> 'retired')
-		  AND version = (SELECT MAX(latest.version) FROM pattern_template_versions latest
+		  AND ($4 OR version = (SELECT MAX(latest.version) FROM pattern_template_versions latest
 		    WHERE latest.organization_id = candidate.organization_id AND latest.id = candidate.id)
-		ORDER BY record_type, lower(name), id`, organizationID, query.RecordType, query.IncludeRetired)
+		  )
+		ORDER BY record_type, lower(name), id, version DESC`, organizationID, query.RecordType, query.IncludeRetired, query.IncludeVersions)
 	if err != nil {
 		return nil, fmt.Errorf("list Patterns templates: %w", err)
 	}

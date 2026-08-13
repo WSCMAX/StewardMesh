@@ -79,8 +79,9 @@ type Template struct {
 }
 
 type ListQuery struct {
-	RecordType     string
-	IncludeRetired bool
+	RecordType      string
+	IncludeRetired  bool
+	IncludeVersions bool
 }
 
 type CreateTemplateInput struct {

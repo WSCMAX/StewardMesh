@@ -293,6 +293,8 @@ message ListPatternsTemplatesRequest {
   // Exact provider-neutral record family; empty returns every family.
   string record_type = 1;
   bool include_retired = 2;
+  // Return all immutable versions instead of only the latest per template.
+  bool include_versions = 3;
 }
 
 message ListPatternsTemplatesResponse {
@@ -2479,6 +2481,13 @@ message ExchangeReference {
   string id = 2;
 }
 
+// Exact immutable Patterns schema pinned for one manifest record family.
+message ExchangeSchemaReference {
+  string record_type = 1;
+  string template_id = 2;
+  int64 template_version = 3;
+}
+
 // Earliest known source identity. Import preserves these values instead of
 // replacing them with a transport filename or an object-store location.
 message ExchangeProvenance {
@@ -2520,6 +2529,8 @@ message ExchangeRecord {
   ExchangeOwnershipMetadata ownership = 7;
   ExchangeFileMetadata file = 8;
   google.protobuf.Struct payload = 9;
+  string template_id = 10;
+  int64 template_version = 11;
 }
 
 // Canonical manifest encoded as manifest.json inside the .openinventory ZIP.
@@ -2531,6 +2542,8 @@ message ExchangeManifest {
   // "metadata" or "include".
   string file_mode = 5;
   repeated ExchangeRecord records = 6;
+  // Sorted, unique schema identities used by records in this manifest.
+  repeated ExchangeSchemaReference schemas = 7;
 }
 
 message ExchangeRecordDescriptor {
@@ -2540,6 +2553,8 @@ message ExchangeRecordDescriptor {
   // At most 128 direct relationships.
   repeated ExchangeReference dependencies = 4;
   bool has_file = 5;
+  string template_id = 6;
+  int64 template_version = 7;
 }
 
 message ListExchangeRecordsRequest {}

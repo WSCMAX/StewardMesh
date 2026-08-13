@@ -1,4 +1,4 @@
-// Requirements: REQ-API-001, SEC-MCP-001, REQ-DIRECTORY-EXPANSION-005, REQ-DIRECTORY-EXPANSION-007, REQ-DIRECTORY-EXPANSION-008, REQ-SIGNALS-001, REQ-REACH-001, REQ-EXCHANGE-001, DOC-001. Features: platform.foundation, integrations.protocols, threads.relationships, alerts.rules, messaging.delivery, migration.packages, experience.help.
+// Requirements: REQ-API-001, SEC-MCP-001, REQ-DIRECTORY-EXPANSION-005, REQ-DIRECTORY-EXPANSION-007, REQ-DIRECTORY-EXPANSION-008, REQ-PATTERNS-001, REQ-SIGNALS-001, REQ-REACH-001, REQ-EXCHANGE-001, DOC-001. Features: platform.foundation, integrations.protocols, threads.relationships, templates.schemas, alerts.rules, messaging.delivery, migration.packages, experience.help.
 
 export type DocumentationTopicID = 'overview' | 'workspace' | 'atlas' | 'horizon' | 'ledger' | 'stack' | 'signals' | 'reach' | 'threads' | 'vault' | 'exchange' | 'people' | 'bridge' | 'guard' | 'guide'
 
@@ -518,7 +518,7 @@ export const documentationPages: readonly DocumentationPage[] = [
     summary: 'Sign in securely, administer roles and scoped grants, and understand the authorization boundary around every StewardMesh record.',
     appHref: '#workspace-guard',
     appLabel: 'Open Guard',
-    searchTerms: ['login', 'bootstrap', 'administrator', 'role', 'permission', 'scope', 'session', 'authorization'],
+    searchTerms: ['login', 'bootstrap', 'administrator', 'role', 'permission', 'scope', 'session', 'authorization', 'patterns', 'template', 'schema', 'csv'],
     sections: [
       {
         id: 'first-admin',
@@ -530,6 +530,16 @@ export const documentationPages: readonly DocumentationPage[] = [
         id: 'roles',
         title: 'Assign the narrowest useful access',
         bullets: ['Roles group permission strings into reusable policy bundles.', 'Assignments can be organization-, site-, department-, or resource-scoped.', 'Ownership controls protect externally managed records until an authorized user claims them.', 'The interface may hide unavailable actions, but server checks remain authoritative.'],
+      },
+      {
+        id: 'patterns',
+        title: 'Validate records with Patterns',
+        steps: [
+          { title: 'Choose an exact template version', body: 'Built-in schemas cover every phase-one record family. Copies and new versions remain immutable once created.' },
+          { title: 'Use the generated workbench', body: 'Required state, bounds, options, help, accessible labels, and all seven field types come from the selected schema. Validate against the server before using the row.' },
+          { title: 'Move one bounded CSV row', body: 'Paste exactly one matching header row and one data row, or prepare the current form as CSV. Formula-like cells, header drift, extra rows, unsafe money, and files over 128 KiB are rejected.' },
+        ],
+        callout: { title: 'Exchange pins the same schema', body: 'Exchange schema 1.1 preflights every Stack and Vault portable record against its exact Patterns ID and version before any record intent, ownership call, or provider write.', tone: 'success' },
       },
       {
         id: 'session',

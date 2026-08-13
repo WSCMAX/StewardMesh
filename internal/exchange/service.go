@@ -1,19 +1,23 @@
 package exchange
 
-// Requirement: REQ-EXCHANGE-001. Feature: migration.packages. GitHub: #9.
+// Requirements: REQ-EXCHANGE-001, REQ-PATTERNS-001. Features: migration.packages, templates.schemas. GitHub: #9, #8.
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/maxlemke/stewardmesh/internal/foundation"
 	"github.com/maxlemke/stewardmesh/internal/guard"
+	"github.com/maxlemke/stewardmesh/internal/patterns"
 )
 
 var errProcessingLeaseLost = errors.New("Exchange processing lease was lost")
@@ -21,6 +25,7 @@ var errProcessingLeaseLost = errors.New("Exchange processing lease was lost")
 type ServiceConfig struct {
 	OrganizationID  string
 	SourceSystemID  string
+	Schemas         SchemaRegistry
 	Now             func() time.Time
 	ProcessingLease time.Duration
 }
@@ -39,6 +44,7 @@ type Service struct {
 	sourceSystemID  string
 	now             func() time.Time
 	processingLease time.Duration
+	schemas         SchemaRegistry
 	providers       map[string]Provider
 	providerList    []Provider
 }
@@ -46,8 +52,8 @@ type Service struct {
 func NewService(store Store, auditor foundation.Auditor, ownership ownershipManager, configuration ServiceConfig, providers ...Provider) (*Service, error) {
 	configuration.OrganizationID = strings.TrimSpace(configuration.OrganizationID)
 	configuration.SourceSystemID = strings.TrimSpace(configuration.SourceSystemID)
-	if store == nil || auditor == nil || ownership == nil || !stableIDPattern.MatchString(configuration.OrganizationID) || !stableIDPattern.MatchString(configuration.SourceSystemID) {
-		return nil, errors.New("Exchange store, auditor, ownership service, organization, and source system are required")
+	if store == nil || auditor == nil || ownership == nil || configuration.Schemas == nil || !stableIDPattern.MatchString(configuration.OrganizationID) || !stableIDPattern.MatchString(configuration.SourceSystemID) {
+		return nil, errors.New("Exchange store, auditor, ownership service, Patterns schemas, organization, and source system are required")
 	}
 	if configuration.Now == nil {
 		configuration.Now = func() time.Time { return time.Now().UTC() }
@@ -58,7 +64,7 @@ func NewService(store Store, auditor foundation.Auditor, ownership ownershipMana
 	service := &Service{
 		store: store, auditor: auditor, guard: ownership, organizationID: configuration.OrganizationID,
 		sourceSystemID: configuration.SourceSystemID, now: configuration.Now, processingLease: configuration.ProcessingLease,
-		providers: make(map[string]Provider),
+		schemas: configuration.Schemas, providers: make(map[string]Provider),
 	}
 	for _, provider := range providers {
 		if provider == nil || len(provider.Types()) == 0 {
@@ -98,7 +104,7 @@ func (s *Service) ListRecords(ctx context.Context) ([]RecordDescriptor, error) {
 	for _, key := range keys {
 		record := records[key]
 		result = append(result, RecordDescriptor{
-			Type: record.Type, ID: record.ID, Revision: record.Revision,
+			Type: record.Type, ID: record.ID, Revision: record.Revision, TemplateID: record.TemplateID, TemplateVersion: record.TemplateVersion,
 			Dependencies: append([]Reference{}, record.Dependencies...), HasFile: record.File != nil,
 		})
 	}
@@ -201,7 +207,7 @@ func (s *Service) Export(ctx context.Context, actorID string, request ExportRequ
 	now := normalizedNow(s.now())
 	artifact, sealed, err := encodeArchive(Manifest{
 		SchemaVersion: SchemaVersion, PackageID: packageID, SourceSystemID: s.sourceSystemID,
-		ExportedAt: now, FileMode: request.FileMode, Records: ordered,
+		ExportedAt: now, FileMode: request.FileMode, Schemas: schemaReferences(ordered), Records: ordered,
 	}, files)
 	if err != nil {
 		return ExportArtifact{}, err
@@ -301,36 +307,22 @@ func (s *Service) Import(ctx context.Context, actorID string, contents []byte) (
 	for _, progress := range pending.Progress {
 		progressByKey[progress.key()] = progress
 	}
-	for _, record := range ordered {
-		key := Reference{Type: record.Type, ID: record.ID}.Key()
+	preflight, err := s.preflightImport(ctx, ordered, recordMap, outcomesByKey, progressByKey)
+	if err != nil {
+		return ImportResult{}, s.failImport(ctx, actorID, pending, err)
+	}
+	for _, original := range ordered {
+		key := Reference{Type: original.Type, ID: original.ID}.Key()
+		prepared := preflight[key]
+		record := prepared.Record
 		progress, hasProgress := progressByKey[key]
 		if _, alreadyDurable := outcomesByKey[key]; alreadyDurable && !hasProgress {
 			continue
 		}
 		provider := s.providers[record.Type]
 		if !hasProgress {
-			missing, dependencyErr := s.missingDependencies(ctx, record, recordMap, outcomesByKey)
-			if dependencyErr != nil {
-				return ImportResult{}, s.failImport(ctx, actorID, pending, dependencyErr)
-			}
-			if provider == nil {
-				missing = append(missing, Reference{Type: "provider", ID: record.Type})
-			}
-			if provider != nil && record.File != nil && record.File.Entry == "" {
-				exact := false
-				if resolver, ok := provider.(MetadataOnlyResolver); ok {
-					exact, dependencyErr = resolver.MetadataOnlyRecordExists(ctx, record)
-					if dependencyErr != nil {
-						return ImportResult{}, s.failImport(ctx, actorID, pending, dependencyErr)
-					}
-				}
-				if !exact {
-					missing = append(missing, Reference{Type: "exchange.file", ID: record.File.SHA256})
-				}
-			}
-			missing = normalizeReferences(missing)
-			if len(missing) > 0 {
-				outcome := RecordOutcome{Type: record.Type, ID: record.ID, Revision: record.Revision, Checksum: record.Checksum, Status: OutcomeHolding, MissingDependencies: missing}
+			if prepared.Validation == patterns.ValidationHolding || len(prepared.MissingDependencies) > 0 {
+				outcome := RecordOutcome{Type: record.Type, ID: record.ID, Revision: record.Revision, Checksum: record.Checksum, Status: OutcomeHolding, MissingDependencies: append([]Reference(nil), prepared.MissingDependencies...)}
 				outcomesByKey[key] = outcome
 				continue
 			}
@@ -627,6 +619,105 @@ func (s *Service) failImport(ctx context.Context, actorID string, pending Packag
 	return errors.Join(cause, updateErr)
 }
 
+type importSchemaPreflight struct {
+	Record              Record
+	Validation          patterns.ValidationStatus
+	MissingDependencies []Reference
+}
+
+// preflightImport resolves and validates every immutable Patterns schema before
+// the durable loop reserves its first record intent or touches Guard/provider
+// state. The second pass is still read-only: it classifies dependency-driven
+// holdings in topological order and caches normalized payloads for the write
+// loop. This prevents a later bad schema from creating a partial import.
+func (s *Service) preflightImport(
+	ctx context.Context,
+	ordered []Record,
+	records map[string]Record,
+	durable map[string]RecordOutcome,
+	progress map[string]ImportProgress,
+) (map[string]importSchemaPreflight, error) {
+	prepared := make(map[string]importSchemaPreflight, len(ordered))
+	for _, original := range ordered {
+		record := cloneRecord(original)
+		validation, normalizedPayload, err := s.validateSchema(ctx, record, nil, true)
+		if err != nil || validation.Status == patterns.ValidationInvalid {
+			return nil, errors.Join(ErrInvalidInput, err)
+		}
+		record.Payload = normalizedPayload
+		prepared[Reference{Type: record.Type, ID: record.ID}.Key()] = importSchemaPreflight{
+			Record: record, Validation: validation.Status,
+			MissingDependencies: holdingReferences(validation.HoldingReferences, nil),
+		}
+	}
+
+	classified := make(map[string]RecordOutcome, len(ordered))
+	for _, original := range ordered {
+		key := Reference{Type: original.Type, ID: original.ID}.Key()
+		item := prepared[key]
+		_, hasProgress := progress[key]
+		prior, alreadyDurable := durable[key]
+		if alreadyDurable || hasProgress {
+			if item.Validation == patterns.ValidationHolding || len(item.MissingDependencies) != 0 {
+				return nil, ErrConflict
+			}
+			if hasProgress && s.providers[item.Record.Type] == nil {
+				return nil, ErrConflict
+			}
+			if alreadyDurable {
+				classified[key] = cloneOutcome(prior)
+			} else {
+				classified[key] = RecordOutcome{Type: item.Record.Type, ID: item.Record.ID, Status: OutcomeUnchanged}
+			}
+			continue
+		}
+
+		missing, err := s.missingDependencies(ctx, item.Record, records, classified)
+		if err != nil {
+			return nil, err
+		}
+		provider := s.providers[item.Record.Type]
+		if provider == nil {
+			missing = append(missing, Reference{Type: "provider", ID: item.Record.Type})
+		}
+		if provider != nil && item.Record.File != nil && item.Record.File.Entry == "" {
+			exact := false
+			if resolver, ok := provider.(MetadataOnlyResolver); ok {
+				exact, err = resolver.MetadataOnlyRecordExists(ctx, item.Record)
+				if err != nil {
+					return nil, err
+				}
+			}
+			if !exact {
+				missing = append(missing, Reference{Type: "exchange.file", ID: item.Record.File.SHA256})
+			}
+		}
+		missing = normalizeReferences(missing)
+		validation, normalizedPayload, err := s.validateSchema(ctx, item.Record, missing, true)
+		if err != nil || validation.Status == patterns.ValidationInvalid {
+			return nil, errors.Join(ErrInvalidInput, err)
+		}
+		item.Record.Payload = normalizedPayload
+		item.Validation = validation.Status
+		missing = append(missing, holdingReferences(validation.HoldingReferences, missing)...)
+		missing = normalizeReferences(missing)
+		if len(missing) > MaximumOutcomeDependencies {
+			return nil, ErrTooLarge
+		}
+		if validation.Status == patterns.ValidationHolding && len(missing) == 0 {
+			return nil, ErrInvalidInput
+		}
+		item.MissingDependencies = missing
+		prepared[key] = item
+		status := OutcomeUnchanged
+		if validation.Status == patterns.ValidationHolding || len(missing) > 0 {
+			status = OutcomeHolding
+		}
+		classified[key] = RecordOutcome{Type: item.Record.Type, ID: item.Record.ID, Status: status}
+	}
+	return prepared, nil
+}
+
 func (s *Service) missingDependencies(ctx context.Context, record Record, records map[string]Record, outcomes map[string]RecordOutcome) ([]Reference, error) {
 	missing := make([]Reference, 0)
 	for _, dependency := range record.Dependencies {
@@ -694,9 +785,19 @@ func (s *Service) catalog(ctx context.Context) (map[string]Record, map[string]Ow
 			if item.Ownership.State == "" {
 				item.Ownership.State = "local"
 			}
+			template, err := s.schemas.ActiveTemplateForRecordType(ctx, item.Type)
+			if err != nil || template.RecordType != item.Type || template.Status != patterns.StatusActive {
+				return nil, nil, fmt.Errorf("resolve Exchange Patterns schema: %w", errors.Join(ErrInvalidInput, err))
+			}
+			item.TemplateID, item.TemplateVersion = template.ID, template.Version
 			if err := validateRecord(item); err != nil {
 				return nil, nil, fmt.Errorf("validate Exchange provider record: %w", err)
 			}
+			validation, normalizedPayload, err := s.validateSchema(ctx, item, nil, false)
+			if err != nil || validation.Status != patterns.ValidationValid {
+				return nil, nil, fmt.Errorf("validate Exchange provider schema: %w", errors.Join(ErrInvalidInput, err))
+			}
+			item.Payload = normalizedPayload
 			key := Reference{Type: item.Type, ID: item.ID}.Key()
 			if _, duplicate := records[key]; duplicate {
 				return nil, nil, ErrConflict
@@ -724,6 +825,91 @@ func (s *Service) catalog(ctx context.Context) (map[string]Record, map[string]Ow
 		}
 	}
 	return records, owners, nil
+}
+
+func (s *Service) validateSchema(ctx context.Context, record Record, missing []Reference, allowHolding bool) (patterns.ValidationResult, []byte, error) {
+	// Imports honor the exact immutable version pinned in the archive. A newer
+	// custom version may exist by import time; that must not invalidate an older
+	// package whose exact schema remains active and retrievable.
+	template, err := s.schemas.GetTemplate(ctx, record.TemplateID, record.TemplateVersion)
+	if err != nil || template.ID != record.TemplateID || template.Version != record.TemplateVersion || template.RecordType != record.Type || template.Status != patterns.StatusActive {
+		return patterns.ValidationResult{}, nil, errors.Join(ErrInvalidInput, err)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(record.Payload))
+	decoder.UseNumber()
+	var values map[string]any
+	if err := decoder.Decode(&values); err != nil || values == nil {
+		return patterns.ValidationResult{}, nil, ErrInvalidInput
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return patterns.ValidationResult{}, nil, ErrInvalidInput
+	}
+	missingFields := make([]string, 0, len(missing))
+	for _, field := range template.Fields {
+		if field.Type != patterns.FieldReference && field.Type != patterns.FieldAttachment {
+			continue
+		}
+		value, ok := values[field.Key].(string)
+		if !ok || value == "" {
+			continue
+		}
+		for _, dependency := range missing {
+			if dependency.ID == value && (field.ReferenceType == "stewardmesh.record" || canonicalSchemaRecordType(field.ReferenceType) == canonicalSchemaRecordType(dependency.Type)) {
+				missingFields = append(missingFields, field.Key)
+				break
+			}
+		}
+	}
+	result, err := s.schemas.Validate(ctx, record.TemplateID, record.TemplateVersion, patterns.ValidationInput{
+		Values: values, MissingReferences: missingFields, AllowHoldingRecord: allowHolding,
+	})
+	if err != nil || result.Status == patterns.ValidationInvalid || result.Status != patterns.ValidationValid && result.Status != patterns.ValidationHolding || len(missingFields) > 0 && result.Status != patterns.ValidationHolding {
+		return result, nil, errors.Join(ErrInvalidInput, err)
+	}
+	normalized, err := json.Marshal(result.NormalizedValues)
+	if err != nil || len(normalized) == 0 || len(normalized) > MaximumPayloadBytes {
+		return result, nil, ErrInvalidInput
+	}
+	return result, normalized, nil
+}
+
+func canonicalSchemaRecordType(value string) string {
+	return strings.ReplaceAll(value, "_", "-")
+}
+
+func holdingReferences(values []patterns.HoldingReference, missing []Reference) []Reference {
+	result := make([]Reference, 0, len(values))
+	for _, value := range values {
+		recordType := canonicalSchemaRecordType(strings.TrimSpace(value.ReferenceType))
+		id := strings.TrimSpace(value.Value)
+		for _, dependency := range missing {
+			if dependency.ID == id && (recordType == "stewardmesh.record" || recordType == canonicalSchemaRecordType(dependency.Type)) {
+				// Preserve the exact manifest spelling. Providers own their canonical
+				// dependency type (for example ledger.purchase_order), while Patterns
+				// uses a portable hyphenated record type.
+				result = append(result, dependency)
+				break
+			}
+		}
+	}
+	return result
+}
+
+func schemaReferences(records []Record) []SchemaReference {
+	byType := make(map[string]SchemaReference)
+	for _, record := range records {
+		byType[record.Type] = SchemaReference{RecordType: record.Type, TemplateID: record.TemplateID, TemplateVersion: record.TemplateVersion}
+	}
+	types := make([]string, 0, len(byType))
+	for recordType := range byType {
+		types = append(types, recordType)
+	}
+	sort.Strings(types)
+	result := make([]SchemaReference, 0, len(types))
+	for _, recordType := range types {
+		result = append(result, byType[recordType])
+	}
+	return result
 }
 
 func topologicalRecords(records map[string]Record) ([]Record, error) {

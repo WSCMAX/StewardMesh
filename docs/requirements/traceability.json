@@ -316,9 +316,12 @@
       "featureId": "templates.schemas",
       "artifacts": {
         "documentation": [
+          "README.md",
           "docs/features/dictionary.md",
+          "docs/features/exchange.md",
           "docs/features/patterns.md",
-          "docs/requirements/initial.md"
+          "docs/requirements/initial.md",
+          "docs/validation/exchange-security-review.md"
         ],
         "api": [
           "api/openapi/openapi.yaml",
@@ -326,6 +329,10 @@
         ],
         "code": [
           "internal/application/application.go",
+          "internal/exchange/archive.go",
+          "internal/exchange/contracts.go",
+          "internal/exchange/providers.go",
+          "internal/exchange/service.go",
           "internal/httpapi/server.go",
           "internal/patterns/builtin.go",
           "internal/patterns/contracts.go",
@@ -334,21 +341,27 @@
           "internal/repository/postgres/patterns.go"
         ],
         "schema": [
-          "internal/repository/postgres/migrations/0027_patterns_templates.sql"
+          "internal/repository/postgres/migrations/0027_patterns_templates.sql",
+          "internal/repository/postgres/migrations/0035_exchange_patterns_schema.sql"
         ],
         "tests": [
           "internal/application/application_test.go",
+          "internal/exchange/archive_test.go",
+          "internal/exchange/providers_test.go",
+          "internal/exchange/service_test.go",
           "internal/httpapi/server_test.go",
           "internal/patterns/service_test.go",
           "internal/repository/contracttest/patterns.go",
           "internal/repository/memory_patterns_test.go",
           "internal/repository/postgres/migrate_test.go",
           "internal/repository/postgres/postgres_integration_test.go",
-          "web/src/PatternsManager.test.tsx"
+          "web/src/PatternsManager.test.tsx",
+          "web/src/patternCsv.test.ts"
         ],
         "ui": [
           "web/src/App.tsx",
-          "web/src/PatternsManager.tsx"
+          "web/src/PatternsManager.tsx",
+          "web/src/patternCsv.ts"
         ]
       }
     },
@@ -680,7 +693,8 @@
         "schema": [
           "api/openapi/openapi.yaml",
           "api/proto/stewardmesh.proto",
-          "internal/repository/postgres/migrations/0032_exchange_packages.sql"
+          "internal/repository/postgres/migrations/0032_exchange_packages.sql",
+          "internal/repository/postgres/migrations/0035_exchange_patterns_schema.sql"
         ],
         "tests": [
           "internal/exchange/archive_test.go",

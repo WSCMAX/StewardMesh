@@ -1,11 +1,13 @@
 package exchange
 
-// Requirement: REQ-EXCHANGE-001. Security regression coverage for bounded
+// Requirements: REQ-EXCHANGE-001, REQ-PATTERNS-001. Features: migration.packages, templates.schemas.
+// Security regression coverage for bounded
 // archive parsing, checksums, and credential-free payloads.
 
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -20,6 +22,7 @@ func TestArchiveRoundTripVerifiesRecordsAndIncludedFiles(t *testing.T) {
 	record := validArchiveRecord()
 	record.Type = "vault.blob"
 	record.ID = "0123456789abcdef0123456789abcdef"
+	record.TemplateID = "builtin-vault-blob"
 	record.File = &FileMetadata{
 		Mode: FileModeMetadata, Name: "evidence.txt", MediaType: "text/plain",
 		SizeBytes: int64(len(content)), SHA256: hex.EncodeToString(digest[:]),
@@ -38,6 +41,25 @@ func TestArchiveRoundTripVerifiesRecordsAndIncludedFiles(t *testing.T) {
 	}
 	if checksum != artifact.SHA256 || decoded.Manifest.Records[0].Checksum == "" || !bytes.Equal(decoded.Files[sealed.Records[0].File.Entry], content) {
 		t.Fatalf("archive did not round trip: %#v checksum=%q", decoded.Manifest, checksum)
+	}
+}
+
+func TestServiceRejectsLegacyOnePointZeroArchiveBeforeAnyWorkflowMutation(t *testing.T) {
+	_, sealed, err := encodeArchive(validArchiveManifest([]Record{validArchiveRecord()}, FileModeMetadata), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealed.SchemaVersion = LegacySchemaVersion
+	manifest, err := json.Marshal(sealed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := rawZip(t, map[string][]byte{manifestEntry: manifest})
+	// Every dependency is deliberately nil. Reaching receipt, Patterns, Guard,
+	// or provider work would panic; schema rejection must happen first.
+	service := &Service{}
+	if _, err := service.Import(context.Background(), "operator", legacy); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected legacy archive rejection before mutation, got %v", err)
 	}
 }
 
@@ -147,6 +169,7 @@ func TestArchiveRoundTripsHighlyCompressibleIncludedFileWithoutCreatingABomb(t *
 	record := validArchiveRecord()
 	record.Type = "vault.blob"
 	record.ID = "fedcba9876543210fedcba9876543210"
+	record.TemplateID = "builtin-vault-blob"
 	record.File = &FileMetadata{
 		Mode: FileModeMetadata, Name: "zeros.bin", MediaType: "application/octet-stream",
 		SizeBytes: int64(len(content)), SHA256: hex.EncodeToString(digest[:]),
@@ -167,13 +190,13 @@ func TestArchiveRoundTripsHighlyCompressibleIncludedFileWithoutCreatingABomb(t *
 func validArchiveManifest(records []Record, mode FileMode) Manifest {
 	return Manifest{
 		SchemaVersion: SchemaVersion, PackageID: "package-0123456789abcdef", SourceSystemID: "source-system",
-		ExportedAt: time.Date(2026, time.August, 13, 12, 0, 0, 0, time.UTC), FileMode: mode, Records: records,
+		ExportedAt: time.Date(2026, time.August, 13, 12, 0, 0, 0, time.UTC), FileMode: mode, Schemas: schemaReferences(records), Records: records,
 	}
 }
 
 func validArchiveRecord() Record {
 	return Record{
-		Type: "stack.product", ID: "product-one", Revision: 1, Dependencies: []Reference{},
+		Type: "stack.product", ID: "product-one", Revision: 1, TemplateID: "builtin-stack-product", TemplateVersion: 1, Dependencies: []Reference{},
 		Provenance: Provenance{SourceSystemID: "source-system", SourceRecordID: "stack.product:product-one"},
 		Ownership:  OwnershipMetadata{State: "local"}, Payload: json.RawMessage(`{"id":"product-one","name":"Safe product"}`),
 	}

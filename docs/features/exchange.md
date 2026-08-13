@@ -2,10 +2,11 @@
 
 - **Canonical ID:** `migration.packages`
 - **Requirement:** `REQ-EXCHANGE-001`
+- **Patterns integration:** `REQ-PATTERNS-001`, `templates.schemas`
 - **Roadmap issue:** [#9](https://github.com/WSCMAX/StewardMesh/issues/9)
 - **Package media type:** `application/vnd.stewardmesh.openinventory+zip`
 - **Package suffix:** `.openinventory`
-- **Manifest schema:** `1.0`
+- **Manifest schema:** `1.1`
 
 ## Purpose and supported boundary
 
@@ -38,7 +39,8 @@ manifest entries fail verification.
 The manifest carries:
 
 - schema version, package ID, source-system ID, UTC export time, and file mode;
-- each record's type, stable ID, revision, SHA-256 checksum, typed JSON payload,
+- a sorted registry of each record family's exact immutable Patterns template ID/version;
+- each record's type, stable ID, revision, repeated exact template reference, SHA-256 checksum, schema-only typed JSON payload,
   sorted relationships, earliest known source-system/source-record provenance,
   and ownership state;
 - optional file name, exact media type, byte count, checksum, and fixed internal
@@ -46,10 +48,10 @@ The manifest carries:
 - no organization-selected operator identity, database key, private object key,
   provider credential, session value, access token, or signed URL.
 
-Record checksums cover identity, revision, dependencies, provenance, ownership,
+Record checksums cover identity, revision, exact Patterns schema identity, dependencies, provenance, ownership,
 file metadata, and typed payload. The archive has a separate SHA-256 checksum
 returned as `X-Content-SHA256` and retained in the receipt. Import verifies both
-layers before any domain write. Dependencies are topologically ordered so a
+layers before any domain write. Exchange then resolves the exact active template, verifies its record family, and calls Patterns validation before any Guard ownership registration or provider write. Unknown, mismatched, ambiguous, or retired schemas fail closed. Dependencies are topologically ordered so a
 record is attempted only after every packaged dependency has completed. Cycles,
 duplicate identities, duplicate/unsorted dependencies, a checksum mismatch, or
 an invalid identity fail closed.
@@ -138,7 +140,7 @@ same durable receipt without duplicating earlier provider work.
 
 ## Limits and validation
 
-The server enforces all limits even when a client omits its own checks:
+The server enforces all limits even when a client omits its own checks. Manifest schema `1.1` is an intentional breaking compatibility boundary: pre-Patterns `1.0` archives are rejected and must be re-exported by the source installation. Durable `1.0` receipt rows remain readable as honest historical evidence; migration `0035_exchange_patterns_schema.sql` allows both receipt labels without rewriting history, while archive decoding and every new workflow require `1.1`.
 
 | Boundary | Limit |
 |---|---:|
@@ -158,11 +160,11 @@ The server enforces all limits even when a client omits its own checks:
 ZIP entries also fail when their declared expansion is greater than 200 times
 the compressed size plus 1 MiB. JSON decoding rejects unknown manifest fields
 and trailing content. Resource types, IDs, checksums, revisions, UTF-8 file
-names, exact parameter-free media types, timestamps, counts, states, and source
-identities use explicit allowlists or bounds. Typed payloads are JSON objects
+names, exact parameter-free media types, timestamps, counts, states, source
+identities, and schema references use explicit allowlists or bounds. Typed payloads are JSON objects
 and reject credential-like keys and credential-bearing or signed HTTP URLs
-before a domain provider receives them. Stack and Vault then strictly decode
-their own payload shape and verify that envelope identity, provenance,
+before a domain provider receives them. Stack and Vault export minimal Patterns-defined projections instead of full domain records, then strictly reconstruct and decode
+their own provider shape and verify that envelope identity, provenance,
 relationships, and file metadata agree with the typed record.
 
 ## Permissions, APIs, and configuration

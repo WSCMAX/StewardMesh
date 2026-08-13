@@ -337,6 +337,7 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 	exchangeService, err := exchange.NewService(runtime.exchangeStore, runtime.auditor, guardService, exchange.ServiceConfig{
 		OrganizationID: cfg.OrganizationID,
 		SourceSystemID: cfg.ExchangeSourceSystemID,
+		Schemas:        patternsService,
 	}, stackExchangeProvider, vaultExchangeProvider)
 	if err != nil {
 		return fail(fmt.Errorf("initialize Exchange: %w", err))

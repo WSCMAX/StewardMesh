@@ -508,7 +508,16 @@ func (s *Server) listPatternsTemplates(w http.ResponseWriter, r *http.Request, _
 		}
 		includeRetired = parsed
 	}
-	items, err := s.patterns.ListTemplates(r.Context(), patterns.ListQuery{RecordType: r.URL.Query().Get("recordType"), IncludeRetired: includeRetired})
+	includeVersions := false
+	if value := strings.TrimSpace(r.URL.Query().Get("includeVersions")); value != "" {
+		parsed, err := strconv.ParseBool(value)
+		if err != nil {
+			writeError(w, r, http.StatusBadRequest, "validation_failed", "includeVersions must be true or false")
+			return
+		}
+		includeVersions = parsed
+	}
+	items, err := s.patterns.ListTemplates(r.Context(), patterns.ListQuery{RecordType: r.URL.Query().Get("recordType"), IncludeRetired: includeRetired, IncludeVersions: includeVersions})
 	if err != nil {
 		writePatternsError(w, r, err)
 		return
@@ -3594,6 +3603,7 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, maximumBytes int64, dest
 	}
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maximumBytes))
 	decoder.DisallowUnknownFields()
+	decoder.UseNumber()
 	if err := decoder.Decode(destination); err != nil {
 		return err
 	}

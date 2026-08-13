@@ -32,17 +32,28 @@ func (s *MemoryPatternsStore) ListTemplates(_ context.Context, organizationID st
 		if len(versions) == 0 {
 			continue
 		}
-		latest := versions[len(versions)-1]
-		if latest.OrganizationID != organizationID || query.RecordType != "" && latest.RecordType != query.RecordType || !query.IncludeRetired && latest.Status == patterns.StatusRetired {
-			continue
+		candidates := versions[len(versions)-1:]
+		if query.IncludeVersions {
+			candidates = versions
 		}
-		items = append(items, cloneMemoryTemplate(latest))
+		for _, candidate := range candidates {
+			if candidate.OrganizationID != organizationID || query.RecordType != "" && candidate.RecordType != query.RecordType || !query.IncludeRetired && candidate.Status == patterns.StatusRetired {
+				continue
+			}
+			items = append(items, cloneMemoryTemplate(candidate))
+		}
 	}
 	sort.Slice(items, func(i, j int) bool {
 		if items[i].RecordType != items[j].RecordType {
 			return items[i].RecordType < items[j].RecordType
 		}
-		return strings.ToLower(items[i].Name) < strings.ToLower(items[j].Name)
+		if strings.ToLower(items[i].Name) != strings.ToLower(items[j].Name) {
+			return strings.ToLower(items[i].Name) < strings.ToLower(items[j].Name)
+		}
+		if items[i].ID != items[j].ID {
+			return items[i].ID < items[j].ID
+		}
+		return items[i].Version > items[j].Version
 	})
 	return items, nil
 }

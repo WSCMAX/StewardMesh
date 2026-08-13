@@ -2,6 +2,7 @@
 
 - **Requirement:** `REQ-EXCHANGE-001`
 - **Feature:** `migration.packages`
+- **Patterns integration:** `REQ-PATTERNS-001`, `templates.schemas`
 - **Roadmap:** [#9](https://github.com/WSCMAX/StewardMesh/issues/9)
 - **Reviewed:** 2026-08-13
 - **Scope:** Exchange archive, service, Stack/Vault provider, repository, HTTP,
@@ -84,6 +85,7 @@ None open.
 | Oversized body or decompression bomb | Export JSON is capped at 128 KiB. Import rejects HTTP content encoding and non-exact media types, checks declared length, and wraps the body in `http.MaxBytesReader` at 32 MiB (`internal/httpapi/exchange.go:61-125`). ZIP entry count, entry size, total expansion, per-entry 200x-plus-1-MiB ratio, manifest, record payload, payload total, file, 128-dependency, and record limits are enforced before provider writes (`internal/exchange/archive.go:132-260`). |
 | ZIP traversal or ambiguous archive | Only `manifest.json` and `files/{lowercase-sha256}` are accepted; directories, cleaned-name differences, duplicates, unsupported compression, missing/unreferenced entries, size mismatches, and file/record checksum mismatches fail closed (`internal/exchange/archive.go:145-258`). No archive path is passed to an OS filesystem API. |
 | Malformed or credential-bearing payload | Manifest decoding rejects unknown fields and trailing JSON. Typed payloads must be bounded JSON objects; credential-like field names, URL user info, and signed/credential query parameters are rejected for case-insensitive HTTP(S) schemes (`internal/exchange/archive.go`). Stack and Vault providers then strictly decode their own schema and verify envelope identity, provenance, dependencies, and file metadata. |
+| Schema substitution, drift, or late failure | Manifest schema `1.1` carries a sorted unique Patterns registry and repeats the exact template ID/version in every record checksum. Export resolves and validates the full provider catalog before file reads or receipt creation. Import completes a bounded all-record preflight before the first durable record intent, Guard call, or provider write. Unknown, mismatched, ambiguous, retired, and invalid schemas fail closed; holding-capable reference gaps remain visible. Stack and Vault payloads are allowlisted schema projections (`internal/exchange/archive.go`, `internal/exchange/service.go`, `internal/exchange/providers.go`). |
 | Missing dependency or unsupported type | Providers are registered against unique allowlisted record types. Imports run in topological order; unavailable relationships, metadata-only Vault content without an exact target, and unknown providers produce visible holding outcomes without a domain write (`internal/exchange/service.go`, `internal/exchange/providers.go`). |
 | Ownership-policy bypass | Guard registers earliest source identity before the provider write and the durable intent records the returned lock state. A newly created lock is compensated only when the provider reports that no write committed; a commit followed by audit failure retains the lock and truthful outcome for repair. Domain mutation handlers call the shared Guard write boundary; claims require separate `guard.manage`. The Guard UI strictly validates the ownership list, sends the synchronized CSRF token, and presents locked and locally managed states without trusting package-supplied actors. Package ownership metadata never bypasses the target's Guard decision. |
 | Replay, collision, crash, or partial failure | Receipt identity includes organization, direction, package ID, source, schema, and complete archive digest. Changed reuse conflicts. Before a provider mutation, Exchange persists a per-record intent containing an immutable deterministic provider token and created-versus-unchanged expectation. Provider commits are checkpointed even when audit delivery fails, and retries use the same token to repair the deterministic Stack/Vault audit event. Compare-and-swap checkpoints plus heartbeats renew the processing lease throughout slow calls, so another worker cannot concurrently invoke the provider; a crashed worker can be replaced only after expiry. PostgreSQL persists the private intents beside outcomes and constrains terminal states to have none (`internal/exchange/service.go`, `internal/exchange/providers.go`, `internal/repository/postgres/exchange.go`, `internal/repository/postgres/migrations/0032_exchange_packages.sql`). |
@@ -111,8 +113,9 @@ untrusted redirects.
   retention, and backup access are deployment controls not proven by this code
   review. Verify them in each shared environment.
 - The current provider registry supports Stack and Vault. Adding another domain
-  requires a typed payload allowlist, dependency and idempotency tests, privacy
-  review, and write-lock enforcement in every mutation path before registration.
+  requires an active built-in or uniquely resolved custom Patterns schema, a
+  typed payload allowlist, dependency and idempotency tests, privacy review,
+  and write-lock enforcement in every mutation path before registration.
 
 ## Validation evidence
 

@@ -212,9 +212,14 @@ func TestPatternsTemplateManagementSchemaValidationAndCSV(t *testing.T) {
 	session := bootstrapAdministrator(t, handler)
 
 	list := httptest.NewRecorder()
-	handler.ServeHTTP(list, authenticatedRequest(http.MethodGet, "/api/v1/templates?recordType=atlas.asset", nil, session))
+	handler.ServeHTTP(list, authenticatedRequest(http.MethodGet, "/api/v1/templates?recordType=atlas.asset&includeVersions=true", nil, session))
 	if list.Code != http.StatusOK || !strings.Contains(list.Body.String(), `"id":"builtin-atlas-asset"`) || !strings.Contains(list.Body.String(), `"accessibleLabel":"Asset name"`) {
 		t.Fatalf("expected built-in form metadata, got %d: %s", list.Code, list.Body.String())
+	}
+	malformedVersions := httptest.NewRecorder()
+	handler.ServeHTTP(malformedVersions, authenticatedRequest(http.MethodGet, "/api/v1/templates?includeVersions=sometimes", nil, session))
+	if malformedVersions.Code != http.StatusBadRequest || !strings.Contains(malformedVersions.Body.String(), "includeVersions must be true or false") {
+		t.Fatalf("expected malformed includeVersions rejection, got %d: %s", malformedVersions.Code, malformedVersions.Body.String())
 	}
 
 	payload := map[string]any{
@@ -229,6 +234,17 @@ func TestPatternsTemplateManagementSchemaValidationAndCSV(t *testing.T) {
 	handler.ServeHTTP(create, authenticatedRequest(http.MethodPost, "/api/v1/templates", bytes.NewReader(encoded), session))
 	if create.Code != http.StatusCreated || !strings.Contains(create.Body.String(), `"version":1`) {
 		t.Fatalf("expected custom template creation, got %d: %s", create.Code, create.Body.String())
+	}
+	versionPayload, _ := json.Marshal(map[string]any{"description": "Second immutable version", "fields": payload["fields"]})
+	version := httptest.NewRecorder()
+	handler.ServeHTTP(version, authenticatedRequest(http.MethodPost, "/api/v1/templates/http-intake/versions", bytes.NewReader(versionPayload), session))
+	if version.Code != http.StatusCreated || !strings.Contains(version.Body.String(), `"version":2`) {
+		t.Fatalf("expected appended custom version, got %d: %s", version.Code, version.Body.String())
+	}
+	history := httptest.NewRecorder()
+	handler.ServeHTTP(history, authenticatedRequest(http.MethodGet, "/api/v1/templates?recordType=exchange.row&includeVersions=true", nil, session))
+	if history.Code != http.StatusOK || strings.Count(history.Body.String(), `"id":"http-intake"`) != 2 {
+		t.Fatalf("expected both immutable versions, got %d: %s", history.Code, history.Body.String())
 	}
 
 	schema := httptest.NewRecorder()
@@ -251,6 +267,25 @@ func TestPatternsTemplateManagementSchemaValidationAndCSV(t *testing.T) {
 	handler.ServeHTTP(csvTemplate, authenticatedRequest(http.MethodGet, "/api/v1/templates/http-intake/template.csv?version=1", nil, session))
 	if csvTemplate.Code != http.StatusOK || csvTemplate.Header().Get("Content-Type") != "text/csv; charset=utf-8" || csvTemplate.Body.String() != "name,ownerId\n" {
 		t.Fatalf("expected CSV template, got %d %q: %s", csvTemplate.Code, csvTemplate.Header().Get("Content-Type"), csvTemplate.Body.String())
+	}
+}
+
+func TestPatternsValidationRejectsLexicallyFractionalMoneyWithoutRounding(t *testing.T) {
+	handler := newGuardServer(t)
+	session := bootstrapAdministrator(t, handler)
+	createBody := `{"id":"exact-money","recordType":"example.money","name":"Exact money","fields":[{"key":"currency","label":"Currency","type":"text","required":true,"maximumLength":3},{"key":"amountMinor","label":"Amount","type":"money","required":true,"currencyField":"currency"}]}`
+	created := httptest.NewRecorder()
+	handler.ServeHTTP(created, authenticatedRequest(http.MethodPost, "/api/v1/templates", strings.NewReader(createBody), session))
+	if created.Code != http.StatusCreated {
+		t.Fatalf("expected exact-money template, got %d: %s", created.Code, created.Body.String())
+	}
+	for _, token := range []string{"9007199254740990.5", "1.0000000000000001", "0.99999999999999999"} {
+		validated := httptest.NewRecorder()
+		body := `{"values":{"currency":"USD","amountMinor":` + token + `}}`
+		handler.ServeHTTP(validated, authenticatedRequest(http.MethodPost, "/api/v1/templates/exact-money/validate?version=1", strings.NewReader(body), session))
+		if validated.Code != http.StatusOK || !strings.Contains(validated.Body.String(), `"status":"invalid"`) || !strings.Contains(validated.Body.String(), `"code":"money"`) {
+			t.Fatalf("money token %s was rounded or accepted: %d %s", token, validated.Code, validated.Body.String())
+		}
 	}
 }
 
@@ -2671,6 +2706,7 @@ func newGuardServerWithDirectory(t *testing.T, limiter guard.AttemptLimiter, oid
 	exchangeService, err := exchange.NewService(repository.NewMemoryExchangeStore(), foundation.NopAuditor{}, service, exchange.ServiceConfig{
 		OrganizationID: organization.ID,
 		SourceSystemID: "http-test-system",
+		Schemas:        patternsService,
 		Now: func() time.Time {
 			return time.Date(2026, time.August, 13, 0, 0, 0, 0, time.UTC)
 		},

@@ -224,7 +224,7 @@ export default function DirectoryImportManager({ csrfToken, permissions, onAppli
               <td className="px-3 py-3"><div className="flex flex-wrap gap-2">
                 <button className={secondaryButtonClass} disabled={busy !== ''} onClick={() => showDetail(batch.id)} type="button">{busy === `detail-${batch.id}` ? 'Loading…' : 'View audit'}</button>
                 {canWrite && batch.status === 'previewed' && <button className={buttonClass} disabled={busy !== ''} onClick={() => run(batch, 'apply')} type="button">{busy === `apply-${batch.id}` ? 'Applying…' : 'Apply exact plan'}</button>}
-                {canWrite && (batch.status === 'failed' || batch.status === 'partially_applied') && <button className={secondaryButtonClass} disabled={busy !== ''} onClick={() => run(batch, 'retry')} type="button">{busy === `retry-${batch.id}` ? 'Retrying…' : 'Retry failures'}</button>}
+                {canWrite && canRetry(batch, detail) && <button className={secondaryButtonClass} disabled={busy !== ''} onClick={() => run(batch, 'retry')} type="button">{busy === `retry-${batch.id}` ? 'Retrying…' : 'Retry failures'}</button>}
               </div></td>
             </tr>)}
             {batches.length === 0 && <tr><td className="px-3 py-5 text-steward-mist-muted" colSpan={5}>{loading ? 'Loading import history…' : 'No import batches have been previewed.'}</td></tr>}
@@ -285,6 +285,17 @@ function readDetail(value: unknown): BatchDetail {
 function readOperation(value: unknown): { batch: Batch; replay: boolean } {
   if (!object(value) || !isBatch(value.batch) || typeof value.replay !== 'boolean') throw new Error('invalid directory import operation response')
   return { batch: value.batch, replay: value.replay }
+}
+
+function canRetry(batch: Batch, detail: BatchDetail | null) {
+  if ((batch.status !== 'failed' && batch.status !== 'partially_applied') || detail?.batch.id !== batch.id || detail.attempts.length >= 100) return false
+  if (detail.items.some((item) => item.outcome === 'failed' && item.retryable === true)) return true
+  if (detail.items.length > 0) return false
+  let latestCompletedAttempt: ImportAttempt | undefined
+  for (const attempt of detail.attempts) {
+    if (attempt.completedAt && (!latestCompletedAttempt || attempt.number > latestCompletedAttempt.number)) latestCompletedAttempt = attempt
+  }
+  return latestCompletedAttempt?.retryable === true
 }
 
 function isSource(value: unknown): value is Source {

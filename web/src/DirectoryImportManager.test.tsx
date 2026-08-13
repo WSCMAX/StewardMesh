@@ -1,5 +1,5 @@
 import axe from 'axe-core'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, expect, test, vi } from 'vitest'
 import DirectoryImportManager from './DirectoryImportManager'
 
@@ -167,4 +167,58 @@ test('renders SailPoint governance groups and memberships from bounded audit det
   expect(screen.getByText('Managed group')).toBeInTheDocument()
   expect(screen.getByText('subject membership')).toBeInTheDocument()
   expect(screen.getAllByText('directory-object-kind:')).toHaveLength(2)
+})
+
+test('offers retry only when reviewed audit detail contains a retryable failure', async () => {
+  const retryBatchID = '33333333333333333333333333333333'
+  const terminalBatch = {
+    ...previewedBatch,
+    sourceSystemId: 'terminal-conflict',
+    status: 'partially_applied',
+    counts: { ...counts, created: 0, conflicts: 1 },
+  }
+  const retryableBatch = {
+    ...previewedBatch,
+    id: retryBatchID,
+    sourceSystemId: 'retryable-failure',
+    status: 'partially_applied',
+    counts: { ...counts, created: 0, failed: 1 },
+  }
+  const terminalItem = {
+    ...item,
+    action: 'conflict',
+    outcome: 'conflict',
+    failureClass: 'conflict',
+    retryable: false,
+    error: 'source and target changes conflict',
+  }
+  const retryableItem = {
+    ...item,
+    id: '44444444444444444444444444444444',
+    outcome: 'failed',
+    failureClass: 'transient',
+    retryable: true,
+    error: 'target temporarily unavailable',
+  }
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    const path = String(input)
+    if (path === '/api/v1/directory-import-sources') return jsonResponse({ items: [source] })
+    if (path === '/api/v1/directory-imports?limit=50') return jsonResponse({ batches: [terminalBatch, retryableBatch] })
+    if (path === `/api/v1/directory-imports/${batchID}`) return jsonResponse({ batch: terminalBatch, items: [terminalItem], attempts: [{ ...attempt, status: 'partially_applied', retryable: false }] })
+    if (path === `/api/v1/directory-imports/${retryBatchID}`) return jsonResponse({ batch: retryableBatch, items: [retryableItem], attempts: [{ ...attempt, status: 'partially_applied', retryable: true }] })
+    throw new Error(`unexpected request ${path}`)
+  }))
+  render(<DirectoryImportManager csrfToken="csrf-token" permissions={['integrations.read', 'integrations.write']} />)
+
+  const terminalRow = await screen.findByRole('row', { name: /terminal-conflict/ })
+  const retryableRow = screen.getByRole('row', { name: /retryable-failure/ })
+  expect(screen.queryByRole('button', { name: 'Retry failures' })).not.toBeInTheDocument()
+
+  fireEvent.click(within(terminalRow).getByRole('button', { name: 'View audit' }))
+  expect(await screen.findByText('source and target changes conflict')).toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'Retry failures' })).not.toBeInTheDocument()
+
+  fireEvent.click(within(retryableRow).getByRole('button', { name: 'View audit' }))
+  expect(await screen.findByText('target temporarily unavailable')).toBeInTheDocument()
+  expect(within(retryableRow).getByRole('button', { name: 'Retry failures' })).toBeInTheDocument()
 })

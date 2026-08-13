@@ -1,6 +1,6 @@
 // Package directoryexpansion implements provider-neutral directory preview,
 // reconciliation, apply, and retry contracts.
-// Requirements: REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-005.
+// Requirements: REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005.
 // Features: integrations.protocols, identity.directory.
 package directoryexpansion
 
@@ -13,9 +13,10 @@ import (
 )
 
 const (
-	RequirementID        = "REQ-DIRECTORY-EXPANSION-002"
-	GrouperRequirementID = "REQ-DIRECTORY-EXPANSION-005"
-	FeatureID            = "integrations.protocols"
+	RequirementID          = "REQ-DIRECTORY-EXPANSION-002"
+	GrouperRequirementID   = "REQ-DIRECTORY-EXPANSION-005"
+	SailPointRequirementID = "REQ-DIRECTORY-EXPANSION-004"
+	FeatureID              = "integrations.protocols"
 
 	DefaultListLimit  = 50
 	MaximumListLimit  = 100
@@ -63,6 +64,8 @@ type Room struct {
 // Provider is intentionally open-ended. Runtime connector registration is the
 // allowlist; provider-specific slices do not require a schema enum migration.
 type Provider string
+
+const SailPointProvider Provider = "sailpoint"
 
 // SourceSystem identifies one server-configured, read-only connector. Client
 // requests can select this stable identifier but cannot submit credentials or

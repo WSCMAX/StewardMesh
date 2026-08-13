@@ -1,6 +1,6 @@
 package directoryexpansion
 
-// Requirement: REQ-DIRECTORY-EXPANSION-005. Feature: integrations.protocols.
+// Requirements: REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005. Features: identity.directory, integrations.protocols.
 
 import (
 	"context"
@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-// ManagedGraphStore projects active normalized Grouper targets into the
+// ManagedGraphStore projects active normalized directory-provider targets into the
 // existing relationship-graph contract. It is bound to one organization so a
 // transport cannot accidentally widen scope through query input.
 type ManagedGraphStore struct {

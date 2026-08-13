@@ -3,10 +3,11 @@
 - **Canonical IDs:** `identity.directory` for locations and
   `integrations.protocols` for directory imports
 - **Current requirements:** `REQ-DIRECTORY-EXPANSION-001` through
-  `REQ-DIRECTORY-EXPANSION-003`, plus `REQ-DIRECTORY-EXPANSION-005`
+  `REQ-DIRECTORY-EXPANSION-005`
 - **Roadmap issues:** [#24](https://github.com/WSCMAX/StewardMesh/issues/24),
   [#25](https://github.com/WSCMAX/StewardMesh/issues/25),
-  [#26](https://github.com/WSCMAX/StewardMesh/issues/26), and
+  [#26](https://github.com/WSCMAX/StewardMesh/issues/26),
+  [#27](https://github.com/WSCMAX/StewardMesh/issues/27), and
   [#28](https://github.com/WSCMAX/StewardMesh/issues/28)
 
 Directory Expansion extends People with hierarchical locations, optional
@@ -180,8 +181,8 @@ documents and unsupported
 directory objects are not retained. Duplicate object IDs or memberships fail
 the preview instead of silently merging records.
 
-An authorized operator uses **People > Microsoft Entra directory import** to
-select the credential-free source identity, preview the complete exact plan,
+An authorized operator uses **People > Directory import**, selects the
+Microsoft Entra source, and previews the complete exact plan before they
 review create/update/deactivate/conflict counts and normalized audit detail,
 then apply that persisted plan. `integrations.read` exposes source identity and
 history; `integrations.write` plus CSRF is required for preview/apply/retry.
@@ -195,12 +196,78 @@ errors, and method assertions proving Graph traffic remains GET-only. HTTP,
 React, accessibility, race, vet, vulnerability, OpenAPI, protobuf, PostgreSQL,
 and browser checks complete the release gate.
 
+## SailPoint Identity Security Cloud read-only synchronization
+
+Set all four deployment-owned values to enable one SailPoint source:
+
+```text
+STEWARDMESH_SAILPOINT_SOURCE_SYSTEM_ID=sailpoint
+STEWARDMESH_SAILPOINT_BASE_URL=https://<tenant>.api.identitynow.com
+STEWARDMESH_SAILPOINT_CLIENT_ID=<least-privilege client or PAT ID>
+STEWARDMESH_SAILPOINT_CLIENT_SECRET=<secret-manager value>
+```
+
+The endpoint must be HTTPS, contain no credentials, port, path, query, or
+fragment, and end in one exact tenant subdomain of `api.identitynow.com`.
+Partial, malformed, plaintext, arbitrary-host, short-client, and short-secret
+configuration fails startup with a generic error. The secret is cleared from
+the application's working configuration after connector construction and is
+never returned through REST, protobuf, UI, persistence, errors, or audits.
+Create a dedicated read-only SailPoint client or PAT whose user has only the
+authorities needed by the selected read endpoints; do not grant role, identity,
+account, or governance-group management access.
+
+StewardMesh follows SailPoint's documented client-credentials flow: one
+form-encoded `POST /oauth/token` exchanges the client ID and secret for a
+short-lived bearer token. All directory traffic is GET-only against the fixed
+`/v2025/identities`, `/v2025/accounts`, `/v2025/workgroups`,
+`/v2025/workgroups/{id}/members`, `/v2025/roles`, and
+`/v2025/roles/{id}/assigned-identities` paths. Redirects are rejected, ambient
+HTTP proxies are disabled, bodies are limited to 2 MiB, requests time out after
+15 seconds, collection pages contain at most 50 items, and one snapshot is
+bounded to 500 provider pages, 5,000 normalized records, and 20,000
+memberships. Only safe GET requests retry HTTP 429 or transient 5xx responses,
+at most three attempts and with a two-second delay cap. Provider bodies and
+record values never appear in returned errors.
+
+SailPoint identities become People person identities; accounts become
+deliberately non-person shared identities with allowlisted account-source,
+native-identity, owner, lock, and correlation metadata. Account sources,
+departments, governance groups, and roles become typed managed groups, while
+account-source links, department membership, workgroup membership, and role
+assignment become durable memberships. Disabled or lifecycle-inactive
+identities, disabled accounts, and disabled roles remain in the exact plan as
+inactive records. Stable provider IDs become source mappings; raw provider
+documents and arbitrary identity attributes are discarded. Duplicate object
+IDs, source disagreements, duplicate memberships, inconsistent totals, invalid
+attributes, and over-limit snapshots fail preview before any People mutation.
+
+Provider precedence is intentionally absent. A SailPoint record can update only
+the People target owned by the same configured source and source record. If its
+normalized email already belongs to local data, Entra, or another SailPoint
+source, preview reports a conflict and cannot overwrite that target; the same
+rule applies in the reverse direction. Locally claimed imported records also
+remain conflict-protected. Operators use the provider-neutral **People >
+Directory import** panel to select the credential-free source, preview the
+complete persisted plan, inspect identities/groups/memberships and inactive
+status, then apply only that exact plan.
+
+The adapter follows SailPoint's official
+[authentication](https://developer.sailpoint.com/docs/api/authentication/),
+[identity](https://developer.sailpoint.com/docs/api/v2025/list-identities/),
+[account](https://developer.sailpoint.com/docs/api/v2025/list-accounts/),
+[governance-group](https://developer.sailpoint.com/docs/api/v2025/list-workgroups/),
+and [role-assignment](https://developer.sailpoint.com/docs/api/v2025/get-role-assigned-identities/)
+contracts. Fake-server tests cover token isolation, pagination, updates,
+inactive states, every normalized object type, transient retry, malformed and
+oversized data, duplicate records/memberships, configuration validation,
+cross-provider conflict, safe errors, and the no-write method invariant.
+
 ## Planned provider slices
 
 Remaining provider connectors are deliberately read-only and plug into the
-delivered source-system contract. SailPoint provides identity records, while
-PeopleSoft Campus Solutions provides configurable organization and location
-records. Each
+delivered source-system contract. PeopleSoft Campus Solutions provides
+configurable organization and location records. Each
 provider-specific mapper must retain source IDs, use an explicit configuration
 revision, produce the bounded complete snapshot, and report conflicts instead
 of silently overwriting records.

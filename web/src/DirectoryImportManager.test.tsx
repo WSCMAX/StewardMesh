@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, expect, test, vi } from 'vitest'
 import DirectoryImportManager from './DirectoryImportManager'
 
-// Requirements: REQ-DIRECTORY-EXPANSION-003, A11Y-001, SEC-GUARD-001.
+// Requirements: REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005, A11Y-001, SEC-GUARD-001.
 
 const batchID = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
 const itemID = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
@@ -11,6 +11,7 @@ const attemptID = 'cccccccccccccccccccccccccccccccc'
 const now = '2026-08-13T12:00:00Z'
 
 const source = { id: 'entra-primary', provider: 'entra', configRevision: 'entra-1234567890abcdef' }
+const sailPointSource = { id: 'sailpoint-primary', provider: 'sailpoint', configRevision: 'sailpoint-1234567890abcdef' }
 const counts = { created: 2, updated: 0, unchanged: 0, deactivated: 0, conflicts: 0, failed: 0 }
 const previewedBatch = { id: batchID, sourceSystemId: source.id, provider: 'entra', configRevision: source.configRevision, status: 'previewed', completeSnapshot: true, counts, createdAt: now, updatedAt: now, completedAt: now }
 const appliedBatch = { ...previewedBatch, status: 'applied' }
@@ -40,7 +41,7 @@ test('previews and applies the exact Entra plan with CSRF, idempotency, audit de
   const onApplied = vi.fn()
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input)
-    if (path === '/api/v1/directory-import-sources' && !init?.method) return jsonResponse({ items: [source] })
+    if (path === '/api/v1/directory-import-sources' && !init?.method) return jsonResponse({ items: [source, sailPointSource] })
     if (path === '/api/v1/directory-imports?limit=50' && !init?.method) return jsonResponse({ batches: currentBatch ? [currentBatch] : [] })
     if (path === '/api/v1/directory-imports/preview' && init?.method === 'POST') {
       currentBatch = previewedBatch
@@ -59,12 +60,13 @@ test('previews and applies the exact Entra plan with CSRF, idempotency, audit de
   const { container } = render(<DirectoryImportManager csrfToken="csrf-token" onApplied={onApplied} permissions={['integrations.read', 'integrations.write']} />)
 
   expect(await screen.findByRole('option', { name: 'entra-primary · Microsoft Entra ID' })).toBeInTheDocument()
+  expect(screen.getByRole('option', { name: 'sailpoint-primary · SailPoint Identity Security Cloud' })).toBeInTheDocument()
   fireEvent.click(screen.getByRole('button', { name: 'Preview import' }))
   expect(await screen.findByText('Ada Example')).toBeInTheDocument()
   expect(screen.getByText('Technology')).toBeInTheDocument()
   expect(screen.getByText('1 direct group memberships')).toBeInTheDocument()
   expect(screen.getByText('job-title:')).toBeInTheDocument()
-  expect(screen.getByText('Inactive in Microsoft Entra')).toBeInTheDocument()
+  expect(screen.getByText('Inactive at Microsoft Entra ID')).toBeInTheDocument()
 
   const previewRequest = fetchMock.mock.calls.find(([path, init]) => path === '/api/v1/directory-imports/preview' && init?.method === 'POST')
   expect(previewRequest?.[1]?.headers).toMatchObject({ 'X-CSRF-Token': 'csrf-token', 'Idempotency-Key': expect.stringContaining('directory-preview-') })
@@ -107,4 +109,34 @@ test('keeps the import panel permission-aware and rejects malformed API response
   }))
   rerender(<DirectoryImportManager csrfToken="csrf-token" permissions={['integrations.read']} />)
   expect(await screen.findByRole('alert')).toHaveTextContent('Directory import sources and audit history could not be loaded.')
+})
+
+test('renders SailPoint governance groups and memberships from bounded audit detail', async () => {
+  const sailPointBatch = { ...previewedBatch, sourceSystemId: sailPointSource.id, provider: 'sailpoint', configRevision: sailPointSource.configRevision }
+  const groupItem = {
+    id: 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee', ordinal: 0,
+    record: { sourceRecordId: 'role:finance-reader', kind: 'group', groupName: 'Finance Reader', displayName: 'Finance Reader',
+      description: 'Read finance records', status: 'active', metadata: { 'directory-object-kind': 'role' } },
+    targetId: 'ffffffffffffffffffffffffffffffff', action: 'create', outcome: 'pending', updatedAt: now,
+  }
+  const membershipItem = {
+    id: '11111111111111111111111111111111', ordinal: 1,
+    record: { sourceRecordId: 'membership:finance-ada', kind: 'membership', displayName: 'Ada Example', status: 'active',
+      groupSourceId: 'role:finance-reader', memberSourceId: 'identity:ada', memberKind: 'subject', metadata: { 'directory-object-kind': 'role-assignment' } },
+    targetId: '22222222222222222222222222222222', action: 'create', outcome: 'pending', updatedAt: now,
+  }
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    const path = String(input)
+    if (path === '/api/v1/directory-import-sources') return jsonResponse({ items: [sailPointSource] })
+    if (path === '/api/v1/directory-imports?limit=50') return jsonResponse({ batches: [sailPointBatch] })
+    if (path === `/api/v1/directory-imports/${batchID}`) return jsonResponse({ batch: sailPointBatch, items: [groupItem, membershipItem], attempts: [attempt] })
+    throw new Error(`unexpected request ${path}`)
+  }))
+  render(<DirectoryImportManager csrfToken="csrf-token" permissions={['integrations.read']} />)
+  expect((await screen.findAllByText('SailPoint Identity Security Cloud')).length).toBeGreaterThan(0)
+  fireEvent.click(screen.getByRole('button', { name: 'View audit' }))
+  expect((await screen.findAllByText('Finance Reader')).length).toBeGreaterThan(0)
+  expect(screen.getByText('Managed group')).toBeInTheDocument()
+  expect(screen.getByText('subject membership')).toBeInTheDocument()
+  expect(screen.getAllByText('directory-object-kind:')).toHaveLength(2)
 })

@@ -1,5 +1,5 @@
 // Package config loads and validates provider-neutral StewardMesh settings.
-// Requirements: REQ-FOUNDATION-001, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-005, REQ-STORAGE-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
+// Requirements: REQ-FOUNDATION-001, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005, REQ-STORAGE-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
 package config
 
 import (
@@ -15,6 +15,7 @@ import (
 	"github.com/maxlemke/stewardmesh/internal/cache"
 	"github.com/maxlemke/stewardmesh/internal/directoryexpansion"
 	"github.com/maxlemke/stewardmesh/internal/directoryexpansion/entra"
+	"github.com/maxlemke/stewardmesh/internal/directoryexpansion/sailpoint"
 	"github.com/maxlemke/stewardmesh/internal/storage"
 )
 
@@ -82,6 +83,10 @@ type Config struct {
 	EntraTenantID               string
 	EntraClientID               string
 	EntraClientSecret           string
+	SailPointSourceSystemID     string
+	SailPointBaseURL            string
+	SailPointClientID           string
+	SailPointClientSecret       string
 	AllowedOrigin               string
 	OrganizationID              string
 	OrganizationName            string
@@ -183,6 +188,10 @@ func FromEnv() Config {
 		EntraTenantID:               os.Getenv("STEWARDMESH_ENTRA_TENANT_ID"),
 		EntraClientID:               os.Getenv("STEWARDMESH_ENTRA_CLIENT_ID"),
 		EntraClientSecret:           os.Getenv("STEWARDMESH_ENTRA_CLIENT_SECRET"),
+		SailPointSourceSystemID:     envOr("STEWARDMESH_SAILPOINT_SOURCE_SYSTEM_ID", "sailpoint"),
+		SailPointBaseURL:            os.Getenv("STEWARDMESH_SAILPOINT_BASE_URL"),
+		SailPointClientID:           os.Getenv("STEWARDMESH_SAILPOINT_CLIENT_ID"),
+		SailPointClientSecret:       os.Getenv("STEWARDMESH_SAILPOINT_CLIENT_SECRET"),
 		AllowedOrigin:               allowedOrigin,
 		OrganizationID:              envOr("STEWARDMESH_ORGANIZATION_ID", "local-organization"),
 		OrganizationName:            envOr("STEWARDMESH_ORGANIZATION_NAME", "StewardMesh Local Organization"),
@@ -298,6 +307,9 @@ func (c Config) Validate() error {
 	if err := c.validateEntra(); err != nil {
 		return err
 	}
+	if err := c.validateSailPoint(); err != nil {
+		return err
+	}
 	if err := c.validateGrouper(); err != nil {
 		return err
 	}
@@ -385,6 +397,32 @@ func (c Config) validateEntra() error {
 	}
 	if err := entra.ValidateConfig(c.EntraConfig()); err != nil {
 		return errors.New("Microsoft Entra tenant and application credential configuration is invalid")
+	}
+	return nil
+}
+
+func (c Config) SailPointEnabled() bool {
+	return strings.TrimSpace(c.SailPointBaseURL) != ""
+}
+
+func (c Config) SailPointConfig() sailpoint.Config {
+	return sailpoint.Config{
+		SourceSystemID: c.SailPointSourceSystemID,
+		BaseURL:        c.SailPointBaseURL,
+		ClientID:       c.SailPointClientID,
+		ClientSecret:   c.SailPointClientSecret,
+	}
+}
+
+func (c Config) validateSailPoint() error {
+	if !c.SailPointEnabled() {
+		if strings.TrimSpace(c.SailPointClientID) != "" || c.SailPointClientSecret != "" {
+			return errors.New("STEWARDMESH_SAILPOINT_BASE_URL is required when SailPoint credentials are configured")
+		}
+		return nil
+	}
+	if err := sailpoint.ValidateConfig(c.SailPointConfig()); err != nil {
+		return errors.New("SailPoint endpoint and client credential configuration is invalid")
 	}
 	return nil
 }

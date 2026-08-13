@@ -2,7 +2,7 @@ import { type FormEvent, useCallback, useEffect, useRef, useState } from 'react'
 import { ApiRequestError, requestJSON } from './api'
 import { buttonClass, inputClass, labelClass, secondaryButtonClass, subpanelClass } from './ui'
 
-// Requirements: REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, A11Y-001.
+// Requirements: REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005, A11Y-001.
 // Feature: identity.directory.
 
 type Source = { id: string; provider: string; configRevision: string }
@@ -22,7 +22,7 @@ type Batch = {
 }
 type ImportRecord = {
   sourceRecordId: string
-  kind: 'identity'
+  kind: 'identity' | 'group' | 'membership'
   identityKind?: 'person' | 'shared' | 'public' | 'lab'
   displayName: string
   email?: string
@@ -30,6 +30,12 @@ type ImportRecord = {
   department?: string
   directoryAttributes?: Record<string, string>
   groupSourceIds?: string[]
+  groupName?: string
+  description?: string
+  groupSourceId?: string
+  memberSourceId?: string
+  memberKind?: 'subject' | 'group'
+  metadata?: Record<string, string>
 }
 type ImportItem = {
   id: string
@@ -115,8 +121,8 @@ export default function DirectoryImportManager({ csrfToken, permissions, onAppli
   }, [canRead, loadSummary])
 
   if (!canRead) {
-    return <section aria-labelledby="directory-import-heading" className="border-t border-steward-ink-800 pt-6" data-requirement="REQ-DIRECTORY-EXPANSION-003">
-      <h3 className="text-lg font-semibold" id="directory-import-heading">Microsoft Entra directory import</h3>
+    return <section aria-labelledby="directory-import-heading" className="border-t border-steward-ink-800 pt-6" data-requirement="REQ-DIRECTORY-EXPANSION-002">
+      <h3 className="text-lg font-semibold" id="directory-import-heading">Directory import</h3>
       <p className="mt-2 text-sm text-steward-mist-muted">Import history requires <code>integrations.read</code>. Provider credentials remain on the server.</p>
     </section>
   }
@@ -177,11 +183,11 @@ export default function DirectoryImportManager({ csrfToken, permissions, onAppli
   }
 
   return (
-    <section aria-busy={loading || busy !== ''} aria-labelledby="directory-import-heading" className="border-t border-steward-ink-800 pt-6" data-feature="identity.directory" data-requirement="REQ-DIRECTORY-EXPANSION-003">
+    <section aria-busy={loading || busy !== ''} aria-labelledby="directory-import-heading" className="border-t border-steward-ink-800 pt-6" data-feature="identity.directory" data-requirement="REQ-DIRECTORY-EXPANSION-002">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h3 className="text-lg font-semibold" id="directory-import-heading">Microsoft Entra directory import</h3>
-          <p className="mt-1 max-w-3xl text-sm leading-6 text-steward-mist-muted">Preview the server-configured read-only source before applying its exact plan. Tenant and application credentials never enter the browser.</p>
+          <h3 className="text-lg font-semibold" id="directory-import-heading">Directory import</h3>
+          <p className="mt-1 max-w-3xl text-sm leading-6 text-steward-mist-muted">Preview a server-configured read-only source before applying its exact plan. Provider endpoints and credentials never enter the browser.</p>
         </div>
         <p className="text-sm text-steward-mist-muted">{batches.length} recent {batches.length === 1 ? 'batch' : 'batches'}</p>
       </div>
@@ -190,7 +196,7 @@ export default function DirectoryImportManager({ csrfToken, permissions, onAppli
 	  {status && <p aria-live="polite" className="mt-4 rounded-xl border border-steward-primary/40 bg-steward-primary/10 p-4 text-sm text-steward-mist" role="status">{status}</p>}
 
       {sources.length === 0 && !loading ? (
-        <p className="mt-4 rounded-xl border border-dashed border-steward-ink-800 p-5 text-sm leading-6 text-steward-mist-muted">No read-only directory source is configured. Add the Microsoft Entra tenant, application ID, and secret through deployment configuration, then restart the service.</p>
+        <p className="mt-4 rounded-xl border border-dashed border-steward-ink-800 p-5 text-sm leading-6 text-steward-mist-muted">No read-only directory source is configured. Add an Entra, SailPoint, or Grouper source through deployment configuration, then restart the service.</p>
       ) : (
         <form aria-label="Preview a directory import" className={`${subpanelClass} mt-4 grid gap-4 p-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-end`} onSubmit={preview}>
           <div>
@@ -238,10 +244,10 @@ function ImportAuditDetail({ detail }: { detail: BatchDetail }) {
     <div aria-label="Directory import records" className="mt-4 overflow-x-auto" role="region" tabIndex={0}>
       <table className="min-w-[50rem] w-full text-left text-sm">
         <caption className="sr-only">Normalized records and reconciliation outcomes</caption>
-        <thead className="text-steward-mist-muted"><tr><th className="px-2 py-2" scope="col">Directory record</th><th className="px-2 py-2" scope="col">Department and groups</th><th className="px-2 py-2" scope="col">Action</th><th className="px-2 py-2" scope="col">Outcome</th></tr></thead>
+        <thead className="text-steward-mist-muted"><tr><th className="px-2 py-2" scope="col">Directory record</th><th className="px-2 py-2" scope="col">Context</th><th className="px-2 py-2" scope="col">Action</th><th className="px-2 py-2" scope="col">Outcome</th></tr></thead>
         <tbody className="divide-y divide-steward-ink-800">{detail.items.map((item) => <tr key={item.id}>
-          <th className="px-2 py-3 align-top font-semibold text-steward-mist" scope="row">{item.record.displayName}<span className="mt-1 block break-all text-xs font-normal text-steward-mist-muted">{item.record.email || item.record.sourceRecordId}</span>{item.record.status === 'inactive' && <span className="mt-1 block text-xs font-normal text-steward-warning">Inactive in Microsoft Entra</span>}<AttributeList attributes={item.record.directoryAttributes} /></th>
-          <td className="px-2 py-3 align-top text-steward-mist-muted">{item.record.department || 'No department'}<span className="mt-1 block text-xs">{item.record.groupSourceIds?.length ?? 0} direct group memberships</span></td>
+          <th className="px-2 py-3 align-top font-semibold text-steward-mist" scope="row">{item.record.displayName}<span className="mt-1 block break-all text-xs font-normal text-steward-mist-muted">{recordReference(item.record)}</span>{item.record.status === 'inactive' && <span className="mt-1 block text-xs font-normal text-steward-warning">Inactive at {providerLabel(detail.batch.provider)}</span>}<AttributeList attributes={item.record.directoryAttributes} /><AttributeList attributes={item.record.metadata} /></th>
+          <td className="px-2 py-3 align-top text-steward-mist-muted">{recordContext(item.record)}</td>
           <td className="px-2 py-3 align-top text-steward-mist-muted">{item.action}</td>
           <td className="px-2 py-3 align-top text-steward-mist-muted">{item.outcome}{item.error && <span className="mt-1 block max-w-sm text-xs text-steward-warning">{item.error}</span>}</td>
         </tr>)}</tbody>
@@ -307,14 +313,32 @@ function isItem(value: unknown): value is ImportItem {
 }
 
 function isImportRecord(value: unknown): value is ImportRecord {
-  if (!object(value) || !string(value.sourceRecordId, 1, 255) || value.kind !== 'identity' || !string(value.displayName, 1, 200) ||
-    !['active', 'inactive'].includes(String(value.status)) || (value.email !== undefined && !string(value.email, 1, 320)) ||
-    (value.identityKind !== undefined && !['person', 'shared', 'public', 'lab'].includes(String(value.identityKind))) ||
-    (value.department !== undefined && !string(value.department, 1, 200))) return false
-  if (value.directoryAttributes !== undefined && (!object(value.directoryAttributes) || Object.keys(value.directoryAttributes).length > 16 ||
-    !Object.entries(value.directoryAttributes).every(([key, item]) => providerPattern.test(key) && string(item, 1, 500)))) return false
-  return value.groupSourceIds === undefined || Array.isArray(value.groupSourceIds) && value.groupSourceIds.length <= 256 &&
-    new Set(value.groupSourceIds).size === value.groupSourceIds.length && value.groupSourceIds.every((item) => string(item, 1, 255))
+  if (!object(value) || !string(value.sourceRecordId, 1, 255) || !['identity', 'group', 'membership'].includes(String(value.kind)) ||
+    !string(value.displayName, 1, 200) || !['active', 'inactive'].includes(String(value.status)) || !validMetadata(value.metadata)) return false
+  if (value.kind === 'identity') {
+    if ((value.email !== undefined && !string(value.email, 1, 320)) ||
+      (value.identityKind !== undefined && !['person', 'shared', 'public', 'lab'].includes(String(value.identityKind))) ||
+      (value.department !== undefined && !string(value.department, 1, 200)) ||
+      value.groupName !== undefined || value.description !== undefined || value.groupSourceId !== undefined ||
+      value.memberSourceId !== undefined || value.memberKind !== undefined || value.metadata !== undefined) return false
+    if (value.directoryAttributes !== undefined && (!object(value.directoryAttributes) || Object.keys(value.directoryAttributes).length > 16 ||
+      !Object.entries(value.directoryAttributes).every(([key, item]) => providerPattern.test(key) && string(item, 1, 500)))) return false
+    return value.groupSourceIds === undefined || Array.isArray(value.groupSourceIds) && value.groupSourceIds.length <= 256 &&
+      new Set(value.groupSourceIds).size === value.groupSourceIds.length && value.groupSourceIds.every((item) => string(item, 1, 255))
+  }
+  if (value.identityKind !== undefined || value.email !== undefined || value.department !== undefined ||
+    value.directoryAttributes !== undefined || value.groupSourceIds !== undefined) return false
+  if (value.kind === 'group') {
+    return string(value.groupName, 1, 512) && (value.description === undefined || string(value.description, 0, 2000)) &&
+      value.groupSourceId === undefined && value.memberSourceId === undefined && value.memberKind === undefined
+  }
+  return value.groupName === undefined && value.description === undefined && string(value.groupSourceId, 1, 255) &&
+    string(value.memberSourceId, 1, 255) && ['subject', 'group'].includes(String(value.memberKind))
+}
+
+function validMetadata(value: unknown) {
+  return value === undefined || object(value) && Object.keys(value).length <= 16 &&
+    Object.entries(value).every(([key, item]) => providerPattern.test(key) && string(item, 0, 500))
 }
 
 function isAttempt(value: unknown): value is ImportAttempt {
@@ -338,6 +362,21 @@ function instant(value: unknown): value is string { return typeof value === 'str
 function optionalInstant(value: unknown): value is string | undefined { return value === undefined || instant(value) }
 function messageFor(error: unknown, fallback: string) { return error instanceof ApiRequestError ? error.message : fallback }
 function statusLabel(value: BatchStatus) { return value.replaceAll('_', ' ') }
-function providerLabel(value: string) { return value === 'entra' ? 'Microsoft Entra ID' : value }
+function recordReference(record: ImportRecord) {
+  if (record.kind === 'identity') return record.email || record.sourceRecordId
+  if (record.kind === 'group') return record.groupName || record.sourceRecordId
+  return `${record.memberKind} ${record.memberSourceId}`
+}
+function recordContext(record: ImportRecord) {
+  if (record.kind === 'identity') return <>{record.department || 'No department'}<span className="mt-1 block text-xs">{record.groupSourceIds?.length ?? 0} direct group memberships</span></>
+  if (record.kind === 'group') return <>Managed group<span className="mt-1 block break-all text-xs">{record.sourceRecordId}</span></>
+  return <>Member of <span className="break-all">{record.groupSourceId}</span><span className="mt-1 block text-xs">{record.memberKind} membership</span></>
+}
+function providerLabel(value: string) {
+  if (value === 'entra') return 'Microsoft Entra ID'
+  if (value === 'sailpoint') return 'SailPoint Identity Security Cloud'
+  if (value === 'grouper') return 'Internet2 Grouper'
+  return value
+}
 function formatDate(value: string) { return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) }
 function operationKey(operation: string) { return `directory-${operation}-${globalThis.crypto.randomUUID()}` }

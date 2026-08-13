@@ -1,6 +1,6 @@
 package directoryexpansion_test
 
-// Requirements: REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003.
+// Requirements: REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004.
 // Features: integrations.protocols, identity.directory.
 
 import (
@@ -795,6 +795,43 @@ func TestPeopleTargetReportsCrossSourceEmailConflict(t *testing.T) {
 		Record{SourceRecordID: "external", Kind: RecordIdentity, IdentityKind: "person", DisplayName: "External", Email: "same@example.test", Status: "active"}, nil)
 	if err != nil || !plan.Conflict {
 		t.Fatalf("expected email ownership conflict, got %#v %v", plan, err)
+	}
+}
+
+func TestPeopleTargetGivesNeitherSailPointNorEntraImplicitPrecedence(t *testing.T) {
+	peopleStore := repository.NewMemoryPeopleStore()
+	guardService, err := guard.NewService(repository.NewMemoryGuardStore(), contractPasswordHasher{}, foundation.NopAuditor{}, nil,
+		guard.ServiceConfig{OrganizationID: "example-org"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := NewPeopleTarget(peopleStore, guardService, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sailPoint := SourceSystem{ID: "sailpoint-primary", Provider: SailPointProvider, ConfigRevision: "sailpoint-v1"}
+	sailPointRecord := Record{SourceRecordID: "identity:sailpoint-ada", Kind: RecordIdentity, IdentityKind: "person",
+		DisplayName: "SailPoint Ada", Email: "ada@example.test", Status: "active"}
+	create, err := target.Preview(context.Background(), "example-org", sailPoint, sailPointRecord, nil)
+	if err != nil || create.Found || create.Conflict {
+		t.Fatalf("unexpected SailPoint create plan %#v %v", create, err)
+	}
+	if _, err := target.Apply(context.Background(), contractAuthentication(), sailPoint, Item{OrganizationID: "example-org",
+		Record: sailPointRecord, TargetID: create.TargetID, PlannedTargetDigest: create.DesiredDigest, Action: ActionCreate}); err != nil {
+		t.Fatal(err)
+	}
+
+	entra := SourceSystem{ID: "entra-primary", Provider: "entra", ConfigRevision: "entra-v1"}
+	entraRecord := Record{SourceRecordID: "user:entra-ada", Kind: RecordIdentity, IdentityKind: "person",
+		DisplayName: "Entra Ada", Email: "ada@example.test", Status: "active"}
+	conflict, err := target.Preview(context.Background(), "example-org", entra, entraRecord, nil)
+	if err != nil || !conflict.Found || !conflict.Conflict || conflict.SourceMatched ||
+		conflict.ConflictReason != "email belongs to another managed or local identity" {
+		t.Fatalf("cross-provider precedence was not explicit %#v %v", conflict, err)
+	}
+	stored, err := peopleStore.GetIdentity(context.Background(), "example-org", create.TargetID)
+	if err != nil || stored.DisplayName != "SailPoint Ada" || stored.ProviderSubject != sailPointRecord.SourceRecordID {
+		t.Fatalf("cross-provider preview changed the existing identity %#v %v", stored, err)
 	}
 }
 

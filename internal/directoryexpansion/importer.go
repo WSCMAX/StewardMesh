@@ -671,8 +671,11 @@ func (s *Service) audit(ctx context.Context, attempt Attempt, batch Batch, actio
 	actorID := attempt.ActorID
 	correlationID := attempt.CorrelationID
 	requirementID := RequirementID
-	if batch.Provider == GrouperProvider {
+	switch batch.Provider {
+	case GrouperProvider:
 		requirementID = GrouperRequirementID
+	case SailPointProvider:
+		requirementID = SailPointRequirementID
 	}
 	eventID := digestStrings(requirementID, batch.ID, action, operationKey)[:32]
 	return s.auditor.Record(foundation.WithScope(ctx, foundation.Scope{OrganizationID: s.organizationID, ActorID: actorID, CorrelationID: correlationID}), foundation.AuditEvent{

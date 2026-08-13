@@ -1,6 +1,6 @@
 package config
 
-// Requirements: REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-005, REQ-STORAGE-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
+// Requirements: REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005, REQ-STORAGE-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
 
 import (
 	"strings"
@@ -39,6 +39,57 @@ func TestLoadSupportsOptionalGrouperConnector(t *testing.T) {
 		configuration.GrouperConfigRevision != "mapping-v4" || configuration.GrouperPageSize != 50 ||
 		configuration.GrouperMaximumResponseBytes != 4096 || configuration.GrouperTimeout != 10*time.Second {
 		t.Fatalf("unexpected Grouper configuration %#v", configuration)
+	}
+}
+
+func TestLoadSupportsOptionalSailPointConnector(t *testing.T) {
+	t.Setenv("STEWARDMESH_REPOSITORY_DRIVER", "memory")
+	t.Setenv("STEWARDMESH_SAILPOINT_SOURCE_SYSTEM_ID", "sailpoint-primary")
+	t.Setenv("STEWARDMESH_SAILPOINT_BASE_URL", "https://example.api.identitynow.com")
+	t.Setenv("STEWARDMESH_SAILPOINT_CLIENT_ID", "0123456789abcdef")
+	t.Setenv("STEWARDMESH_SAILPOINT_CLIENT_SECRET", "abcdef0123456789")
+	configuration, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !configuration.SailPointEnabled() || configuration.SailPointSourceSystemID != "sailpoint-primary" ||
+		configuration.SailPointConfig().BaseURL != "https://example.api.identitynow.com" {
+		t.Fatalf("unexpected SailPoint configuration %#v", configuration)
+	}
+}
+
+func TestValidateRejectsUnsafeSailPointConfigurationWithoutLeakingSecrets(t *testing.T) {
+	secret := "super-secret-sailpoint-credential"
+	valid := FromEnv()
+	valid.RepositoryDriver = RepositoryDriverMemory
+	valid.SailPointSourceSystemID = "sailpoint-primary"
+	valid.SailPointBaseURL = "https://example.api.identitynow.com"
+	valid.SailPointClientID = "0123456789abcdef"
+	valid.SailPointClientSecret = secret
+	tests := []struct {
+		name   string
+		mutate func(*Config)
+	}{
+		{name: "missing endpoint", mutate: func(c *Config) { c.SailPointBaseURL = "" }},
+		{name: "plaintext endpoint", mutate: func(c *Config) { c.SailPointBaseURL = "http://example.api.identitynow.com" }},
+		{name: "arbitrary endpoint", mutate: func(c *Config) { c.SailPointBaseURL = "https://identity.example.test" }},
+		{name: "credentialed endpoint", mutate: func(c *Config) { c.SailPointBaseURL = "https://user:super-secret@example.api.identitynow.com" }},
+		{name: "missing client", mutate: func(c *Config) { c.SailPointClientID = "" }},
+		{name: "short secret", mutate: func(c *Config) { c.SailPointClientSecret = "short" }},
+		{name: "invalid source", mutate: func(c *Config) { c.SailPointSourceSystemID = "bad source" }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			configuration := valid
+			test.mutate(&configuration)
+			err := configuration.Validate()
+			if err == nil {
+				t.Fatal("expected invalid SailPoint configuration")
+			}
+			if strings.Contains(err.Error(), "super-secret") {
+				t.Fatalf("SailPoint configuration error leaked a credential: %v", err)
+			}
+		})
 	}
 }
 

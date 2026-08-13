@@ -1,6 +1,6 @@
 // Package application constructs StewardMesh's transport-neutral HTTP
 // application and owns the lifecycle of its shared runtime dependencies.
-// Requirements: REQ-FOUNDATION-001, REQ-ATLAS-001, REQ-ATLAS-CODES-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-005, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-STACK-001, REQ-HORIZON-001, REQ-SIGNALS-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001.
+// Requirements: REQ-FOUNDATION-001, REQ-ATLAS-001, REQ-ATLAS-CODES-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-STACK-001, REQ-HORIZON-001, REQ-SIGNALS-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001.
 package application
 
 import (
@@ -19,6 +19,7 @@ import (
 	"github.com/maxlemke/stewardmesh/internal/config"
 	"github.com/maxlemke/stewardmesh/internal/directoryexpansion"
 	"github.com/maxlemke/stewardmesh/internal/directoryexpansion/entra"
+	"github.com/maxlemke/stewardmesh/internal/directoryexpansion/sailpoint"
 	"github.com/maxlemke/stewardmesh/internal/foundation"
 	"github.com/maxlemke/stewardmesh/internal/guard"
 	"github.com/maxlemke/stewardmesh/internal/horizon"
@@ -193,6 +194,16 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 			return fail(fmt.Errorf("initialize Microsoft Entra directory connector: %w", connectorErr))
 		}
 		directoryConnectors = append(directoryConnectors, entraConnector)
+	}
+	if cfg.SailPointEnabled() {
+		sailPointConfiguration := cfg.SailPointConfig()
+		cfg.SailPointClientSecret = ""
+		sailPointConnector, connectorErr := sailpoint.NewConnector(sailPointConfiguration, sailpoint.Options{})
+		sailPointConfiguration.ClientSecret = ""
+		if connectorErr != nil {
+			return fail(fmt.Errorf("initialize SailPoint directory connector: %w", connectorErr))
+		}
+		directoryConnectors = append(directoryConnectors, sailPointConnector)
 	}
 	if cfg.GrouperEnabled() {
 		grouperConnector, connectorErr := directoryexpansion.NewGrouperConnector(cfg.GrouperConnectorConfig())

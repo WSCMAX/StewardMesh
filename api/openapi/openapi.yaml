@@ -1,4 +1,4 @@
-# Requirements: REQ-ATLAS-001, REQ-ATLAS-MODELS-001, REQ-ATLAS-CODES-001, REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-005, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-HORIZON-001, REQ-LEDGER-001, REQ-STACK-001, REQ-SIGNALS-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
+# Requirements: REQ-ATLAS-001, REQ-ATLAS-MODELS-001, REQ-ATLAS-CODES-001, REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-HORIZON-001, REQ-LEDGER-001, REQ-STACK-001, REQ-SIGNALS-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
 openapi: 3.1.0
 info:
   title: StewardMesh API
@@ -1376,9 +1376,9 @@ paths:
       summary: List configured read-only directory sources
       operationId: listDirectoryImportSources
       tags: [Bridge]
-      x-requirement: REQ-DIRECTORY-EXPANSION-003
+      x-requirement: REQ-DIRECTORY-EXPANSION-002
       x-required-permission: integrations.read
-      description: Requires organization-scoped `integrations.read`. Returns only stable source identity, provider name, and non-secret configuration revision; tenant identifiers, endpoints, and credentials remain server-side.
+      description: Requires organization-scoped `integrations.read`. Returns only stable source identity, provider name, and non-secret configuration revision; Entra tenants, SailPoint endpoints, Grouper URLs, credentials, and tokens remain server-side.
       security: [{localCookieAuth: []}, {secureCookieAuth: []}]
       responses:
         '200':

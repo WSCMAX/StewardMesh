@@ -1,6 +1,6 @@
 package main
 
-// Requirements: REQ-FOUNDATION-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001.
+// Requirements: REQ-FOUNDATION-001, REQ-DIRECTORY-EXPANSION-004, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001.
 
 import (
 	"context"
@@ -34,6 +34,10 @@ func main() {
 	cfg.OIDCClientSecret = ""
 	cfg.OIDCTransactionSecret = ""
 	cfg.BootstrapToken = ""
+	cfg.EntraClientSecret = ""
+	cfg.SailPointClientSecret = ""
+	cfg.GrouperPassword = ""
+	cfg.GrouperBearerToken = ""
 	if err != nil {
 		logger.Error("initialize application", "error", err)
 		os.Exit(1)

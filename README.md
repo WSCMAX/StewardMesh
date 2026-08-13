@@ -153,6 +153,11 @@ permissions, APIs, security reviews, and validation coverage.
 People now provides sites, departments, person/shared/public/lab identities,
 structured site addresses, buildings and rooms, scoped directory search, and
 effective-dated multi-user asset assignments.
+Its optional SailPoint Identity Security Cloud connector
+(`REQ-DIRECTORY-EXPANSION-004`, `identity.directory`) normalizes identities,
+accounts, account sources, departments, governance groups, roles, and
+memberships through a bounded read-only exact-plan workflow with explicit
+cross-provider conflicts and no provider write path.
 See [People](docs/features/people.md) and
 [Directory Expansion](docs/features/directory-expansion.md) for permissions,
 privacy boundaries, provider contracts, location behavior, assignments, and

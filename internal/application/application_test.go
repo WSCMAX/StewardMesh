@@ -1,6 +1,6 @@
 package application
 
-// Requirements: REQ-FOUNDATION-001, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-005, REQ-PATTERNS-001, REQ-STORAGE-001, REQ-HORIZON-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001.
+// Requirements: REQ-FOUNDATION-001, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005, REQ-PATTERNS-001, REQ-STORAGE-001, REQ-HORIZON-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001.
 // Features: lifecycle.planning, templates.schemas.
 
 import (
@@ -64,6 +64,21 @@ func TestNewRegistersOptionalMicrosoftEntraConnectorWithoutStartupNetworkWrites(
 	cfg.EntraTenantID = "11111111-1111-4111-8111-111111111111"
 	cfg.EntraClientID = "22222222-2222-4222-8222-222222222222"
 	cfg.EntraClientSecret = "0123456789abcdef"
+	app, err := New(context.Background(), cfg, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := app.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestNewRegistersOptionalSailPointConnectorWithoutStartupNetworkWrites(t *testing.T) {
+	cfg := memoryConfiguration(t)
+	cfg.SailPointSourceSystemID = "sailpoint-primary"
+	cfg.SailPointBaseURL = "https://example.api.identitynow.com"
+	cfg.SailPointClientID = "0123456789abcdef"
+	cfg.SailPointClientSecret = "abcdef0123456789"
 	app, err := New(context.Background(), cfg, Options{})
 	if err != nil {
 		t.Fatal(err)
@@ -297,6 +312,10 @@ func memoryConfiguration(t *testing.T) config.Config {
 	cfg.EntraTenantID = ""
 	cfg.EntraClientID = ""
 	cfg.EntraClientSecret = ""
+	cfg.SailPointSourceSystemID = "sailpoint"
+	cfg.SailPointBaseURL = ""
+	cfg.SailPointClientID = ""
+	cfg.SailPointClientSecret = ""
 	cfg.BlobDir = t.TempDir()
 	cfg.AllowedOrigin = "http://localhost:5173"
 	cfg.SessionCookieSecure = false

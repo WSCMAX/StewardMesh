@@ -47,12 +47,15 @@
       "artifacts": {
         "documentation": [
           "docs/features/dictionary.md",
+          "docs/features/guide.md",
+          "docs/features/people.md",
           "docs/features/workspace.md",
           "docs/requirements/initial.md"
         ],
         "api": [
           "api/openapi/openapi.yaml",
           "internal/httpapi/server.go",
+          "web/src/api.ts",
           "web/src/WorkspaceShell.tsx"
         ],
         "code": [
@@ -73,15 +76,19 @@
         "tests": [
           "internal/httpapi/server_test.go",
           "web/src/App.test.tsx",
+          "web/src/api.test.ts",
           "web/src/GuideExperience.test.tsx",
           "web/src/PeopleDirectory.test.tsx",
           "web/src/RelatedRecordWorkflow.test.tsx",
           "web/src/WorkspaceAccessibility.test.tsx",
           "web/src/WorkspaceShell.test.tsx",
+          "web/src/guide.test.ts",
+          "web/src/test-setup.ts",
           "web/src/workspaceAccess.test.ts"
         ],
         "ui": [
           "web/src/App.tsx",
+          "web/src/GuideExperience.tsx",
           "web/src/PeopleDirectory.tsx",
           "web/src/RelatedRecordWorkflow.tsx",
           "web/src/WorkspaceShell.tsx"

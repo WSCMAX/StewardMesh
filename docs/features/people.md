@@ -52,6 +52,8 @@ The controlled draft survives forward and backward navigation as well as step-le
 
 This task is the first consumer of Workspace's reusable related-record workflow pattern. It declares People ownership and the existing identity/location API boundaries, announces asynchronous creation and confirmation, preserves inputs after a recoverable failure, offers retry, and clears temporary values on explicit cancellation. Workspace coordinates the steps but never weakens People validation or Guard authorization.
 
+The matching same-host **People** documentation links back to `#workspace-people`; the same-host **Workspace** documentation explains the reusable cross-feature pattern and its ownership boundary. Guide's People topic opens both the focused People work area and this local documentation without putting a selected person, location, search term, or draft value into the URL.
+
 ## Asset assignments
 
 People records three relationship roles:
@@ -101,7 +103,7 @@ The on-page quick guide follows this sequence:
 3. Review the scoped directory and location inventory.
 4. Select an asset and add one or more relationships.
 
-Use the configurable **Report a People issue** link on the workspace to report a component problem. Include the response correlation ID when available. Do not include email lists, identity-provider claims, cookies, CSRF values, or other private directory data.
+Use Workspace's Guide report view to report a People component problem. It includes only the URL pathname, selected component, public version, coarse browser/system/viewport, and a bounded response correlation ID. It excludes the Workspace hash, query string, person and location drafts, selected record values, search terms, roles, permissions, cookies, CSRF values, and request bodies. The editable destination opens only after the user selects **Review issue before submitting**; remove any private directory data added manually.
 
 ## Audit events
 

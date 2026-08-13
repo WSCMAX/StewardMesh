@@ -1,7 +1,7 @@
 import { expect, test, vi } from 'vitest'
 import { authenticationRequiredEventName, correlationEventName, getLastCorrelationId, requestJSON } from './api'
 
-// Requirements: A11Y-001, DOC-002, SEC-HTTP-001. Feature: experience.help.
+// Requirements: REQ-WORKSPACE-001, A11Y-001, DOC-002, SEC-HTTP-001. Features: experience.workspace, experience.help.
 
 test('captures only a valid response correlation ID for Guide reports', async () => {
   const listener = vi.fn()

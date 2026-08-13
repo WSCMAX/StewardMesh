@@ -1,7 +1,7 @@
 # Guide — Help, walkthroughs, accessibility, and issue reporting
 
 - **Canonical ID:** `experience.help`
-- **Requirements:** `A11Y-001`, `DOC-001`, `DOC-002`
+- **Requirements:** `REQ-WORKSPACE-001`, `A11Y-001`, `DOC-001`, `DOC-002`
 - **Roadmap issue:** [#15](https://github.com/WSCMAX/StewardMesh/issues/15)
 
 ## Purpose
@@ -68,6 +68,8 @@ Brand values are compiled into the public web bundle. They are not secret config
 - the latest valid `X-Correlation-ID`, or `Unavailable`.
 
 The shared same-origin API client captures only correlation IDs that match the bounded allow-list. Guide excludes display names, usernames, email addresses, roles, permissions, record values, search terms, full user-agent strings, request bodies, cookies, CSRF values, tokens, files, and private URLs. The issue opens in a new tab for explicit user review and submission; StewardMesh does not submit it automatically.
+
+Workspace and People use the same report boundary. The active Workspace hash, selected directory records, controlled related-record drafts, and location/person values never enter `collectIssueContext`. The final URL serializer sanitizes every supplied field again, so even a future caller cannot place line breaks or an email address directly into the generated report context. Correlation IDs remain useful for server-side audit lookup without exposing the audit event's private record metadata.
 
 ## Interfaces and provider boundary
 

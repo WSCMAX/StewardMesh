@@ -14,7 +14,7 @@ Workspace gives authenticated users one coherent application shell without prese
 
 ## Delivered behavior
 
-- Desktop layouts use a persistent left navigation rail and a bounded work surface. Narrow layouts convert the rail into a horizontally scrollable, touch-sized navigation row before the active content.
+- Desktop layouts use a persistent left navigation rail and a bounded work surface. Narrow layouts use a modal navigation drawer with focus containment, Escape dismissal, focus restoration, and touch-sized controls.
 - Only the active work area is visible. An area mounts when first opened and remains mounted while hidden so search terms, selected records, open forms, and other in-progress React state survive navigation.
 - Each navigation action updates a stable `#workspace-{area}` deep link. Browser history restores the matching area, and invalid hashes safely return to Overview.
 - The context header always identifies the current area, signed-in role summary, visible-record boundary, change capability, and live service state.
@@ -76,16 +76,24 @@ These hints cannot widen access. Every API route continues to authenticate the c
 - The global skip link targets the main landmark, Workspace has a labeled navigation landmark, and the active context uses a stable level-two heading.
 - Navigation uses ordinary links with real deep-link destinations and `aria-current="page"`; it does not require a custom tab keyboard model.
 - Every target is at least 44 CSS pixels high, keyboard focus moves to the current-context heading after navigation, and active, limited, connected, and unavailable states include text instead of relying on color.
-- Horizontal navigation remains operable at 320 CSS pixels without forcing document-level overflow.
+- The modal navigation drawer and active work surface remain operable at 320 CSS pixels without forcing document-level overflow.
 - Reduced-motion behavior continues to use the application-wide media query.
+
+## Help and walkthroughs
+
+The first authenticated Overview offers Guide's nonblocking Workspace walkthrough. It describes the current workbench, then includes only product areas supported by the current permission hints before ending in Guide. A user can skip, close, finish, or replay it without losing work. Only the preference state `new`, `skipped`, or `completed` is stored; roles, grants, record values, and workflow drafts are never persisted. Contextual Help controls in the header and navigation open the active area's same-host documentation and can return focus to that owning area.
 
 ## Security and privacy
 
 Workspace stores no credentials, grants, record identifiers, or form values in URLs or browser persistence. Its hash contains only a fixed area identifier. Permission and scope hints remain in memory for the current session and are cleared on sign-out or session expiry. Server-managed authorization remains authoritative for every API request.
 
+Issue reporting is delegated to Guide's allow-listed handoff. The generated report contains the URL pathname, selected product component, public application version, coarse browser/system/viewport, and latest bounded response correlation ID. It excludes the Workspace hash, query string, role and permission hints, selected People records, person/location drafts, search terms, request bodies, cookies, tokens, and CSRF values. Users see and review the generated context before an external issue page opens.
+
 ## APIs, audit, and storage
 
 `GET /api/v1/auth/session` now includes a sorted, deduplicated `grants` collection alongside its existing organization-wide `permissions` hint. Each grant contains only the permission, scope kind, and scope resource ID already assigned to the authenticated principal. The response remains `Cache-Control: no-store`. This delivery adds no database schema, audit event, or persistent browser storage contract.
+
+Workspace is an orchestration surface, so it does not emit a second synthetic audit event for a feature-owned write. Inline location creation is audited by People as `people.site.created`, `people.building.created`, or `people.room.created`; final identity creation is separately audited as `people.identity.created`. Those events retain stable IDs, kinds, the actor, correlation, and requirement context while excluding display names, emails, and draft values.
 
 ## Validation
 
@@ -93,11 +101,13 @@ Workspace stores no credentials, grants, record identifiers, or form values in U
 - `web/src/App.test.tsx` covers authenticated rendering, read/write labels, scoped collection suppression, focused navigation, deep-link updates, session expiry, context preservation, Guide entry, and automated accessibility checks.
 - `web/src/PeopleDirectory.test.tsx` covers guided draft retention, existing room selection, inline missing-room creation, containing-site submission, step-specific validation, read-only alternatives, and automated accessibility checks.
 - `web/src/RelatedRecordWorkflow.test.tsx` covers preservation, validation, selection-only fallback, return, confirmation, explicit ownership/API boundaries, loading, failure, retry, cancellation, and reset behavior.
+- `web/src/GuideExperience.test.tsx` covers the Workspace/People issue-report allow-list, safe correlation context, and exclusion of hashes, query strings, line breaks, emails, roles, and session values.
 - `web/src/WorkspaceAccessibility.test.tsx` runs axe-core against explicit populated, empty, permission-denied, and feature-error Workspace states. The state fixtures retain textual status or alert meaning and include long context values that must reflow rather than widen the document.
 - `web/src/WorkspaceShell.test.tsx` covers safe hash parsing and stable deep-link generation.
 - `web/src/workspaceAccess.test.ts` covers deterministic organization, scoped, and absent grant classification.
 - Issue #38 browser validation used an authenticated PostgreSQL-backed application at 320 by 900 CSS pixels. Keyboard activation focused each workflow step heading, an empty submission focused its announced validation alert, cancellation returned focus to `Start person workflow`, and the People view remained exactly 320 CSS pixels wide with no document overflow. The clean validation session reported zero console errors and warnings. A local ignored screenshot is retained at `output/playwright/phase-one/issue-38/workspace-people-320.png`.
+- Issue #39 browser validation used the PostgreSQL-backed application to navigate Atlas to People and back while preserving an Atlas filter, create a person through existing-location selection, create another person after authorized inline site creation, and render the read-only People alternative with all creation controls absent. The denied view remained exactly 320 CSS pixels wide, and both clean browser sessions reported zero console errors and warnings. Local ignored flow scripts and the denied-state screenshot are retained under `output/playwright/phase-one/issue-39/`.
 
 ## Follow-up work
 
-Issue #38 completed the broader accessibility and mobile validation pass. Issue #39 owns final traceability and release evidence for the parent Workspace feature.
+Issues #38 and #39 complete the Workspace accessibility, documentation, traceability, privacy, and end-to-end validation passes for parent issue #33.

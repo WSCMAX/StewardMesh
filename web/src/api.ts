@@ -1,4 +1,4 @@
-// Requirements: SEC-HTTP-001, SEC-GUARD-001, REQ-PEOPLE-001, REQ-THREADS-001, A11Y-001, DOC-001, DOC-002.
+// Requirements: SEC-HTTP-001, SEC-GUARD-001, REQ-PEOPLE-001, REQ-THREADS-001, REQ-WORKSPACE-001, A11Y-001, DOC-001, DOC-002.
 
 const httpNoContent = 204
 const correlationPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/

@@ -196,6 +196,44 @@ function safeLine(value: string, fallback: string, maximum = 128) {
   return safe || fallback
 }
 
+const reportComponentNames = new Set(guideTopics.map((topic) => topic.name))
+const reportCorrelationPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
+const reportVersionPattern = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$/
+const reportBrowserPattern = /^(?:(?:Edge|Firefox|Chrome|Safari) [0-9]{1,4}|Other browser)$/
+const reportSystems = new Set(['Windows', 'Android', 'iOS', 'macOS', 'Linux', 'Other system'])
+
+function safeReportComponent(value: string) {
+  return reportComponentNames.has(value) ? value : 'Workspace'
+}
+
+function safeReportVersion(value: string) {
+  return reportVersionPattern.test(value) ? value : 'development'
+}
+
+function safeReportCorrelation(value: string) {
+  return reportCorrelationPattern.test(value) ? value : 'Unavailable'
+}
+
+function safeReportBrowser(value: string) {
+  return reportBrowserPattern.test(value) ? value : 'Other browser'
+}
+
+function safeReportSystem(value: string) {
+  return reportSystems.has(value) ? value : 'Other system'
+}
+
+function safeReportViewport(value: string) {
+  const match = /^(\d{1,5})x(\d{1,5})$/.exec(value)
+  if (!match || Number(match[1]) > 10000 || Number(match[2]) > 10000) return '0x0'
+  return value
+}
+
+function safeReportPage(value: string) {
+  const pathname = value.split(/[?#]/, 1)[0]
+  if (!pathname.startsWith('/') || pathname.startsWith('//') || pathname.includes('@')) return '/'
+  return safeLine(pathname, '/', 256)
+}
+
 export function detectBrowser(userAgent: string) {
   const candidates = [
     ['Edge', /Edg\/(\d+)/],
@@ -224,15 +262,14 @@ export function collectIssueContext(component: string, version: string, correlat
   const userAgent = typeof navigator === 'undefined' ? '' : navigator.userAgent
   const width = typeof window === 'undefined' ? 0 : Math.max(0, Math.min(10000, Math.round(window.innerWidth)))
   const height = typeof window === 'undefined' ? 0 : Math.max(0, Math.min(10000, Math.round(window.innerHeight)))
-  const safeCorrelation = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(correlationId) ? correlationId : 'Unavailable'
   return {
-    page: safeLine(page, '/'),
-    component: safeLine(component, 'Workspace'),
-    version: safeLine(version, 'development'),
+    page: safeReportPage(page),
+    component: safeReportComponent(component),
+    version: safeReportVersion(version),
     browser: detectBrowser(userAgent),
     viewport: `${width}x${height}`,
     system: detectSystem(userAgent),
-    correlationId: safeCorrelation,
+    correlationId: safeReportCorrelation(correlationId),
   }
 }
 
@@ -243,20 +280,20 @@ export function buildIssueReportUrl(baseUrl: string, context: IssueContext) {
   const body = [
     '## StewardMesh context',
     '',
-    `- Page: ${safeLine(context.page, '/')}`,
-    `- Component: ${safeLine(context.component, 'Workspace')}`,
-    `- Version: ${safeLine(context.version, 'development')}`,
-    `- Browser: ${safeLine(context.browser, 'Other browser')}`,
-    `- Viewport: ${safeLine(context.viewport, '0x0')}`,
-    `- System: ${safeLine(context.system, 'Other system')}`,
-    `- Correlation ID: ${safeLine(context.correlationId, 'Unavailable')}`,
+    `- Page: ${safeReportPage(context.page)}`,
+    `- Component: ${safeReportComponent(context.component)}`,
+    `- Version: ${safeReportVersion(context.version)}`,
+    `- Browser: ${safeReportBrowser(context.browser)}`,
+    `- Viewport: ${safeReportViewport(context.viewport)}`,
+    `- System: ${safeReportSystem(context.system)}`,
+    `- Correlation ID: ${safeReportCorrelation(context.correlationId)}`,
     '',
     '## Before submitting',
     '',
     '- Describe what you expected and what happened.',
     '- Remove names, emails, asset details, files, credentials, cookies, tokens, and private URLs.',
   ].join('\n')
-  url.searchParams.set('title', `[Guide] ${safeLine(context.component, 'Workspace')} issue`)
+  url.searchParams.set('title', `[Guide] ${safeReportComponent(context.component)} issue`)
   url.searchParams.set('body', body)
   return relative ? `${url.pathname}${url.search}` : url.toString()
 }

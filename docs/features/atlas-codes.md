@@ -3,7 +3,7 @@
 - **Canonical ID:** `inventory.identifiers`
 - **Requirement:** `REQ-ATLAS-CODES-001`
 - **Phase:** v1
-- **Delivery status:** Identifier associations and manual management are implemented by [#61](https://github.com/WSCMAX/StewardMesh/issues/61); scanner and printer slices remain planned.
+- **Delivery status:** Identifier associations and manual management are implemented by [#61](https://github.com/WSCMAX/StewardMesh/issues/61), and explicit scanner workflows are implemented by [#64](https://github.com/WSCMAX/StewardMesh/issues/64); label printing and final validation remain planned.
 - **GitHub roadmap issue:** [#60 — Atlas Codes](https://github.com/WSCMAX/StewardMesh/issues/60)
 - **Owning product area:** [Atlas](atlas.md)
 
@@ -32,7 +32,7 @@ Generated QR payloads use an opaque identifier or organization-scoped applicatio
 
 ## Scanner workflows
 
-The scanning boundary supports:
+The implemented scanning boundary supports:
 
 - USB and Bluetooth scanners operating as keyboard-wedge/HID input without a vendor SDK;
 - permission-gated browser camera scanning on supported desktop and mobile browsers;
@@ -40,7 +40,7 @@ The scanning boundary supports:
 - explicit scan-to-find and scan-to-associate modes so background keystrokes cannot accidentally change an asset;
 - duplicate-read suppression, configurable terminators, normalization, timeouts, cancel/retry behavior, and clear unsupported-format feedback.
 
-At least Code 128 and QR must work end to end. Additional formats require fixtures and compatibility tests before they can be advertised as supported.
+Code 128 and QR work end to end through the same bounded REST operations as manual management. The scanner surface accepts a configurable Enter or Tab terminator and 250–2,000 millisecond burst window, retains slower input for deliberate manual submission, rejects malformed and oversized input before a request, suppresses a repeated completed scan for 1.5 seconds, retains failed input for retry, and provides an explicit cancellation path. Additional formats require fixtures and compatibility tests before they can be advertised as supported.
 
 ## Label generation and printer support
 
@@ -71,7 +71,7 @@ Scanner decoders, label renderers, and printer transports remain planned provide
 5. Choose **Deactivate**, review the explicit confirmation, and confirm to remove the value from active resolution without deleting history.
 6. Receive announced text status for success, safe retries, conflicts, permission denial, ownership locks, validation failures, and stale revisions.
 
-The current manual workflow is keyboard operable, screen-reader labeled, permission aware, and usable at narrow widths. Scanner input, browser camera permission, duplicate-read handling, scan-to-find, and scan-to-associate remain tracked in [#64](https://github.com/WSCMAX/StewardMesh/issues/64); camera capture will never be the only input path. Label preview and printing remain tracked in [#62](https://github.com/WSCMAX/StewardMesh/issues/62).
+The manual and scanner workflows are keyboard operable, screen-reader labeled, permission aware, and usable at narrow widths. The scanner is inactive until a user opens it and chooses find or associate; association also requires a selected asset and `assets.write`. Browser camera capture is optional and stops on capture, explicit stop, cancellation, or unmount, so paste and manual entry remain complete fallbacks. Label preview and printing remain tracked in [#62](https://github.com/WSCMAX/StewardMesh/issues/62).
 
 ## Security, privacy, and audit
 
@@ -84,20 +84,20 @@ Camera access is requested only while the scanner surface is active, with an obv
 The v1 delivery is split into four implementation slices:
 
 1. [#61](https://github.com/WSCMAX/StewardMesh/issues/61) — Identifier associations, normalization, conflicts, provenance, history, provider contracts, APIs, and audits.
-2. [#64](https://github.com/WSCMAX/StewardMesh/issues/64) — Keyboard-wedge, camera, and manual scan-to-find/associate workflows.
+2. [#64](https://github.com/WSCMAX/StewardMesh/issues/64) — Keyboard-wedge, camera, paste, and manual scan-to-find/associate workflows (implemented).
 3. [#62](https://github.com/WSCMAX/StewardMesh/issues/62) — Versioned label templates, preview, batch generation, standard printing, and provider-neutral thermal-printer output.
 4. [#63](https://github.com/WSCMAX/StewardMesh/issues/63) — Security, accessibility, hardware/browser compatibility, documentation, traceability, and end-to-end validation.
 
 Validation must cover memory and PostgreSQL conformance, concurrent and stale associations, organization isolation, ownership locks, malformed and oversized input, duplicate bursts, camera permission states, scanner disconnects, keyboard timing, Code 128 and QR fixtures, print dimensions, batch bounds, PDF/vector output, any supported printer-language adapter, WCAG 2.2 AA, reduced motion, and 320-pixel layouts.
 
-The traceability manifest links `REQ-ATLAS-CODES-001` to the implemented association API, domain service, memory and PostgreSQL providers, migrations, tests, and manual UI. It does not mark the parent Atlas Codes roadmap complete: scanner and device work remains in #64, label generation and printing in #62, and final compatibility and end-to-end validation in #63.
+The traceability manifest links `REQ-ATLAS-CODES-001` to the implemented association and scanning UI, APIs, domain service, memory and PostgreSQL providers, migrations, and tests. It does not mark the parent Atlas Codes roadmap complete: label generation and printing remain in #62, followed by final compatibility and end-to-end validation in #63.
 
 ## Test coverage
 
 - Service tests cover case-sensitive normalization, format and size bounds, asset references, stable and same-intent retries, optimistic revisions, audit redaction, and deterministic audit repair after transient persistence failure.
 - Shared memory and PostgreSQL conformance covers organization isolation, active uniqueness, primary conflicts, replacement and deactivation history, stale writes, and concurrent claims.
 - HTTP tests cover read/write permissions, resource-scoped resolution with uniform unauthorized/unknown responses, CSRF, ownership locks, bounded strict JSON, safe conflict responses, and association lifecycle operations.
-- React tests cover read-only history, manual association, replacement, explicit deactivation confirmation, CSRF headers, status announcements, and automated accessibility checks.
+- React tests cover read-only history, manual association, replacement, explicit deactivation confirmation, Code 128 keyboard-wedge find, QR association, configurable explicit modes, duplicate suppression, malformed input, camera fallback, retry/cancellation, CSRF headers, status announcements, and automated accessibility checks.
 - Repository validation includes race tests, vet, vulnerability analysis, traceability, OpenAPI lint, protobuf descriptor compilation, type checking, production build, and authenticated desktop and 320-pixel browser checks.
 
 ## Issue reporting

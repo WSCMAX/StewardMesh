@@ -1,6 +1,7 @@
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ApiRequestError, requestJSON } from './api'
 import AtlasIdentifiers from './AtlasIdentifiers'
+import AtlasScanner from './AtlasScanner'
 import { StatusBadge, buttonClass, dangerButtonClass, emptyStateClass, inputClass, labelClass, panelClass, plainButtonClass, secondaryButtonClass, subpanelClass } from './ui'
 
 // Requirements: REQ-ATLAS-001, REQ-ATLAS-CODES-001, REQ-ATLAS-MODELS-001. Features: inventory.assets, inventory.identifiers, inventory.models.
@@ -188,6 +189,7 @@ export default function AtlasInventory({ assets, csrfToken, permissions, onAsset
   const [busy, setBusy] = useState('')
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
+  const [identifierRefreshVersion, setIdentifierRefreshVersion] = useState(0)
   const errorRef = useRef<HTMLDivElement>(null)
   const nextBulkRowKey = useRef(1)
   const canWrite = permissions.includes('assets.write')
@@ -309,6 +311,17 @@ export default function AtlasInventory({ assets, csrfToken, permissions, onAsset
     } finally {
       setBusy('')
     }
+  }
+
+  async function resolveScannedAsset(assetID: string) {
+    let asset = assets.find((item) => item.id === assetID)
+    if (!asset) {
+      const response = await requestJSON(`/api/v1/assets/${encodeURIComponent(assetID)}`)
+      if (!isAsset(response)) throw new Error('invalid asset response')
+      asset = response
+      onAssetsChange([...assets, asset].sort((left, right) => left.name.localeCompare(right.name)))
+    }
+    await selectAsset(asset)
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -486,6 +499,8 @@ export default function AtlasInventory({ assets, csrfToken, permissions, onAsset
       {error && <div className="mt-4 rounded-lg border border-red-400/50 bg-red-950/50 p-3 text-sm" ref={errorRef} role="alert" tabIndex={-1}>{error}</div>}
       {message && <p className="mt-4 rounded-lg border border-steward-green/40 bg-steward-green/10 p-3 text-sm" role="status">{message}</p>}
 
+      <AtlasScanner canWrite={canWrite} csrfToken={csrfToken} onAssociated={() => setIdentifierRefreshVersion((current) => current + 1)} onResolveAsset={resolveScannedAsset} selectedAsset={selected ? { id: selected.id, name: selected.name } : null} />
+
       <section aria-labelledby="models-heading" className={`${subpanelClass} mt-6 overflow-hidden`} data-feature="inventory.models" data-requirement="REQ-ATLAS-MODELS-001">
         <div aria-hidden="true" className="h-px bg-gradient-to-r from-steward-green/70 via-steward-teal/70 to-steward-blue/70" />
         <div className="p-5 sm:p-6">
@@ -632,7 +647,7 @@ export default function AtlasInventory({ assets, csrfToken, permissions, onAsset
             {selected.modelContext && <ModelContextDetails context={selected.modelContext} instanceKind={selected.kind} />}
             <h4 className="mt-6 font-semibold">Lifecycle history</h4>
             {busy === `history-${selected.id}` ? <p className="mt-2 text-sm text-steward-mist-muted" role="status">Loading lifecycle…</p> : lifecycle.length === 0 ? <p className="mt-2 text-sm text-steward-mist-muted">No lifecycle events loaded.</p> : <ol className="mt-3 space-y-3">{lifecycle.map((event) => <li className="border-l-2 border-steward-blue pl-3 text-sm" key={event.id}><p><strong>{event.fromStatus ? `${event.fromStatus} → ` : ''}{event.toStatus}</strong> · revision {event.revision}</p><p className="text-steward-mist-muted">{event.note || 'Status recorded'} · {new Date(event.occurredAt).toLocaleDateString()}</p></li>)}</ol>}
-            <AtlasIdentifiers assetId={selected.id} assetName={selected.name} canWrite={canWrite} csrfToken={csrfToken} />
+            <AtlasIdentifiers assetId={selected.id} assetName={selected.name} canWrite={canWrite} csrfToken={csrfToken} key={`${selected.id}-${identifierRefreshVersion}`} />
           </>}
         </aside>
       </div>

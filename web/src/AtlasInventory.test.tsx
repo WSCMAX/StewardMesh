@@ -208,3 +208,26 @@ test('updates an asset using its current revision and records a lifecycle note',
   expect(JSON.parse(String(request?.[1]?.body))).toMatchObject({ revision: 1, status: 'retired', lifecycleNote: 'Replacement completed' })
   await waitFor(() => expect(onAssetsChange).toHaveBeenCalledWith([updated]))
 })
+
+test('opens the authorized asset detail from the explicit Atlas Codes scan-to-find workflow', async () => {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input)
+    if (path === '/api/v1/asset-models?limit=100') return jsonResponse({ items: [] })
+    if (path === '/api/v1/asset-identifiers/resolve' && init?.method === 'POST') return jsonResponse({ assetId: asset.id })
+    if (path === '/api/v1/assets/asset-1/lifecycle') return jsonResponse({ items: [] })
+    if (path === '/api/v1/assets/asset-1/identifiers') return jsonResponse({ items: [] })
+    throw new Error(`unexpected request: ${path}`)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  render(<AtlasInventory assets={[asset]} csrfToken="csrf-token" onAssetsChange={() => undefined} permissions={['assets.read']} />)
+
+  fireEvent.click(screen.getByRole('button', { name: 'Open scanner' }))
+  fireEvent.change(screen.getByLabelText('Symbology'), { target: { value: 'qr' } })
+  fireEvent.change(screen.getByLabelText('Scanned or entered value'), { target: { value: 'opaque-asset-route' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Find asset' }))
+
+  expect(await screen.findByText(/Identifier matched/)).toBeInTheDocument()
+  const detail = screen.getByRole('heading', { name: 'Asset details' }).closest('aside') as HTMLElement
+  expect(within(detail).getByText('Lab server')).toBeInTheDocument()
+  expect(JSON.parse(String(fetchMock.mock.calls.find(([path]) => path === '/api/v1/asset-identifiers/resolve')?.[1]?.body))).toEqual({ symbology: 'qr', value: 'opaque-asset-route' })
+})

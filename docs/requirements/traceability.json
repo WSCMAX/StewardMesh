@@ -185,11 +185,13 @@
           "internal/repository/postgres/migrate_test.go",
           "internal/repository/postgres/postgres_integration_test.go",
           "web/src/AtlasInventory.test.tsx",
-          "web/src/AtlasIdentifiers.test.tsx"
+          "web/src/AtlasIdentifiers.test.tsx",
+          "web/src/AtlasScanner.test.tsx"
         ],
         "ui": [
           "web/src/AtlasInventory.tsx",
-          "web/src/AtlasIdentifiers.tsx"
+          "web/src/AtlasIdentifiers.tsx",
+          "web/src/AtlasScanner.tsx"
         ]
       }
     },

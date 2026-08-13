@@ -215,7 +215,7 @@ export default function AtlasIdentifiers({ assetId, assetName, canWrite, csrfTok
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h4 className="font-semibold" id="asset-identifiers-heading">Atlas Codes — Identifiers</h4>
-          <p className="mt-1 text-sm leading-5 text-steward-mist-muted">Manage Code 128 and QR associations for {assetName}. Scanning and label printing arrive in later Atlas Codes slices.</p>
+          <p className="mt-1 text-sm leading-5 text-steward-mist-muted">Manage Code 128 and QR associations for {assetName}. Use the explicit Atlas Codes scanner above to find assets or associate codes; label printing is a separate workflow.</p>
         </div>
         {canWrite && <button className={secondaryButtonClass} onClick={() => { setCreateOpen((open) => !open); setReplaceTarget(null); setDeactivateTarget(null) }} type="button">{createOpen ? 'Cancel association' : 'Associate identifier'}</button>}
       </div>

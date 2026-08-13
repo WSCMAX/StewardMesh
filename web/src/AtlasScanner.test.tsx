@@ -41,6 +41,36 @@ test('finds an authorized asset from explicit Code 128 keyboard-wedge input and 
   expect(fetchMock).toHaveBeenCalledTimes(1)
 })
 
+test('supports a Tab terminator, bounds scanner bursts, and keeps paste as a manual fallback', async () => {
+  const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({ assetId: 'asset-tab' }))
+  vi.stubGlobal('fetch', fetchMock)
+  render(<AtlasScanner canWrite csrfToken="csrf" onAssociated={vi.fn()} onResolveAsset={vi.fn(async () => undefined)} selectedAsset={null} />)
+
+  fireEvent.click(screen.getByRole('button', { name: 'Open scanner' }))
+  fireEvent.change(screen.getByLabelText('Scanner terminator'), { target: { value: 'Tab' } })
+  fireEvent.change(screen.getByLabelText('Scanner burst window'), { target: { value: '250' } })
+  const input = screen.getByLabelText('Scanned or entered value')
+  const now = vi.spyOn(Date, 'now')
+  now.mockReturnValue(1_000)
+  fireEvent.change(input, { target: { value: 'SLOW-SCAN' } })
+  fireEvent.keyDown(input, { key: 'S' })
+  now.mockReturnValue(1_300)
+  fireEvent.keyDown(input, { key: 'Tab' })
+  expect(await screen.findByText(/exceeded the 250 ms burst window/)).toBeInTheDocument()
+  expect(input).toHaveValue('SLOW-SCAN')
+  expect(fetchMock).not.toHaveBeenCalled()
+
+  now.mockReturnValue(2_000)
+  fireEvent.keyDown(input, { key: 'S' })
+  fireEvent.paste(input, { clipboardData: { getData: () => 'PASTED-CODE' } })
+  fireEvent.change(input, { target: { value: 'PASTED-CODE' } })
+  now.mockReturnValue(5_000)
+  fireEvent.keyDown(input, { key: 'Tab' })
+  expect(await screen.findByText(/Identifier matched/)).toBeInTheDocument()
+  expect(fetchMock).toHaveBeenCalledTimes(1)
+  expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({ symbology: 'code128', value: 'PASTED-CODE' })
+})
+
 test('associates QR input only with the explicitly selected asset and sends CSRF', async () => {
   const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({ identifier: { assetId: 'asset-1' }, created: true }, 201))
   vi.stubGlobal('fetch', fetchMock)

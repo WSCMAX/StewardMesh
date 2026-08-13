@@ -72,6 +72,11 @@ service AssetService {
   rpc CreateAssetIdentifier(CreateAssetIdentifierRequest) returns (CreateAssetIdentifierResponse);
   rpc ReplaceAssetIdentifier(ReplaceAssetIdentifierRequest) returns (ReplaceAssetIdentifierResponse);
   rpc DeactivateAssetIdentifier(DeactivateAssetIdentifierRequest) returns (DeactivateAssetIdentifierResponse);
+  rpc ListAssetLabelTemplates(ListAssetLabelTemplatesRequest) returns (ListAssetLabelTemplatesResponse);
+  // GenerateAssetLabelBatch is read-only against identifier associations.
+  // gRPC cancellation stops generation; output bytes are delivered to an
+  // operator-controlled browser/OS or device workflow, never a selected printer.
+  rpc GenerateAssetLabelBatch(GenerateAssetLabelBatchRequest) returns (AssetLabelArtifact);
 }
 
 // People directory and effective-dated asset assignments.
@@ -680,6 +685,80 @@ message DeactivateAssetIdentifierRequest {
 message DeactivateAssetIdentifierResponse {
   AssetIdentifier identifier = 1;
   bool changed = 2;
+}
+
+message ListAssetLabelTemplatesRequest {}
+
+message ListAssetLabelTemplatesResponse {
+  repeated AssetLabelTemplate items = 1;
+  int32 maximum_batch_size = 2;
+  repeated AssetLabelOutput outputs = 3;
+}
+
+message AssetLabelTemplate {
+  // Exact immutable Patterns template ID. Geometry and symbology come from the
+  // selected schema version's fields and are never parsed from this ID.
+  string id = 1;
+  string pattern_template_id = 2;
+  int64 pattern_version = 3;
+  string name = 4;
+  string description = 5;
+  int64 version = 6;
+  double width_mm = 7;
+  double height_mm = 8;
+  double margin_mm = 9;
+  double quiet_zone_mm = 10;
+  AssetIdentifierSymbology symbology = 11;
+  AssetLabelPayloadSource payload_source = 12;
+  string human_readable_field = 13;
+  repeated string safe_asset_fields = 14;
+  string organization_branding = 15;
+}
+
+enum AssetLabelPayloadSource {
+  ASSET_LABEL_PAYLOAD_SOURCE_UNSPECIFIED = 0;
+  ASSET_LABEL_PAYLOAD_SOURCE_IDENTIFIER_VALUE = 1;
+  ASSET_LABEL_PAYLOAD_SOURCE_ORGANIZATION_ROUTE = 2;
+}
+
+enum AssetLabelOutput {
+  ASSET_LABEL_OUTPUT_UNSPECIFIED = 0;
+  ASSET_LABEL_OUTPUT_SVG = 1;
+  ASSET_LABEL_OUTPUT_PDF = 2;
+  ASSET_LABEL_OUTPUT_ZPL = 3;
+}
+
+message GenerateAssetLabelBatchRequest {
+  // Exact retries reuse this safe stable key within the bounded replay window;
+  // a retained key cannot represent two inputs and an expired replay needs a
+  // new key.
+  string idempotency_key = 1;
+  // Exact ID and immutable version returned by ListAssetLabelTemplates.
+  string template_id = 2;
+  int64 template_version = 3;
+  // One to fifty unique active identifier IDs of one symbology. SVG requires
+  // exactly one; PDF emits one physical page per item; ZPL emits one device
+  // label per item. The adapter rechecks read, write, scope, and ownership for
+  // every selected asset before returning bytes.
+  repeated string identifier_ids = 4;
+  // All rendered human-readable fields are bounded printable ASCII so SVG,
+  // PDF, and ZPL cannot silently substitute different glyphs.
+  AssetLabelOutput output = 5;
+  bool test_print = 6;
+}
+
+message AssetLabelArtifact {
+  string batch_id = 1;
+  AssetLabelTemplate template = 2;
+  AssetLabelOutput output = 3;
+  bool test_print = 4;
+  int32 item_count = 5;
+  string media_type = 6;
+  string file_name = 7;
+  bytes content = 8;
+  string sha256 = 9;
+  google.protobuf.Timestamp created_at = 10;
+  bool idempotent_replay = 11;
 }
 
 message AssetIdentifier {

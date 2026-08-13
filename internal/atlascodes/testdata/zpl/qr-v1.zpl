@@ -1,0 +1,9 @@
+^XA
+^CI28
+^PW400
+^LL240
+^LH0,0
+^FO24,24^BQN,2,5^FH^FDLA,/atlas/codes/identifier-qr^FS
+^FO205,56^A0N,26,26^FB171,1,0,L,0^FH^FDVisible QR^FS
+^FO205,96^A0N,19,19^FB171,1,0,L,0^FH^FDLab server^FS
+^XZ

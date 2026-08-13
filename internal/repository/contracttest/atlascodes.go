@@ -78,6 +78,13 @@ func AtlasCodesStore(
 	if err != nil || !applied || created.ID != primary.ID || created.Revision != 1 {
 		t.Fatalf("unexpected Atlas Codes creation %#v applied=%t err=%v", created, applied, err)
 	}
+	byID, err := subject.GetIdentifierByID(ctx, organizationID, primary.ID)
+	if err != nil || byID.AssetID != assetID {
+		t.Fatalf("unexpected organization-scoped Atlas Codes ID lookup %#v err=%v", byID, err)
+	}
+	if _, err := subject.GetIdentifierByID(ctx, otherOrganizationID, primary.ID); !errors.Is(err, atlascodes.ErrNotFound) {
+		t.Fatalf("expected organization-isolated Atlas Codes ID lookup, got %v", err)
+	}
 
 	retry := primary
 	retry.CreatedAt = retry.CreatedAt.Add(time.Hour)

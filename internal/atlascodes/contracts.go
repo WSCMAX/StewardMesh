@@ -109,6 +109,7 @@ type AssetReader interface {
 type Store interface {
 	ListIdentifiers(ctx context.Context, organizationID, assetID string) ([]Identifier, error)
 	GetIdentifier(ctx context.Context, organizationID, assetID, identifierID string) (Identifier, error)
+	GetIdentifierByID(ctx context.Context, organizationID, identifierID string) (Identifier, error)
 	ResolveIdentifier(ctx context.Context, organizationID string, symbology Symbology, normalizedValue string) (Identifier, error)
 	CreateIdentifier(ctx context.Context, identifier Identifier) (Identifier, bool, error)
 	ReplaceIdentifier(

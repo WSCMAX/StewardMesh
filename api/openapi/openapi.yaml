@@ -689,7 +689,7 @@ paths:
       operationId: resolveAssetIdentifier
       tags: [Atlas Codes]
       x-requirement: REQ-ATLAS-CODES-001
-      description: Resolves an active identifier without placing the encoded value in a URL or access log, then authorizes the matched asset against the caller's organization, site, department, or resource-scoped assets.read grants. Unknown and unauthorized values return the same not-found response.
+      description: Resolves an active identifier without placing the encoded value in a URL or access log, including credential-free `/atlas/codes/{opaqueIdentifierId}` routes emitted by QR label templates. It then authorizes the matched asset against the caller's organization, site, department, or resource-scoped assets.read grants. Unknown and unauthorized values return the same not-found response.
       security: [{localCookieAuth: []}, {secureCookieAuth: []}]
       requestBody:
         required: true
@@ -705,6 +705,69 @@ paths:
         '400': {$ref: '#/components/responses/InvalidRequest'}
         '401': {$ref: '#/components/responses/Unauthorized'}
         '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/asset-label-templates:
+    get:
+      summary: List versioned Atlas Codes label templates
+      operationId: listAssetLabelTemplates
+      tags: [Atlas Codes]
+      x-requirement: REQ-ATLAS-CODES-001
+      description: Lists active physical label definitions derived directly from immutable Patterns `atlas.label-template` versions. Each definition exposes configured dimensions, margins, quiet zones, credential-free payload source, human-readable text, organization branding, and the explicit safe asset-field allowlist. At least one assets.read grant in the current organization is required, including a site, department, or resource-scoped grant.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200':
+          description: Available Code 128 and QR label definitions and output bounds
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AssetLabelTemplateCollection'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+  /api/v1/asset-label-batches:
+    post:
+      summary: Generate a bounded print-ready label artifact
+      operationId: createAssetLabelBatch
+      tags: [Atlas Codes]
+      x-requirement: REQ-ATLAS-CODES-001
+      description: Generates one label or a bounded selected batch without creating or changing identifier associations. Every selected asset is rechecked for current assets.read, assets.write, matching scope, and imported-resource ownership before cached or newly rendered bytes are returned. Within the bounded replay window, repeating the exact request with the same idempotency key returns identical snapshot bytes and reusing a key for different input is rejected; an expired replay requires a new key. Request cancellation stops generation. SVG is a one-label vector browser/OS artifact, PDF preserves one physical page per selected label, and ZPL preserves one device label per selection as an escaped provider adapter file that never contacts or silently selects a printer. Printable label text is bounded ASCII across all three renderers so no output silently substitutes unsupported characters.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+        - in: header
+          name: Idempotency-Key
+          required: true
+          description: Stable retry key scoped to this authenticated organization; 1–128 safe identifier characters.
+          schema: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateAssetLabelBatchRequest'}
+      responses:
+        '200':
+          description: Print-ready vector/PDF output or an operator-controlled ZPL adapter file
+          headers:
+            Content-Disposition: {description: Inline browser review for SVG/PDF or attachment for ZPL., schema: {type: string}}
+            X-Label-Batch-ID: {description: Deterministic batch identity for this exact input., schema: {type: string}}
+            X-Label-Template-Version: {description: Resolved immutable Patterns-backed template version., schema: {type: integer, format: int64, minimum: 1}}
+            X-Label-Width-MM: {description: Physical width of each label in millimeters., schema: {type: number, format: double, minimum: 12, maximum: 300}}
+            X-Label-Height-MM: {description: Physical height of each label in millimeters., schema: {type: number, format: double, minimum: 12, maximum: 300}}
+            X-Label-Item-Count: {description: Number of labels in the bounded artifact., schema: {type: integer, minimum: 1, maximum: 50}}
+            X-Content-SHA256: {description: SHA-256 digest of the exact returned artifact bytes., schema: {type: string, pattern: '^[a-f0-9]{64}$'}}
+            X-Idempotent-Replay: {description: True when returning an exact prior result for the same request key., schema: {type: boolean}}
+          content:
+            image/svg+xml:
+              schema: {type: string, format: binary}
+            application/pdf:
+              schema: {type: string, format: binary}
+            application/vnd.zebra-zpl:
+              schema: {type: string, format: binary}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '423': {$ref: '#/components/responses/Locked'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
   /api/v1/asset-models:
     get:
       summary: List asset models
@@ -3468,6 +3531,61 @@ components:
         items:
           type: array
           items: {$ref: '#/components/schemas/AssetIdentifier'}
+    AssetLabelTemplate:
+      type: object
+      additionalProperties: false
+      required: [id, patternTemplateId, patternVersion, name, version, widthMm, heightMm, marginMm, quietZoneMm, symbology, payloadSource, humanReadableField]
+      properties:
+        id: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$', description: Exact immutable Patterns template ID; symbology and geometry are read from the versioned schema fields rather than parsed from this identifier.}
+        patternTemplateId: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        patternVersion: {type: integer, format: int64, minimum: 1}
+        name: {type: string, minLength: 1, maxLength: 200}
+        description: {type: string, maxLength: 1000}
+        version: {type: integer, format: int64, minimum: 1}
+        widthMm: {type: number, format: double, minimum: 12, maximum: 300}
+        heightMm: {type: number, format: double, minimum: 12, maximum: 300}
+        marginMm: {type: number, format: double, minimum: 0}
+        quietZoneMm: {type: number, format: double, minimum: 1}
+        symbology: {$ref: '#/components/schemas/AssetIdentifierSymbology'}
+        payloadSource: {type: string, enum: [identifier_value, organization_route]}
+        humanReadableField: {type: string, enum: [identifier.displayValue]}
+        safeAssetFields:
+          type: array
+          uniqueItems: true
+          maxItems: 2
+          items: {type: string, enum: [asset.name, asset.assetTag]}
+        organizationBranding: {type: string, maxLength: 80}
+    AssetLabelTemplateCollection:
+      type: object
+      additionalProperties: false
+      required: [items, maximumBatchSize, outputs]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/AssetLabelTemplate'}
+        maximumBatchSize: {type: integer, enum: [50]}
+        outputs:
+          type: array
+          uniqueItems: true
+          items: {$ref: '#/components/schemas/AssetLabelOutput'}
+    AssetLabelOutput:
+      type: string
+      enum: [svg, pdf, zpl]
+    CreateAssetLabelBatchRequest:
+      type: object
+      additionalProperties: false
+      required: [templateId, templateVersion, identifierIds, output]
+      properties:
+        templateId: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$', description: Exact immutable Patterns template ID returned by the template-list endpoint.}
+        templateVersion: {type: integer, format: int64, minimum: 1}
+        identifierIds:
+          type: array
+          minItems: 1
+          maxItems: 50
+          uniqueItems: true
+          items: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        output: {$ref: '#/components/schemas/AssetLabelOutput', description: SVG accepts exactly one identifier; PDF and ZPL accept one to fifty.}
+        testPrint: {type: boolean, default: false}
     CreateAssetIdentifierResponse:
       type: object
       additionalProperties: false

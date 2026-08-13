@@ -24,6 +24,7 @@ const (
 	maximumCode128Bytes = 128
 	maximumQRBytes      = 512
 	maximumDisplayBytes = 512
+	labelRoutePrefix    = "/atlas/codes/"
 )
 
 var stableIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
@@ -63,17 +64,37 @@ func (s *Service) ResolveIdentifier(ctx context.Context, symbology Symbology, va
 	if err != nil {
 		return Identifier{}, err
 	}
-	identifier, err := s.store.ResolveIdentifier(ctx, s.organizationID, normalizedSymbology, normalizedValue)
+	var identifier Identifier
+	if normalizedSymbology == SymbologyQR && strings.HasPrefix(normalizedValue, labelRoutePrefix) {
+		identifierID := strings.TrimPrefix(normalizedValue, labelRoutePrefix)
+		if !stableIDPattern.MatchString(identifierID) || strings.Contains(identifierID, "/") {
+			return Identifier{}, ErrInvalidInput
+		}
+		identifier, err = s.store.GetIdentifierByID(ctx, s.organizationID, identifierID)
+	} else {
+		identifier, err = s.store.ResolveIdentifier(ctx, s.organizationID, normalizedSymbology, normalizedValue)
+	}
 	if err != nil {
 		return Identifier{}, err
 	}
-	if identifier.OrganizationID != s.organizationID || identifier.Status != StatusActive {
+	if identifier.OrganizationID != s.organizationID || identifier.Status != StatusActive || identifier.Symbology != normalizedSymbology {
 		return Identifier{}, ErrNotFound
 	}
 	if _, err := s.asset(ctx, identifier.AssetID); err != nil {
 		return Identifier{}, err
 	}
 	return cloneIdentifier(identifier), nil
+}
+
+// LabelRoute is the credential-free, organization-scoped application route
+// encoded in generated QR labels. The current authenticated organization is
+// resolved server-side; no session, grant, or asset detail enters the payload.
+func LabelRoute(identifierID string) (string, error) {
+	identifierID = strings.TrimSpace(identifierID)
+	if !stableIDPattern.MatchString(identifierID) || strings.Contains(identifierID, "/") {
+		return "", ErrInvalidInput
+	}
+	return labelRoutePrefix + identifierID, nil
 }
 
 func (s *Service) ListIdentifiers(ctx context.Context, assetID string) ([]Identifier, error) {
@@ -168,6 +189,9 @@ func (s *Service) ReplaceIdentifier(ctx context.Context, input ReplaceIdentifier
 	if err != nil {
 		return Identifier{}, false, err
 	}
+	if normalizedSymbology == SymbologyQR && strings.HasPrefix(normalizedValue, labelRoutePrefix) {
+		return Identifier{}, false, ErrInvalidInput
+	}
 	displayValue, err := normalizeDisplay(input.DisplayValue, normalizedValue)
 	if err != nil {
 		return Identifier{}, false, err
@@ -258,6 +282,9 @@ func normalizeCreateInput(input CreateIdentifierInput) (CreateIdentifierInput, e
 	symbology, value, err := normalizeCode(input.Symbology, input.Value)
 	if err != nil {
 		return CreateIdentifierInput{}, err
+	}
+	if symbology == SymbologyQR && strings.HasPrefix(value, labelRoutePrefix) {
+		return CreateIdentifierInput{}, ErrInvalidInput
 	}
 	display, err := normalizeDisplay(input.DisplayValue, value)
 	if err != nil {

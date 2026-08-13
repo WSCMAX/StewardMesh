@@ -101,3 +101,33 @@ option {
     animation-iteration-count: 1 !important;
   }
 }
+
+.atlas-label-print-sheet {
+  display: none;
+}
+
+@media print {
+  body > *:not(.atlas-label-print-sheet) {
+    display: none !important;
+  }
+
+  body > .atlas-label-print-sheet {
+    display: block !important;
+    position: absolute;
+    inset: 0 auto auto 0;
+    margin: 0;
+    padding: 0;
+  }
+
+  .atlas-label-print-sheet img {
+    display: block;
+    width: auto;
+    max-width: none;
+    height: auto;
+    background: #fff;
+  }
+
+  @page {
+    margin: 0;
+  }
+}

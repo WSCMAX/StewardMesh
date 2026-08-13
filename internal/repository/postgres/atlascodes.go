@@ -66,6 +66,13 @@ func (s *AtlasCodesStore) GetIdentifier(ctx context.Context, organizationID, ass
 	return item, translateAtlasCodesReadError("get Atlas Codes identifier", err)
 }
 
+func (s *AtlasCodesStore) GetIdentifierByID(ctx context.Context, organizationID, identifierID string) (atlascodes.Identifier, error) {
+	item, err := scanAtlasCodesIdentifier(s.database.QueryRowContext(ctx, `SELECT `+atlasCodesIdentifierColumns+`
+		FROM atlas_asset_identifiers
+		WHERE organization_id = $1 AND id = $2`, organizationID, identifierID))
+	return item, translateAtlasCodesReadError("get Atlas Codes identifier by id", err)
+}
+
 func (s *AtlasCodesStore) ResolveIdentifier(ctx context.Context, organizationID string, symbology atlascodes.Symbology, normalizedValue string) (atlascodes.Identifier, error) {
 	item, err := scanAtlasCodesIdentifier(s.database.QueryRowContext(ctx, `SELECT `+atlasCodesIdentifierColumns+`
 		FROM atlas_asset_identifiers

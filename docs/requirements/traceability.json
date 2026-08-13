@@ -168,7 +168,8 @@
         "documentation": [
           "docs/features/atlas-codes.md",
           "docs/features/dictionary.md",
-          "docs/requirements/initial.md"
+          "docs/requirements/initial.md",
+          "docs/validation/atlas-codes-label-printing.md"
         ],
         "api": [
           "api/openapi/openapi.yaml",
@@ -177,9 +178,11 @@
         "code": [
           "internal/application/application.go",
           "internal/atlascodes/contracts.go",
+          "internal/atlascodes/labels.go",
           "internal/atlascodes/service.go",
           "internal/httpapi/server.go",
           "internal/foundation/contracts.go",
+          "internal/patterns/builtin.go",
           "internal/repository/memory_atlascodes.go",
           "internal/repository/postgres/audit.go",
           "internal/repository/postgres/atlascodes.go"
@@ -189,6 +192,7 @@
           "internal/repository/postgres/migrations/0022_atlas_codes_audit_provenance.sql"
         ],
         "tests": [
+          "internal/atlascodes/labels_test.go",
           "internal/atlascodes/service_test.go",
           "internal/httpapi/server_test.go",
           "internal/repository/contracttest/atlascodes.go",
@@ -197,11 +201,13 @@
           "internal/repository/postgres/postgres_integration_test.go",
           "web/src/AtlasInventory.test.tsx",
           "web/src/AtlasIdentifiers.test.tsx",
+          "web/src/AtlasLabelPrint.test.tsx",
           "web/src/AtlasScanner.test.tsx"
         ],
         "ui": [
           "web/src/AtlasInventory.tsx",
           "web/src/AtlasIdentifiers.tsx",
+          "web/src/AtlasLabelPrint.tsx",
           "web/src/AtlasScanner.tsx"
         ]
       }

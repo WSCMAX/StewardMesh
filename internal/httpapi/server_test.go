@@ -1242,6 +1242,256 @@ func TestAtlasCodesIdentifierLifecycleIsRetrySafeLockedAndConflictRedacted(t *te
 	}
 }
 
+func TestAtlasCodesLabelTemplatesAndPrintArtifactsAreBoundedRetrySafeAndConfirmedByClients(t *testing.T) {
+	handler := newGuardServer(t)
+	session := bootstrapAdministrator(t, handler)
+	createPeopleRecord[domain.Asset](t, handler, session, "/api/v1/assets", map[string]any{
+		"id": "label-asset-one", "name": "Label asset one", "kind": "server", "assetTag": "LABEL-001", "serialNumber": "PRIVATE-SERIAL", "status": "active",
+	})
+	identifierPayload, _ := json.Marshal(map[string]any{
+		"id": "label-identifier-one", "symbology": "code128", "value": "LABEL-001", "displayValue": "LABEL-001", "source": "generated",
+	})
+	identifierRequest := authenticatedRequest(http.MethodPost, "/api/v1/assets/label-asset-one/identifiers", bytes.NewReader(identifierPayload), session)
+	identifierResponse := httptest.NewRecorder()
+	handler.ServeHTTP(identifierResponse, identifierRequest)
+	if identifierResponse.Code != http.StatusCreated {
+		t.Fatalf("create printable identifier: %d: %s", identifierResponse.Code, identifierResponse.Body.String())
+	}
+
+	templatesRequest := authenticatedRequest(http.MethodGet, "/api/v1/asset-label-templates", nil, session)
+	templatesResponse := httptest.NewRecorder()
+	handler.ServeHTTP(templatesResponse, templatesRequest)
+	if templatesResponse.Code != http.StatusOK || !strings.Contains(templatesResponse.Body.String(), `"patternTemplateId":"builtin-atlas-label-code128"`) ||
+		!strings.Contains(templatesResponse.Body.String(), `"maximumBatchSize":50`) || !strings.Contains(templatesResponse.Body.String(), `"widthMm":70`) {
+		t.Fatalf("unexpected label templates response %d: %s", templatesResponse.Code, templatesResponse.Body.String())
+	}
+
+	payload, _ := json.Marshal(map[string]any{
+		"templateId": "builtin-atlas-label-code128", "templateVersion": 1,
+		"identifierIds": []string{"label-identifier-one"}, "output": "svg", "testPrint": true,
+	})
+	printRequest := authenticatedRequest(http.MethodPost, "/api/v1/asset-label-batches", bytes.NewReader(payload), session)
+	printRequest.Header.Set("Idempotency-Key", "http-label-preview-one")
+	printResponse := httptest.NewRecorder()
+	handler.ServeHTTP(printResponse, printRequest)
+	if printResponse.Code != http.StatusOK || printResponse.Header().Get("Content-Type") != "image/svg+xml" ||
+		printResponse.Header().Get("X-Label-Width-MM") != "70.00" || printResponse.Header().Get("X-Label-Height-MM") != "30.00" ||
+		printResponse.Header().Get("X-Label-Item-Count") != "1" || printResponse.Header().Get("X-Idempotent-Replay") != "false" ||
+		!strings.Contains(printResponse.Header().Get("Content-Disposition"), "inline") || !strings.Contains(printResponse.Body.String(), `stroke-dasharray="1 1"`) ||
+		strings.Contains(printResponse.Body.String(), "PRIVATE-SERIAL") {
+		t.Fatalf("unexpected print-ready SVG %d %#v: %s", printResponse.Code, printResponse.Header(), printResponse.Body.String())
+	}
+	for _, exposed := range []string{
+		"Content-Disposition", "X-Label-Batch-ID", "X-Label-Template-Version", "X-Label-Width-MM",
+		"X-Label-Height-MM", "X-Label-Item-Count", "X-Content-SHA256", "X-Idempotent-Replay",
+	} {
+		if !strings.Contains(printResponse.Header().Get("Access-Control-Expose-Headers"), exposed) {
+			t.Fatalf("label artifact response does not expose %s: %#v", exposed, printResponse.Header())
+		}
+	}
+	replayRequest := authenticatedRequest(http.MethodPost, "/api/v1/asset-label-batches", bytes.NewReader(payload), session)
+	replayRequest.Header.Set("Idempotency-Key", "http-label-preview-one")
+	replayResponse := httptest.NewRecorder()
+	handler.ServeHTTP(replayResponse, replayRequest)
+	if replayResponse.Code != http.StatusOK || replayResponse.Header().Get("X-Idempotent-Replay") != "true" || replayResponse.Body.String() != printResponse.Body.String() {
+		t.Fatalf("expected exact retry-safe label response %d: %s", replayResponse.Code, replayResponse.Body.String())
+	}
+
+	pdfPayload, _ := json.Marshal(map[string]any{
+		"templateId": "builtin-atlas-label-code128", "templateVersion": 1,
+		"identifierIds": []string{"label-identifier-one"}, "output": "pdf",
+	})
+	pdfRequest := authenticatedRequest(http.MethodPost, "/api/v1/asset-label-batches", bytes.NewReader(pdfPayload), session)
+	pdfRequest.Header.Set("Idempotency-Key", "http-label-pdf-one")
+	pdfResponse := httptest.NewRecorder()
+	handler.ServeHTTP(pdfResponse, pdfRequest)
+	if pdfResponse.Code != http.StatusOK || pdfResponse.Header().Get("Content-Type") != "application/pdf" || !bytes.HasPrefix(pdfResponse.Body.Bytes(), []byte("%PDF-1.4")) {
+		t.Fatalf("unexpected PDF label output %d: %q", pdfResponse.Code, pdfResponse.Body.Bytes())
+	}
+
+	missingCSRF := authenticatedRequest(http.MethodPost, "/api/v1/asset-label-batches", bytes.NewReader(payload), session)
+	missingCSRF.Header.Del(csrfHeader)
+	missingCSRF.Header.Set("Idempotency-Key", "http-label-missing-csrf")
+	missingCSRFResponse := httptest.NewRecorder()
+	handler.ServeHTTP(missingCSRFResponse, missingCSRF)
+	if missingCSRFResponse.Code != http.StatusForbidden {
+		t.Fatalf("expected label output to require CSRF, got %d", missingCSRFResponse.Code)
+	}
+
+	listRequest := authenticatedRequest(http.MethodGet, "/api/v1/assets/label-asset-one/identifiers", nil, session)
+	listResponse := httptest.NewRecorder()
+	handler.ServeHTTP(listResponse, listRequest)
+	var list struct {
+		Items []atlascodes.Identifier `json:"items"`
+	}
+	if err := json.Unmarshal(listResponse.Body.Bytes(), &list); err != nil || len(list.Items) != 1 {
+		t.Fatalf("label retries must not duplicate identifier associations: %#v err=%v", list, err)
+	}
+}
+
+func TestAtlasCodesLabelEndpointsEnforceScopedReadWriteAndOwnership(t *testing.T) {
+	handler, guardService := newGuardServerWithIdentityAndGuard(t, nil, nil, nil)
+	administrator := bootstrapAdministrator(t, handler)
+	for _, asset := range []map[string]any{
+		{
+			"id": "label-auth-visible-asset", "name": "Visible asset", "kind": "server",
+			"assetTag": "VIS-AUTH", "serialNumber": "PRIVATE-VISIBLE-SERIAL", "status": "active",
+		},
+		{
+			"id": "label-auth-hidden-asset", "name": "Hidden asset", "kind": "server",
+			"assetTag": "HID-AUTH", "serialNumber": "PRIVATE-HIDDEN-SERIAL", "status": "active",
+		},
+	} {
+		createPeopleRecord[domain.Asset](t, handler, administrator, "/api/v1/assets", asset)
+	}
+	for _, association := range []struct {
+		assetID string
+		id      string
+		value   string
+	}{
+		{assetID: "label-auth-visible-asset", id: "label-auth-visible-code", value: "VIS-AUTH-01"},
+		{assetID: "label-auth-hidden-asset", id: "label-auth-hidden-code", value: "HID-AUTH-01"},
+	} {
+		payload, _ := json.Marshal(map[string]any{
+			"id": association.id, "symbology": "code128", "value": association.value,
+			"displayValue": association.value, "source": "user_entered",
+		})
+		request := authenticatedRequest(http.MethodPost, "/api/v1/assets/"+association.assetID+"/identifiers", bytes.NewReader(payload), administrator)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusCreated {
+			t.Fatalf("create label authorization fixture %s: %d: %s", association.id, response.Code, response.Body.String())
+		}
+	}
+
+	ctx := context.Background()
+	administratorAuthentication, err := guardService.AuthenticateSession(ctx, administrator.cookie.Value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	createSession := func(name string, permissions []guard.Permission, scopeKind guard.ScopeKind, resourceID string) testSession {
+		t.Helper()
+		subject := strings.ReplaceAll(strings.ToLower(name), " ", "-")
+		credentials, err := guardService.LoginOIDC(ctx, identity.OIDCPrincipal{
+			Issuer: "https://identity.example.test/label-authorization", Subject: subject,
+			Email: subject + "@example.test", EmailVerified: true, DisplayName: name,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		role, err := guardService.CreateRole(ctx, administratorAuthentication, guard.CreateRoleInput{
+			Name: name, Permissions: permissions,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := guardService.AssignRole(ctx, administratorAuthentication, guard.RoleAssignmentInput{
+			AccountID: credentials.Authentication.Principal.Subject,
+			RoleID:    role.ID, ScopeKind: scopeKind, ResourceID: resourceID,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return testSession{
+			cookie: &http.Cookie{Name: localSessionName, Value: credentials.Token}, csrfToken: credentials.CSRFToken,
+		}
+	}
+	writeOnly := createSession(
+		"Label write only", []guard.Permission{guard.PermissionAssetsWrite}, guard.ScopeOrganization, "",
+	)
+	readOnly := createSession(
+		"Label read only", []guard.Permission{guard.PermissionAssetsRead}, guard.ScopeOrganization, "",
+	)
+	scopedReadWrite := createSession(
+		"Scoped label reader writer", []guard.Permission{guard.PermissionAssetsRead, guard.PermissionAssetsWrite},
+		guard.ScopeResource, "label-auth-visible-asset",
+	)
+
+	requestBatch := func(session testSession, identifierID, idempotencyKey string) *httptest.ResponseRecorder {
+		t.Helper()
+		payload, _ := json.Marshal(map[string]any{
+			"templateId": "builtin-atlas-label-code128", "templateVersion": 1,
+			"identifierIds": []string{identifierID}, "output": "svg",
+		})
+		request := authenticatedRequest(http.MethodPost, "/api/v1/asset-label-batches", bytes.NewReader(payload), session)
+		request.Header.Set("Idempotency-Key", idempotencyKey)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		return response
+	}
+	assertNoLabelFields := func(response *httptest.ResponseRecorder) {
+		t.Helper()
+		for _, privateValue := range []string{
+			"Visible asset", "VIS-AUTH", "PRIVATE-VISIBLE-SERIAL", "VIS-AUTH-01",
+			"Hidden asset", "HID-AUTH", "PRIVATE-HIDDEN-SERIAL", "HID-AUTH-01",
+		} {
+			if strings.Contains(response.Body.String(), privateValue) {
+				t.Fatalf("authorization denial leaked %q in %d response: %s", privateValue, response.Code, response.Body.String())
+			}
+		}
+	}
+
+	t.Run("write-only principal cannot discover label data", func(t *testing.T) {
+		response := requestBatch(writeOnly, "label-auth-visible-code", "label-auth-write-only")
+		if response.Code != http.StatusNotFound || !strings.Contains(response.Body.String(), `"code":"not_found"`) {
+			t.Fatalf("expected redacted not-found without asset read permission, got %d: %s", response.Code, response.Body.String())
+		}
+		assertNoLabelFields(response)
+
+		templatesRequest := authenticatedRequest(http.MethodGet, "/api/v1/asset-label-templates", nil, writeOnly)
+		templatesResponse := httptest.NewRecorder()
+		handler.ServeHTTP(templatesResponse, templatesRequest)
+		if templatesResponse.Code != http.StatusForbidden || !strings.Contains(templatesResponse.Body.String(), `"code":"permission_denied"`) {
+			t.Fatalf("expected template listing to require asset read permission, got %d: %s", templatesResponse.Code, templatesResponse.Body.String())
+		}
+	})
+
+	t.Run("read-only principal cannot generate labels", func(t *testing.T) {
+		response := requestBatch(readOnly, "label-auth-visible-code", "label-auth-read-only")
+		if response.Code != http.StatusForbidden || !strings.Contains(response.Body.String(), `"code":"permission_denied"`) {
+			t.Fatalf("expected label generation to require asset write permission, got %d: %s", response.Code, response.Body.String())
+		}
+		assertNoLabelFields(response)
+	})
+
+	t.Run("resource-scoped read and write exposes only the granted asset", func(t *testing.T) {
+		templatesRequest := authenticatedRequest(http.MethodGet, "/api/v1/asset-label-templates", nil, scopedReadWrite)
+		templatesResponse := httptest.NewRecorder()
+		handler.ServeHTTP(templatesResponse, templatesRequest)
+		if templatesResponse.Code != http.StatusOK || !strings.Contains(templatesResponse.Body.String(), `"patternTemplateId":"builtin-atlas-label-code128"`) {
+			t.Fatalf("expected resource-scoped reader to list label templates, got %d: %s", templatesResponse.Code, templatesResponse.Body.String())
+		}
+
+		visible := requestBatch(scopedReadWrite, "label-auth-visible-code", "label-auth-scoped-visible")
+		if visible.Code != http.StatusOK || visible.Header().Get("Content-Type") != "image/svg+xml" ||
+			!strings.Contains(visible.Body.String(), "VIS-AUTH-01") {
+			t.Fatalf("expected resource-scoped label generation for visible asset, got %d: %s", visible.Code, visible.Body.String())
+		}
+		if strings.Contains(visible.Body.String(), "PRIVATE-VISIBLE-SERIAL") {
+			t.Fatalf("printable label leaked a non-template serial number: %s", visible.Body.String())
+		}
+
+		hidden := requestBatch(scopedReadWrite, "label-auth-hidden-code", "label-auth-scoped-hidden")
+		if hidden.Code != http.StatusNotFound || !strings.Contains(hidden.Body.String(), `"code":"not_found"`) {
+			t.Fatalf("expected redacted not-found for asset outside resource scope, got %d: %s", hidden.Code, hidden.Body.String())
+		}
+		assertNoLabelFields(hidden)
+	})
+
+	t.Run("ownership lock blocks an otherwise authorized label", func(t *testing.T) {
+		if _, created, err := guardService.RegisterResourceOwnership(ctx, administratorAuthentication, guard.ResourceOwnershipInput{
+			ResourceType: "asset", ResourceID: "label-auth-visible-asset",
+			SourceSystemID: "external-inventory", SourceRecordID: "external-visible-asset",
+		}); err != nil || !created {
+			t.Fatalf("register ownership lock: created=%t err=%v", created, err)
+		}
+		response := requestBatch(scopedReadWrite, "label-auth-visible-code", "label-auth-ownership-locked")
+		if response.Code != http.StatusLocked || !strings.Contains(response.Body.String(), `"code":"ownership_locked"`) {
+			t.Fatalf("expected ownership lock denial, got %d: %s", response.Code, response.Body.String())
+		}
+		assertNoLabelFields(response)
+	})
+}
+
 func TestAtlasCodesResolveHonorsScopedAssetReadWithoutDisclosingDeniedMatches(t *testing.T) {
 	handler, guardService := newGuardServerWithIdentityAndGuard(t, nil, nil, nil)
 	administrator := bootstrapAdministrator(t, handler)
@@ -1608,13 +1858,16 @@ func TestLoginReturnsSafeServiceUnavailableWhenSharedProtectionFails(t *testing.
 
 func TestCORSAllowsOnlyConfiguredCredentialedOrigin(t *testing.T) {
 	handler := newGuardServer(t)
-	allowed := httptest.NewRequest(http.MethodOptions, "/api/v1/auth/login", nil)
+	allowed := httptest.NewRequest(http.MethodOptions, "/api/v1/asset-label-batches", nil)
 	allowed.Header.Set("Origin", testOrigin)
+	allowed.Header.Set("Access-Control-Request-Method", http.MethodPost)
+	allowed.Header.Set("Access-Control-Request-Headers", "Content-Type, X-CSRF-Token, Idempotency-Key")
 	allowedRes := httptest.NewRecorder()
 	handler.ServeHTTP(allowedRes, allowed)
 	if allowedRes.Code != http.StatusNoContent ||
 		allowedRes.Header().Get("Access-Control-Allow-Origin") != testOrigin ||
-		allowedRes.Header().Get("Access-Control-Allow-Credentials") != "true" {
+		allowedRes.Header().Get("Access-Control-Allow-Credentials") != "true" ||
+		!strings.Contains(allowedRes.Header().Get("Access-Control-Allow-Headers"), "Idempotency-Key") {
 		t.Fatalf("unexpected allowed preflight %d %#v", allowedRes.Code, allowedRes.Header())
 	}
 	denied := httptest.NewRequest(http.MethodOptions, "/api/v1/auth/login", nil)
@@ -1838,9 +2091,14 @@ func newGuardServerWithDirectory(t *testing.T, limiter guard.AttemptLimiter, oid
 	if err != nil {
 		t.Fatal(err)
 	}
+	atlasLabelsService, err := atlascodes.NewLabelService(atlasCodesService, atlasService, patternsService, atlascodes.DefaultLabelRenderers(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	handler := NewServer(Dependencies{
 		Atlas:            atlasService,
 		AtlasCodes:       atlasCodesService,
+		AtlasLabels:      atlasLabelsService,
 		People:           peopleService,
 		DirectoryImports: directoryService,
 		Threads:          threadsService,

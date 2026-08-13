@@ -1,6 +1,7 @@
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ApiRequestError, requestJSON } from './api'
 import AtlasIdentifiers from './AtlasIdentifiers'
+import AtlasLabelPrint from './AtlasLabelPrint'
 import AtlasScanner from './AtlasScanner'
 import { StatusBadge, buttonClass, dangerButtonClass, emptyStateClass, inputClass, labelClass, panelClass, plainButtonClass, secondaryButtonClass, subpanelClass } from './ui'
 
@@ -654,6 +655,8 @@ export default function AtlasInventory({ assets, csrfToken, permissions, onAsset
 
       <AtlasScanner canWrite={canWrite} csrfToken={csrfToken} onAssociated={() => setIdentifierRefreshVersion((current) => current + 1)} onResolveAsset={resolveScannedAsset} selectedAsset={selected ? { id: selected.id, name: selected.name } : null} />
 
+      {canWrite && <AtlasLabelPrint assets={filteredAssets} csrfToken={csrfToken} key={`label-print-${identifierRefreshVersion}-${filteredAssets.map((asset) => asset.id).join(',')}`} />}
+
       <section aria-labelledby="models-heading" className={`${subpanelClass} mt-6 overflow-hidden`} data-feature="inventory.models" data-requirement="REQ-ATLAS-MODELS-001">
         <div aria-hidden="true" className="h-px bg-gradient-to-r from-steward-green/70 via-steward-teal/70 to-steward-blue/70" />
         <div className="p-5 sm:p-6">
@@ -850,7 +853,7 @@ export default function AtlasInventory({ assets, csrfToken, permissions, onAsset
             {selected.modelContext && <ModelContextDetails context={selected.modelContext} instanceKind={selected.kind} />}
             <h4 className="mt-6 font-semibold">Lifecycle history</h4>
             {busy === `history-${selected.id}` ? <p className="mt-2 text-sm text-steward-mist-muted" role="status">Loading lifecycle…</p> : lifecycle.length === 0 ? <p className="mt-2 text-sm text-steward-mist-muted">No lifecycle events loaded.</p> : <ol className="mt-3 space-y-3">{lifecycle.map((event) => <li className="border-l-2 border-steward-blue pl-3 text-sm" key={event.id}><p><strong>{event.fromStatus ? `${event.fromStatus} → ` : ''}{event.toStatus}</strong> · revision {event.revision}</p><p className="text-steward-mist-muted">{event.note || 'Status recorded'} · {new Date(event.occurredAt).toLocaleDateString()}</p></li>)}</ol>}
-            <AtlasIdentifiers assetId={selected.id} assetName={selected.name} canWrite={canWrite} csrfToken={csrfToken} key={`${selected.id}-${identifierRefreshVersion}`} />
+            <AtlasIdentifiers assetId={selected.id} assetName={selected.name} canWrite={canWrite} csrfToken={csrfToken} key={`${selected.id}-${identifierRefreshVersion}`} onChanged={() => setIdentifierRefreshVersion((current) => current + 1)} />
           </>}
         </aside>
       </div>

@@ -9,7 +9,7 @@ The display format is **branded name — plain-language descriptor**. Canonical 
 | Atlas | `inventory.assets` | Asset inventory | v1 |
 | Atlas Models | `inventory.models` | Product model catalog and reusable defaults | v1 |
 | Atlas Catalog | `inventory.catalog` | Model configurations, effective pricing, and upgrade paths | v1 |
-| Atlas Codes | `inventory.identifiers` | Barcode and QR identifier associations | v1 |
+| Atlas Codes | `inventory.identifiers` | Barcode/QR associations, scanning, and label printing | v1 |
 | Horizon | `lifecycle.planning` | Lifecycle planning and forecasting | v1 |
 | Ledger | `procurement.finance` | Procurement, budgets, and costs | v1 |
 | Threads | `goals.tags` | Tags, goals, and relationships | v1 |

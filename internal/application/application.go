@@ -216,10 +216,15 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 	if err != nil {
 		return fail(fmt.Errorf("initialize Patterns: %w", err))
 	}
+	atlasLabelsService, err := atlascodes.NewLabelService(atlasCodesService, atlasService, patternsService, atlascodes.DefaultLabelRenderers(), nil)
+	if err != nil {
+		return fail(fmt.Errorf("initialize Atlas Codes labels: %w", err))
+	}
 
 	application.handler = httpapi.NewServer(httpapi.Dependencies{
 		Atlas:               atlasService,
 		AtlasCodes:          atlasCodesService,
+		AtlasLabels:         atlasLabelsService,
 		People:              peopleService,
 		DirectoryImports:    directoryService,
 		Threads:             threadsService,

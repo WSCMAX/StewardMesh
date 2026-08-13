@@ -88,6 +88,16 @@ func (s *identifierTestStore) GetIdentifier(_ context.Context, organizationID, a
 	return cloneIdentifier(item), nil
 }
 
+func (s *identifierTestStore) GetIdentifierByID(_ context.Context, organizationID, identifierID string) (Identifier, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	item, exists := s.items[identifierTestKey(organizationID, identifierID)]
+	if !exists {
+		return Identifier{}, ErrNotFound
+	}
+	return cloneIdentifier(item), nil
+}
+
 func (s *identifierTestStore) ResolveIdentifier(_ context.Context, organizationID string, symbology Symbology, normalizedValue string) (Identifier, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

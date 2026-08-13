@@ -1,5 +1,5 @@
 import { expect, test, vi } from 'vitest'
-import { authenticationRequiredEventName, correlationEventName, getLastCorrelationId, requestJSON } from './api'
+import { authenticationRequiredEventName, correlationEventName, getLastCorrelationId, requestArtifact, requestJSON } from './api'
 
 // Requirements: REQ-WORKSPACE-001, A11Y-001, DOC-002, SEC-HTTP-001. Features: experience.workspace, experience.help.
 
@@ -31,4 +31,16 @@ test('announces an expired authenticated request without treating initial sessio
   await expect(requestJSON('/api/v1/auth/session')).rejects.toMatchObject({ status: 401 })
   expect(listener).toHaveBeenCalledOnce()
   window.removeEventListener(authenticationRequiredEventName, listener)
+})
+
+test('retrieves print artifacts with the same-origin session and requested media types intact', async () => {
+  const fetchMock = vi.fn(async () => new Response('%PDF-1.4', { headers: { 'Content-Type': 'application/pdf', 'X-Correlation-ID': 'label-request-1' } }))
+  vi.stubGlobal('fetch', fetchMock)
+  const response = await requestArtifact('/api/v1/asset-label-batches', { method: 'POST', headers: { 'X-CSRF-Token': 'csrf' } })
+  expect(await response.text()).toBe('%PDF-1.4')
+  expect(fetchMock).toHaveBeenCalledWith('/api/v1/asset-label-batches', expect.objectContaining({
+    credentials: 'same-origin',
+    headers: expect.objectContaining({ Accept: 'image/svg+xml, application/pdf, application/vnd.zebra-zpl', 'X-CSRF-Token': 'csrf' }),
+  }))
+  await expect(requestArtifact('https://printer.example/labels')).rejects.toThrow('same-origin')
 })

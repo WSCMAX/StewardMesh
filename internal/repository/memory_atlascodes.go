@@ -61,6 +61,16 @@ func (s *MemoryAtlasCodesStore) GetIdentifier(_ context.Context, organizationID,
 	return cloneAtlasCodesIdentifier(item), nil
 }
 
+func (s *MemoryAtlasCodesStore) GetIdentifierByID(_ context.Context, organizationID, identifierID string) (atlascodes.Identifier, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	item, exists := s.identifiers[atlasCodesMemoryKey(organizationID, identifierID)]
+	if !exists {
+		return atlascodes.Identifier{}, atlascodes.ErrNotFound
+	}
+	return cloneAtlasCodesIdentifier(item), nil
+}
+
 func (s *MemoryAtlasCodesStore) ResolveIdentifier(_ context.Context, organizationID string, symbology atlascodes.Symbology, normalizedValue string) (atlascodes.Identifier, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

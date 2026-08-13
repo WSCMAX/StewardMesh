@@ -22,7 +22,7 @@ func TestBuiltInTemplatesCoverCoreRecordsAndEveryFieldType(t *testing.T) {
 	}
 	wantRecords := []string{
 		"foundation.organization",
-		"atlas.asset", "atlas.model", "atlas.identifier", "atlas.lifecycle-event",
+		"atlas.asset", "atlas.model", "atlas.identifier", "atlas.label-template", "atlas.lifecycle-event",
 		"atlas.catalog-configuration", "atlas.catalog-price", "atlas.catalog-upgrade-path",
 		"people.site", "people.building", "people.room", "people.department", "people.identity", "people.assignment",
 		"threads.tag", "threads.goal", "threads.tag-rule", "threads.goal-link", "vault.blob", "ledger.vendor", "ledger.purchase-order", "ledger.contract",

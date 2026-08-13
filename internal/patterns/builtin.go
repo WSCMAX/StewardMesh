@@ -1,6 +1,6 @@
 package patterns
 
-// Requirement: REQ-PATTERNS-001. Feature: templates.schemas. GitHub: #8.
+// Requirements: REQ-PATTERNS-001, REQ-ATLAS-CODES-001. Features: templates.schemas, inventory.identifiers. GitHub: #8, #62.
 
 // BuiltInTemplates returns immutable v1 templates for every record family
 // currently exposed by StewardMesh. These definitions are code-versioned and
@@ -29,6 +29,12 @@ func BuiltInTemplates() []Template {
 	number := func(key, label string, required bool) Field {
 		return Field{Key: key, Label: label, AccessibleLabel: label, CSVHeader: key, Type: FieldNumber, Required: required}
 	}
+	labelNumber := func(key, label string, value float64) Field {
+		return Field{Key: key, Label: label, AccessibleLabel: label, CSVHeader: key, Type: FieldNumber, Required: true, Minimum: &value, Maximum: &value}
+	}
+	labelEnum := func(key, label, value string) Field {
+		return Field{Key: key, Label: label, AccessibleLabel: label, CSVHeader: key, Type: FieldEnum, Required: true, Options: []string{value}}
+	}
 	attachment := func(key, label string) Field {
 		return Field{Key: key, Label: label, AccessibleLabel: label, CSVHeader: key, Type: FieldAttachment, ReferenceType: "vault.blob", AllowHolding: true}
 	}
@@ -37,6 +43,8 @@ func BuiltInTemplates() []Template {
 		t("builtin-atlas-asset", "atlas.asset", "Atlas asset", "Register an organization-owned asset.", text("name", "Asset name", true), enum("kind", "Asset kind", true, "server", "desktop", "laptop", "network", "storage", "mobile", "printer", "virtual", "other"), text("assetTag", "Asset tag", false), text("serialNumber", "Serial number", false), ref("modelId", "Model", "atlas.model", false, true), ref("siteId", "Site", "people.site", false, true), ref("departmentId", "Department", "people.department", false, true), date("purchaseDate", "Purchase date", false)),
 		t("builtin-atlas-model", "atlas.model", "Atlas model", "Define reusable product defaults.", text("manufacturer", "Manufacturer", true), text("name", "Model name", true), text("modelNumber", "Model number", false), enum("kind", "Asset kind", true, "server", "desktop", "laptop", "network", "storage", "mobile", "printer", "virtual", "other"), text("supportUrl", "Support URL", false), number("warrantyMonths", "Warranty months", false)),
 		t("builtin-atlas-identifier", "atlas.identifier", "Atlas identifier", "Associate a Code 128 or QR identifier.", ref("assetId", "Asset", "atlas.asset", true, false), enum("symbology", "Code format", true, "code128", "qr"), text("value", "Encoded value", true), text("displayValue", "Human-readable value", false)),
+		t("builtin-atlas-label-code128", "atlas.label-template", "Atlas Code 128 label", "Immutable 70 by 30 millimeter Code 128 label definition.", labelEnum("symbology", "Code format", "code128"), labelNumber("widthMm", "Width in millimeters", 70), labelNumber("heightMm", "Height in millimeters", 30), labelNumber("marginMm", "Margin in millimeters", 3), labelNumber("quietZoneMm", "Quiet zone in millimeters", 3), labelEnum("payloadSource", "Encoded payload source", "identifier_value"), labelEnum("humanReadableField", "Human-readable field", "identifier.displayValue"), labelEnum("safeAssetFields", "Optional safe asset fields", "asset.name,asset.assetTag"), labelEnum("organizationBranding", "Organization branding", "StewardMesh")),
+		t("builtin-atlas-label-qr", "atlas.label-template", "Atlas QR label", "Immutable 50 by 30 millimeter QR label definition.", labelEnum("symbology", "Code format", "qr"), labelNumber("widthMm", "Width in millimeters", 50), labelNumber("heightMm", "Height in millimeters", 30), labelNumber("marginMm", "Margin in millimeters", 3), labelNumber("quietZoneMm", "Quiet zone in millimeters", 2), labelEnum("payloadSource", "Encoded payload source", "organization_route"), labelEnum("humanReadableField", "Human-readable field", "identifier.displayValue"), labelEnum("safeAssetFields", "Optional safe asset fields", "asset.name,asset.assetTag"), labelEnum("organizationBranding", "Organization branding", "StewardMesh")),
 		t("builtin-atlas-lifecycle-event", "atlas.lifecycle-event", "Atlas lifecycle event", "Record an immutable asset lifecycle event.", ref("assetId", "Asset", "atlas.asset", true, false), enum("kind", "Event kind", true, "registered", "assigned", "moved", "maintained", "retired", "disposed"), date("effectiveOn", "Effective date", true), text("note", "Event note", false)),
 		t("builtin-atlas-catalog-configuration", "atlas.catalog-configuration", "Atlas catalog configuration", "Define a purchasable model configuration.", ref("modelId", "Model", "atlas.model", true, true), text("name", "Configuration name", true), text("sku", "SKU", false), text("specifications", "Specifications", false)),
 		t("builtin-atlas-catalog-price", "atlas.catalog-price", "Atlas catalog price", "Record an effective-dated catalog price.", ref("configurationId", "Configuration", "atlas.catalog-configuration", true, true), enum("kind", "Price kind", true, "list", "street", "contract"), text("currency", "Currency", true), money("amountMinor", "Amount in minor units", true), date("effectiveFrom", "Effective from", true), date("effectiveTo", "Effective to", false)),

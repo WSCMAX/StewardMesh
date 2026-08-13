@@ -51,6 +51,7 @@ var correlationIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127
 type Dependencies struct {
 	Atlas               *atlas.Service
 	AtlasCodes          *atlascodes.Service
+	AtlasLabels         *atlascodes.LabelService
 	People              *people.Service
 	DirectoryImports    *directoryexpansion.Service
 	Threads             *threads.Service
@@ -69,6 +70,7 @@ type Dependencies struct {
 type Server struct {
 	atlas               *atlas.Service
 	atlasCodes          *atlascodes.Service
+	atlasLabels         *atlascodes.LabelService
 	people              *people.Service
 	directoryImports    *directoryexpansion.Service
 	threads             *threads.Service
@@ -152,6 +154,7 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 	server := &Server{
 		atlas:               deps.Atlas,
 		atlasCodes:          deps.AtlasCodes,
+		atlasLabels:         deps.AtlasLabels,
 		people:              deps.People,
 		directoryImports:    deps.DirectoryImports,
 		threads:             deps.Threads,
@@ -220,6 +223,8 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 	// department, and resource-scoped readers can use the endpoint without
 	// revealing matches outside their grants.
 	mux.Handle("POST /api/v1/asset-identifiers/resolve", server.protected("", false, server.resolveAssetIdentifier))
+	mux.Handle("GET /api/v1/asset-label-templates", server.protected("", false, server.listAssetLabelTemplates))
+	mux.Handle("POST /api/v1/asset-label-batches", server.protected("", true, server.createAssetLabelBatch))
 	mux.Handle("GET /api/v1/assets/{assetID}/identifiers", server.protected(guard.PermissionAssetsRead, false, server.listAssetIdentifiers))
 	mux.Handle("POST /api/v1/assets/{assetID}/identifiers", server.protected(guard.PermissionAssetsWrite, true, server.createAssetIdentifier))
 	mux.Handle("POST /api/v1/assets/{assetID}/identifiers/{identifierID}/replace", server.protected(guard.PermissionAssetsWrite, true, server.replaceAssetIdentifier))
@@ -2731,8 +2736,20 @@ func (s *Server) resolveAssetIdentifier(w http.ResponseWriter, r *http.Request, 
 }
 
 func (s *Server) canReadAsset(ctx context.Context, authentication guard.Authentication, asset domain.Asset) bool {
+	if s.hasAssetGrant(authentication, guard.PermissionAssetsRead, asset) {
+		return true
+	}
+	// Preserve Guard's centralized denial event without exposing whether a
+	// value resolved successfully.
+	_ = s.guard.CheckPermission(ctx, authentication, guard.PermissionAssetsRead, guard.Scope{
+		Kind: guard.ScopeResource, OrganizationID: s.organization.ID, ResourceID: asset.ID,
+	})
+	return false
+}
+
+func (s *Server) hasAssetGrant(authentication guard.Authentication, permission guard.Permission, asset domain.Asset) bool {
 	for _, grant := range authentication.Grants {
-		if grant.Permission != guard.PermissionAssetsRead || grant.Scope.OrganizationID != s.organization.ID {
+		if grant.Permission != permission || grant.Scope.OrganizationID != s.organization.ID {
 			continue
 		}
 		switch grant.Scope.Kind {
@@ -2752,11 +2769,25 @@ func (s *Server) canReadAsset(ctx context.Context, authentication guard.Authenti
 			}
 		}
 	}
-	// Preserve Guard's centralized denial event without exposing whether a
-	// value resolved successfully.
-	_ = s.guard.CheckPermission(ctx, authentication, guard.PermissionAssetsRead, guard.Scope{
+	return false
+}
+
+func (s *Server) canWriteAsset(ctx context.Context, authentication guard.Authentication, asset domain.Asset) bool {
+	if s.hasAssetGrant(authentication, guard.PermissionAssetsWrite, asset) {
+		return true
+	}
+	_ = s.guard.CheckPermission(ctx, authentication, guard.PermissionAssetsWrite, guard.Scope{
 		Kind: guard.ScopeResource, OrganizationID: s.organization.ID, ResourceID: asset.ID,
 	})
+	return false
+}
+
+func (s *Server) hasAnyAssetGrant(authentication guard.Authentication, permission guard.Permission) bool {
+	for _, grant := range authentication.Grants {
+		if grant.Permission == permission && grant.Scope.OrganizationID == s.organization.ID {
+			return true
+		}
+	}
 	return false
 }
 
@@ -2771,6 +2802,68 @@ func (s *Server) listAssetIdentifiers(w http.ResponseWriter, r *http.Request, _ 
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) listAssetLabelTemplates(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
+	if s.atlasLabels == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "atlas_labels_unavailable", "Atlas Codes label printing is unavailable")
+		return
+	}
+	if !s.hasAnyAssetGrant(authentication, guard.PermissionAssetsRead) {
+		writeError(w, r, http.StatusForbidden, "permission_denied", "asset read permission is required for label templates")
+		return
+	}
+	items, err := s.atlasLabels.ListTemplates(r.Context())
+	if err != nil {
+		writeAtlasCodesError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"items":            items,
+		"maximumBatchSize": atlascodes.MaximumLabelBatch,
+		"outputs":          []atlascodes.LabelOutput{atlascodes.LabelOutputSVG, atlascodes.LabelOutputPDF, atlascodes.LabelOutputZPL},
+	})
+}
+
+func (s *Server) createAssetLabelBatch(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
+	if s.atlasLabels == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "atlas_labels_unavailable", "Atlas Codes label printing is unavailable")
+		return
+	}
+	var input atlascodes.LabelBatchInput
+	if err := decodeJSON(w, r, 32<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid label batch payload")
+		return
+	}
+	input.IdempotencyKey = r.Header.Get("Idempotency-Key")
+	batch, created, err := s.atlasLabels.CreateBatchAuthorized(r.Context(), input, func(ctx context.Context, asset domain.Asset) error {
+		if !s.canReadAsset(ctx, authentication, asset) {
+			return atlascodes.ErrNotFound
+		}
+		if !s.canWriteAsset(ctx, authentication, asset) {
+			return guard.ErrPermissionDenied
+		}
+		return s.guard.CheckResourceWrite(ctx, authentication, "asset", asset.ID)
+	})
+	if err != nil {
+		writeAtlasCodesError(w, r, err)
+		return
+	}
+	disposition := "inline"
+	if batch.Output == atlascodes.LabelOutputZPL {
+		disposition = "attachment"
+	}
+	w.Header().Set("Content-Type", batch.MediaType)
+	w.Header().Set("Content-Disposition", mime.FormatMediaType(disposition, map[string]string{"filename": batch.FileName}))
+	w.Header().Set("X-Label-Batch-ID", batch.ID)
+	w.Header().Set("X-Label-Template-Version", strconv.FormatInt(batch.Template.Version, 10))
+	w.Header().Set("X-Label-Width-MM", strconv.FormatFloat(batch.Template.WidthMM, 'f', 2, 64))
+	w.Header().Set("X-Label-Height-MM", strconv.FormatFloat(batch.Template.HeightMM, 'f', 2, 64))
+	w.Header().Set("X-Label-Item-Count", strconv.Itoa(batch.ItemCount))
+	w.Header().Set("X-Content-SHA256", batch.SHA256)
+	w.Header().Set("X-Idempotent-Replay", strconv.FormatBool(!created))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(batch.Contents)
 }
 
 func (s *Server) createAssetIdentifier(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
@@ -2850,8 +2943,18 @@ func (s *Server) deactivateAssetIdentifier(w http.ResponseWriter, r *http.Reques
 
 func writeAtlasCodesError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
-	case errors.Is(err, atlascodes.ErrInvalidInput):
+	case errors.Is(err, atlascodes.ErrInvalidInput), errors.Is(err, atlascodes.ErrUnsupportedLabelOutput):
 		writeError(w, r, http.StatusBadRequest, "validation_failed", "identifier details are invalid")
+	case errors.Is(err, atlascodes.ErrBatchCancelled):
+		writeError(w, r, http.StatusConflict, "label_batch_cancelled", "label generation was cancelled and can be retried safely")
+	case errors.Is(err, atlascodes.ErrIdempotencyConflict):
+		writeError(w, r, http.StatusConflict, "idempotency_conflict", "the idempotency key was already used for different label details")
+	case errors.Is(err, atlascodes.ErrIdempotencyExpired):
+		writeError(w, r, http.StatusConflict, "idempotency_replay_expired", "the exact label artifact is no longer retained; generate current data with a new idempotency key")
+	case errors.Is(err, guard.ErrPermissionDenied):
+		writeError(w, r, http.StatusForbidden, "permission_denied", "asset read and write permission is required for every selected label")
+	case errors.Is(err, guard.ErrResourceWriteLocked):
+		writeError(w, r, http.StatusLocked, "ownership_locked", "claim local ownership before generating a label for this imported asset")
 	case errors.Is(err, atlascodes.ErrNotFound), errors.Is(err, atlascodes.ErrReferenceMissing):
 		writeError(w, r, http.StatusNotFound, "not_found", "the requested asset identifier was not found")
 	case errors.Is(err, atlascodes.ErrConflict):
@@ -3237,7 +3340,7 @@ func (s *Server) cors(next http.Handler) http.Handler {
 		if originAllowed {
 			w.Header().Set("Access-Control-Allow-Origin", s.allowedOrigin)
 			w.Header().Set("Access-Control-Allow-Credentials", "true")
-			w.Header().Set("Access-Control-Expose-Headers", "X-Correlation-ID")
+			w.Header().Set("Access-Control-Expose-Headers", "X-Correlation-ID, Content-Disposition, X-Label-Batch-ID, X-Label-Template-Version, X-Label-Width-MM, X-Label-Height-MM, X-Label-Item-Count, X-Content-SHA256, X-Idempotent-Replay")
 		}
 		if r.Method == http.MethodOptions {
 			if !originAllowed {

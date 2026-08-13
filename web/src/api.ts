@@ -26,15 +26,13 @@ export class ApiRequestError extends Error {
   }
 }
 
-// requestJSON is same-origin by construction. Session cookies remain HttpOnly,
-// and callers must explicitly add the in-memory CSRF value for mutations.
-export async function requestJSON(path: string, init?: RequestInit): Promise<unknown> {
+async function requestAPI(path: string, init: RequestInit | undefined, accept: string) {
   if (!path.startsWith('/') || path.startsWith('//')) throw new Error('API path must be same-origin')
   const response = await fetch(path, {
     ...init,
     credentials: 'same-origin',
     headers: {
-      Accept: 'application/json',
+      Accept: accept,
       ...init?.headers,
     },
   })
@@ -58,6 +56,19 @@ export async function requestJSON(path: string, init?: RequestInit): Promise<unk
     }
     throw new ApiRequestError(response.status, message)
   }
+  return response
+}
+
+// requestJSON is same-origin by construction. Session cookies remain HttpOnly,
+// and callers must explicitly add the in-memory CSRF value for mutations.
+export async function requestJSON(path: string, init?: RequestInit): Promise<unknown> {
+  const response = await requestAPI(path, init, 'application/json')
   if (response.status === httpNoContent) return undefined
   return response.json() as Promise<unknown>
+}
+
+// requestArtifact preserves the same correlation, session-expiry, CSRF, and
+// same-origin behavior while leaving vector/PDF/printer-language bytes intact.
+export async function requestArtifact(path: string, init?: RequestInit): Promise<Response> {
+  return requestAPI(path, init, 'image/svg+xml, application/pdf, application/vnd.zebra-zpl')
 }

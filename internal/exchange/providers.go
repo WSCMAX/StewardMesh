@@ -1,10 +1,11 @@
 package exchange
 
-// Requirements: REQ-EXCHANGE-001, REQ-PATTERNS-001. Features: migration.packages, templates.schemas. GitHub: #9, #8.
+// Requirements: REQ-EXCHANGE-001, REQ-PATTERNS-001, REQ-STACK-001. Features: migration.packages, templates.schemas, software.licenses. GitHub: #9, #8, #7.
 
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,13 +23,28 @@ var stackRecordTypes = []string{
 	"stack.product", "stack.version", "stack.license", "stack.installation", "stack.assignment",
 }
 
-type StackProvider struct{ service *stack.Service }
+// The legacy Stack JSON envelope has no schema identity. Pin it permanently to
+// the v1 built-ins so the exact same request always regenerates byte-identical
+// package material, even after newer built-in schema versions are deployed.
+// A future schema-aware Stack import surface can carry an explicit version.
+var stackDirectImportSchemas = map[string]SchemaReference{
+	"stack.product":      {RecordType: "stack.product", TemplateID: "builtin-stack-product", TemplateVersion: 1},
+	"stack.version":      {RecordType: "stack.version", TemplateID: "builtin-stack-version", TemplateVersion: 1},
+	"stack.installation": {RecordType: "stack.installation", TemplateID: "builtin-stack-installation", TemplateVersion: 1},
+	"stack.license":      {RecordType: "stack.license", TemplateID: "builtin-stack-license", TemplateVersion: 1},
+	"stack.assignment":   {RecordType: "stack.assignment", TemplateID: "builtin-stack-assignment", TemplateVersion: 1},
+}
 
-func NewStackProvider(service *stack.Service) (*StackProvider, error) {
-	if service == nil {
-		return nil, errors.New("Stack service is required for Exchange")
+type StackProvider struct {
+	service  *stack.Service
+	importer stack.ExchangeImporter
+}
+
+func NewStackProvider(service *stack.Service, importer stack.ExchangeImporter) (*StackProvider, error) {
+	if service == nil || importer == nil || !service.OwnsExchangeImporter(importer) {
+		return nil, errors.New("Stack service and its construction-time Exchange importer are required")
 	}
-	return &StackProvider{service: service}, nil
+	return &StackProvider{service: service, importer: importer}, nil
 }
 
 func (*StackProvider) Types() []string { return append([]string(nil), stackRecordTypes...) }
@@ -60,6 +76,151 @@ func (p *StackProvider) ListRecords(ctx context.Context) ([]Record, error) {
 		})
 	}
 	return result, nil
+}
+
+// ImportStackRecords preserves the historical JSON Stack import contract while
+// routing every mutation through Exchange's durable intent, ownership, audit,
+// and recovery workflow. The package identity is derived from the canonical
+// request, so an exact HTTP/gRPC retry resumes or replays the same receipt.
+func (s *Service) ImportStackRecords(ctx context.Context, actorID, sourceSystemID string, records []stack.ExchangeRecord) (StackImportResult, error) {
+	actorID = strings.TrimSpace(actorID)
+	sourceSystemID = strings.ToLower(strings.TrimSpace(sourceSystemID))
+	if actorID == "" || len(actorID) > 128 || !stableIDPattern.MatchString(sourceSystemID) {
+		return StackImportResult{}, ErrInvalidInput
+	}
+	var stackProvider *StackProvider
+	for _, recordType := range stackRecordTypes {
+		provider, ok := s.providers[recordType].(*StackProvider)
+		if !ok || provider == nil || stackProvider != nil && provider != stackProvider {
+			return StackImportResult{}, errors.New("Exchange Stack provider is unavailable")
+		}
+		stackProvider = provider
+	}
+	normalized, err := stack.NormalizeImportRecords(sourceSystemID, records)
+	if err != nil {
+		return StackImportResult{}, translateStackImportError(err)
+	}
+	portable := make([]Record, 0, len(normalized))
+	for _, item := range normalized {
+		payload, err := projectStackPayload(item.Type, item.Payload)
+		if err != nil {
+			return StackImportResult{}, translateStackImportError(err)
+		}
+		dependencies := make([]Reference, 0, len(item.Dependencies))
+		for _, value := range item.Dependencies {
+			dependency, err := parseStackReference(value)
+			if err != nil {
+				return StackImportResult{}, err
+			}
+			dependencies = append(dependencies, dependency)
+		}
+		sort.Slice(dependencies, func(i, j int) bool { return dependencies[i].Key() < dependencies[j].Key() })
+		pinned, ok := stackDirectImportSchemas[item.Type]
+		if !ok {
+			return StackImportResult{}, ErrInvalidInput
+		}
+		template, err := s.schemas.GetTemplate(ctx, pinned.TemplateID, pinned.TemplateVersion)
+		if err != nil || template.ID != pinned.TemplateID || template.Version != pinned.TemplateVersion || template.RecordType != item.Type || template.Status != "active" {
+			return StackImportResult{}, errors.Join(ErrInvalidInput, err)
+		}
+		portable = append(portable, Record{
+			Type: item.Type, ID: item.ID, Revision: item.Revision,
+			TemplateID: pinned.TemplateID, TemplateVersion: pinned.TemplateVersion,
+			Dependencies: dependencies,
+			Provenance:   Provenance{SourceSystemID: item.SourceSystemID, SourceRecordID: item.SourceRecordID},
+			Ownership:    OwnershipMetadata{State: "local"}, Payload: payload,
+		})
+	}
+	sort.Slice(portable, func(i, j int) bool {
+		return (Reference{Type: portable[i].Type, ID: portable[i].ID}).Key() < (Reference{Type: portable[j].Type, ID: portable[j].ID}).Key()
+	})
+	identity, err := json.Marshal(struct {
+		SourceSystemID string   `json:"sourceSystemId"`
+		Records        []Record `json:"records"`
+	}{SourceSystemID: sourceSystemID, Records: portable})
+	if err != nil {
+		return StackImportResult{}, ErrInvalidInput
+	}
+	digest := sha256.Sum256(identity)
+	packageID := fmt.Sprintf("stack-import-%x", digest[:])
+	artifact, _, err := encodeArchive(Manifest{
+		SchemaVersion: SchemaVersion, PackageID: packageID, SourceSystemID: sourceSystemID,
+		// This value is package metadata only. Keeping it fixed makes the exact
+		// canonical JSON request produce byte-identical retry material.
+		ExportedAt: time.Date(2000, time.January, 1, 0, 0, 0, 0, time.UTC),
+		FileMode:   FileModeMetadata, Schemas: schemaReferences(portable), Records: portable,
+	}, nil)
+	if err != nil {
+		// No durable receipt exists yet and no provider mutation is possible, so
+		// this is an ordinary pre-reservation failure rather than a resumable
+		// partial import.
+		return StackImportResult{}, err
+	}
+	result, importErr := s.Import(ctx, actorID, artifact.Bytes)
+	if importErr == nil {
+		return stackImportResult(result.Package, result.Replay), nil
+	}
+	// Import returns the most truthful in-memory receipt it can construct. Prefer
+	// that projection over a readable but older durable checkpoint: a provider
+	// write or ownership lock may have committed immediately before the receipt
+	// store failed.
+	if result.Package.PackageID == packageID {
+		projection := stackImportResult(result.Package, result.Replay)
+		if projection.Status == StatusProcessing && projection.ErrorCode == "" {
+			projection.ErrorCode = "receipt_read_failed"
+		}
+		return projection, importErr
+	}
+	stored, readErr := s.store.GetPackage(ctx, s.organizationID, DirectionImport, packageID)
+	if readErr == nil {
+		return stackImportResult(stored, false), importErr
+	}
+	return StackImportResult{
+		PackageID: packageID, Status: StatusProcessing, ErrorCode: "receipt_read_failed",
+		Records: []RecordOutcome{}, PendingOwnership: []StackImportOwnership{},
+	}, errors.Join(importErr, readErr)
+}
+
+func stackImportResult(value Package, replay bool) StackImportResult {
+	result := StackImportResult{
+		PackageID: value.PackageID, Status: value.Status, Created: value.CreatedCount,
+		Unchanged: value.UnchangedCount, Holding: value.HoldingCount, Replay: replay,
+		ErrorCode: value.ErrorCode, Records: append([]RecordOutcome(nil), value.Records...), PendingOwnership: []StackImportOwnership{},
+	}
+	outcomes := make(map[string]struct{}, len(value.Records))
+	for _, outcome := range value.Records {
+		outcomes[Reference{Type: outcome.Type, ID: outcome.ID}.Key()] = struct{}{}
+	}
+	for _, progress := range value.Progress {
+		key := Reference{Type: progress.Type, ID: progress.ID}.Key()
+		if !progress.OwnershipReady {
+			continue
+		}
+		if _, durable := outcomes[key]; durable {
+			continue
+		}
+		result.PendingOwnership = append(result.PendingOwnership, StackImportOwnership{
+			Type: progress.Type, ID: progress.ID, WriteLocked: progress.WriteLocked,
+		})
+	}
+	sort.Slice(result.PendingOwnership, func(i, j int) bool {
+		return Reference{Type: result.PendingOwnership[i].Type, ID: result.PendingOwnership[i].ID}.Key() <
+			Reference{Type: result.PendingOwnership[j].Type, ID: result.PendingOwnership[j].ID}.Key()
+	})
+	return result
+}
+
+func translateStackImportError(err error) error {
+	switch {
+	case errors.Is(err, stack.ErrInvalidInput), errors.Is(err, stack.ErrDurableImportRequired):
+		return ErrInvalidInput
+	case errors.Is(err, stack.ErrConflict):
+		return ErrConflict
+	case errors.Is(err, stack.ErrReferenceMissing), errors.Is(err, stack.ErrNotFound):
+		return ErrDependencyMissing
+	default:
+		return err
+	}
 }
 
 func (p *StackProvider) Exists(ctx context.Context, reference Reference) (bool, error) {
@@ -120,7 +281,7 @@ func (p *StackProvider) ImportRecord(ctx context.Context, operation ProviderImpo
 	if err != nil {
 		return ProviderImportResult{}, err
 	}
-	result, err := p.service.ImportExchangeRecord(ctx, stack.ExchangeImportOperation{Token: operation.Token, OccurredAt: operation.OccurredAt}, sourceSystemID, stack.ExchangeRecord{
+	result, err := p.importer.ImportExchangeRecord(ctx, stack.ExchangeImportOperation{Token: operation.Token, OccurredAt: operation.OccurredAt}, sourceSystemID, stack.ExchangeRecord{
 		Type: record.Type, ID: record.ID, Revision: record.Revision,
 		Dependencies: dependencies, SourceSystemID: record.Provenance.SourceSystemID,
 		SourceRecordID: record.Provenance.SourceRecordID, Payload: domainPayload,

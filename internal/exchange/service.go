@@ -1,6 +1,6 @@
 package exchange
 
-// Requirements: REQ-EXCHANGE-001, REQ-PATTERNS-001. Features: migration.packages, templates.schemas. GitHub: #9, #8.
+// Requirements: REQ-EXCHANGE-001, REQ-PATTERNS-001, REQ-STACK-001. Features: migration.packages, templates.schemas, software.licenses. GitHub: #9, #8, #7.
 
 import (
 	"bytes"
@@ -257,7 +257,7 @@ func (s *Service) Import(ctx context.Context, actorID string, contents []byte) (
 	}
 	stored, created, err := s.store.CreatePackage(ctx, pending)
 	if err != nil {
-		return ImportResult{}, fmt.Errorf("reserve Exchange import: %w", err)
+		return ImportResult{Package: pending}, fmt.Errorf("reserve Exchange import: %w", err)
 	}
 	pending = stored
 	if !created {
@@ -269,6 +269,9 @@ func (s *Service) Import(ctx context.Context, actorID string, contents []byte) (
 		}
 		switch stored.Status {
 		case StatusCompleted:
+			if err := s.audit(ctx, stored.CreatedBy, "exchange.package.imported", stored); err != nil {
+				return ImportResult{Package: stored, Replay: true}, fmt.Errorf("repair Exchange import audit: %w", err)
+			}
 			return ImportResult{Package: stored, Replay: true}, nil
 		case StatusProcessing:
 			if now.Before(stored.UpdatedAt.Add(s.processingLease)) {
@@ -281,6 +284,13 @@ func (s *Service) Import(ctx context.Context, actorID string, contents []byte) (
 			}
 			pending = stored
 		case StatusHolding, StatusFailed:
+			action := "exchange.package.imported"
+			if stored.Status == StatusFailed {
+				action = "exchange.package.import_failed"
+			}
+			if err := s.audit(ctx, stored.CreatedBy, action, stored); err != nil {
+				return ImportResult{Package: stored}, fmt.Errorf("repair Exchange terminal audit: %w", err)
+			}
 			pending = retryPackage(stored, now)
 			stored, err = s.store.UpdatePackage(ctx, pending, stored.UpdatedAt)
 			if err != nil {
@@ -297,7 +307,7 @@ func (s *Service) Import(ctx context.Context, actorID string, contents []byte) (
 	}
 	ordered, err := topologicalRecords(recordMap)
 	if err != nil {
-		return ImportResult{}, s.failImport(ctx, actorID, pending, err)
+		return s.failImportResult(ctx, actorID, pending, err)
 	}
 	outcomesByKey := make(map[string]RecordOutcome, len(ordered))
 	for _, outcome := range pending.Records {
@@ -309,7 +319,7 @@ func (s *Service) Import(ctx context.Context, actorID string, contents []byte) (
 	}
 	preflight, err := s.preflightImport(ctx, ordered, recordMap, outcomesByKey, progressByKey)
 	if err != nil {
-		return ImportResult{}, s.failImport(ctx, actorID, pending, err)
+		return s.failImportResult(ctx, actorID, pending, err)
 	}
 	for _, original := range ordered {
 		key := Reference{Type: original.Type, ID: original.ID}.Key()
@@ -328,7 +338,7 @@ func (s *Service) Import(ctx context.Context, actorID string, contents []byte) (
 			}
 		}
 		if provider == nil {
-			return ImportResult{}, s.failImport(ctx, actorID, pending, ErrConflict)
+			return s.failImportResult(ctx, actorID, pending, ErrConflict)
 		}
 		var file []byte
 		if record.File != nil {
@@ -337,7 +347,7 @@ func (s *Service) Import(ctx context.Context, actorID string, contents []byte) (
 		if !hasProgress {
 			exact, inspectErr := provider.ImportRecordExists(ctx, record, file)
 			if inspectErr != nil {
-				return ImportResult{}, s.failImport(ctx, actorID, pending, inspectErr)
+				return s.failImportResult(ctx, actorID, pending, inspectErr)
 			}
 			progress = ImportProgress{
 				Type: record.Type, ID: record.ID, Checksum: record.Checksum,
@@ -348,7 +358,7 @@ func (s *Service) Import(ctx context.Context, actorID string, contents []byte) (
 			upsertImportProgress(&candidate, progress)
 			checkpointed, checkpointErr := s.checkpointImport(ctx, candidate, ordered, outcomesByKey)
 			if checkpointErr != nil {
-				return ImportResult{}, s.failImport(ctx, actorID, pending, fmt.Errorf("reserve Exchange record intent: %w", checkpointErr))
+				return s.failImportResult(ctx, actorID, pending, fmt.Errorf("reserve Exchange record intent: %w", checkpointErr))
 			}
 			pending = checkpointed
 			progressByKey[key] = progress
@@ -365,11 +375,36 @@ func (s *Service) Import(ctx context.Context, actorID string, contents []byte) (
 			SourceSystemID: provenance.SourceSystemID, SourceRecordID: provenance.SourceRecordID,
 		})
 		if lockErr != nil {
+			// Guard can fail after persisting a lock when both its audit delivery
+			// and rollback fail. Reconcile the exact resource before deciding that
+			// no ownership was created; otherwise the provider could remain
+			// unwritten behind an undisclosed phantom fence.
+			observed, inspectErr := s.guard.ImportedResourceOwnership(ctx, s.organizationID, record.Type, record.ID)
 			candidate := pending
+			if inspectErr == nil && exactImportedOwnership(observed, s.organizationID, record, provenance) {
+				progress.OwnershipReady = true
+				// The Guard contract returns an existing exact lock without an
+				// error. Therefore an error followed by this exact observation is
+				// the ambiguous commit of this registration attempt and remains
+				// eligible for compensation if the provider later proves it did
+				// not write.
+				progress.OwnershipCreated = true
+				progress.WriteLocked = true
+				upsertImportProgress(&candidate, progress)
+				return s.failImportResult(ctx, actorID, candidate, lockErr)
+			}
 			if progress.Phase == progressIntent && !progress.OwnershipReady {
 				removeImportProgress(&candidate, key)
 			}
-			return ImportResult{}, s.failImport(ctx, actorID, candidate, lockErr)
+			if inspectErr != nil && !errors.Is(inspectErr, guard.ErrNotFound) {
+				// The lookup is ambiguous, so retain the durable intent and fail
+				// closed. A retry must reconcile ownership before any provider call.
+				candidate = pending
+			}
+			if inspectErr == nil {
+				inspectErr = ErrConflict
+			}
+			return s.failImportResult(ctx, actorID, candidate, errors.Join(lockErr, inspectErr))
 		}
 		if !progress.OwnershipReady || ownershipCreated || progress.WriteLocked != ownership.WriteLocked {
 			progress.OwnershipReady = true
@@ -386,8 +421,13 @@ func (s *Service) Import(ctx context.Context, actorID string, contents []byte) (
 				failureCandidate := pending
 				if cleanupErr == nil {
 					removeImportProgress(&failureCandidate, key)
+				} else {
+					// The lock exists but could not be compensated. Retain the
+					// in-memory ownership state so direct-import callers can
+					// disclose it even when the receipt store is unavailable.
+					upsertImportProgress(&failureCandidate, progress)
 				}
-				return ImportResult{}, s.failImport(ctx, actorID, failureCandidate, errors.Join(fmt.Errorf("checkpoint Exchange ownership intent: %w", checkpointErr), cleanupErr))
+				return s.failImportResult(ctx, actorID, failureCandidate, errors.Join(fmt.Errorf("checkpoint Exchange ownership intent: %w", checkpointErr), cleanupErr))
 			}
 			pending = checkpointed
 			progressByKey[key] = progress
@@ -397,6 +437,19 @@ func (s *Service) Import(ctx context.Context, actorID string, contents []byte) (
 			ExpectedCreated: progress.ExpectedCreated, OccurredAt: pending.CreatedAt,
 		}, decoded.Manifest.SourceSystemID, record, file)
 		pending = refreshed
+		if !providerResult.Committed && importErr != nil {
+			// A provider/network error can be commit-ambiguous. Verify the exact
+			// immutable record before compensating its ownership fence. An exact
+			// read promotes the result into the normal committed repair path; a
+			// read failure retains ownership and the intent for a safe retry.
+			exact, inspectErr := provider.ImportRecordExists(ctx, record, file)
+			if inspectErr != nil {
+				return s.failImportResult(ctx, actorID, pending, errors.Join(importErr, fmt.Errorf("verify ambiguous Exchange provider commit: %w", inspectErr)))
+			}
+			if exact {
+				providerResult = ProviderImportResult{Committed: true, Created: progress.ExpectedCreated}
+			}
+		}
 		if providerResult.Committed {
 			status := OutcomeUnchanged
 			if progress.ExpectedCreated {
@@ -413,18 +466,18 @@ func (s *Service) Import(ctx context.Context, actorID string, contents []byte) (
 			checkpointed, checkpointErr := s.checkpointImport(ctx, candidate, ordered, outcomesByKey)
 			if checkpointErr != nil {
 				setPackageOutcomes(&candidate, orderedOutcomes(ordered, outcomesByKey, false))
-				return ImportResult{}, s.failImport(ctx, actorID, candidate, errors.Join(importErr, fmt.Errorf("checkpoint committed Exchange record: %w", checkpointErr)))
+				return s.failImportResult(ctx, actorID, candidate, errors.Join(importErr, fmt.Errorf("checkpoint committed Exchange record: %w", checkpointErr)))
 			}
 			pending = checkpointed
 			progressByKey[key] = progress
 			if importErr != nil {
-				return ImportResult{}, s.failImport(ctx, actorID, pending, importErr)
+				return s.failImportResult(ctx, actorID, pending, importErr)
 			}
 			candidate = pending
 			removeImportProgress(&candidate, key)
 			checkpointed, checkpointErr = s.checkpointImport(ctx, candidate, ordered, outcomesByKey)
 			if checkpointErr != nil {
-				return ImportResult{}, s.failImport(ctx, actorID, pending, fmt.Errorf("complete Exchange record intent: %w", checkpointErr))
+				return s.failImportResult(ctx, actorID, pending, fmt.Errorf("complete Exchange record intent: %w", checkpointErr))
 			}
 			pending = checkpointed
 			delete(progressByKey, key)
@@ -439,14 +492,14 @@ func (s *Service) Import(ctx context.Context, actorID string, contents []byte) (
 				cleanupErr = s.guard.DeleteImportedResourceOwnership(ctx, ownership)
 			}
 			if cleanupErr != nil {
-				return ImportResult{}, s.failImport(ctx, actorID, pending, errors.Join(importErr, cleanupErr))
+				return s.failImportResult(ctx, actorID, pending, errors.Join(importErr, cleanupErr))
 			}
 			candidate := pending
 			removeImportProgress(&candidate, key)
 			if errors.Is(importErr, ErrDependencyMissing) {
 				checkpointed, checkpointErr := s.checkpointImport(ctx, candidate, ordered, outcomesByKey)
 				if checkpointErr != nil {
-					return ImportResult{}, s.failImport(ctx, actorID, candidate, errors.Join(importErr, fmt.Errorf("compensate Exchange record intent: %w", checkpointErr)))
+					return s.failImportResult(ctx, actorID, candidate, errors.Join(importErr, fmt.Errorf("compensate Exchange record intent: %w", checkpointErr)))
 				}
 				pending = checkpointed
 				delete(progressByKey, key)
@@ -454,9 +507,9 @@ func (s *Service) Import(ctx context.Context, actorID string, contents []byte) (
 				outcomesByKey[key] = outcome
 				continue
 			}
-			return ImportResult{}, s.failImport(ctx, actorID, candidate, importErr)
+			return s.failImportResult(ctx, actorID, candidate, importErr)
 		}
-		return ImportResult{}, s.failImport(ctx, actorID, pending, ErrConflict)
+		return s.failImportResult(ctx, actorID, pending, ErrConflict)
 	}
 	expectedUpdatedAt := pending.UpdatedAt
 	setPackageOutcomes(&pending, orderedOutcomes(ordered, outcomesByKey, true))
@@ -467,12 +520,18 @@ func (s *Service) Import(ctx context.Context, actorID string, contents []byte) (
 	pending.UpdatedAt = nextUpdatedAt(s.now(), expectedUpdatedAt)
 	completed, err := s.store.UpdatePackage(ctx, pending, expectedUpdatedAt)
 	if err != nil {
-		return ImportResult{}, fmt.Errorf("complete Exchange import: %w", err)
+		return ImportResult{Package: pending}, fmt.Errorf("complete Exchange import: %w", err)
 	}
 	if err := s.audit(ctx, actorID, "exchange.package.imported", completed); err != nil {
-		return ImportResult{}, fmt.Errorf("audit Exchange import: %w", err)
+		return ImportResult{Package: completed}, fmt.Errorf("audit Exchange import: %w", err)
 	}
 	return ImportResult{Package: completed}, nil
+}
+
+func exactImportedOwnership(value guard.ResourceOwnership, organizationID string, record Record, provenance Provenance) bool {
+	return value.OrganizationID == organizationID && value.ResourceType == record.Type && value.ResourceID == record.ID &&
+		value.SourceSystemID == provenance.SourceSystemID && value.SourceRecordID == provenance.SourceRecordID &&
+		value.WriteLocked && value.ClaimedBy == "" && value.ClaimedAt == nil && value.Validate() == nil
 }
 
 func retryPackage(stored Package, now time.Time) Package {
@@ -607,7 +666,12 @@ func setPackageOutcomes(value *Package, outcomes []RecordOutcome) {
 	}
 }
 
-func (s *Service) failImport(ctx context.Context, actorID string, pending Package, cause error) error {
+func (s *Service) failImportResult(ctx context.Context, actorID string, pending Package, cause error) (ImportResult, error) {
+	failed, err := s.failImport(ctx, actorID, pending, cause)
+	return ImportResult{Package: failed}, err
+}
+
+func (s *Service) failImport(ctx context.Context, actorID string, pending Package, cause error) (Package, error) {
 	expected := pending.UpdatedAt
 	pending.Status = StatusFailed
 	pending.ErrorCode = archiveErrorCode(cause)
@@ -615,8 +679,13 @@ func (s *Service) failImport(ctx context.Context, actorID string, pending Packag
 	failed, updateErr := s.store.UpdatePackage(ctx, pending, expected)
 	if updateErr == nil {
 		updateErr = s.audit(ctx, actorID, "exchange.package.import_failed", failed)
+	} else {
+		// Preserve the most truthful in-memory receipt projection. The caller can
+		// disclose committed outcomes and pending ownership even when both the
+		// checkpoint and its readback are unavailable.
+		failed = pending
 	}
-	return errors.Join(cause, updateErr)
+	return failed, errors.Join(cause, updateErr)
 }
 
 type importSchemaPreflight struct {
@@ -987,18 +1056,46 @@ func cloneRecord(value Record) Record {
 }
 
 func (s *Service) audit(ctx context.Context, actorID, action string, value Package) error {
-	scope, ok := foundation.ScopeFromContext(ctx)
-	if !ok || scope.CorrelationID == "" {
-		correlationID, err := foundation.NewCorrelationID()
+	actorID = strings.TrimSpace(actorID)
+	if actorID == "" {
+		actorID = value.CreatedBy
+	}
+	eventID := ""
+	correlationID := ""
+	occurredAt := normalizedNow(s.now())
+	if value.Direction == DirectionExport {
+		// Exports are not resumed, so preserve the request correlation that
+		// links the audit to the caller's broader operation.
+		scope, ok := foundation.ScopeFromContext(ctx)
+		if !ok || scope.CorrelationID == "" {
+			var err error
+			correlationID, err = foundation.NewCorrelationID()
+			if err != nil {
+				return err
+			}
+			ctx = foundation.WithScope(ctx, foundation.Scope{OrganizationID: s.organizationID, ActorID: actorID, CorrelationID: correlationID})
+		} else {
+			correlationID = scope.CorrelationID
+		}
+		var err error
+		eventID, err = foundation.NewCorrelationID()
 		if err != nil {
 			return err
 		}
-		scope = foundation.Scope{OrganizationID: s.organizationID, ActorID: actorID, CorrelationID: correlationID}
-		ctx = foundation.WithScope(ctx, scope)
-	}
-	eventID, err := foundation.NewCorrelationID()
-	if err != nil {
-		return err
+	} else {
+		// Package audit delivery is retryable. Its identity and correlation are
+		// derived entirely from immutable receipt state, so exact delivery after a
+		// transient auditor failure is idempotent even under a different request.
+		identity := strings.Join([]string{
+			s.organizationID, string(value.Direction), value.PackageID, action,
+			value.ArchiveSHA256, string(value.Status), value.UpdatedAt.UTC().Format(time.RFC3339Nano),
+		}, "\x00")
+		eventDigest := sha256.Sum256([]byte(identity))
+		correlationDigest := sha256.Sum256([]byte("correlation\x00" + identity))
+		eventID = fmt.Sprintf("%x", eventDigest[:])
+		correlationID = fmt.Sprintf("%x", correlationDigest[:])
+		occurredAt = value.UpdatedAt.UTC()
+		ctx = foundation.WithScope(ctx, foundation.Scope{OrganizationID: s.organizationID, ActorID: actorID, CorrelationID: correlationID})
 	}
 	metadata := map[string]string{
 		"requirementId": RequirementID, "featureId": FeatureID, "direction": string(value.Direction),
@@ -1008,9 +1105,9 @@ func (s *Service) audit(ctx context.Context, actorID, action string, value Packa
 		"holdingCount": fmt.Sprint(value.HoldingCount),
 	}
 	return s.auditor.Record(ctx, foundation.AuditEvent{
-		ID: eventID, OrganizationID: s.organizationID, ActorID: actorID, CorrelationID: scope.CorrelationID,
+		ID: eventID, OrganizationID: s.organizationID, ActorID: actorID, CorrelationID: correlationID,
 		Action: action, ResourceType: "exchange.package", ResourceID: value.PackageID,
-		OccurredAt: normalizedNow(s.now()), Metadata: metadata,
+		OccurredAt: occurredAt, Metadata: metadata,
 	})
 }
 

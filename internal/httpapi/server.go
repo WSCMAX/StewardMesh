@@ -1182,8 +1182,8 @@ func (s *Server) exportStackRecords(w http.ResponseWriter, r *http.Request, _ gu
 	writeJSON(w, http.StatusOK, map[string]any{"records": records})
 }
 
-func (s *Server) importStackRecords(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
-	if s.stack == nil {
+func (s *Server) importStackRecords(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
+	if s.stack == nil || s.exchange == nil {
 		writeError(w, r, http.StatusServiceUnavailable, "stack_unavailable", "Stack software inventory is unavailable")
 		return
 	}
@@ -1195,13 +1195,46 @@ func (s *Server) importStackRecords(w http.ResponseWriter, r *http.Request, _ gu
 		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid Stack exchange payload")
 		return
 	}
-	result, err := s.stack.ImportRecords(r.Context(), input.SourceSystemID, input.Records)
+	result, err := s.exchange.ImportStackRecords(r.Context(), authentication.Principal.Subject, input.SourceSystemID, input.Records)
 	if err != nil {
-		writeStackError(w, r, err)
+		writeStackImportError(w, r, result, err)
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Exchange-Package-ID", result.PackageID)
+	w.Header().Set("X-Idempotent-Replay", strconv.FormatBool(result.Replay))
 	writeJSON(w, http.StatusOK, result)
+}
+
+func writeStackImportError(w http.ResponseWriter, r *http.Request, result exchange.StackImportResult, err error) {
+	if result.PackageID == "" {
+		writeExchangeError(w, r, err)
+		return
+	}
+	status, code, message := http.StatusInternalServerError, "stack_import_failed", "the durable Stack import did not complete; retry the exact request to resume it"
+	switch {
+	case errors.Is(err, exchange.ErrTooLarge):
+		status, code, message = http.StatusRequestEntityTooLarge, "package_too_large", "the Stack import exceeds a configured limit"
+	case errors.Is(err, exchange.ErrInvalidInput):
+		status, code, message = http.StatusBadRequest, "validation_failed", "the Stack import payload is invalid"
+	case errors.Is(err, exchange.ErrIntegrity), errors.Is(err, exchange.ErrDependencyMissing):
+		status, code, message = http.StatusUnprocessableEntity, "import_unprocessable", "the Stack import could not safely process a dependency"
+	case errors.Is(err, exchange.ErrConflict):
+		status, code, message = http.StatusConflict, "package_conflict", "the Stack import conflicts with durable history or current records"
+	}
+	correlationID := ""
+	if scope, ok := foundation.ScopeFromContext(r.Context()); ok {
+		correlationID = scope.CorrelationID
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	if result.PackageID != "" {
+		w.Header().Set("X-Exchange-Package-ID", result.PackageID)
+	}
+	w.Header().Set("X-Idempotent-Replay", strconv.FormatBool(result.Replay))
+	writeJSON(w, status, map[string]any{
+		"error":  map[string]string{"code": code, "message": message, "correlationId": correlationID},
+		"import": result,
+	})
 }
 
 func writeStackError(w http.ResponseWriter, r *http.Request, err error) {

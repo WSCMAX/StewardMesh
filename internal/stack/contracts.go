@@ -15,10 +15,11 @@ const (
 )
 
 var (
-	ErrInvalidInput     = errors.New("invalid Stack input")
-	ErrNotFound         = errors.New("Stack record not found")
-	ErrConflict         = errors.New("Stack record conflicts with existing data")
-	ErrReferenceMissing = errors.New("Stack reference does not exist")
+	ErrInvalidInput          = errors.New("invalid Stack input")
+	ErrNotFound              = errors.New("Stack record not found")
+	ErrConflict              = errors.New("Stack record conflicts with existing data")
+	ErrReferenceMissing      = errors.New("Stack reference does not exist")
+	ErrDurableImportRequired = errors.New("Stack batch imports require the durable Exchange workflow")
 )
 
 type Product struct {
@@ -283,6 +284,15 @@ type ExchangeImportOperation struct {
 type ExchangeImportResult struct {
 	Committed bool
 	Created   bool
+}
+
+// ExchangeImporter is an opaque, single-owner capability used by the Exchange
+// provider. Service itself deliberately does not expose the record-import
+// operation, so ordinary in-process callers cannot forge the private context
+// that unlocks the low-level mutation seam.
+type ExchangeImporter interface {
+	ImportExchangeRecord(context.Context, ExchangeImportOperation, string, ExchangeRecord) (ExchangeImportResult, error)
+	stackExchangeImporter()
 }
 
 type ReferenceValidator interface {

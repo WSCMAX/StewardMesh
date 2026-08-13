@@ -604,6 +604,8 @@
         ],
         "code": [
           "internal/application/application.go",
+          "internal/exchange/providers.go",
+          "internal/exchange/service.go",
           "internal/guard/contracts.go",
           "internal/httpapi/server.go",
           "internal/repository/memory_stack.go",
@@ -615,6 +617,7 @@
           "internal/repository/postgres/migrations/0029_stack_software_licenses.sql"
         ],
         "tests": [
+          "internal/exchange/providers_test.go",
           "internal/httpapi/server_test.go",
           "internal/repository/contracttest/stack.go",
           "internal/repository/memory_stack_test.go",

@@ -49,6 +49,23 @@ type Service struct {
 }
 
 func NewService(store Store, references ReferenceValidator, auditor foundation.Auditor, configuration ServiceConfig) (*Service, error) {
+	return newService(store, references, auditor, configuration)
+}
+
+// NewServiceWithExchangeImporter constructs Stack's normal domain service and
+// returns the only capability able to perform an Exchange provider mutation.
+// The capability is issued at construction rather than retrievable from an
+// existing Service, so another in-process package cannot unlock a live service
+// merely by supplying a plausible operation token.
+func NewServiceWithExchangeImporter(store Store, references ReferenceValidator, auditor foundation.Auditor, configuration ServiceConfig) (*Service, ExchangeImporter, error) {
+	service, err := newService(store, references, auditor, configuration)
+	if err != nil {
+		return nil, nil, err
+	}
+	return service, &exchangeImporter{service: service}, nil
+}
+
+func newService(store Store, references ReferenceValidator, auditor foundation.Auditor, configuration ServiceConfig) (*Service, error) {
 	if store == nil || references == nil || auditor == nil {
 		return nil, errors.New("Stack store, reference validator, and auditor are required")
 	}
@@ -89,7 +106,7 @@ func (s *Service) CreateProduct(ctx context.Context, input CreateProductInput) (
 	product, created, err := s.store.CreateProduct(ctx, Product{
 		ID: id, OrganizationID: s.organizationID, Name: input.Name, Publisher: input.Publisher,
 		Category: input.Category, Status: input.Status, SourceSystemID: input.SourceSystemID,
-		SourceRecordID: input.SourceRecordID, Revision: 1, CreatedAt: now, UpdatedAt: now,
+		SourceRecordID: input.SourceRecordID, Revision: createRevision(ctx), CreatedAt: now, UpdatedAt: now,
 	})
 	if err != nil {
 		return Product{}, err
@@ -128,7 +145,7 @@ func (s *Service) CreateVersion(ctx context.Context, input CreateVersionInput) (
 	version, created, err := s.store.CreateVersion(ctx, Version{
 		ID: id, OrganizationID: s.organizationID, ProductID: input.ProductID, Name: input.Name,
 		ReleasedOn: releasedOn, Status: input.Status, SourceSystemID: input.SourceSystemID,
-		SourceRecordID: input.SourceRecordID, Revision: 1, CreatedAt: now, UpdatedAt: now,
+		SourceRecordID: input.SourceRecordID, Revision: createRevision(ctx), CreatedAt: now, UpdatedAt: now,
 	})
 	if err != nil {
 		return Version{}, err
@@ -185,7 +202,7 @@ func (s *Service) RecordInstallation(ctx context.Context, input RecordInstallati
 		ID: id, OrganizationID: s.organizationID, VersionID: input.VersionID, AssetID: input.AssetID,
 		Status: input.Status, UsageState: input.UsageState, InstalledAt: installedAt, LastUsedAt: lastUsedAt,
 		RemovedAt: removedAt, SourceSystemID: input.SourceSystemID, SourceRecordID: input.SourceRecordID,
-		Revision: 1, CreatedAt: now, UpdatedAt: now,
+		Revision: createRevision(ctx), CreatedAt: now, UpdatedAt: now,
 	})
 	if err != nil {
 		return Installation{}, err
@@ -257,7 +274,7 @@ func (s *Service) CreateLicense(ctx context.Context, input CreateLicenseInput) (
 		Status: input.Status, StartsOn: startsOn, ExpiresOn: expiresOn, VendorID: input.VendorID,
 		PurchaseOrderID: input.PurchaseOrderID, ContractID: input.ContractID, CostRecordID: input.CostRecordID,
 		DocumentIDs: input.DocumentIDs, SourceSystemID: input.SourceSystemID, SourceRecordID: input.SourceRecordID,
-		Revision: 1, CreatedAt: now, UpdatedAt: now,
+		Revision: createRevision(ctx), CreatedAt: now, UpdatedAt: now,
 	})
 	if err != nil {
 		return License{}, err
@@ -320,7 +337,7 @@ func (s *Service) CreateAssignment(ctx context.Context, input CreateAssignmentIn
 		AssigneeKind: input.AssigneeKind, AssigneeID: input.AssigneeID, Seats: input.Seats,
 		UsageState: input.UsageState, AssignedAt: assignedAt, LastUsedAt: lastUsedAt, EndedAt: endedAt,
 		SourceSystemID: input.SourceSystemID, SourceRecordID: input.SourceRecordID,
-		Revision: 1, CreatedAt: now, UpdatedAt: now,
+		Revision: createRevision(ctx), CreatedAt: now, UpdatedAt: now,
 	})
 	if err != nil {
 		return Assignment{}, err
@@ -810,9 +827,48 @@ func portableExchangeRecord(recordType, id string, revision int64, dependencies 
 }
 
 func (s *Service) ImportRecords(ctx context.Context, sourceSystemID string, records []ExchangeRecord) (ImportResult, error) {
+	// Batch import is a distributed mutation across Stack, audit, and Guard
+	// ownership. Only Exchange may call this low-level single-record seam after
+	// it has durably reserved an operation intent. Public transports use
+	// exchange.Service.ImportStackRecords so failures retain a truthful receipt
+	// and can resume with the same operation token.
+	if !hasExchangeImportOperation(ctx) || len(records) != 1 {
+		return ImportResult{}, ErrDurableImportRequired
+	}
+	prepared, err := prepareImportRecords(sourceSystemID, records)
+	if err != nil {
+		return ImportResult{}, err
+	}
+	return s.applyImportRecords(ctx, prepared)
+}
+
+// NormalizeImportRecords performs the complete read-only Stack envelope
+// preflight used before a direct Stack JSON import is converted into a durable
+// Exchange package. It strictly decodes typed payloads, verifies identity,
+// revision, provenance, dependency equality, and duplicate batch identities,
+// then returns defensive canonical copies with effective provenance.
+func NormalizeImportRecords(sourceSystemID string, records []ExchangeRecord) ([]ExchangeRecord, error) {
+	prepared, err := prepareImportRecords(sourceSystemID, records)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]ExchangeRecord, 0, len(prepared))
+	for _, item := range prepared {
+		record := item.record
+		record.Dependencies = append([]string(nil), record.Dependencies...)
+		sort.Strings(record.Dependencies)
+		record.Payload = append(json.RawMessage(nil), record.Payload...)
+		record.SourceSystemID = item.sourceSystemID
+		record.SourceRecordID = item.sourceRecordID
+		result = append(result, record)
+	}
+	return result, nil
+}
+
+func prepareImportRecords(sourceSystemID string, records []ExchangeRecord) ([]portableRecord, error) {
 	sourceSystemID = strings.ToLower(strings.TrimSpace(sourceSystemID))
 	if !stableIDPattern.MatchString(sourceSystemID) || len(records) == 0 || len(records) > 10_000 {
-		return ImportResult{}, ErrInvalidInput
+		return nil, ErrInvalidInput
 	}
 	order := map[string]int{"stack.product": 0, "stack.version": 1, "stack.license": 2, "stack.installation": 3, "stack.assignment": 4}
 	prepared := make([]portableRecord, 0, len(records))
@@ -820,20 +876,24 @@ func (s *Service) ImportRecords(ctx context.Context, sourceSystemID string, reco
 	for _, record := range records {
 		if _, ok := order[record.Type]; !ok || !stableIDPattern.MatchString(record.ID) || record.Revision < 1 || record.Dependencies == nil ||
 			len(record.Payload) == 0 || len(record.Payload) > 1<<20 || !validSource(record.SourceSystemID, record.SourceRecordID) {
-			return ImportResult{}, ErrInvalidInput
+			return nil, ErrInvalidInput
 		}
 		key := record.Type + "\x00" + record.ID
 		if _, duplicate := seen[key]; duplicate {
-			return ImportResult{}, ErrInvalidInput
+			return nil, ErrInvalidInput
 		}
 		seen[key] = struct{}{}
 		value, err := preparePortableRecord(record, sourceSystemID)
 		if err != nil {
-			return ImportResult{}, err
+			return nil, err
 		}
 		prepared = append(prepared, value)
 	}
 	sort.SliceStable(prepared, func(i, j int) bool { return order[prepared[i].record.Type] < order[prepared[j].record.Type] })
+	return prepared, nil
+}
+
+func (s *Service) applyImportRecords(ctx context.Context, prepared []portableRecord) (ImportResult, error) {
 	result := ImportResult{}
 	for _, preparedRecord := range prepared {
 		record := preparedRecord.record
@@ -872,6 +932,15 @@ func (s *Service) ImportRecords(ctx context.Context, sourceSystemID string, reco
 
 type exchangeImportContextKey struct{}
 
+type exchangeImportContext struct {
+	operation ExchangeImportOperation
+	revision  int64
+}
+
+type exchangeImporter struct{ service *Service }
+
+func (*exchangeImporter) stackExchangeImporter() {}
+
 type exchangeCommittedError struct {
 	created bool
 	cause   error
@@ -885,8 +954,15 @@ func committedStackError(created bool, operation string, cause error) error {
 }
 
 func hasExchangeImportOperation(ctx context.Context) bool {
-	_, ok := ctx.Value(exchangeImportContextKey{}).(ExchangeImportOperation)
+	_, ok := ctx.Value(exchangeImportContextKey{}).(exchangeImportContext)
 	return ok
+}
+
+func createRevision(ctx context.Context) int64 {
+	if state, ok := ctx.Value(exchangeImportContextKey{}).(exchangeImportContext); ok && state.revision > 0 {
+		return state.revision
+	}
+	return 1
 }
 
 func normalizeExchangeImportOperation(operation ExchangeImportOperation) (ExchangeImportOperation, error) {
@@ -898,16 +974,23 @@ func normalizeExchangeImportOperation(operation ExchangeImportOperation) (Exchan
 	return operation, nil
 }
 
+// OwnsExchangeImporter lets the Exchange adapter reject a capability issued
+// for a different Stack service without exposing the capability's internals.
+func (s *Service) OwnsExchangeImporter(candidate ExchangeImporter) bool {
+	importer, ok := candidate.(*exchangeImporter)
+	return ok && importer != nil && importer.service == s
+}
+
 // ImportExchangeRecord gives Exchange a deterministic audit/idempotency token
 // and reports whether the domain mutation committed even when audit delivery
 // fails afterward. Retrying the same token repairs the exact audit event.
-func (s *Service) ImportExchangeRecord(ctx context.Context, operation ExchangeImportOperation, sourceSystemID string, record ExchangeRecord) (ExchangeImportResult, error) {
+func (i *exchangeImporter) ImportExchangeRecord(ctx context.Context, operation ExchangeImportOperation, sourceSystemID string, record ExchangeRecord) (ExchangeImportResult, error) {
 	operation, err := normalizeExchangeImportOperation(operation)
-	if err != nil {
+	if err != nil || record.Revision < 1 {
 		return ExchangeImportResult{}, ErrInvalidInput
 	}
-	ctx = context.WithValue(ctx, exchangeImportContextKey{}, operation)
-	result, err := s.ImportRecords(ctx, sourceSystemID, []ExchangeRecord{record})
+	ctx = context.WithValue(ctx, exchangeImportContextKey{}, exchangeImportContext{operation: operation, revision: record.Revision})
+	result, err := i.service.ImportRecords(ctx, sourceSystemID, []ExchangeRecord{record})
 	if err == nil {
 		return ExchangeImportResult{Committed: true, Created: result.Created == 1}, nil
 	}
@@ -986,6 +1069,7 @@ func preparePortableRecord(record ExchangeRecord, fallbackSourceSystemID string)
 	if effectiveSourceSystemID == "" {
 		effectiveSourceSystemID, effectiveSourceRecordID = fallbackSourceSystemID, record.Type+":"+record.ID
 	}
+	effectiveSourceSystemID = strings.ToLower(effectiveSourceSystemID)
 	if !validSource(effectiveSourceSystemID, effectiveSourceRecordID) {
 		return portableRecord{}, ErrInvalidInput
 	}
@@ -1263,7 +1347,8 @@ func actorFromContext(ctx context.Context) string {
 }
 
 func (s *Service) audit(ctx context.Context, action, resourceType, resourceID string, metadata map[string]string) error {
-	if operation, ok := ctx.Value(exchangeImportContextKey{}).(ExchangeImportOperation); ok {
+	if state, ok := ctx.Value(exchangeImportContextKey{}).(exchangeImportContext); ok {
+		operation := state.operation
 		if metadata == nil {
 			metadata = make(map[string]string)
 		}

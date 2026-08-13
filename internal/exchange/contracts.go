@@ -501,6 +501,33 @@ type ImportResult struct {
 	Replay  bool    `json:"replay"`
 }
 
+// StackImportResult is the transport-safe projection returned by the legacy
+// JSON Stack import surface after Exchange has reserved and processed its
+// deterministic durable package. PackageID is present even when receipt
+// persistence/readback fails so an exact retry addresses the same operation.
+// Records expose only stable identities and workflow outcomes.
+type StackImportResult struct {
+	PackageID        string                 `json:"packageId"`
+	Status           PackageStatus          `json:"status"`
+	Created          int                    `json:"created"`
+	Unchanged        int                    `json:"unchanged"`
+	Holding          int                    `json:"holding"`
+	Replay           bool                   `json:"replay"`
+	ErrorCode        string                 `json:"errorCode,omitempty"`
+	Records          []RecordOutcome        `json:"records"`
+	PendingOwnership []StackImportOwnership `json:"pendingOwnership"`
+}
+
+// StackImportOwnership exposes a Guard lock that exists for a record whose
+// provider outcome is not yet durable. Operation tokens and private recovery
+// phases remain hidden; the user only sees the resource and lock state needed
+// to understand and safely retry a failed direct import.
+type StackImportOwnership struct {
+	Type        string `json:"type"`
+	ID          string `json:"id"`
+	WriteLocked bool   `json:"writeLocked"`
+}
+
 type ProviderImportOperation struct {
 	Token           string
 	Repair          bool

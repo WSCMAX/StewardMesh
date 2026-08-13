@@ -17880,6 +17880,8 @@ func (x *ExportStackRecordsResponse) GetRecords() []*StackExchangeRecord {
 	return nil
 }
 
+// Legacy schema-less Stack import requests are pinned to the five v1 built-in
+// Stack templates so exact retries remain stable across later schema releases.
 type ImportStackRecordsRequest struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	SourceSystemId string                 `protobuf:"bytes,1,opt,name=source_system_id,json=sourceSystemId,proto3" json:"source_system_id,omitempty"`
@@ -17933,11 +17935,22 @@ func (x *ImportStackRecordsRequest) GetRecords() []*StackExchangeRecord {
 }
 
 type StackImportResult struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Created       int32                  `protobuf:"varint,1,opt,name=created,proto3" json:"created,omitempty"`
-	Unchanged     int32                  `protobuf:"varint,2,opt,name=unchanged,proto3" json:"unchanged,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	Created   int32                  `protobuf:"varint,1,opt,name=created,proto3" json:"created,omitempty"`
+	Unchanged int32                  `protobuf:"varint,2,opt,name=unchanged,proto3" json:"unchanged,omitempty"`
+	// Deterministic Exchange receipt identity for exact retry/recovery.
+	PackageId string `protobuf:"bytes,3,opt,name=package_id,json=packageId,proto3" json:"package_id,omitempty"`
+	// "processing", "completed", "holding", or "failed".
+	Status    string `protobuf:"bytes,4,opt,name=status,proto3" json:"status,omitempty"`
+	Holding   int32  `protobuf:"varint,5,opt,name=holding,proto3" json:"holding,omitempty"`
+	Replay    bool   `protobuf:"varint,6,opt,name=replay,proto3" json:"replay,omitempty"`
+	ErrorCode string `protobuf:"bytes,7,opt,name=error_code,json=errorCode,proto3" json:"error_code,omitempty"`
+	// Checkpointed outcomes make any committed prefix and ownership lock explicit.
+	Records []*ExchangeRecordOutcome `protobuf:"bytes,8,rep,name=records,proto3" json:"records,omitempty"`
+	// Guard locks that exist while the provider outcome still awaits recovery.
+	PendingOwnership []*StackImportOwnership `protobuf:"bytes,9,rep,name=pending_ownership,json=pendingOwnership,proto3" json:"pending_ownership,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *StackImportResult) Reset() {
@@ -17984,6 +17997,115 @@ func (x *StackImportResult) GetUnchanged() int32 {
 	return 0
 }
 
+func (x *StackImportResult) GetPackageId() string {
+	if x != nil {
+		return x.PackageId
+	}
+	return ""
+}
+
+func (x *StackImportResult) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
+func (x *StackImportResult) GetHolding() int32 {
+	if x != nil {
+		return x.Holding
+	}
+	return 0
+}
+
+func (x *StackImportResult) GetReplay() bool {
+	if x != nil {
+		return x.Replay
+	}
+	return false
+}
+
+func (x *StackImportResult) GetErrorCode() string {
+	if x != nil {
+		return x.ErrorCode
+	}
+	return ""
+}
+
+func (x *StackImportResult) GetRecords() []*ExchangeRecordOutcome {
+	if x != nil {
+		return x.Records
+	}
+	return nil
+}
+
+func (x *StackImportResult) GetPendingOwnership() []*StackImportOwnership {
+	if x != nil {
+		return x.PendingOwnership
+	}
+	return nil
+}
+
+type StackImportOwnership struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Type          string                 `protobuf:"bytes,1,opt,name=type,proto3" json:"type,omitempty"`
+	Id            string                 `protobuf:"bytes,2,opt,name=id,proto3" json:"id,omitempty"`
+	WriteLocked   bool                   `protobuf:"varint,3,opt,name=write_locked,json=writeLocked,proto3" json:"write_locked,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *StackImportOwnership) Reset() {
+	*x = StackImportOwnership{}
+	mi := &file_stewardmesh_proto_msgTypes[221]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StackImportOwnership) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StackImportOwnership) ProtoMessage() {}
+
+func (x *StackImportOwnership) ProtoReflect() protoreflect.Message {
+	mi := &file_stewardmesh_proto_msgTypes[221]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StackImportOwnership.ProtoReflect.Descriptor instead.
+func (*StackImportOwnership) Descriptor() ([]byte, []int) {
+	return file_stewardmesh_proto_rawDescGZIP(), []int{221}
+}
+
+func (x *StackImportOwnership) GetType() string {
+	if x != nil {
+		return x.Type
+	}
+	return ""
+}
+
+func (x *StackImportOwnership) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *StackImportOwnership) GetWriteLocked() bool {
+	if x != nil {
+		return x.WriteLocked
+	}
+	return false
+}
+
 type ListSignalRulesRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -17992,7 +18114,7 @@ type ListSignalRulesRequest struct {
 
 func (x *ListSignalRulesRequest) Reset() {
 	*x = ListSignalRulesRequest{}
-	mi := &file_stewardmesh_proto_msgTypes[221]
+	mi := &file_stewardmesh_proto_msgTypes[222]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -18004,7 +18126,7 @@ func (x *ListSignalRulesRequest) String() string {
 func (*ListSignalRulesRequest) ProtoMessage() {}
 
 func (x *ListSignalRulesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[221]
+	mi := &file_stewardmesh_proto_msgTypes[222]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -18017,7 +18139,7 @@ func (x *ListSignalRulesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSignalRulesRequest.ProtoReflect.Descriptor instead.
 func (*ListSignalRulesRequest) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{221}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{222}
 }
 
 type ListSignalRulesResponse struct {
@@ -18029,7 +18151,7 @@ type ListSignalRulesResponse struct {
 
 func (x *ListSignalRulesResponse) Reset() {
 	*x = ListSignalRulesResponse{}
-	mi := &file_stewardmesh_proto_msgTypes[222]
+	mi := &file_stewardmesh_proto_msgTypes[223]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -18041,7 +18163,7 @@ func (x *ListSignalRulesResponse) String() string {
 func (*ListSignalRulesResponse) ProtoMessage() {}
 
 func (x *ListSignalRulesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[222]
+	mi := &file_stewardmesh_proto_msgTypes[223]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -18054,7 +18176,7 @@ func (x *ListSignalRulesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSignalRulesResponse.ProtoReflect.Descriptor instead.
 func (*ListSignalRulesResponse) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{222}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{223}
 }
 
 func (x *ListSignalRulesResponse) GetItems() []*SignalRule {
@@ -18085,7 +18207,7 @@ type SignalRule struct {
 
 func (x *SignalRule) Reset() {
 	*x = SignalRule{}
-	mi := &file_stewardmesh_proto_msgTypes[223]
+	mi := &file_stewardmesh_proto_msgTypes[224]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -18097,7 +18219,7 @@ func (x *SignalRule) String() string {
 func (*SignalRule) ProtoMessage() {}
 
 func (x *SignalRule) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[223]
+	mi := &file_stewardmesh_proto_msgTypes[224]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -18110,7 +18232,7 @@ func (x *SignalRule) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SignalRule.ProtoReflect.Descriptor instead.
 func (*SignalRule) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{223}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{224}
 }
 
 func (x *SignalRule) GetId() string {
@@ -18225,7 +18347,7 @@ type CreateSignalRuleRequest struct {
 
 func (x *CreateSignalRuleRequest) Reset() {
 	*x = CreateSignalRuleRequest{}
-	mi := &file_stewardmesh_proto_msgTypes[224]
+	mi := &file_stewardmesh_proto_msgTypes[225]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -18237,7 +18359,7 @@ func (x *CreateSignalRuleRequest) String() string {
 func (*CreateSignalRuleRequest) ProtoMessage() {}
 
 func (x *CreateSignalRuleRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[224]
+	mi := &file_stewardmesh_proto_msgTypes[225]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -18250,7 +18372,7 @@ func (x *CreateSignalRuleRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateSignalRuleRequest.ProtoReflect.Descriptor instead.
 func (*CreateSignalRuleRequest) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{224}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{225}
 }
 
 func (x *CreateSignalRuleRequest) GetId() string {
@@ -18333,7 +18455,7 @@ type UpdateSignalRuleRequest struct {
 
 func (x *UpdateSignalRuleRequest) Reset() {
 	*x = UpdateSignalRuleRequest{}
-	mi := &file_stewardmesh_proto_msgTypes[225]
+	mi := &file_stewardmesh_proto_msgTypes[226]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -18345,7 +18467,7 @@ func (x *UpdateSignalRuleRequest) String() string {
 func (*UpdateSignalRuleRequest) ProtoMessage() {}
 
 func (x *UpdateSignalRuleRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[225]
+	mi := &file_stewardmesh_proto_msgTypes[226]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -18358,7 +18480,7 @@ func (x *UpdateSignalRuleRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateSignalRuleRequest.ProtoReflect.Descriptor instead.
 func (*UpdateSignalRuleRequest) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{225}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{226}
 }
 
 func (x *UpdateSignalRuleRequest) GetRuleId() string {
@@ -18436,7 +18558,7 @@ type ListSignalAlertsRequest struct {
 
 func (x *ListSignalAlertsRequest) Reset() {
 	*x = ListSignalAlertsRequest{}
-	mi := &file_stewardmesh_proto_msgTypes[226]
+	mi := &file_stewardmesh_proto_msgTypes[227]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -18448,7 +18570,7 @@ func (x *ListSignalAlertsRequest) String() string {
 func (*ListSignalAlertsRequest) ProtoMessage() {}
 
 func (x *ListSignalAlertsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[226]
+	mi := &file_stewardmesh_proto_msgTypes[227]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -18461,7 +18583,7 @@ func (x *ListSignalAlertsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSignalAlertsRequest.ProtoReflect.Descriptor instead.
 func (*ListSignalAlertsRequest) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{226}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{227}
 }
 
 func (x *ListSignalAlertsRequest) GetStatus() string {
@@ -18501,7 +18623,7 @@ type ListSignalAlertsResponse struct {
 
 func (x *ListSignalAlertsResponse) Reset() {
 	*x = ListSignalAlertsResponse{}
-	mi := &file_stewardmesh_proto_msgTypes[227]
+	mi := &file_stewardmesh_proto_msgTypes[228]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -18513,7 +18635,7 @@ func (x *ListSignalAlertsResponse) String() string {
 func (*ListSignalAlertsResponse) ProtoMessage() {}
 
 func (x *ListSignalAlertsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[227]
+	mi := &file_stewardmesh_proto_msgTypes[228]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -18526,7 +18648,7 @@ func (x *ListSignalAlertsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSignalAlertsResponse.ProtoReflect.Descriptor instead.
 func (*ListSignalAlertsResponse) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{227}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{228}
 }
 
 func (x *ListSignalAlertsResponse) GetItems() []*SignalAlert {
@@ -18564,7 +18686,7 @@ type SignalAlert struct {
 
 func (x *SignalAlert) Reset() {
 	*x = SignalAlert{}
-	mi := &file_stewardmesh_proto_msgTypes[228]
+	mi := &file_stewardmesh_proto_msgTypes[229]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -18576,7 +18698,7 @@ func (x *SignalAlert) String() string {
 func (*SignalAlert) ProtoMessage() {}
 
 func (x *SignalAlert) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[228]
+	mi := &file_stewardmesh_proto_msgTypes[229]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -18589,7 +18711,7 @@ func (x *SignalAlert) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SignalAlert.ProtoReflect.Descriptor instead.
 func (*SignalAlert) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{228}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{229}
 }
 
 func (x *SignalAlert) GetId() string {
@@ -18741,7 +18863,7 @@ type ListSignalAlertHistoryRequest struct {
 
 func (x *ListSignalAlertHistoryRequest) Reset() {
 	*x = ListSignalAlertHistoryRequest{}
-	mi := &file_stewardmesh_proto_msgTypes[229]
+	mi := &file_stewardmesh_proto_msgTypes[230]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -18753,7 +18875,7 @@ func (x *ListSignalAlertHistoryRequest) String() string {
 func (*ListSignalAlertHistoryRequest) ProtoMessage() {}
 
 func (x *ListSignalAlertHistoryRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[229]
+	mi := &file_stewardmesh_proto_msgTypes[230]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -18766,7 +18888,7 @@ func (x *ListSignalAlertHistoryRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSignalAlertHistoryRequest.ProtoReflect.Descriptor instead.
 func (*ListSignalAlertHistoryRequest) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{229}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{230}
 }
 
 func (x *ListSignalAlertHistoryRequest) GetAlertId() string {
@@ -18785,7 +18907,7 @@ type ListSignalAlertHistoryResponse struct {
 
 func (x *ListSignalAlertHistoryResponse) Reset() {
 	*x = ListSignalAlertHistoryResponse{}
-	mi := &file_stewardmesh_proto_msgTypes[230]
+	mi := &file_stewardmesh_proto_msgTypes[231]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -18797,7 +18919,7 @@ func (x *ListSignalAlertHistoryResponse) String() string {
 func (*ListSignalAlertHistoryResponse) ProtoMessage() {}
 
 func (x *ListSignalAlertHistoryResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[230]
+	mi := &file_stewardmesh_proto_msgTypes[231]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -18810,7 +18932,7 @@ func (x *ListSignalAlertHistoryResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSignalAlertHistoryResponse.ProtoReflect.Descriptor instead.
 func (*ListSignalAlertHistoryResponse) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{230}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{231}
 }
 
 func (x *ListSignalAlertHistoryResponse) GetItems() []*SignalAlertHistory {
@@ -18834,7 +18956,7 @@ type SignalAlertHistory struct {
 
 func (x *SignalAlertHistory) Reset() {
 	*x = SignalAlertHistory{}
-	mi := &file_stewardmesh_proto_msgTypes[231]
+	mi := &file_stewardmesh_proto_msgTypes[232]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -18846,7 +18968,7 @@ func (x *SignalAlertHistory) String() string {
 func (*SignalAlertHistory) ProtoMessage() {}
 
 func (x *SignalAlertHistory) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[231]
+	mi := &file_stewardmesh_proto_msgTypes[232]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -18859,7 +18981,7 @@ func (x *SignalAlertHistory) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SignalAlertHistory.ProtoReflect.Descriptor instead.
 func (*SignalAlertHistory) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{231}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{232}
 }
 
 func (x *SignalAlertHistory) GetId() string {
@@ -18914,7 +19036,7 @@ type EvaluateSignalsRequest struct {
 
 func (x *EvaluateSignalsRequest) Reset() {
 	*x = EvaluateSignalsRequest{}
-	mi := &file_stewardmesh_proto_msgTypes[232]
+	mi := &file_stewardmesh_proto_msgTypes[233]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -18926,7 +19048,7 @@ func (x *EvaluateSignalsRequest) String() string {
 func (*EvaluateSignalsRequest) ProtoMessage() {}
 
 func (x *EvaluateSignalsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[232]
+	mi := &file_stewardmesh_proto_msgTypes[233]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -18939,7 +19061,7 @@ func (x *EvaluateSignalsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EvaluateSignalsRequest.ProtoReflect.Descriptor instead.
 func (*EvaluateSignalsRequest) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{232}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{233}
 }
 
 func (x *EvaluateSignalsRequest) GetAsOf() *timestamppb.Timestamp {
@@ -18962,7 +19084,7 @@ type SignalEvaluationResult struct {
 
 func (x *SignalEvaluationResult) Reset() {
 	*x = SignalEvaluationResult{}
-	mi := &file_stewardmesh_proto_msgTypes[233]
+	mi := &file_stewardmesh_proto_msgTypes[234]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -18974,7 +19096,7 @@ func (x *SignalEvaluationResult) String() string {
 func (*SignalEvaluationResult) ProtoMessage() {}
 
 func (x *SignalEvaluationResult) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[233]
+	mi := &file_stewardmesh_proto_msgTypes[234]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -18987,7 +19109,7 @@ func (x *SignalEvaluationResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SignalEvaluationResult.ProtoReflect.Descriptor instead.
 func (*SignalEvaluationResult) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{233}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{234}
 }
 
 func (x *SignalEvaluationResult) GetAsOf() *timestamppb.Timestamp {
@@ -19035,7 +19157,7 @@ type AcknowledgeSignalAlertRequest struct {
 
 func (x *AcknowledgeSignalAlertRequest) Reset() {
 	*x = AcknowledgeSignalAlertRequest{}
-	mi := &file_stewardmesh_proto_msgTypes[234]
+	mi := &file_stewardmesh_proto_msgTypes[235]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -19047,7 +19169,7 @@ func (x *AcknowledgeSignalAlertRequest) String() string {
 func (*AcknowledgeSignalAlertRequest) ProtoMessage() {}
 
 func (x *AcknowledgeSignalAlertRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[234]
+	mi := &file_stewardmesh_proto_msgTypes[235]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -19060,7 +19182,7 @@ func (x *AcknowledgeSignalAlertRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AcknowledgeSignalAlertRequest.ProtoReflect.Descriptor instead.
 func (*AcknowledgeSignalAlertRequest) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{234}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{235}
 }
 
 func (x *AcknowledgeSignalAlertRequest) GetAlertId() string {
@@ -19090,7 +19212,7 @@ type AssignSignalAlertRequest struct {
 
 func (x *AssignSignalAlertRequest) Reset() {
 	*x = AssignSignalAlertRequest{}
-	mi := &file_stewardmesh_proto_msgTypes[235]
+	mi := &file_stewardmesh_proto_msgTypes[236]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -19102,7 +19224,7 @@ func (x *AssignSignalAlertRequest) String() string {
 func (*AssignSignalAlertRequest) ProtoMessage() {}
 
 func (x *AssignSignalAlertRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[235]
+	mi := &file_stewardmesh_proto_msgTypes[236]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -19115,7 +19237,7 @@ func (x *AssignSignalAlertRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AssignSignalAlertRequest.ProtoReflect.Descriptor instead.
 func (*AssignSignalAlertRequest) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{235}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{236}
 }
 
 func (x *AssignSignalAlertRequest) GetAlertId() string {
@@ -19154,7 +19276,7 @@ type ListSignalSubscriptionsRequest struct {
 
 func (x *ListSignalSubscriptionsRequest) Reset() {
 	*x = ListSignalSubscriptionsRequest{}
-	mi := &file_stewardmesh_proto_msgTypes[236]
+	mi := &file_stewardmesh_proto_msgTypes[237]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -19166,7 +19288,7 @@ func (x *ListSignalSubscriptionsRequest) String() string {
 func (*ListSignalSubscriptionsRequest) ProtoMessage() {}
 
 func (x *ListSignalSubscriptionsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[236]
+	mi := &file_stewardmesh_proto_msgTypes[237]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -19179,7 +19301,7 @@ func (x *ListSignalSubscriptionsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSignalSubscriptionsRequest.ProtoReflect.Descriptor instead.
 func (*ListSignalSubscriptionsRequest) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{236}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{237}
 }
 
 type ListSignalSubscriptionsResponse struct {
@@ -19191,7 +19313,7 @@ type ListSignalSubscriptionsResponse struct {
 
 func (x *ListSignalSubscriptionsResponse) Reset() {
 	*x = ListSignalSubscriptionsResponse{}
-	mi := &file_stewardmesh_proto_msgTypes[237]
+	mi := &file_stewardmesh_proto_msgTypes[238]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -19203,7 +19325,7 @@ func (x *ListSignalSubscriptionsResponse) String() string {
 func (*ListSignalSubscriptionsResponse) ProtoMessage() {}
 
 func (x *ListSignalSubscriptionsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[237]
+	mi := &file_stewardmesh_proto_msgTypes[238]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -19216,7 +19338,7 @@ func (x *ListSignalSubscriptionsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSignalSubscriptionsResponse.ProtoReflect.Descriptor instead.
 func (*ListSignalSubscriptionsResponse) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{237}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{238}
 }
 
 func (x *ListSignalSubscriptionsResponse) GetItems() []*SignalSubscription {
@@ -19234,7 +19356,7 @@ type ListSignalSubscriptionTargetsRequest struct {
 
 func (x *ListSignalSubscriptionTargetsRequest) Reset() {
 	*x = ListSignalSubscriptionTargetsRequest{}
-	mi := &file_stewardmesh_proto_msgTypes[238]
+	mi := &file_stewardmesh_proto_msgTypes[239]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -19246,7 +19368,7 @@ func (x *ListSignalSubscriptionTargetsRequest) String() string {
 func (*ListSignalSubscriptionTargetsRequest) ProtoMessage() {}
 
 func (x *ListSignalSubscriptionTargetsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[238]
+	mi := &file_stewardmesh_proto_msgTypes[239]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -19259,7 +19381,7 @@ func (x *ListSignalSubscriptionTargetsRequest) ProtoReflect() protoreflect.Messa
 
 // Deprecated: Use ListSignalSubscriptionTargetsRequest.ProtoReflect.Descriptor instead.
 func (*ListSignalSubscriptionTargetsRequest) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{238}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{239}
 }
 
 type ListSignalSubscriptionTargetsResponse struct {
@@ -19271,7 +19393,7 @@ type ListSignalSubscriptionTargetsResponse struct {
 
 func (x *ListSignalSubscriptionTargetsResponse) Reset() {
 	*x = ListSignalSubscriptionTargetsResponse{}
-	mi := &file_stewardmesh_proto_msgTypes[239]
+	mi := &file_stewardmesh_proto_msgTypes[240]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -19283,7 +19405,7 @@ func (x *ListSignalSubscriptionTargetsResponse) String() string {
 func (*ListSignalSubscriptionTargetsResponse) ProtoMessage() {}
 
 func (x *ListSignalSubscriptionTargetsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[239]
+	mi := &file_stewardmesh_proto_msgTypes[240]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -19296,7 +19418,7 @@ func (x *ListSignalSubscriptionTargetsResponse) ProtoReflect() protoreflect.Mess
 
 // Deprecated: Use ListSignalSubscriptionTargetsResponse.ProtoReflect.Descriptor instead.
 func (*ListSignalSubscriptionTargetsResponse) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{239}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{240}
 }
 
 func (x *ListSignalSubscriptionTargetsResponse) GetItems() []*SignalSubscriptionTarget {
@@ -19319,7 +19441,7 @@ type SignalSubscriptionTarget struct {
 
 func (x *SignalSubscriptionTarget) Reset() {
 	*x = SignalSubscriptionTarget{}
-	mi := &file_stewardmesh_proto_msgTypes[240]
+	mi := &file_stewardmesh_proto_msgTypes[241]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -19331,7 +19453,7 @@ func (x *SignalSubscriptionTarget) String() string {
 func (*SignalSubscriptionTarget) ProtoMessage() {}
 
 func (x *SignalSubscriptionTarget) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[240]
+	mi := &file_stewardmesh_proto_msgTypes[241]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -19344,7 +19466,7 @@ func (x *SignalSubscriptionTarget) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SignalSubscriptionTarget.ProtoReflect.Descriptor instead.
 func (*SignalSubscriptionTarget) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{240}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{241}
 }
 
 func (x *SignalSubscriptionTarget) GetTargetKind() string {
@@ -19386,7 +19508,7 @@ type SignalSubscription struct {
 
 func (x *SignalSubscription) Reset() {
 	*x = SignalSubscription{}
-	mi := &file_stewardmesh_proto_msgTypes[241]
+	mi := &file_stewardmesh_proto_msgTypes[242]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -19398,7 +19520,7 @@ func (x *SignalSubscription) String() string {
 func (*SignalSubscription) ProtoMessage() {}
 
 func (x *SignalSubscription) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[241]
+	mi := &file_stewardmesh_proto_msgTypes[242]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -19411,7 +19533,7 @@ func (x *SignalSubscription) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SignalSubscription.ProtoReflect.Descriptor instead.
 func (*SignalSubscription) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{241}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{242}
 }
 
 func (x *SignalSubscription) GetId() string {
@@ -19482,7 +19604,7 @@ type CreateSignalSubscriptionRequest struct {
 
 func (x *CreateSignalSubscriptionRequest) Reset() {
 	*x = CreateSignalSubscriptionRequest{}
-	mi := &file_stewardmesh_proto_msgTypes[242]
+	mi := &file_stewardmesh_proto_msgTypes[243]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -19494,7 +19616,7 @@ func (x *CreateSignalSubscriptionRequest) String() string {
 func (*CreateSignalSubscriptionRequest) ProtoMessage() {}
 
 func (x *CreateSignalSubscriptionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[242]
+	mi := &file_stewardmesh_proto_msgTypes[243]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -19507,7 +19629,7 @@ func (x *CreateSignalSubscriptionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateSignalSubscriptionRequest.ProtoReflect.Descriptor instead.
 func (*CreateSignalSubscriptionRequest) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{242}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{243}
 }
 
 func (x *CreateSignalSubscriptionRequest) GetId() string {
@@ -19547,7 +19669,7 @@ type DeleteSignalSubscriptionRequest struct {
 
 func (x *DeleteSignalSubscriptionRequest) Reset() {
 	*x = DeleteSignalSubscriptionRequest{}
-	mi := &file_stewardmesh_proto_msgTypes[243]
+	mi := &file_stewardmesh_proto_msgTypes[244]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -19559,7 +19681,7 @@ func (x *DeleteSignalSubscriptionRequest) String() string {
 func (*DeleteSignalSubscriptionRequest) ProtoMessage() {}
 
 func (x *DeleteSignalSubscriptionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[243]
+	mi := &file_stewardmesh_proto_msgTypes[244]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -19572,7 +19694,7 @@ func (x *DeleteSignalSubscriptionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteSignalSubscriptionRequest.ProtoReflect.Descriptor instead.
 func (*DeleteSignalSubscriptionRequest) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{243}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{244}
 }
 
 func (x *DeleteSignalSubscriptionRequest) GetSubscriptionId() string {
@@ -19591,7 +19713,7 @@ type DeleteSignalSubscriptionResponse struct {
 
 func (x *DeleteSignalSubscriptionResponse) Reset() {
 	*x = DeleteSignalSubscriptionResponse{}
-	mi := &file_stewardmesh_proto_msgTypes[244]
+	mi := &file_stewardmesh_proto_msgTypes[245]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -19603,7 +19725,7 @@ func (x *DeleteSignalSubscriptionResponse) String() string {
 func (*DeleteSignalSubscriptionResponse) ProtoMessage() {}
 
 func (x *DeleteSignalSubscriptionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[244]
+	mi := &file_stewardmesh_proto_msgTypes[245]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -19616,7 +19738,7 @@ func (x *DeleteSignalSubscriptionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteSignalSubscriptionResponse.ProtoReflect.Descriptor instead.
 func (*DeleteSignalSubscriptionResponse) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{244}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{245}
 }
 
 func (x *DeleteSignalSubscriptionResponse) GetDeleted() bool {
@@ -19646,7 +19768,7 @@ type SignalDelivery struct {
 
 func (x *SignalDelivery) Reset() {
 	*x = SignalDelivery{}
-	mi := &file_stewardmesh_proto_msgTypes[245]
+	mi := &file_stewardmesh_proto_msgTypes[246]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -19658,7 +19780,7 @@ func (x *SignalDelivery) String() string {
 func (*SignalDelivery) ProtoMessage() {}
 
 func (x *SignalDelivery) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[245]
+	mi := &file_stewardmesh_proto_msgTypes[246]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -19671,7 +19793,7 @@ func (x *SignalDelivery) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SignalDelivery.ProtoReflect.Descriptor instead.
 func (*SignalDelivery) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{245}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{246}
 }
 
 func (x *SignalDelivery) GetId() string {
@@ -19761,7 +19883,7 @@ type ListPendingSignalDeliveriesRequest struct {
 
 func (x *ListPendingSignalDeliveriesRequest) Reset() {
 	*x = ListPendingSignalDeliveriesRequest{}
-	mi := &file_stewardmesh_proto_msgTypes[246]
+	mi := &file_stewardmesh_proto_msgTypes[247]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -19773,7 +19895,7 @@ func (x *ListPendingSignalDeliveriesRequest) String() string {
 func (*ListPendingSignalDeliveriesRequest) ProtoMessage() {}
 
 func (x *ListPendingSignalDeliveriesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[246]
+	mi := &file_stewardmesh_proto_msgTypes[247]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -19786,7 +19908,7 @@ func (x *ListPendingSignalDeliveriesRequest) ProtoReflect() protoreflect.Message
 
 // Deprecated: Use ListPendingSignalDeliveriesRequest.ProtoReflect.Descriptor instead.
 func (*ListPendingSignalDeliveriesRequest) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{246}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{247}
 }
 
 func (x *ListPendingSignalDeliveriesRequest) GetAsOf() *timestamppb.Timestamp {
@@ -19812,7 +19934,7 @@ type ListPendingSignalDeliveriesResponse struct {
 
 func (x *ListPendingSignalDeliveriesResponse) Reset() {
 	*x = ListPendingSignalDeliveriesResponse{}
-	mi := &file_stewardmesh_proto_msgTypes[247]
+	mi := &file_stewardmesh_proto_msgTypes[248]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -19824,7 +19946,7 @@ func (x *ListPendingSignalDeliveriesResponse) String() string {
 func (*ListPendingSignalDeliveriesResponse) ProtoMessage() {}
 
 func (x *ListPendingSignalDeliveriesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[247]
+	mi := &file_stewardmesh_proto_msgTypes[248]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -19837,7 +19959,7 @@ func (x *ListPendingSignalDeliveriesResponse) ProtoReflect() protoreflect.Messag
 
 // Deprecated: Use ListPendingSignalDeliveriesResponse.ProtoReflect.Descriptor instead.
 func (*ListPendingSignalDeliveriesResponse) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{247}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{248}
 }
 
 func (x *ListPendingSignalDeliveriesResponse) GetItems() []*SignalDelivery {
@@ -19859,7 +19981,7 @@ type RecordSignalDeliveryAttemptRequest struct {
 
 func (x *RecordSignalDeliveryAttemptRequest) Reset() {
 	*x = RecordSignalDeliveryAttemptRequest{}
-	mi := &file_stewardmesh_proto_msgTypes[248]
+	mi := &file_stewardmesh_proto_msgTypes[249]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -19871,7 +19993,7 @@ func (x *RecordSignalDeliveryAttemptRequest) String() string {
 func (*RecordSignalDeliveryAttemptRequest) ProtoMessage() {}
 
 func (x *RecordSignalDeliveryAttemptRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[248]
+	mi := &file_stewardmesh_proto_msgTypes[249]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -19884,7 +20006,7 @@ func (x *RecordSignalDeliveryAttemptRequest) ProtoReflect() protoreflect.Message
 
 // Deprecated: Use RecordSignalDeliveryAttemptRequest.ProtoReflect.Descriptor instead.
 func (*RecordSignalDeliveryAttemptRequest) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{248}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{249}
 }
 
 func (x *RecordSignalDeliveryAttemptRequest) GetDeliveryId() string {
@@ -19927,7 +20049,7 @@ type ExportSignalsCSVRequest struct {
 
 func (x *ExportSignalsCSVRequest) Reset() {
 	*x = ExportSignalsCSVRequest{}
-	mi := &file_stewardmesh_proto_msgTypes[249]
+	mi := &file_stewardmesh_proto_msgTypes[250]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -19939,7 +20061,7 @@ func (x *ExportSignalsCSVRequest) String() string {
 func (*ExportSignalsCSVRequest) ProtoMessage() {}
 
 func (x *ExportSignalsCSVRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[249]
+	mi := &file_stewardmesh_proto_msgTypes[250]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -19952,7 +20074,7 @@ func (x *ExportSignalsCSVRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExportSignalsCSVRequest.ProtoReflect.Descriptor instead.
 func (*ExportSignalsCSVRequest) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{249}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{250}
 }
 
 func (x *ExportSignalsCSVRequest) GetStatus() string {
@@ -19994,7 +20116,7 @@ type ExportSignalsCSVResponse struct {
 
 func (x *ExportSignalsCSVResponse) Reset() {
 	*x = ExportSignalsCSVResponse{}
-	mi := &file_stewardmesh_proto_msgTypes[250]
+	mi := &file_stewardmesh_proto_msgTypes[251]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -20006,7 +20128,7 @@ func (x *ExportSignalsCSVResponse) String() string {
 func (*ExportSignalsCSVResponse) ProtoMessage() {}
 
 func (x *ExportSignalsCSVResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[250]
+	mi := &file_stewardmesh_proto_msgTypes[251]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -20019,7 +20141,7 @@ func (x *ExportSignalsCSVResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExportSignalsCSVResponse.ProtoReflect.Descriptor instead.
 func (*ExportSignalsCSVResponse) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{250}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{251}
 }
 
 func (x *ExportSignalsCSVResponse) GetContent() []byte {
@@ -20054,7 +20176,7 @@ type ExchangeReference struct {
 
 func (x *ExchangeReference) Reset() {
 	*x = ExchangeReference{}
-	mi := &file_stewardmesh_proto_msgTypes[251]
+	mi := &file_stewardmesh_proto_msgTypes[252]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -20066,7 +20188,7 @@ func (x *ExchangeReference) String() string {
 func (*ExchangeReference) ProtoMessage() {}
 
 func (x *ExchangeReference) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[251]
+	mi := &file_stewardmesh_proto_msgTypes[252]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -20079,7 +20201,7 @@ func (x *ExchangeReference) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExchangeReference.ProtoReflect.Descriptor instead.
 func (*ExchangeReference) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{251}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{252}
 }
 
 func (x *ExchangeReference) GetType() string {
@@ -20108,7 +20230,7 @@ type ExchangeSchemaReference struct {
 
 func (x *ExchangeSchemaReference) Reset() {
 	*x = ExchangeSchemaReference{}
-	mi := &file_stewardmesh_proto_msgTypes[252]
+	mi := &file_stewardmesh_proto_msgTypes[253]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -20120,7 +20242,7 @@ func (x *ExchangeSchemaReference) String() string {
 func (*ExchangeSchemaReference) ProtoMessage() {}
 
 func (x *ExchangeSchemaReference) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[252]
+	mi := &file_stewardmesh_proto_msgTypes[253]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -20133,7 +20255,7 @@ func (x *ExchangeSchemaReference) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExchangeSchemaReference.ProtoReflect.Descriptor instead.
 func (*ExchangeSchemaReference) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{252}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{253}
 }
 
 func (x *ExchangeSchemaReference) GetRecordType() string {
@@ -20169,7 +20291,7 @@ type ExchangeProvenance struct {
 
 func (x *ExchangeProvenance) Reset() {
 	*x = ExchangeProvenance{}
-	mi := &file_stewardmesh_proto_msgTypes[253]
+	mi := &file_stewardmesh_proto_msgTypes[254]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -20181,7 +20303,7 @@ func (x *ExchangeProvenance) String() string {
 func (*ExchangeProvenance) ProtoMessage() {}
 
 func (x *ExchangeProvenance) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[253]
+	mi := &file_stewardmesh_proto_msgTypes[254]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -20194,7 +20316,7 @@ func (x *ExchangeProvenance) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExchangeProvenance.ProtoReflect.Descriptor instead.
 func (*ExchangeProvenance) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{253}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{254}
 }
 
 func (x *ExchangeProvenance) GetSourceSystemId() string {
@@ -20224,7 +20346,7 @@ type ExchangeOwnershipMetadata struct {
 
 func (x *ExchangeOwnershipMetadata) Reset() {
 	*x = ExchangeOwnershipMetadata{}
-	mi := &file_stewardmesh_proto_msgTypes[254]
+	mi := &file_stewardmesh_proto_msgTypes[255]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -20236,7 +20358,7 @@ func (x *ExchangeOwnershipMetadata) String() string {
 func (*ExchangeOwnershipMetadata) ProtoMessage() {}
 
 func (x *ExchangeOwnershipMetadata) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[254]
+	mi := &file_stewardmesh_proto_msgTypes[255]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -20249,7 +20371,7 @@ func (x *ExchangeOwnershipMetadata) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExchangeOwnershipMetadata.ProtoReflect.Descriptor instead.
 func (*ExchangeOwnershipMetadata) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{254}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{255}
 }
 
 func (x *ExchangeOwnershipMetadata) GetState() string {
@@ -20298,7 +20420,7 @@ type ExchangeFileMetadata struct {
 
 func (x *ExchangeFileMetadata) Reset() {
 	*x = ExchangeFileMetadata{}
-	mi := &file_stewardmesh_proto_msgTypes[255]
+	mi := &file_stewardmesh_proto_msgTypes[256]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -20310,7 +20432,7 @@ func (x *ExchangeFileMetadata) String() string {
 func (*ExchangeFileMetadata) ProtoMessage() {}
 
 func (x *ExchangeFileMetadata) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[255]
+	mi := &file_stewardmesh_proto_msgTypes[256]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -20323,7 +20445,7 @@ func (x *ExchangeFileMetadata) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExchangeFileMetadata.ProtoReflect.Descriptor instead.
 func (*ExchangeFileMetadata) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{255}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{256}
 }
 
 func (x *ExchangeFileMetadata) GetMode() string {
@@ -20390,7 +20512,7 @@ type ExchangeRecord struct {
 
 func (x *ExchangeRecord) Reset() {
 	*x = ExchangeRecord{}
-	mi := &file_stewardmesh_proto_msgTypes[256]
+	mi := &file_stewardmesh_proto_msgTypes[257]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -20402,7 +20524,7 @@ func (x *ExchangeRecord) String() string {
 func (*ExchangeRecord) ProtoMessage() {}
 
 func (x *ExchangeRecord) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[256]
+	mi := &file_stewardmesh_proto_msgTypes[257]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -20415,7 +20537,7 @@ func (x *ExchangeRecord) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExchangeRecord.ProtoReflect.Descriptor instead.
 func (*ExchangeRecord) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{256}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{257}
 }
 
 func (x *ExchangeRecord) GetType() string {
@@ -20513,7 +20635,7 @@ type ExchangeManifest struct {
 
 func (x *ExchangeManifest) Reset() {
 	*x = ExchangeManifest{}
-	mi := &file_stewardmesh_proto_msgTypes[257]
+	mi := &file_stewardmesh_proto_msgTypes[258]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -20525,7 +20647,7 @@ func (x *ExchangeManifest) String() string {
 func (*ExchangeManifest) ProtoMessage() {}
 
 func (x *ExchangeManifest) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[257]
+	mi := &file_stewardmesh_proto_msgTypes[258]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -20538,7 +20660,7 @@ func (x *ExchangeManifest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExchangeManifest.ProtoReflect.Descriptor instead.
 func (*ExchangeManifest) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{257}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{258}
 }
 
 func (x *ExchangeManifest) GetSchemaVersion() string {
@@ -20606,7 +20728,7 @@ type ExchangeRecordDescriptor struct {
 
 func (x *ExchangeRecordDescriptor) Reset() {
 	*x = ExchangeRecordDescriptor{}
-	mi := &file_stewardmesh_proto_msgTypes[258]
+	mi := &file_stewardmesh_proto_msgTypes[259]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -20618,7 +20740,7 @@ func (x *ExchangeRecordDescriptor) String() string {
 func (*ExchangeRecordDescriptor) ProtoMessage() {}
 
 func (x *ExchangeRecordDescriptor) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[258]
+	mi := &file_stewardmesh_proto_msgTypes[259]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -20631,7 +20753,7 @@ func (x *ExchangeRecordDescriptor) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExchangeRecordDescriptor.ProtoReflect.Descriptor instead.
 func (*ExchangeRecordDescriptor) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{258}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{259}
 }
 
 func (x *ExchangeRecordDescriptor) GetType() string {
@@ -20691,7 +20813,7 @@ type ListExchangeRecordsRequest struct {
 
 func (x *ListExchangeRecordsRequest) Reset() {
 	*x = ListExchangeRecordsRequest{}
-	mi := &file_stewardmesh_proto_msgTypes[259]
+	mi := &file_stewardmesh_proto_msgTypes[260]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -20703,7 +20825,7 @@ func (x *ListExchangeRecordsRequest) String() string {
 func (*ListExchangeRecordsRequest) ProtoMessage() {}
 
 func (x *ListExchangeRecordsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[259]
+	mi := &file_stewardmesh_proto_msgTypes[260]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -20716,7 +20838,7 @@ func (x *ListExchangeRecordsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListExchangeRecordsRequest.ProtoReflect.Descriptor instead.
 func (*ListExchangeRecordsRequest) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{259}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{260}
 }
 
 type ListExchangeRecordsResponse struct {
@@ -20729,7 +20851,7 @@ type ListExchangeRecordsResponse struct {
 
 func (x *ListExchangeRecordsResponse) Reset() {
 	*x = ListExchangeRecordsResponse{}
-	mi := &file_stewardmesh_proto_msgTypes[260]
+	mi := &file_stewardmesh_proto_msgTypes[261]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -20741,7 +20863,7 @@ func (x *ListExchangeRecordsResponse) String() string {
 func (*ListExchangeRecordsResponse) ProtoMessage() {}
 
 func (x *ListExchangeRecordsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[260]
+	mi := &file_stewardmesh_proto_msgTypes[261]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -20754,7 +20876,7 @@ func (x *ListExchangeRecordsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListExchangeRecordsResponse.ProtoReflect.Descriptor instead.
 func (*ListExchangeRecordsResponse) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{260}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{261}
 }
 
 func (x *ListExchangeRecordsResponse) GetItems() []*ExchangeRecordDescriptor {
@@ -20774,7 +20896,7 @@ type ListExchangePackagesRequest struct {
 
 func (x *ListExchangePackagesRequest) Reset() {
 	*x = ListExchangePackagesRequest{}
-	mi := &file_stewardmesh_proto_msgTypes[261]
+	mi := &file_stewardmesh_proto_msgTypes[262]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -20786,7 +20908,7 @@ func (x *ListExchangePackagesRequest) String() string {
 func (*ListExchangePackagesRequest) ProtoMessage() {}
 
 func (x *ListExchangePackagesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[261]
+	mi := &file_stewardmesh_proto_msgTypes[262]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -20799,7 +20921,7 @@ func (x *ListExchangePackagesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListExchangePackagesRequest.ProtoReflect.Descriptor instead.
 func (*ListExchangePackagesRequest) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{261}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{262}
 }
 
 func (x *ListExchangePackagesRequest) GetLimit() int32 {
@@ -20819,7 +20941,7 @@ type ListExchangePackagesResponse struct {
 
 func (x *ListExchangePackagesResponse) Reset() {
 	*x = ListExchangePackagesResponse{}
-	mi := &file_stewardmesh_proto_msgTypes[262]
+	mi := &file_stewardmesh_proto_msgTypes[263]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -20831,7 +20953,7 @@ func (x *ListExchangePackagesResponse) String() string {
 func (*ListExchangePackagesResponse) ProtoMessage() {}
 
 func (x *ListExchangePackagesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[262]
+	mi := &file_stewardmesh_proto_msgTypes[263]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -20844,7 +20966,7 @@ func (x *ListExchangePackagesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListExchangePackagesResponse.ProtoReflect.Descriptor instead.
 func (*ListExchangePackagesResponse) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{262}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{263}
 }
 
 func (x *ListExchangePackagesResponse) GetItems() []*ExchangePackage {
@@ -20869,7 +20991,7 @@ type ExportExchangePackageRequest struct {
 
 func (x *ExportExchangePackageRequest) Reset() {
 	*x = ExportExchangePackageRequest{}
-	mi := &file_stewardmesh_proto_msgTypes[263]
+	mi := &file_stewardmesh_proto_msgTypes[264]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -20881,7 +21003,7 @@ func (x *ExportExchangePackageRequest) String() string {
 func (*ExportExchangePackageRequest) ProtoMessage() {}
 
 func (x *ExportExchangePackageRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[263]
+	mi := &file_stewardmesh_proto_msgTypes[264]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -20894,7 +21016,7 @@ func (x *ExportExchangePackageRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExportExchangePackageRequest.ProtoReflect.Descriptor instead.
 func (*ExportExchangePackageRequest) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{263}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{264}
 }
 
 func (x *ExportExchangePackageRequest) GetSelection() []*ExchangeReference {
@@ -20930,7 +21052,7 @@ type ExchangeExportArtifact struct {
 
 func (x *ExchangeExportArtifact) Reset() {
 	*x = ExchangeExportArtifact{}
-	mi := &file_stewardmesh_proto_msgTypes[264]
+	mi := &file_stewardmesh_proto_msgTypes[265]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -20942,7 +21064,7 @@ func (x *ExchangeExportArtifact) String() string {
 func (*ExchangeExportArtifact) ProtoMessage() {}
 
 func (x *ExchangeExportArtifact) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[264]
+	mi := &file_stewardmesh_proto_msgTypes[265]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -20955,7 +21077,7 @@ func (x *ExchangeExportArtifact) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExchangeExportArtifact.ProtoReflect.Descriptor instead.
 func (*ExchangeExportArtifact) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{264}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{265}
 }
 
 func (x *ExchangeExportArtifact) GetPackageId() string {
@@ -20990,7 +21112,7 @@ type ImportExchangePackageRequest struct {
 
 func (x *ImportExchangePackageRequest) Reset() {
 	*x = ImportExchangePackageRequest{}
-	mi := &file_stewardmesh_proto_msgTypes[265]
+	mi := &file_stewardmesh_proto_msgTypes[266]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -21002,7 +21124,7 @@ func (x *ImportExchangePackageRequest) String() string {
 func (*ImportExchangePackageRequest) ProtoMessage() {}
 
 func (x *ImportExchangePackageRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[265]
+	mi := &file_stewardmesh_proto_msgTypes[266]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -21015,7 +21137,7 @@ func (x *ImportExchangePackageRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ImportExchangePackageRequest.ProtoReflect.Descriptor instead.
 func (*ImportExchangePackageRequest) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{265}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{266}
 }
 
 func (x *ImportExchangePackageRequest) GetArchive() []byte {
@@ -21043,7 +21165,7 @@ type ExchangeRecordOutcome struct {
 
 func (x *ExchangeRecordOutcome) Reset() {
 	*x = ExchangeRecordOutcome{}
-	mi := &file_stewardmesh_proto_msgTypes[266]
+	mi := &file_stewardmesh_proto_msgTypes[267]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -21055,7 +21177,7 @@ func (x *ExchangeRecordOutcome) String() string {
 func (*ExchangeRecordOutcome) ProtoMessage() {}
 
 func (x *ExchangeRecordOutcome) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[266]
+	mi := &file_stewardmesh_proto_msgTypes[267]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -21068,7 +21190,7 @@ func (x *ExchangeRecordOutcome) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExchangeRecordOutcome.ProtoReflect.Descriptor instead.
 func (*ExchangeRecordOutcome) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{266}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{267}
 }
 
 func (x *ExchangeRecordOutcome) GetType() string {
@@ -21153,7 +21275,7 @@ type ExchangePackage struct {
 
 func (x *ExchangePackage) Reset() {
 	*x = ExchangePackage{}
-	mi := &file_stewardmesh_proto_msgTypes[267]
+	mi := &file_stewardmesh_proto_msgTypes[268]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -21165,7 +21287,7 @@ func (x *ExchangePackage) String() string {
 func (*ExchangePackage) ProtoMessage() {}
 
 func (x *ExchangePackage) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[267]
+	mi := &file_stewardmesh_proto_msgTypes[268]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -21178,7 +21300,7 @@ func (x *ExchangePackage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExchangePackage.ProtoReflect.Descriptor instead.
 func (*ExchangePackage) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{267}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{268}
 }
 
 func (x *ExchangePackage) GetPackageId() string {
@@ -21314,7 +21436,7 @@ type ImportExchangePackageResponse struct {
 
 func (x *ImportExchangePackageResponse) Reset() {
 	*x = ImportExchangePackageResponse{}
-	mi := &file_stewardmesh_proto_msgTypes[268]
+	mi := &file_stewardmesh_proto_msgTypes[269]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -21326,7 +21448,7 @@ func (x *ImportExchangePackageResponse) String() string {
 func (*ImportExchangePackageResponse) ProtoMessage() {}
 
 func (x *ImportExchangePackageResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[268]
+	mi := &file_stewardmesh_proto_msgTypes[269]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -21339,7 +21461,7 @@ func (x *ImportExchangePackageResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ImportExchangePackageResponse.ProtoReflect.Descriptor instead.
 func (*ImportExchangePackageResponse) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{268}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{269}
 }
 
 func (x *ImportExchangePackageResponse) GetPackage() *ExchangePackage {
@@ -21364,7 +21486,7 @@ type ListReachEndpointsRequest struct {
 
 func (x *ListReachEndpointsRequest) Reset() {
 	*x = ListReachEndpointsRequest{}
-	mi := &file_stewardmesh_proto_msgTypes[269]
+	mi := &file_stewardmesh_proto_msgTypes[270]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -21376,7 +21498,7 @@ func (x *ListReachEndpointsRequest) String() string {
 func (*ListReachEndpointsRequest) ProtoMessage() {}
 
 func (x *ListReachEndpointsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[269]
+	mi := &file_stewardmesh_proto_msgTypes[270]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -21389,7 +21511,7 @@ func (x *ListReachEndpointsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListReachEndpointsRequest.ProtoReflect.Descriptor instead.
 func (*ListReachEndpointsRequest) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{269}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{270}
 }
 
 type ListReachEndpointsResponse struct {
@@ -21401,7 +21523,7 @@ type ListReachEndpointsResponse struct {
 
 func (x *ListReachEndpointsResponse) Reset() {
 	*x = ListReachEndpointsResponse{}
-	mi := &file_stewardmesh_proto_msgTypes[270]
+	mi := &file_stewardmesh_proto_msgTypes[271]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -21413,7 +21535,7 @@ func (x *ListReachEndpointsResponse) String() string {
 func (*ListReachEndpointsResponse) ProtoMessage() {}
 
 func (x *ListReachEndpointsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[270]
+	mi := &file_stewardmesh_proto_msgTypes[271]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -21426,7 +21548,7 @@ func (x *ListReachEndpointsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListReachEndpointsResponse.ProtoReflect.Descriptor instead.
 func (*ListReachEndpointsResponse) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{270}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{271}
 }
 
 func (x *ListReachEndpointsResponse) GetItems() []*ReachEndpoint {
@@ -21451,7 +21573,7 @@ type ReachEndpoint struct {
 
 func (x *ReachEndpoint) Reset() {
 	*x = ReachEndpoint{}
-	mi := &file_stewardmesh_proto_msgTypes[271]
+	mi := &file_stewardmesh_proto_msgTypes[272]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -21463,7 +21585,7 @@ func (x *ReachEndpoint) String() string {
 func (*ReachEndpoint) ProtoMessage() {}
 
 func (x *ReachEndpoint) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[271]
+	mi := &file_stewardmesh_proto_msgTypes[272]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -21476,7 +21598,7 @@ func (x *ReachEndpoint) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReachEndpoint.ProtoReflect.Descriptor instead.
 func (*ReachEndpoint) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{271}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{272}
 }
 
 func (x *ReachEndpoint) GetId() string {
@@ -21515,7 +21637,7 @@ type ListReachProvidersRequest struct {
 
 func (x *ListReachProvidersRequest) Reset() {
 	*x = ListReachProvidersRequest{}
-	mi := &file_stewardmesh_proto_msgTypes[272]
+	mi := &file_stewardmesh_proto_msgTypes[273]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -21527,7 +21649,7 @@ func (x *ListReachProvidersRequest) String() string {
 func (*ListReachProvidersRequest) ProtoMessage() {}
 
 func (x *ListReachProvidersRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[272]
+	mi := &file_stewardmesh_proto_msgTypes[273]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -21540,7 +21662,7 @@ func (x *ListReachProvidersRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListReachProvidersRequest.ProtoReflect.Descriptor instead.
 func (*ListReachProvidersRequest) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{272}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{273}
 }
 
 type ListReachProvidersResponse struct {
@@ -21552,7 +21674,7 @@ type ListReachProvidersResponse struct {
 
 func (x *ListReachProvidersResponse) Reset() {
 	*x = ListReachProvidersResponse{}
-	mi := &file_stewardmesh_proto_msgTypes[273]
+	mi := &file_stewardmesh_proto_msgTypes[274]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -21564,7 +21686,7 @@ func (x *ListReachProvidersResponse) String() string {
 func (*ListReachProvidersResponse) ProtoMessage() {}
 
 func (x *ListReachProvidersResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[273]
+	mi := &file_stewardmesh_proto_msgTypes[274]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -21577,7 +21699,7 @@ func (x *ListReachProvidersResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListReachProvidersResponse.ProtoReflect.Descriptor instead.
 func (*ListReachProvidersResponse) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{273}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{274}
 }
 
 func (x *ListReachProvidersResponse) GetItems() []*ReachProvider {
@@ -21610,7 +21732,7 @@ type ReachProvider struct {
 
 func (x *ReachProvider) Reset() {
 	*x = ReachProvider{}
-	mi := &file_stewardmesh_proto_msgTypes[274]
+	mi := &file_stewardmesh_proto_msgTypes[275]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -21622,7 +21744,7 @@ func (x *ReachProvider) String() string {
 func (*ReachProvider) ProtoMessage() {}
 
 func (x *ReachProvider) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[274]
+	mi := &file_stewardmesh_proto_msgTypes[275]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -21635,7 +21757,7 @@ func (x *ReachProvider) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReachProvider.ProtoReflect.Descriptor instead.
 func (*ReachProvider) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{274}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{275}
 }
 
 func (x *ReachProvider) GetId() string {
@@ -21746,7 +21868,7 @@ type CreateReachProviderRequest struct {
 
 func (x *CreateReachProviderRequest) Reset() {
 	*x = CreateReachProviderRequest{}
-	mi := &file_stewardmesh_proto_msgTypes[275]
+	mi := &file_stewardmesh_proto_msgTypes[276]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -21758,7 +21880,7 @@ func (x *CreateReachProviderRequest) String() string {
 func (*CreateReachProviderRequest) ProtoMessage() {}
 
 func (x *CreateReachProviderRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[275]
+	mi := &file_stewardmesh_proto_msgTypes[276]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -21771,7 +21893,7 @@ func (x *CreateReachProviderRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateReachProviderRequest.ProtoReflect.Descriptor instead.
 func (*CreateReachProviderRequest) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{275}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{276}
 }
 
 func (x *CreateReachProviderRequest) GetId() string {
@@ -21836,7 +21958,7 @@ type UpdateReachProviderRequest struct {
 
 func (x *UpdateReachProviderRequest) Reset() {
 	*x = UpdateReachProviderRequest{}
-	mi := &file_stewardmesh_proto_msgTypes[276]
+	mi := &file_stewardmesh_proto_msgTypes[277]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -21848,7 +21970,7 @@ func (x *UpdateReachProviderRequest) String() string {
 func (*UpdateReachProviderRequest) ProtoMessage() {}
 
 func (x *UpdateReachProviderRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[276]
+	mi := &file_stewardmesh_proto_msgTypes[277]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -21861,7 +21983,7 @@ func (x *UpdateReachProviderRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateReachProviderRequest.ProtoReflect.Descriptor instead.
 func (*UpdateReachProviderRequest) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{276}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{277}
 }
 
 func (x *UpdateReachProviderRequest) GetProviderId() string {
@@ -21912,7 +22034,7 @@ type RotateReachProviderSecretRequest struct {
 
 func (x *RotateReachProviderSecretRequest) Reset() {
 	*x = RotateReachProviderSecretRequest{}
-	mi := &file_stewardmesh_proto_msgTypes[277]
+	mi := &file_stewardmesh_proto_msgTypes[278]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -21924,7 +22046,7 @@ func (x *RotateReachProviderSecretRequest) String() string {
 func (*RotateReachProviderSecretRequest) ProtoMessage() {}
 
 func (x *RotateReachProviderSecretRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[277]
+	mi := &file_stewardmesh_proto_msgTypes[278]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -21937,7 +22059,7 @@ func (x *RotateReachProviderSecretRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RotateReachProviderSecretRequest.ProtoReflect.Descriptor instead.
 func (*RotateReachProviderSecretRequest) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{277}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{278}
 }
 
 func (x *RotateReachProviderSecretRequest) GetProviderId() string {
@@ -21978,7 +22100,7 @@ type TestReachProviderRequest struct {
 
 func (x *TestReachProviderRequest) Reset() {
 	*x = TestReachProviderRequest{}
-	mi := &file_stewardmesh_proto_msgTypes[278]
+	mi := &file_stewardmesh_proto_msgTypes[279]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -21990,7 +22112,7 @@ func (x *TestReachProviderRequest) String() string {
 func (*TestReachProviderRequest) ProtoMessage() {}
 
 func (x *TestReachProviderRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[278]
+	mi := &file_stewardmesh_proto_msgTypes[279]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -22003,7 +22125,7 @@ func (x *TestReachProviderRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TestReachProviderRequest.ProtoReflect.Descriptor instead.
 func (*TestReachProviderRequest) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{278}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{279}
 }
 
 func (x *TestReachProviderRequest) GetProviderId() string {
@@ -22029,7 +22151,7 @@ type ListReachProviderTestsRequest struct {
 
 func (x *ListReachProviderTestsRequest) Reset() {
 	*x = ListReachProviderTestsRequest{}
-	mi := &file_stewardmesh_proto_msgTypes[279]
+	mi := &file_stewardmesh_proto_msgTypes[280]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -22041,7 +22163,7 @@ func (x *ListReachProviderTestsRequest) String() string {
 func (*ListReachProviderTestsRequest) ProtoMessage() {}
 
 func (x *ListReachProviderTestsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[279]
+	mi := &file_stewardmesh_proto_msgTypes[280]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -22054,7 +22176,7 @@ func (x *ListReachProviderTestsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListReachProviderTestsRequest.ProtoReflect.Descriptor instead.
 func (*ListReachProviderTestsRequest) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{279}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{280}
 }
 
 func (x *ListReachProviderTestsRequest) GetProviderId() string {
@@ -22073,7 +22195,7 @@ type ListReachProviderTestsResponse struct {
 
 func (x *ListReachProviderTestsResponse) Reset() {
 	*x = ListReachProviderTestsResponse{}
-	mi := &file_stewardmesh_proto_msgTypes[280]
+	mi := &file_stewardmesh_proto_msgTypes[281]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -22085,7 +22207,7 @@ func (x *ListReachProviderTestsResponse) String() string {
 func (*ListReachProviderTestsResponse) ProtoMessage() {}
 
 func (x *ListReachProviderTestsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[280]
+	mi := &file_stewardmesh_proto_msgTypes[281]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -22098,7 +22220,7 @@ func (x *ListReachProviderTestsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListReachProviderTestsResponse.ProtoReflect.Descriptor instead.
 func (*ListReachProviderTestsResponse) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{280}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{281}
 }
 
 func (x *ListReachProviderTestsResponse) GetItems() []*ReachProviderTest {
@@ -22123,7 +22245,7 @@ type ReachProviderTest struct {
 
 func (x *ReachProviderTest) Reset() {
 	*x = ReachProviderTest{}
-	mi := &file_stewardmesh_proto_msgTypes[281]
+	mi := &file_stewardmesh_proto_msgTypes[282]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -22135,7 +22257,7 @@ func (x *ReachProviderTest) String() string {
 func (*ReachProviderTest) ProtoMessage() {}
 
 func (x *ReachProviderTest) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[281]
+	mi := &file_stewardmesh_proto_msgTypes[282]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -22148,7 +22270,7 @@ func (x *ReachProviderTest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReachProviderTest.ProtoReflect.Descriptor instead.
 func (*ReachProviderTest) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{281}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{282}
 }
 
 func (x *ReachProviderTest) GetId() string {
@@ -22201,7 +22323,7 @@ type ListReachTemplatesRequest struct {
 
 func (x *ListReachTemplatesRequest) Reset() {
 	*x = ListReachTemplatesRequest{}
-	mi := &file_stewardmesh_proto_msgTypes[282]
+	mi := &file_stewardmesh_proto_msgTypes[283]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -22213,7 +22335,7 @@ func (x *ListReachTemplatesRequest) String() string {
 func (*ListReachTemplatesRequest) ProtoMessage() {}
 
 func (x *ListReachTemplatesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[282]
+	mi := &file_stewardmesh_proto_msgTypes[283]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -22226,7 +22348,7 @@ func (x *ListReachTemplatesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListReachTemplatesRequest.ProtoReflect.Descriptor instead.
 func (*ListReachTemplatesRequest) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{282}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{283}
 }
 
 type ListReachTemplatesResponse struct {
@@ -22238,7 +22360,7 @@ type ListReachTemplatesResponse struct {
 
 func (x *ListReachTemplatesResponse) Reset() {
 	*x = ListReachTemplatesResponse{}
-	mi := &file_stewardmesh_proto_msgTypes[283]
+	mi := &file_stewardmesh_proto_msgTypes[284]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -22250,7 +22372,7 @@ func (x *ListReachTemplatesResponse) String() string {
 func (*ListReachTemplatesResponse) ProtoMessage() {}
 
 func (x *ListReachTemplatesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[283]
+	mi := &file_stewardmesh_proto_msgTypes[284]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -22263,7 +22385,7 @@ func (x *ListReachTemplatesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListReachTemplatesResponse.ProtoReflect.Descriptor instead.
 func (*ListReachTemplatesResponse) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{283}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{284}
 }
 
 func (x *ListReachTemplatesResponse) GetItems() []*ReachTemplate {
@@ -22291,7 +22413,7 @@ type ReachTemplate struct {
 
 func (x *ReachTemplate) Reset() {
 	*x = ReachTemplate{}
-	mi := &file_stewardmesh_proto_msgTypes[284]
+	mi := &file_stewardmesh_proto_msgTypes[285]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -22303,7 +22425,7 @@ func (x *ReachTemplate) String() string {
 func (*ReachTemplate) ProtoMessage() {}
 
 func (x *ReachTemplate) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[284]
+	mi := &file_stewardmesh_proto_msgTypes[285]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -22316,7 +22438,7 @@ func (x *ReachTemplate) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReachTemplate.ProtoReflect.Descriptor instead.
 func (*ReachTemplate) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{284}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{285}
 }
 
 func (x *ReachTemplate) GetId() string {
@@ -22402,7 +22524,7 @@ type CreateReachTemplateRequest struct {
 
 func (x *CreateReachTemplateRequest) Reset() {
 	*x = CreateReachTemplateRequest{}
-	mi := &file_stewardmesh_proto_msgTypes[285]
+	mi := &file_stewardmesh_proto_msgTypes[286]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -22414,7 +22536,7 @@ func (x *CreateReachTemplateRequest) String() string {
 func (*CreateReachTemplateRequest) ProtoMessage() {}
 
 func (x *CreateReachTemplateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[285]
+	mi := &file_stewardmesh_proto_msgTypes[286]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -22427,7 +22549,7 @@ func (x *CreateReachTemplateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateReachTemplateRequest.ProtoReflect.Descriptor instead.
 func (*CreateReachTemplateRequest) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{285}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{286}
 }
 
 func (x *CreateReachTemplateRequest) GetId() string {
@@ -22471,7 +22593,7 @@ type UpdateReachTemplateRequest struct {
 
 func (x *UpdateReachTemplateRequest) Reset() {
 	*x = UpdateReachTemplateRequest{}
-	mi := &file_stewardmesh_proto_msgTypes[286]
+	mi := &file_stewardmesh_proto_msgTypes[287]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -22483,7 +22605,7 @@ func (x *UpdateReachTemplateRequest) String() string {
 func (*UpdateReachTemplateRequest) ProtoMessage() {}
 
 func (x *UpdateReachTemplateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[286]
+	mi := &file_stewardmesh_proto_msgTypes[287]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -22496,7 +22618,7 @@ func (x *UpdateReachTemplateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateReachTemplateRequest.ProtoReflect.Descriptor instead.
 func (*UpdateReachTemplateRequest) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{286}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{287}
 }
 
 func (x *UpdateReachTemplateRequest) GetTemplateId() string {
@@ -22546,7 +22668,7 @@ type ReachRecipient struct {
 
 func (x *ReachRecipient) Reset() {
 	*x = ReachRecipient{}
-	mi := &file_stewardmesh_proto_msgTypes[287]
+	mi := &file_stewardmesh_proto_msgTypes[288]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -22558,7 +22680,7 @@ func (x *ReachRecipient) String() string {
 func (*ReachRecipient) ProtoMessage() {}
 
 func (x *ReachRecipient) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[287]
+	mi := &file_stewardmesh_proto_msgTypes[288]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -22571,7 +22693,7 @@ func (x *ReachRecipient) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReachRecipient.ProtoReflect.Descriptor instead.
 func (*ReachRecipient) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{287}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{288}
 }
 
 func (x *ReachRecipient) GetKind() string {
@@ -22596,7 +22718,7 @@ type ListReachGroupsRequest struct {
 
 func (x *ListReachGroupsRequest) Reset() {
 	*x = ListReachGroupsRequest{}
-	mi := &file_stewardmesh_proto_msgTypes[288]
+	mi := &file_stewardmesh_proto_msgTypes[289]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -22608,7 +22730,7 @@ func (x *ListReachGroupsRequest) String() string {
 func (*ListReachGroupsRequest) ProtoMessage() {}
 
 func (x *ListReachGroupsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[288]
+	mi := &file_stewardmesh_proto_msgTypes[289]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -22621,7 +22743,7 @@ func (x *ListReachGroupsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListReachGroupsRequest.ProtoReflect.Descriptor instead.
 func (*ListReachGroupsRequest) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{288}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{289}
 }
 
 type ListReachGroupsResponse struct {
@@ -22633,7 +22755,7 @@ type ListReachGroupsResponse struct {
 
 func (x *ListReachGroupsResponse) Reset() {
 	*x = ListReachGroupsResponse{}
-	mi := &file_stewardmesh_proto_msgTypes[289]
+	mi := &file_stewardmesh_proto_msgTypes[290]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -22645,7 +22767,7 @@ func (x *ListReachGroupsResponse) String() string {
 func (*ListReachGroupsResponse) ProtoMessage() {}
 
 func (x *ListReachGroupsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[289]
+	mi := &file_stewardmesh_proto_msgTypes[290]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -22658,7 +22780,7 @@ func (x *ListReachGroupsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListReachGroupsResponse.ProtoReflect.Descriptor instead.
 func (*ListReachGroupsResponse) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{289}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{290}
 }
 
 func (x *ListReachGroupsResponse) GetItems() []*ReachSubscriberGroup {
@@ -22687,7 +22809,7 @@ type ReachSubscriberGroup struct {
 
 func (x *ReachSubscriberGroup) Reset() {
 	*x = ReachSubscriberGroup{}
-	mi := &file_stewardmesh_proto_msgTypes[290]
+	mi := &file_stewardmesh_proto_msgTypes[291]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -22699,7 +22821,7 @@ func (x *ReachSubscriberGroup) String() string {
 func (*ReachSubscriberGroup) ProtoMessage() {}
 
 func (x *ReachSubscriberGroup) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[290]
+	mi := &file_stewardmesh_proto_msgTypes[291]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -22712,7 +22834,7 @@ func (x *ReachSubscriberGroup) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReachSubscriberGroup.ProtoReflect.Descriptor instead.
 func (*ReachSubscriberGroup) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{290}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{291}
 }
 
 func (x *ReachSubscriberGroup) GetId() string {
@@ -22805,7 +22927,7 @@ type CreateReachGroupRequest struct {
 
 func (x *CreateReachGroupRequest) Reset() {
 	*x = CreateReachGroupRequest{}
-	mi := &file_stewardmesh_proto_msgTypes[291]
+	mi := &file_stewardmesh_proto_msgTypes[292]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -22817,7 +22939,7 @@ func (x *CreateReachGroupRequest) String() string {
 func (*CreateReachGroupRequest) ProtoMessage() {}
 
 func (x *CreateReachGroupRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[291]
+	mi := &file_stewardmesh_proto_msgTypes[292]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -22830,7 +22952,7 @@ func (x *CreateReachGroupRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateReachGroupRequest.ProtoReflect.Descriptor instead.
 func (*CreateReachGroupRequest) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{291}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{292}
 }
 
 func (x *CreateReachGroupRequest) GetId() string {
@@ -22882,7 +23004,7 @@ type UpdateReachGroupRequest struct {
 
 func (x *UpdateReachGroupRequest) Reset() {
 	*x = UpdateReachGroupRequest{}
-	mi := &file_stewardmesh_proto_msgTypes[292]
+	mi := &file_stewardmesh_proto_msgTypes[293]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -22894,7 +23016,7 @@ func (x *UpdateReachGroupRequest) String() string {
 func (*UpdateReachGroupRequest) ProtoMessage() {}
 
 func (x *UpdateReachGroupRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[292]
+	mi := &file_stewardmesh_proto_msgTypes[293]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -22907,7 +23029,7 @@ func (x *UpdateReachGroupRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateReachGroupRequest.ProtoReflect.Descriptor instead.
 func (*UpdateReachGroupRequest) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{292}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{293}
 }
 
 func (x *UpdateReachGroupRequest) GetGroupId() string {
@@ -22961,7 +23083,7 @@ type ListReachMessagesRequest struct {
 
 func (x *ListReachMessagesRequest) Reset() {
 	*x = ListReachMessagesRequest{}
-	mi := &file_stewardmesh_proto_msgTypes[293]
+	mi := &file_stewardmesh_proto_msgTypes[294]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -22973,7 +23095,7 @@ func (x *ListReachMessagesRequest) String() string {
 func (*ListReachMessagesRequest) ProtoMessage() {}
 
 func (x *ListReachMessagesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[293]
+	mi := &file_stewardmesh_proto_msgTypes[294]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -22986,7 +23108,7 @@ func (x *ListReachMessagesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListReachMessagesRequest.ProtoReflect.Descriptor instead.
 func (*ListReachMessagesRequest) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{293}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{294}
 }
 
 func (x *ListReachMessagesRequest) GetLimit() int32 {
@@ -23005,7 +23127,7 @@ type ListReachMessagesResponse struct {
 
 func (x *ListReachMessagesResponse) Reset() {
 	*x = ListReachMessagesResponse{}
-	mi := &file_stewardmesh_proto_msgTypes[294]
+	mi := &file_stewardmesh_proto_msgTypes[295]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -23017,7 +23139,7 @@ func (x *ListReachMessagesResponse) String() string {
 func (*ListReachMessagesResponse) ProtoMessage() {}
 
 func (x *ListReachMessagesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[294]
+	mi := &file_stewardmesh_proto_msgTypes[295]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -23030,7 +23152,7 @@ func (x *ListReachMessagesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListReachMessagesResponse.ProtoReflect.Descriptor instead.
 func (*ListReachMessagesResponse) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{294}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{295}
 }
 
 func (x *ListReachMessagesResponse) GetItems() []*ReachMessage {
@@ -23065,7 +23187,7 @@ type ReachMessage struct {
 
 func (x *ReachMessage) Reset() {
 	*x = ReachMessage{}
-	mi := &file_stewardmesh_proto_msgTypes[295]
+	mi := &file_stewardmesh_proto_msgTypes[296]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -23077,7 +23199,7 @@ func (x *ReachMessage) String() string {
 func (*ReachMessage) ProtoMessage() {}
 
 func (x *ReachMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[295]
+	mi := &file_stewardmesh_proto_msgTypes[296]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -23090,7 +23212,7 @@ func (x *ReachMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReachMessage.ProtoReflect.Descriptor instead.
 func (*ReachMessage) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{295}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{296}
 }
 
 func (x *ReachMessage) GetId() string {
@@ -23224,7 +23346,7 @@ type SendReachMessageRequest struct {
 
 func (x *SendReachMessageRequest) Reset() {
 	*x = SendReachMessageRequest{}
-	mi := &file_stewardmesh_proto_msgTypes[296]
+	mi := &file_stewardmesh_proto_msgTypes[297]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -23236,7 +23358,7 @@ func (x *SendReachMessageRequest) String() string {
 func (*SendReachMessageRequest) ProtoMessage() {}
 
 func (x *SendReachMessageRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[296]
+	mi := &file_stewardmesh_proto_msgTypes[297]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -23249,7 +23371,7 @@ func (x *SendReachMessageRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SendReachMessageRequest.ProtoReflect.Descriptor instead.
 func (*SendReachMessageRequest) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{296}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{297}
 }
 
 func (x *SendReachMessageRequest) GetGroupId() string {
@@ -23290,7 +23412,7 @@ type RetryReachMessageRequest struct {
 
 func (x *RetryReachMessageRequest) Reset() {
 	*x = RetryReachMessageRequest{}
-	mi := &file_stewardmesh_proto_msgTypes[297]
+	mi := &file_stewardmesh_proto_msgTypes[298]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -23302,7 +23424,7 @@ func (x *RetryReachMessageRequest) String() string {
 func (*RetryReachMessageRequest) ProtoMessage() {}
 
 func (x *RetryReachMessageRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[297]
+	mi := &file_stewardmesh_proto_msgTypes[298]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -23315,7 +23437,7 @@ func (x *RetryReachMessageRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RetryReachMessageRequest.ProtoReflect.Descriptor instead.
 func (*RetryReachMessageRequest) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{297}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{298}
 }
 
 func (x *RetryReachMessageRequest) GetMessageId() string {
@@ -23341,7 +23463,7 @@ type ListReachMessageAttemptsRequest struct {
 
 func (x *ListReachMessageAttemptsRequest) Reset() {
 	*x = ListReachMessageAttemptsRequest{}
-	mi := &file_stewardmesh_proto_msgTypes[298]
+	mi := &file_stewardmesh_proto_msgTypes[299]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -23353,7 +23475,7 @@ func (x *ListReachMessageAttemptsRequest) String() string {
 func (*ListReachMessageAttemptsRequest) ProtoMessage() {}
 
 func (x *ListReachMessageAttemptsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[298]
+	mi := &file_stewardmesh_proto_msgTypes[299]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -23366,7 +23488,7 @@ func (x *ListReachMessageAttemptsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListReachMessageAttemptsRequest.ProtoReflect.Descriptor instead.
 func (*ListReachMessageAttemptsRequest) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{298}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{299}
 }
 
 func (x *ListReachMessageAttemptsRequest) GetMessageId() string {
@@ -23385,7 +23507,7 @@ type ListReachMessageAttemptsResponse struct {
 
 func (x *ListReachMessageAttemptsResponse) Reset() {
 	*x = ListReachMessageAttemptsResponse{}
-	mi := &file_stewardmesh_proto_msgTypes[299]
+	mi := &file_stewardmesh_proto_msgTypes[300]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -23397,7 +23519,7 @@ func (x *ListReachMessageAttemptsResponse) String() string {
 func (*ListReachMessageAttemptsResponse) ProtoMessage() {}
 
 func (x *ListReachMessageAttemptsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[299]
+	mi := &file_stewardmesh_proto_msgTypes[300]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -23410,7 +23532,7 @@ func (x *ListReachMessageAttemptsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListReachMessageAttemptsResponse.ProtoReflect.Descriptor instead.
 func (*ListReachMessageAttemptsResponse) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{299}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{300}
 }
 
 func (x *ListReachMessageAttemptsResponse) GetItems() []*ReachDeliveryAttempt {
@@ -23436,7 +23558,7 @@ type ReachDeliveryAttempt struct {
 
 func (x *ReachDeliveryAttempt) Reset() {
 	*x = ReachDeliveryAttempt{}
-	mi := &file_stewardmesh_proto_msgTypes[300]
+	mi := &file_stewardmesh_proto_msgTypes[301]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -23448,7 +23570,7 @@ func (x *ReachDeliveryAttempt) String() string {
 func (*ReachDeliveryAttempt) ProtoMessage() {}
 
 func (x *ReachDeliveryAttempt) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[300]
+	mi := &file_stewardmesh_proto_msgTypes[301]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -23461,7 +23583,7 @@ func (x *ReachDeliveryAttempt) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReachDeliveryAttempt.ProtoReflect.Descriptor instead.
 func (*ReachDeliveryAttempt) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{300}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{301}
 }
 
 func (x *ReachDeliveryAttempt) GetId() string {
@@ -23530,7 +23652,7 @@ type ProcessReachSignalsRequest struct {
 
 func (x *ProcessReachSignalsRequest) Reset() {
 	*x = ProcessReachSignalsRequest{}
-	mi := &file_stewardmesh_proto_msgTypes[301]
+	mi := &file_stewardmesh_proto_msgTypes[302]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -23542,7 +23664,7 @@ func (x *ProcessReachSignalsRequest) String() string {
 func (*ProcessReachSignalsRequest) ProtoMessage() {}
 
 func (x *ProcessReachSignalsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[301]
+	mi := &file_stewardmesh_proto_msgTypes[302]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -23555,7 +23677,7 @@ func (x *ProcessReachSignalsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProcessReachSignalsRequest.ProtoReflect.Descriptor instead.
 func (*ProcessReachSignalsRequest) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{301}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{302}
 }
 
 func (x *ProcessReachSignalsRequest) GetConfirm() bool {
@@ -23584,7 +23706,7 @@ type ReachProcessResult struct {
 
 func (x *ReachProcessResult) Reset() {
 	*x = ReachProcessResult{}
-	mi := &file_stewardmesh_proto_msgTypes[302]
+	mi := &file_stewardmesh_proto_msgTypes[303]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -23596,7 +23718,7 @@ func (x *ReachProcessResult) String() string {
 func (*ReachProcessResult) ProtoMessage() {}
 
 func (x *ReachProcessResult) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[302]
+	mi := &file_stewardmesh_proto_msgTypes[303]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -23609,7 +23731,7 @@ func (x *ReachProcessResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReachProcessResult.ProtoReflect.Descriptor instead.
 func (*ReachProcessResult) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{302}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{303}
 }
 
 func (x *ReachProcessResult) GetExamined() int32 {
@@ -23652,7 +23774,7 @@ type ListBridgeClientsRequest struct {
 
 func (x *ListBridgeClientsRequest) Reset() {
 	*x = ListBridgeClientsRequest{}
-	mi := &file_stewardmesh_proto_msgTypes[303]
+	mi := &file_stewardmesh_proto_msgTypes[304]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -23664,7 +23786,7 @@ func (x *ListBridgeClientsRequest) String() string {
 func (*ListBridgeClientsRequest) ProtoMessage() {}
 
 func (x *ListBridgeClientsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[303]
+	mi := &file_stewardmesh_proto_msgTypes[304]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -23677,7 +23799,7 @@ func (x *ListBridgeClientsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListBridgeClientsRequest.ProtoReflect.Descriptor instead.
 func (*ListBridgeClientsRequest) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{303}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{304}
 }
 
 func (x *ListBridgeClientsRequest) GetCursor() string {
@@ -23704,7 +23826,7 @@ type ListBridgeClientsResponse struct {
 
 func (x *ListBridgeClientsResponse) Reset() {
 	*x = ListBridgeClientsResponse{}
-	mi := &file_stewardmesh_proto_msgTypes[304]
+	mi := &file_stewardmesh_proto_msgTypes[305]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -23716,7 +23838,7 @@ func (x *ListBridgeClientsResponse) String() string {
 func (*ListBridgeClientsResponse) ProtoMessage() {}
 
 func (x *ListBridgeClientsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[304]
+	mi := &file_stewardmesh_proto_msgTypes[305]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -23729,7 +23851,7 @@ func (x *ListBridgeClientsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListBridgeClientsResponse.ProtoReflect.Descriptor instead.
 func (*ListBridgeClientsResponse) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{304}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{305}
 }
 
 func (x *ListBridgeClientsResponse) GetItems() []*BridgeClient {
@@ -23757,7 +23879,7 @@ type CreateBridgeClientRequest struct {
 
 func (x *CreateBridgeClientRequest) Reset() {
 	*x = CreateBridgeClientRequest{}
-	mi := &file_stewardmesh_proto_msgTypes[305]
+	mi := &file_stewardmesh_proto_msgTypes[306]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -23769,7 +23891,7 @@ func (x *CreateBridgeClientRequest) String() string {
 func (*CreateBridgeClientRequest) ProtoMessage() {}
 
 func (x *CreateBridgeClientRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[305]
+	mi := &file_stewardmesh_proto_msgTypes[306]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -23782,7 +23904,7 @@ func (x *CreateBridgeClientRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateBridgeClientRequest.ProtoReflect.Descriptor instead.
 func (*CreateBridgeClientRequest) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{305}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{306}
 }
 
 func (x *CreateBridgeClientRequest) GetName() string {
@@ -23815,7 +23937,7 @@ type RevokeBridgeClientRequest struct {
 
 func (x *RevokeBridgeClientRequest) Reset() {
 	*x = RevokeBridgeClientRequest{}
-	mi := &file_stewardmesh_proto_msgTypes[306]
+	mi := &file_stewardmesh_proto_msgTypes[307]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -23827,7 +23949,7 @@ func (x *RevokeBridgeClientRequest) String() string {
 func (*RevokeBridgeClientRequest) ProtoMessage() {}
 
 func (x *RevokeBridgeClientRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[306]
+	mi := &file_stewardmesh_proto_msgTypes[307]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -23840,7 +23962,7 @@ func (x *RevokeBridgeClientRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RevokeBridgeClientRequest.ProtoReflect.Descriptor instead.
 func (*RevokeBridgeClientRequest) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{306}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{307}
 }
 
 func (x *RevokeBridgeClientRequest) GetClientId() string {
@@ -23868,7 +23990,7 @@ type BridgeClient struct {
 
 func (x *BridgeClient) Reset() {
 	*x = BridgeClient{}
-	mi := &file_stewardmesh_proto_msgTypes[307]
+	mi := &file_stewardmesh_proto_msgTypes[308]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -23880,7 +24002,7 @@ func (x *BridgeClient) String() string {
 func (*BridgeClient) ProtoMessage() {}
 
 func (x *BridgeClient) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[307]
+	mi := &file_stewardmesh_proto_msgTypes[308]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -23893,7 +24015,7 @@ func (x *BridgeClient) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BridgeClient.ProtoReflect.Descriptor instead.
 func (*BridgeClient) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{307}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{308}
 }
 
 func (x *BridgeClient) GetId() string {
@@ -23964,7 +24086,7 @@ type ListBridgeGrantsRequest struct {
 
 func (x *ListBridgeGrantsRequest) Reset() {
 	*x = ListBridgeGrantsRequest{}
-	mi := &file_stewardmesh_proto_msgTypes[308]
+	mi := &file_stewardmesh_proto_msgTypes[309]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -23976,7 +24098,7 @@ func (x *ListBridgeGrantsRequest) String() string {
 func (*ListBridgeGrantsRequest) ProtoMessage() {}
 
 func (x *ListBridgeGrantsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[308]
+	mi := &file_stewardmesh_proto_msgTypes[309]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -23989,7 +24111,7 @@ func (x *ListBridgeGrantsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListBridgeGrantsRequest.ProtoReflect.Descriptor instead.
 func (*ListBridgeGrantsRequest) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{308}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{309}
 }
 
 func (x *ListBridgeGrantsRequest) GetCursor() string {
@@ -24016,7 +24138,7 @@ type ListBridgeGrantsResponse struct {
 
 func (x *ListBridgeGrantsResponse) Reset() {
 	*x = ListBridgeGrantsResponse{}
-	mi := &file_stewardmesh_proto_msgTypes[309]
+	mi := &file_stewardmesh_proto_msgTypes[310]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -24028,7 +24150,7 @@ func (x *ListBridgeGrantsResponse) String() string {
 func (*ListBridgeGrantsResponse) ProtoMessage() {}
 
 func (x *ListBridgeGrantsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[309]
+	mi := &file_stewardmesh_proto_msgTypes[310]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -24041,7 +24163,7 @@ func (x *ListBridgeGrantsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListBridgeGrantsResponse.ProtoReflect.Descriptor instead.
 func (*ListBridgeGrantsResponse) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{309}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{310}
 }
 
 func (x *ListBridgeGrantsResponse) GetItems() []*BridgeGrant {
@@ -24067,7 +24189,7 @@ type RevokeBridgeGrantRequest struct {
 
 func (x *RevokeBridgeGrantRequest) Reset() {
 	*x = RevokeBridgeGrantRequest{}
-	mi := &file_stewardmesh_proto_msgTypes[310]
+	mi := &file_stewardmesh_proto_msgTypes[311]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -24079,7 +24201,7 @@ func (x *RevokeBridgeGrantRequest) String() string {
 func (*RevokeBridgeGrantRequest) ProtoMessage() {}
 
 func (x *RevokeBridgeGrantRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[310]
+	mi := &file_stewardmesh_proto_msgTypes[311]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -24092,7 +24214,7 @@ func (x *RevokeBridgeGrantRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RevokeBridgeGrantRequest.ProtoReflect.Descriptor instead.
 func (*RevokeBridgeGrantRequest) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{310}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{311}
 }
 
 func (x *RevokeBridgeGrantRequest) GetGrantId() string {
@@ -24122,7 +24244,7 @@ type BridgeGrant struct {
 
 func (x *BridgeGrant) Reset() {
 	*x = BridgeGrant{}
-	mi := &file_stewardmesh_proto_msgTypes[311]
+	mi := &file_stewardmesh_proto_msgTypes[312]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -24134,7 +24256,7 @@ func (x *BridgeGrant) String() string {
 func (*BridgeGrant) ProtoMessage() {}
 
 func (x *BridgeGrant) ProtoReflect() protoreflect.Message {
-	mi := &file_stewardmesh_proto_msgTypes[311]
+	mi := &file_stewardmesh_proto_msgTypes[312]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -24147,7 +24269,7 @@ func (x *BridgeGrant) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BridgeGrant.ProtoReflect.Descriptor instead.
 func (*BridgeGrant) Descriptor() ([]byte, []int) {
-	return file_stewardmesh_proto_rawDescGZIP(), []int{311}
+	return file_stewardmesh_proto_rawDescGZIP(), []int{312}
 }
 
 func (x *BridgeGrant) GetId() string {
@@ -25813,10 +25935,23 @@ const file_stewardmesh_proto_rawDesc = "" +
 	"\arecords\x18\x01 \x03(\v2#.stewardmesh.v1.StackExchangeRecordR\arecords\"\x84\x01\n" +
 	"\x19ImportStackRecordsRequest\x12(\n" +
 	"\x10source_system_id\x18\x01 \x01(\tR\x0esourceSystemId\x12=\n" +
-	"\arecords\x18\x02 \x03(\v2#.stewardmesh.v1.StackExchangeRecordR\arecords\"K\n" +
+	"\arecords\x18\x02 \x03(\v2#.stewardmesh.v1.StackExchangeRecordR\arecords\"\xe7\x02\n" +
 	"\x11StackImportResult\x12\x18\n" +
 	"\acreated\x18\x01 \x01(\x05R\acreated\x12\x1c\n" +
-	"\tunchanged\x18\x02 \x01(\x05R\tunchanged\"\x18\n" +
+	"\tunchanged\x18\x02 \x01(\x05R\tunchanged\x12\x1d\n" +
+	"\n" +
+	"package_id\x18\x03 \x01(\tR\tpackageId\x12\x16\n" +
+	"\x06status\x18\x04 \x01(\tR\x06status\x12\x18\n" +
+	"\aholding\x18\x05 \x01(\x05R\aholding\x12\x16\n" +
+	"\x06replay\x18\x06 \x01(\bR\x06replay\x12\x1d\n" +
+	"\n" +
+	"error_code\x18\a \x01(\tR\terrorCode\x12?\n" +
+	"\arecords\x18\b \x03(\v2%.stewardmesh.v1.ExchangeRecordOutcomeR\arecords\x12Q\n" +
+	"\x11pending_ownership\x18\t \x03(\v2$.stewardmesh.v1.StackImportOwnershipR\x10pendingOwnership\"]\n" +
+	"\x14StackImportOwnership\x12\x12\n" +
+	"\x04type\x18\x01 \x01(\tR\x04type\x12\x0e\n" +
+	"\x02id\x18\x02 \x01(\tR\x02id\x12!\n" +
+	"\fwrite_locked\x18\x03 \x01(\bR\vwriteLocked\"\x18\n" +
 	"\x16ListSignalRulesRequest\"K\n" +
 	"\x17ListSignalRulesResponse\x120\n" +
 	"\x05items\x18\x01 \x03(\v2\x1a.stewardmesh.v1.SignalRuleR\x05items\"\xc6\x03\n" +
@@ -26708,7 +26843,7 @@ func file_stewardmesh_proto_rawDescGZIP() []byte {
 }
 
 var file_stewardmesh_proto_enumTypes = make([]protoimpl.EnumInfo, 22)
-var file_stewardmesh_proto_msgTypes = make([]protoimpl.MessageInfo, 321)
+var file_stewardmesh_proto_msgTypes = make([]protoimpl.MessageInfo, 322)
 var file_stewardmesh_proto_goTypes = []any{
 	(PatternsFieldType)(0),                         // 0: stewardmesh.v1.PatternsFieldType
 	(PatternsTemplateStatus)(0),                    // 1: stewardmesh.v1.PatternsTemplateStatus
@@ -26953,137 +27088,138 @@ var file_stewardmesh_proto_goTypes = []any{
 	(*ExportStackRecordsResponse)(nil),             // 240: stewardmesh.v1.ExportStackRecordsResponse
 	(*ImportStackRecordsRequest)(nil),              // 241: stewardmesh.v1.ImportStackRecordsRequest
 	(*StackImportResult)(nil),                      // 242: stewardmesh.v1.StackImportResult
-	(*ListSignalRulesRequest)(nil),                 // 243: stewardmesh.v1.ListSignalRulesRequest
-	(*ListSignalRulesResponse)(nil),                // 244: stewardmesh.v1.ListSignalRulesResponse
-	(*SignalRule)(nil),                             // 245: stewardmesh.v1.SignalRule
-	(*CreateSignalRuleRequest)(nil),                // 246: stewardmesh.v1.CreateSignalRuleRequest
-	(*UpdateSignalRuleRequest)(nil),                // 247: stewardmesh.v1.UpdateSignalRuleRequest
-	(*ListSignalAlertsRequest)(nil),                // 248: stewardmesh.v1.ListSignalAlertsRequest
-	(*ListSignalAlertsResponse)(nil),               // 249: stewardmesh.v1.ListSignalAlertsResponse
-	(*SignalAlert)(nil),                            // 250: stewardmesh.v1.SignalAlert
-	(*ListSignalAlertHistoryRequest)(nil),          // 251: stewardmesh.v1.ListSignalAlertHistoryRequest
-	(*ListSignalAlertHistoryResponse)(nil),         // 252: stewardmesh.v1.ListSignalAlertHistoryResponse
-	(*SignalAlertHistory)(nil),                     // 253: stewardmesh.v1.SignalAlertHistory
-	(*EvaluateSignalsRequest)(nil),                 // 254: stewardmesh.v1.EvaluateSignalsRequest
-	(*SignalEvaluationResult)(nil),                 // 255: stewardmesh.v1.SignalEvaluationResult
-	(*AcknowledgeSignalAlertRequest)(nil),          // 256: stewardmesh.v1.AcknowledgeSignalAlertRequest
-	(*AssignSignalAlertRequest)(nil),               // 257: stewardmesh.v1.AssignSignalAlertRequest
-	(*ListSignalSubscriptionsRequest)(nil),         // 258: stewardmesh.v1.ListSignalSubscriptionsRequest
-	(*ListSignalSubscriptionsResponse)(nil),        // 259: stewardmesh.v1.ListSignalSubscriptionsResponse
-	(*ListSignalSubscriptionTargetsRequest)(nil),   // 260: stewardmesh.v1.ListSignalSubscriptionTargetsRequest
-	(*ListSignalSubscriptionTargetsResponse)(nil),  // 261: stewardmesh.v1.ListSignalSubscriptionTargetsResponse
-	(*SignalSubscriptionTarget)(nil),               // 262: stewardmesh.v1.SignalSubscriptionTarget
-	(*SignalSubscription)(nil),                     // 263: stewardmesh.v1.SignalSubscription
-	(*CreateSignalSubscriptionRequest)(nil),        // 264: stewardmesh.v1.CreateSignalSubscriptionRequest
-	(*DeleteSignalSubscriptionRequest)(nil),        // 265: stewardmesh.v1.DeleteSignalSubscriptionRequest
-	(*DeleteSignalSubscriptionResponse)(nil),       // 266: stewardmesh.v1.DeleteSignalSubscriptionResponse
-	(*SignalDelivery)(nil),                         // 267: stewardmesh.v1.SignalDelivery
-	(*ListPendingSignalDeliveriesRequest)(nil),     // 268: stewardmesh.v1.ListPendingSignalDeliveriesRequest
-	(*ListPendingSignalDeliveriesResponse)(nil),    // 269: stewardmesh.v1.ListPendingSignalDeliveriesResponse
-	(*RecordSignalDeliveryAttemptRequest)(nil),     // 270: stewardmesh.v1.RecordSignalDeliveryAttemptRequest
-	(*ExportSignalsCSVRequest)(nil),                // 271: stewardmesh.v1.ExportSignalsCSVRequest
-	(*ExportSignalsCSVResponse)(nil),               // 272: stewardmesh.v1.ExportSignalsCSVResponse
-	(*ExchangeReference)(nil),                      // 273: stewardmesh.v1.ExchangeReference
-	(*ExchangeSchemaReference)(nil),                // 274: stewardmesh.v1.ExchangeSchemaReference
-	(*ExchangeProvenance)(nil),                     // 275: stewardmesh.v1.ExchangeProvenance
-	(*ExchangeOwnershipMetadata)(nil),              // 276: stewardmesh.v1.ExchangeOwnershipMetadata
-	(*ExchangeFileMetadata)(nil),                   // 277: stewardmesh.v1.ExchangeFileMetadata
-	(*ExchangeRecord)(nil),                         // 278: stewardmesh.v1.ExchangeRecord
-	(*ExchangeManifest)(nil),                       // 279: stewardmesh.v1.ExchangeManifest
-	(*ExchangeRecordDescriptor)(nil),               // 280: stewardmesh.v1.ExchangeRecordDescriptor
-	(*ListExchangeRecordsRequest)(nil),             // 281: stewardmesh.v1.ListExchangeRecordsRequest
-	(*ListExchangeRecordsResponse)(nil),            // 282: stewardmesh.v1.ListExchangeRecordsResponse
-	(*ListExchangePackagesRequest)(nil),            // 283: stewardmesh.v1.ListExchangePackagesRequest
-	(*ListExchangePackagesResponse)(nil),           // 284: stewardmesh.v1.ListExchangePackagesResponse
-	(*ExportExchangePackageRequest)(nil),           // 285: stewardmesh.v1.ExportExchangePackageRequest
-	(*ExchangeExportArtifact)(nil),                 // 286: stewardmesh.v1.ExchangeExportArtifact
-	(*ImportExchangePackageRequest)(nil),           // 287: stewardmesh.v1.ImportExchangePackageRequest
-	(*ExchangeRecordOutcome)(nil),                  // 288: stewardmesh.v1.ExchangeRecordOutcome
-	(*ExchangePackage)(nil),                        // 289: stewardmesh.v1.ExchangePackage
-	(*ImportExchangePackageResponse)(nil),          // 290: stewardmesh.v1.ImportExchangePackageResponse
-	(*ListReachEndpointsRequest)(nil),              // 291: stewardmesh.v1.ListReachEndpointsRequest
-	(*ListReachEndpointsResponse)(nil),             // 292: stewardmesh.v1.ListReachEndpointsResponse
-	(*ReachEndpoint)(nil),                          // 293: stewardmesh.v1.ReachEndpoint
-	(*ListReachProvidersRequest)(nil),              // 294: stewardmesh.v1.ListReachProvidersRequest
-	(*ListReachProvidersResponse)(nil),             // 295: stewardmesh.v1.ListReachProvidersResponse
-	(*ReachProvider)(nil),                          // 296: stewardmesh.v1.ReachProvider
-	(*CreateReachProviderRequest)(nil),             // 297: stewardmesh.v1.CreateReachProviderRequest
-	(*UpdateReachProviderRequest)(nil),             // 298: stewardmesh.v1.UpdateReachProviderRequest
-	(*RotateReachProviderSecretRequest)(nil),       // 299: stewardmesh.v1.RotateReachProviderSecretRequest
-	(*TestReachProviderRequest)(nil),               // 300: stewardmesh.v1.TestReachProviderRequest
-	(*ListReachProviderTestsRequest)(nil),          // 301: stewardmesh.v1.ListReachProviderTestsRequest
-	(*ListReachProviderTestsResponse)(nil),         // 302: stewardmesh.v1.ListReachProviderTestsResponse
-	(*ReachProviderTest)(nil),                      // 303: stewardmesh.v1.ReachProviderTest
-	(*ListReachTemplatesRequest)(nil),              // 304: stewardmesh.v1.ListReachTemplatesRequest
-	(*ListReachTemplatesResponse)(nil),             // 305: stewardmesh.v1.ListReachTemplatesResponse
-	(*ReachTemplate)(nil),                          // 306: stewardmesh.v1.ReachTemplate
-	(*CreateReachTemplateRequest)(nil),             // 307: stewardmesh.v1.CreateReachTemplateRequest
-	(*UpdateReachTemplateRequest)(nil),             // 308: stewardmesh.v1.UpdateReachTemplateRequest
-	(*ReachRecipient)(nil),                         // 309: stewardmesh.v1.ReachRecipient
-	(*ListReachGroupsRequest)(nil),                 // 310: stewardmesh.v1.ListReachGroupsRequest
-	(*ListReachGroupsResponse)(nil),                // 311: stewardmesh.v1.ListReachGroupsResponse
-	(*ReachSubscriberGroup)(nil),                   // 312: stewardmesh.v1.ReachSubscriberGroup
-	(*CreateReachGroupRequest)(nil),                // 313: stewardmesh.v1.CreateReachGroupRequest
-	(*UpdateReachGroupRequest)(nil),                // 314: stewardmesh.v1.UpdateReachGroupRequest
-	(*ListReachMessagesRequest)(nil),               // 315: stewardmesh.v1.ListReachMessagesRequest
-	(*ListReachMessagesResponse)(nil),              // 316: stewardmesh.v1.ListReachMessagesResponse
-	(*ReachMessage)(nil),                           // 317: stewardmesh.v1.ReachMessage
-	(*SendReachMessageRequest)(nil),                // 318: stewardmesh.v1.SendReachMessageRequest
-	(*RetryReachMessageRequest)(nil),               // 319: stewardmesh.v1.RetryReachMessageRequest
-	(*ListReachMessageAttemptsRequest)(nil),        // 320: stewardmesh.v1.ListReachMessageAttemptsRequest
-	(*ListReachMessageAttemptsResponse)(nil),       // 321: stewardmesh.v1.ListReachMessageAttemptsResponse
-	(*ReachDeliveryAttempt)(nil),                   // 322: stewardmesh.v1.ReachDeliveryAttempt
-	(*ProcessReachSignalsRequest)(nil),             // 323: stewardmesh.v1.ProcessReachSignalsRequest
-	(*ReachProcessResult)(nil),                     // 324: stewardmesh.v1.ReachProcessResult
-	(*ListBridgeClientsRequest)(nil),               // 325: stewardmesh.v1.ListBridgeClientsRequest
-	(*ListBridgeClientsResponse)(nil),              // 326: stewardmesh.v1.ListBridgeClientsResponse
-	(*CreateBridgeClientRequest)(nil),              // 327: stewardmesh.v1.CreateBridgeClientRequest
-	(*RevokeBridgeClientRequest)(nil),              // 328: stewardmesh.v1.RevokeBridgeClientRequest
-	(*BridgeClient)(nil),                           // 329: stewardmesh.v1.BridgeClient
-	(*ListBridgeGrantsRequest)(nil),                // 330: stewardmesh.v1.ListBridgeGrantsRequest
-	(*ListBridgeGrantsResponse)(nil),               // 331: stewardmesh.v1.ListBridgeGrantsResponse
-	(*RevokeBridgeGrantRequest)(nil),               // 332: stewardmesh.v1.RevokeBridgeGrantRequest
-	(*BridgeGrant)(nil),                            // 333: stewardmesh.v1.BridgeGrant
-	nil,                                            // 334: stewardmesh.v1.AssetModelContext.SpecificationsEntry
-	nil,                                            // 335: stewardmesh.v1.AssetModel.SpecificationsEntry
-	nil,                                            // 336: stewardmesh.v1.DirectoryImportRecord.DirectoryAttributesEntry
-	nil,                                            // 337: stewardmesh.v1.DirectoryImportRecord.MetadataEntry
-	nil,                                            // 338: stewardmesh.v1.RelationshipGraphNode.AttributesEntry
-	nil,                                            // 339: stewardmesh.v1.RelationshipGraphEdge.AttributesEntry
-	nil,                                            // 340: stewardmesh.v1.HorizonForecastGroup.AmountsByKindMinorEntry
-	nil,                                            // 341: stewardmesh.v1.HorizonForecast.TotalsByKindMinorEntry
-	nil,                                            // 342: stewardmesh.v1.LedgerBudgetVariance.AmountsByKindMinorEntry
-	(*timestamppb.Timestamp)(nil),                  // 343: google.protobuf.Timestamp
-	(*structpb.Struct)(nil),                        // 344: google.protobuf.Struct
+	(*StackImportOwnership)(nil),                   // 243: stewardmesh.v1.StackImportOwnership
+	(*ListSignalRulesRequest)(nil),                 // 244: stewardmesh.v1.ListSignalRulesRequest
+	(*ListSignalRulesResponse)(nil),                // 245: stewardmesh.v1.ListSignalRulesResponse
+	(*SignalRule)(nil),                             // 246: stewardmesh.v1.SignalRule
+	(*CreateSignalRuleRequest)(nil),                // 247: stewardmesh.v1.CreateSignalRuleRequest
+	(*UpdateSignalRuleRequest)(nil),                // 248: stewardmesh.v1.UpdateSignalRuleRequest
+	(*ListSignalAlertsRequest)(nil),                // 249: stewardmesh.v1.ListSignalAlertsRequest
+	(*ListSignalAlertsResponse)(nil),               // 250: stewardmesh.v1.ListSignalAlertsResponse
+	(*SignalAlert)(nil),                            // 251: stewardmesh.v1.SignalAlert
+	(*ListSignalAlertHistoryRequest)(nil),          // 252: stewardmesh.v1.ListSignalAlertHistoryRequest
+	(*ListSignalAlertHistoryResponse)(nil),         // 253: stewardmesh.v1.ListSignalAlertHistoryResponse
+	(*SignalAlertHistory)(nil),                     // 254: stewardmesh.v1.SignalAlertHistory
+	(*EvaluateSignalsRequest)(nil),                 // 255: stewardmesh.v1.EvaluateSignalsRequest
+	(*SignalEvaluationResult)(nil),                 // 256: stewardmesh.v1.SignalEvaluationResult
+	(*AcknowledgeSignalAlertRequest)(nil),          // 257: stewardmesh.v1.AcknowledgeSignalAlertRequest
+	(*AssignSignalAlertRequest)(nil),               // 258: stewardmesh.v1.AssignSignalAlertRequest
+	(*ListSignalSubscriptionsRequest)(nil),         // 259: stewardmesh.v1.ListSignalSubscriptionsRequest
+	(*ListSignalSubscriptionsResponse)(nil),        // 260: stewardmesh.v1.ListSignalSubscriptionsResponse
+	(*ListSignalSubscriptionTargetsRequest)(nil),   // 261: stewardmesh.v1.ListSignalSubscriptionTargetsRequest
+	(*ListSignalSubscriptionTargetsResponse)(nil),  // 262: stewardmesh.v1.ListSignalSubscriptionTargetsResponse
+	(*SignalSubscriptionTarget)(nil),               // 263: stewardmesh.v1.SignalSubscriptionTarget
+	(*SignalSubscription)(nil),                     // 264: stewardmesh.v1.SignalSubscription
+	(*CreateSignalSubscriptionRequest)(nil),        // 265: stewardmesh.v1.CreateSignalSubscriptionRequest
+	(*DeleteSignalSubscriptionRequest)(nil),        // 266: stewardmesh.v1.DeleteSignalSubscriptionRequest
+	(*DeleteSignalSubscriptionResponse)(nil),       // 267: stewardmesh.v1.DeleteSignalSubscriptionResponse
+	(*SignalDelivery)(nil),                         // 268: stewardmesh.v1.SignalDelivery
+	(*ListPendingSignalDeliveriesRequest)(nil),     // 269: stewardmesh.v1.ListPendingSignalDeliveriesRequest
+	(*ListPendingSignalDeliveriesResponse)(nil),    // 270: stewardmesh.v1.ListPendingSignalDeliveriesResponse
+	(*RecordSignalDeliveryAttemptRequest)(nil),     // 271: stewardmesh.v1.RecordSignalDeliveryAttemptRequest
+	(*ExportSignalsCSVRequest)(nil),                // 272: stewardmesh.v1.ExportSignalsCSVRequest
+	(*ExportSignalsCSVResponse)(nil),               // 273: stewardmesh.v1.ExportSignalsCSVResponse
+	(*ExchangeReference)(nil),                      // 274: stewardmesh.v1.ExchangeReference
+	(*ExchangeSchemaReference)(nil),                // 275: stewardmesh.v1.ExchangeSchemaReference
+	(*ExchangeProvenance)(nil),                     // 276: stewardmesh.v1.ExchangeProvenance
+	(*ExchangeOwnershipMetadata)(nil),              // 277: stewardmesh.v1.ExchangeOwnershipMetadata
+	(*ExchangeFileMetadata)(nil),                   // 278: stewardmesh.v1.ExchangeFileMetadata
+	(*ExchangeRecord)(nil),                         // 279: stewardmesh.v1.ExchangeRecord
+	(*ExchangeManifest)(nil),                       // 280: stewardmesh.v1.ExchangeManifest
+	(*ExchangeRecordDescriptor)(nil),               // 281: stewardmesh.v1.ExchangeRecordDescriptor
+	(*ListExchangeRecordsRequest)(nil),             // 282: stewardmesh.v1.ListExchangeRecordsRequest
+	(*ListExchangeRecordsResponse)(nil),            // 283: stewardmesh.v1.ListExchangeRecordsResponse
+	(*ListExchangePackagesRequest)(nil),            // 284: stewardmesh.v1.ListExchangePackagesRequest
+	(*ListExchangePackagesResponse)(nil),           // 285: stewardmesh.v1.ListExchangePackagesResponse
+	(*ExportExchangePackageRequest)(nil),           // 286: stewardmesh.v1.ExportExchangePackageRequest
+	(*ExchangeExportArtifact)(nil),                 // 287: stewardmesh.v1.ExchangeExportArtifact
+	(*ImportExchangePackageRequest)(nil),           // 288: stewardmesh.v1.ImportExchangePackageRequest
+	(*ExchangeRecordOutcome)(nil),                  // 289: stewardmesh.v1.ExchangeRecordOutcome
+	(*ExchangePackage)(nil),                        // 290: stewardmesh.v1.ExchangePackage
+	(*ImportExchangePackageResponse)(nil),          // 291: stewardmesh.v1.ImportExchangePackageResponse
+	(*ListReachEndpointsRequest)(nil),              // 292: stewardmesh.v1.ListReachEndpointsRequest
+	(*ListReachEndpointsResponse)(nil),             // 293: stewardmesh.v1.ListReachEndpointsResponse
+	(*ReachEndpoint)(nil),                          // 294: stewardmesh.v1.ReachEndpoint
+	(*ListReachProvidersRequest)(nil),              // 295: stewardmesh.v1.ListReachProvidersRequest
+	(*ListReachProvidersResponse)(nil),             // 296: stewardmesh.v1.ListReachProvidersResponse
+	(*ReachProvider)(nil),                          // 297: stewardmesh.v1.ReachProvider
+	(*CreateReachProviderRequest)(nil),             // 298: stewardmesh.v1.CreateReachProviderRequest
+	(*UpdateReachProviderRequest)(nil),             // 299: stewardmesh.v1.UpdateReachProviderRequest
+	(*RotateReachProviderSecretRequest)(nil),       // 300: stewardmesh.v1.RotateReachProviderSecretRequest
+	(*TestReachProviderRequest)(nil),               // 301: stewardmesh.v1.TestReachProviderRequest
+	(*ListReachProviderTestsRequest)(nil),          // 302: stewardmesh.v1.ListReachProviderTestsRequest
+	(*ListReachProviderTestsResponse)(nil),         // 303: stewardmesh.v1.ListReachProviderTestsResponse
+	(*ReachProviderTest)(nil),                      // 304: stewardmesh.v1.ReachProviderTest
+	(*ListReachTemplatesRequest)(nil),              // 305: stewardmesh.v1.ListReachTemplatesRequest
+	(*ListReachTemplatesResponse)(nil),             // 306: stewardmesh.v1.ListReachTemplatesResponse
+	(*ReachTemplate)(nil),                          // 307: stewardmesh.v1.ReachTemplate
+	(*CreateReachTemplateRequest)(nil),             // 308: stewardmesh.v1.CreateReachTemplateRequest
+	(*UpdateReachTemplateRequest)(nil),             // 309: stewardmesh.v1.UpdateReachTemplateRequest
+	(*ReachRecipient)(nil),                         // 310: stewardmesh.v1.ReachRecipient
+	(*ListReachGroupsRequest)(nil),                 // 311: stewardmesh.v1.ListReachGroupsRequest
+	(*ListReachGroupsResponse)(nil),                // 312: stewardmesh.v1.ListReachGroupsResponse
+	(*ReachSubscriberGroup)(nil),                   // 313: stewardmesh.v1.ReachSubscriberGroup
+	(*CreateReachGroupRequest)(nil),                // 314: stewardmesh.v1.CreateReachGroupRequest
+	(*UpdateReachGroupRequest)(nil),                // 315: stewardmesh.v1.UpdateReachGroupRequest
+	(*ListReachMessagesRequest)(nil),               // 316: stewardmesh.v1.ListReachMessagesRequest
+	(*ListReachMessagesResponse)(nil),              // 317: stewardmesh.v1.ListReachMessagesResponse
+	(*ReachMessage)(nil),                           // 318: stewardmesh.v1.ReachMessage
+	(*SendReachMessageRequest)(nil),                // 319: stewardmesh.v1.SendReachMessageRequest
+	(*RetryReachMessageRequest)(nil),               // 320: stewardmesh.v1.RetryReachMessageRequest
+	(*ListReachMessageAttemptsRequest)(nil),        // 321: stewardmesh.v1.ListReachMessageAttemptsRequest
+	(*ListReachMessageAttemptsResponse)(nil),       // 322: stewardmesh.v1.ListReachMessageAttemptsResponse
+	(*ReachDeliveryAttempt)(nil),                   // 323: stewardmesh.v1.ReachDeliveryAttempt
+	(*ProcessReachSignalsRequest)(nil),             // 324: stewardmesh.v1.ProcessReachSignalsRequest
+	(*ReachProcessResult)(nil),                     // 325: stewardmesh.v1.ReachProcessResult
+	(*ListBridgeClientsRequest)(nil),               // 326: stewardmesh.v1.ListBridgeClientsRequest
+	(*ListBridgeClientsResponse)(nil),              // 327: stewardmesh.v1.ListBridgeClientsResponse
+	(*CreateBridgeClientRequest)(nil),              // 328: stewardmesh.v1.CreateBridgeClientRequest
+	(*RevokeBridgeClientRequest)(nil),              // 329: stewardmesh.v1.RevokeBridgeClientRequest
+	(*BridgeClient)(nil),                           // 330: stewardmesh.v1.BridgeClient
+	(*ListBridgeGrantsRequest)(nil),                // 331: stewardmesh.v1.ListBridgeGrantsRequest
+	(*ListBridgeGrantsResponse)(nil),               // 332: stewardmesh.v1.ListBridgeGrantsResponse
+	(*RevokeBridgeGrantRequest)(nil),               // 333: stewardmesh.v1.RevokeBridgeGrantRequest
+	(*BridgeGrant)(nil),                            // 334: stewardmesh.v1.BridgeGrant
+	nil,                                            // 335: stewardmesh.v1.AssetModelContext.SpecificationsEntry
+	nil,                                            // 336: stewardmesh.v1.AssetModel.SpecificationsEntry
+	nil,                                            // 337: stewardmesh.v1.DirectoryImportRecord.DirectoryAttributesEntry
+	nil,                                            // 338: stewardmesh.v1.DirectoryImportRecord.MetadataEntry
+	nil,                                            // 339: stewardmesh.v1.RelationshipGraphNode.AttributesEntry
+	nil,                                            // 340: stewardmesh.v1.RelationshipGraphEdge.AttributesEntry
+	nil,                                            // 341: stewardmesh.v1.HorizonForecastGroup.AmountsByKindMinorEntry
+	nil,                                            // 342: stewardmesh.v1.HorizonForecast.TotalsByKindMinorEntry
+	nil,                                            // 343: stewardmesh.v1.LedgerBudgetVariance.AmountsByKindMinorEntry
+	(*timestamppb.Timestamp)(nil),                  // 344: google.protobuf.Timestamp
+	(*structpb.Struct)(nil),                        // 345: google.protobuf.Struct
 }
 var file_stewardmesh_proto_depIdxs = []int32{
-	343, // 0: stewardmesh.v1.Organization.created_at:type_name -> google.protobuf.Timestamp
-	343, // 1: stewardmesh.v1.Organization.updated_at:type_name -> google.protobuf.Timestamp
+	344, // 0: stewardmesh.v1.Organization.created_at:type_name -> google.protobuf.Timestamp
+	344, // 1: stewardmesh.v1.Organization.updated_at:type_name -> google.protobuf.Timestamp
 	34,  // 2: stewardmesh.v1.ListPatternsTemplatesResponse.items:type_name -> stewardmesh.v1.PatternsTemplate
 	35,  // 3: stewardmesh.v1.CreatePatternsTemplateRequest.fields:type_name -> stewardmesh.v1.PatternsField
 	35,  // 4: stewardmesh.v1.CreatePatternsTemplateVersionRequest.fields:type_name -> stewardmesh.v1.PatternsField
-	344, // 5: stewardmesh.v1.ValidatePatternsRecordRequest.values:type_name -> google.protobuf.Struct
+	345, // 5: stewardmesh.v1.ValidatePatternsRecordRequest.values:type_name -> google.protobuf.Struct
 	1,   // 6: stewardmesh.v1.PatternsTemplate.status:type_name -> stewardmesh.v1.PatternsTemplateStatus
 	35,  // 7: stewardmesh.v1.PatternsTemplate.fields:type_name -> stewardmesh.v1.PatternsField
-	343, // 8: stewardmesh.v1.PatternsTemplate.created_at:type_name -> google.protobuf.Timestamp
+	344, // 8: stewardmesh.v1.PatternsTemplate.created_at:type_name -> google.protobuf.Timestamp
 	0,   // 9: stewardmesh.v1.PatternsField.type:type_name -> stewardmesh.v1.PatternsFieldType
 	2,   // 10: stewardmesh.v1.PatternsValidationResult.status:type_name -> stewardmesh.v1.PatternsValidationStatus
-	344, // 11: stewardmesh.v1.PatternsValidationResult.normalized_values:type_name -> google.protobuf.Struct
+	345, // 11: stewardmesh.v1.PatternsValidationResult.normalized_values:type_name -> google.protobuf.Struct
 	36,  // 12: stewardmesh.v1.PatternsValidationResult.errors:type_name -> stewardmesh.v1.PatternsFieldError
 	37,  // 13: stewardmesh.v1.PatternsValidationResult.holding_references:type_name -> stewardmesh.v1.PatternsHoldingReference
 	47,  // 14: stewardmesh.v1.AuthenticationSession.principal:type_name -> stewardmesh.v1.Principal
-	343, // 15: stewardmesh.v1.AuthenticationSession.expires_at:type_name -> google.protobuf.Timestamp
+	344, // 15: stewardmesh.v1.AuthenticationSession.expires_at:type_name -> google.protobuf.Timestamp
 	48,  // 16: stewardmesh.v1.PermissionGrant.scope:type_name -> stewardmesh.v1.AuthorizationScope
 	52,  // 17: stewardmesh.v1.ListGuardAccessResponse.accounts:type_name -> stewardmesh.v1.GuardAccount
 	53,  // 18: stewardmesh.v1.ListGuardAccessResponse.roles:type_name -> stewardmesh.v1.GuardRole
 	56,  // 19: stewardmesh.v1.ListGuardAccessResponse.assignments:type_name -> stewardmesh.v1.GuardRoleAssignment
 	54,  // 20: stewardmesh.v1.ListGuardAccessResponse.policy_bundles:type_name -> stewardmesh.v1.GuardPolicyBundle
 	48,  // 21: stewardmesh.v1.GuardRoleAssignment.scope:type_name -> stewardmesh.v1.AuthorizationScope
-	343, // 22: stewardmesh.v1.GuardRoleAssignment.created_at:type_name -> google.protobuf.Timestamp
+	344, // 22: stewardmesh.v1.GuardRoleAssignment.created_at:type_name -> google.protobuf.Timestamp
 	48,  // 23: stewardmesh.v1.CreateRoleAssignmentRequest.scope:type_name -> stewardmesh.v1.AuthorizationScope
 	62,  // 24: stewardmesh.v1.ListResourceOwnershipResponse.items:type_name -> stewardmesh.v1.GuardResourceOwnership
-	343, // 25: stewardmesh.v1.GuardResourceOwnership.registered_at:type_name -> google.protobuf.Timestamp
-	343, // 26: stewardmesh.v1.GuardResourceOwnership.claimed_at:type_name -> google.protobuf.Timestamp
+	344, // 25: stewardmesh.v1.GuardResourceOwnership.registered_at:type_name -> google.protobuf.Timestamp
+	344, // 26: stewardmesh.v1.GuardResourceOwnership.claimed_at:type_name -> google.protobuf.Timestamp
 	101, // 27: stewardmesh.v1.ListAssetModelsResponse.items:type_name -> stewardmesh.v1.AssetModel
 	101, // 28: stewardmesh.v1.CreateAssetModelRequest.model:type_name -> stewardmesh.v1.AssetModel
 	71,  // 29: stewardmesh.v1.AssetModelInventory.groups:type_name -> stewardmesh.v1.AssetModelInventoryGroup
@@ -27111,60 +27247,60 @@ var file_stewardmesh_proto_depIdxs = []int32{
 	4,   // 51: stewardmesh.v1.GenerateAssetLabelBatchRequest.output:type_name -> stewardmesh.v1.AssetLabelOutput
 	95,  // 52: stewardmesh.v1.AssetLabelArtifact.template:type_name -> stewardmesh.v1.AssetLabelTemplate
 	4,   // 53: stewardmesh.v1.AssetLabelArtifact.output:type_name -> stewardmesh.v1.AssetLabelOutput
-	343, // 54: stewardmesh.v1.AssetLabelArtifact.created_at:type_name -> google.protobuf.Timestamp
+	344, // 54: stewardmesh.v1.AssetLabelArtifact.created_at:type_name -> google.protobuf.Timestamp
 	5,   // 55: stewardmesh.v1.AssetIdentifier.symbology:type_name -> stewardmesh.v1.AssetIdentifierSymbology
 	6,   // 56: stewardmesh.v1.AssetIdentifier.source:type_name -> stewardmesh.v1.AssetIdentifierSource
 	7,   // 57: stewardmesh.v1.AssetIdentifier.status:type_name -> stewardmesh.v1.AssetIdentifierStatus
-	343, // 58: stewardmesh.v1.AssetIdentifier.created_at:type_name -> google.protobuf.Timestamp
-	343, // 59: stewardmesh.v1.AssetIdentifier.updated_at:type_name -> google.protobuf.Timestamp
-	343, // 60: stewardmesh.v1.AssetIdentifier.deactivated_at:type_name -> google.protobuf.Timestamp
-	343, // 61: stewardmesh.v1.Asset.purchase_date:type_name -> google.protobuf.Timestamp
-	343, // 62: stewardmesh.v1.Asset.created_at:type_name -> google.protobuf.Timestamp
-	343, // 63: stewardmesh.v1.Asset.updated_at:type_name -> google.protobuf.Timestamp
+	344, // 58: stewardmesh.v1.AssetIdentifier.created_at:type_name -> google.protobuf.Timestamp
+	344, // 59: stewardmesh.v1.AssetIdentifier.updated_at:type_name -> google.protobuf.Timestamp
+	344, // 60: stewardmesh.v1.AssetIdentifier.deactivated_at:type_name -> google.protobuf.Timestamp
+	344, // 61: stewardmesh.v1.Asset.purchase_date:type_name -> google.protobuf.Timestamp
+	344, // 62: stewardmesh.v1.Asset.created_at:type_name -> google.protobuf.Timestamp
+	344, // 63: stewardmesh.v1.Asset.updated_at:type_name -> google.protobuf.Timestamp
 	100, // 64: stewardmesh.v1.Asset.model_context:type_name -> stewardmesh.v1.AssetModelContext
-	334, // 65: stewardmesh.v1.AssetModelContext.specifications:type_name -> stewardmesh.v1.AssetModelContext.SpecificationsEntry
-	343, // 66: stewardmesh.v1.AssetModelContext.defaults_effective_at:type_name -> google.protobuf.Timestamp
-	343, // 67: stewardmesh.v1.AssetModelContext.applied_at:type_name -> google.protobuf.Timestamp
-	335, // 68: stewardmesh.v1.AssetModel.specifications:type_name -> stewardmesh.v1.AssetModel.SpecificationsEntry
-	343, // 69: stewardmesh.v1.AssetModel.created_at:type_name -> google.protobuf.Timestamp
-	343, // 70: stewardmesh.v1.AssetModel.updated_at:type_name -> google.protobuf.Timestamp
-	343, // 71: stewardmesh.v1.AssetLifecycleEvent.occurred_at:type_name -> google.protobuf.Timestamp
+	335, // 65: stewardmesh.v1.AssetModelContext.specifications:type_name -> stewardmesh.v1.AssetModelContext.SpecificationsEntry
+	344, // 66: stewardmesh.v1.AssetModelContext.defaults_effective_at:type_name -> google.protobuf.Timestamp
+	344, // 67: stewardmesh.v1.AssetModelContext.applied_at:type_name -> google.protobuf.Timestamp
+	336, // 68: stewardmesh.v1.AssetModel.specifications:type_name -> stewardmesh.v1.AssetModel.SpecificationsEntry
+	344, // 69: stewardmesh.v1.AssetModel.created_at:type_name -> google.protobuf.Timestamp
+	344, // 70: stewardmesh.v1.AssetModel.updated_at:type_name -> google.protobuf.Timestamp
+	344, // 71: stewardmesh.v1.AssetLifecycleEvent.occurred_at:type_name -> google.protobuf.Timestamp
 	106, // 72: stewardmesh.v1.ListSitesResponse.items:type_name -> stewardmesh.v1.Site
 	8,   // 73: stewardmesh.v1.CreateSiteRequest.status:type_name -> stewardmesh.v1.RecordStatus
 	107, // 74: stewardmesh.v1.CreateSiteRequest.address:type_name -> stewardmesh.v1.Address
 	8,   // 75: stewardmesh.v1.Site.status:type_name -> stewardmesh.v1.RecordStatus
-	343, // 76: stewardmesh.v1.Site.created_at:type_name -> google.protobuf.Timestamp
-	343, // 77: stewardmesh.v1.Site.updated_at:type_name -> google.protobuf.Timestamp
+	344, // 76: stewardmesh.v1.Site.created_at:type_name -> google.protobuf.Timestamp
+	344, // 77: stewardmesh.v1.Site.updated_at:type_name -> google.protobuf.Timestamp
 	107, // 78: stewardmesh.v1.Site.address:type_name -> stewardmesh.v1.Address
 	111, // 79: stewardmesh.v1.ListBuildingsResponse.items:type_name -> stewardmesh.v1.Building
 	8,   // 80: stewardmesh.v1.CreateBuildingRequest.status:type_name -> stewardmesh.v1.RecordStatus
 	8,   // 81: stewardmesh.v1.Building.status:type_name -> stewardmesh.v1.RecordStatus
-	343, // 82: stewardmesh.v1.Building.created_at:type_name -> google.protobuf.Timestamp
-	343, // 83: stewardmesh.v1.Building.updated_at:type_name -> google.protobuf.Timestamp
+	344, // 82: stewardmesh.v1.Building.created_at:type_name -> google.protobuf.Timestamp
+	344, // 83: stewardmesh.v1.Building.updated_at:type_name -> google.protobuf.Timestamp
 	115, // 84: stewardmesh.v1.ListRoomsResponse.items:type_name -> stewardmesh.v1.Room
 	8,   // 85: stewardmesh.v1.CreateRoomRequest.status:type_name -> stewardmesh.v1.RecordStatus
 	8,   // 86: stewardmesh.v1.Room.status:type_name -> stewardmesh.v1.RecordStatus
-	343, // 87: stewardmesh.v1.Room.created_at:type_name -> google.protobuf.Timestamp
-	343, // 88: stewardmesh.v1.Room.updated_at:type_name -> google.protobuf.Timestamp
+	344, // 87: stewardmesh.v1.Room.created_at:type_name -> google.protobuf.Timestamp
+	344, // 88: stewardmesh.v1.Room.updated_at:type_name -> google.protobuf.Timestamp
 	117, // 89: stewardmesh.v1.ListDirectoryImportSourcesResponse.items:type_name -> stewardmesh.v1.DirectoryImportSource
 	129, // 90: stewardmesh.v1.ListDirectoryImportsResponse.batches:type_name -> stewardmesh.v1.DirectoryImportBatch
-	336, // 91: stewardmesh.v1.DirectoryImportRecord.directory_attributes:type_name -> stewardmesh.v1.DirectoryImportRecord.DirectoryAttributesEntry
-	337, // 92: stewardmesh.v1.DirectoryImportRecord.metadata:type_name -> stewardmesh.v1.DirectoryImportRecord.MetadataEntry
+	337, // 91: stewardmesh.v1.DirectoryImportRecord.directory_attributes:type_name -> stewardmesh.v1.DirectoryImportRecord.DirectoryAttributesEntry
+	338, // 92: stewardmesh.v1.DirectoryImportRecord.metadata:type_name -> stewardmesh.v1.DirectoryImportRecord.MetadataEntry
 	126, // 93: stewardmesh.v1.DirectoryImportItem.record:type_name -> stewardmesh.v1.DirectoryImportRecord
 	13,  // 94: stewardmesh.v1.DirectoryImportItem.action:type_name -> stewardmesh.v1.DirectoryImportAction
 	14,  // 95: stewardmesh.v1.DirectoryImportItem.outcome:type_name -> stewardmesh.v1.DirectoryImportOutcome
 	16,  // 96: stewardmesh.v1.DirectoryImportItem.failure_class:type_name -> stewardmesh.v1.DirectoryImportFailureClass
-	343, // 97: stewardmesh.v1.DirectoryImportItem.updated_at:type_name -> google.protobuf.Timestamp
+	344, // 97: stewardmesh.v1.DirectoryImportItem.updated_at:type_name -> google.protobuf.Timestamp
 	15,  // 98: stewardmesh.v1.DirectoryImportAttempt.operation:type_name -> stewardmesh.v1.DirectoryImportOperation
 	12,  // 99: stewardmesh.v1.DirectoryImportAttempt.status:type_name -> stewardmesh.v1.DirectoryImportBatchStatus
 	16,  // 100: stewardmesh.v1.DirectoryImportAttempt.failure_class:type_name -> stewardmesh.v1.DirectoryImportFailureClass
-	343, // 101: stewardmesh.v1.DirectoryImportAttempt.started_at:type_name -> google.protobuf.Timestamp
-	343, // 102: stewardmesh.v1.DirectoryImportAttempt.completed_at:type_name -> google.protobuf.Timestamp
+	344, // 101: stewardmesh.v1.DirectoryImportAttempt.started_at:type_name -> google.protobuf.Timestamp
+	344, // 102: stewardmesh.v1.DirectoryImportAttempt.completed_at:type_name -> google.protobuf.Timestamp
 	12,  // 103: stewardmesh.v1.DirectoryImportBatch.status:type_name -> stewardmesh.v1.DirectoryImportBatchStatus
 	125, // 104: stewardmesh.v1.DirectoryImportBatch.counts:type_name -> stewardmesh.v1.DirectoryImportCounts
-	343, // 105: stewardmesh.v1.DirectoryImportBatch.created_at:type_name -> google.protobuf.Timestamp
-	343, // 106: stewardmesh.v1.DirectoryImportBatch.updated_at:type_name -> google.protobuf.Timestamp
-	343, // 107: stewardmesh.v1.DirectoryImportBatch.completed_at:type_name -> google.protobuf.Timestamp
+	344, // 105: stewardmesh.v1.DirectoryImportBatch.created_at:type_name -> google.protobuf.Timestamp
+	344, // 106: stewardmesh.v1.DirectoryImportBatch.updated_at:type_name -> google.protobuf.Timestamp
+	344, // 107: stewardmesh.v1.DirectoryImportBatch.completed_at:type_name -> google.protobuf.Timestamp
 	129, // 108: stewardmesh.v1.DirectoryImportBatchDetail.batch:type_name -> stewardmesh.v1.DirectoryImportBatch
 	127, // 109: stewardmesh.v1.DirectoryImportBatchDetail.items:type_name -> stewardmesh.v1.DirectoryImportItem
 	128, // 110: stewardmesh.v1.DirectoryImportBatchDetail.attempts:type_name -> stewardmesh.v1.DirectoryImportAttempt
@@ -27172,8 +27308,8 @@ var file_stewardmesh_proto_depIdxs = []int32{
 	135, // 112: stewardmesh.v1.ListDepartmentsResponse.items:type_name -> stewardmesh.v1.Department
 	8,   // 113: stewardmesh.v1.CreateDepartmentRequest.status:type_name -> stewardmesh.v1.RecordStatus
 	8,   // 114: stewardmesh.v1.Department.status:type_name -> stewardmesh.v1.RecordStatus
-	343, // 115: stewardmesh.v1.Department.created_at:type_name -> google.protobuf.Timestamp
-	343, // 116: stewardmesh.v1.Department.updated_at:type_name -> google.protobuf.Timestamp
+	344, // 115: stewardmesh.v1.Department.created_at:type_name -> google.protobuf.Timestamp
+	344, // 116: stewardmesh.v1.Department.updated_at:type_name -> google.protobuf.Timestamp
 	9,   // 117: stewardmesh.v1.SearchIdentitiesRequest.kind:type_name -> stewardmesh.v1.IdentityKind
 	8,   // 118: stewardmesh.v1.SearchIdentitiesRequest.status:type_name -> stewardmesh.v1.RecordStatus
 	139, // 119: stewardmesh.v1.SearchIdentitiesResponse.items:type_name -> stewardmesh.v1.DirectoryIdentity
@@ -27181,32 +27317,32 @@ var file_stewardmesh_proto_depIdxs = []int32{
 	8,   // 121: stewardmesh.v1.CreateIdentityRequest.status:type_name -> stewardmesh.v1.RecordStatus
 	9,   // 122: stewardmesh.v1.DirectoryIdentity.kind:type_name -> stewardmesh.v1.IdentityKind
 	8,   // 123: stewardmesh.v1.DirectoryIdentity.status:type_name -> stewardmesh.v1.RecordStatus
-	343, // 124: stewardmesh.v1.DirectoryIdentity.created_at:type_name -> google.protobuf.Timestamp
-	343, // 125: stewardmesh.v1.DirectoryIdentity.updated_at:type_name -> google.protobuf.Timestamp
+	344, // 124: stewardmesh.v1.DirectoryIdentity.created_at:type_name -> google.protobuf.Timestamp
+	344, // 125: stewardmesh.v1.DirectoryIdentity.updated_at:type_name -> google.protobuf.Timestamp
 	17,  // 126: stewardmesh.v1.GetRelationshipGraphRequest.kind:type_name -> stewardmesh.v1.RelationshipGraphNodeKind
 	18,  // 127: stewardmesh.v1.GetRelationshipGraphRequest.relationship:type_name -> stewardmesh.v1.RelationshipGraphEdgeKind
 	142, // 128: stewardmesh.v1.RelationshipGraph.nodes:type_name -> stewardmesh.v1.RelationshipGraphNode
 	143, // 129: stewardmesh.v1.RelationshipGraph.edges:type_name -> stewardmesh.v1.RelationshipGraphEdge
 	17,  // 130: stewardmesh.v1.RelationshipGraphNode.kind:type_name -> stewardmesh.v1.RelationshipGraphNodeKind
-	338, // 131: stewardmesh.v1.RelationshipGraphNode.attributes:type_name -> stewardmesh.v1.RelationshipGraphNode.AttributesEntry
+	339, // 131: stewardmesh.v1.RelationshipGraphNode.attributes:type_name -> stewardmesh.v1.RelationshipGraphNode.AttributesEntry
 	18,  // 132: stewardmesh.v1.RelationshipGraphEdge.kind:type_name -> stewardmesh.v1.RelationshipGraphEdgeKind
-	339, // 133: stewardmesh.v1.RelationshipGraphEdge.attributes:type_name -> stewardmesh.v1.RelationshipGraphEdge.AttributesEntry
+	340, // 133: stewardmesh.v1.RelationshipGraphEdge.attributes:type_name -> stewardmesh.v1.RelationshipGraphEdge.AttributesEntry
 	148, // 134: stewardmesh.v1.ListAssetAssignmentsResponse.items:type_name -> stewardmesh.v1.AssetAssignment
 	10,  // 135: stewardmesh.v1.CreateAssetAssignmentRequest.assignee_kind:type_name -> stewardmesh.v1.AssigneeKind
 	11,  // 136: stewardmesh.v1.CreateAssetAssignmentRequest.role:type_name -> stewardmesh.v1.AssignmentRole
-	343, // 137: stewardmesh.v1.CreateAssetAssignmentRequest.effective_from:type_name -> google.protobuf.Timestamp
-	343, // 138: stewardmesh.v1.EndAssetAssignmentRequest.effective_to:type_name -> google.protobuf.Timestamp
+	344, // 137: stewardmesh.v1.CreateAssetAssignmentRequest.effective_from:type_name -> google.protobuf.Timestamp
+	344, // 138: stewardmesh.v1.EndAssetAssignmentRequest.effective_to:type_name -> google.protobuf.Timestamp
 	10,  // 139: stewardmesh.v1.AssetAssignment.assignee_kind:type_name -> stewardmesh.v1.AssigneeKind
 	11,  // 140: stewardmesh.v1.AssetAssignment.role:type_name -> stewardmesh.v1.AssignmentRole
-	343, // 141: stewardmesh.v1.AssetAssignment.effective_from:type_name -> google.protobuf.Timestamp
-	343, // 142: stewardmesh.v1.AssetAssignment.effective_to:type_name -> google.protobuf.Timestamp
-	343, // 143: stewardmesh.v1.AssetAssignment.created_at:type_name -> google.protobuf.Timestamp
+	344, // 141: stewardmesh.v1.AssetAssignment.effective_from:type_name -> google.protobuf.Timestamp
+	344, // 142: stewardmesh.v1.AssetAssignment.effective_to:type_name -> google.protobuf.Timestamp
+	344, // 143: stewardmesh.v1.AssetAssignment.created_at:type_name -> google.protobuf.Timestamp
 	154, // 144: stewardmesh.v1.ListTagsResponse.items:type_name -> stewardmesh.v1.Tag
-	343, // 145: stewardmesh.v1.Tag.created_at:type_name -> google.protobuf.Timestamp
-	343, // 146: stewardmesh.v1.Tag.updated_at:type_name -> google.protobuf.Timestamp
+	344, // 145: stewardmesh.v1.Tag.created_at:type_name -> google.protobuf.Timestamp
+	344, // 146: stewardmesh.v1.Tag.updated_at:type_name -> google.protobuf.Timestamp
 	160, // 147: stewardmesh.v1.ListGoalsResponse.items:type_name -> stewardmesh.v1.Goal
-	343, // 148: stewardmesh.v1.Goal.created_at:type_name -> google.protobuf.Timestamp
-	343, // 149: stewardmesh.v1.Goal.updated_at:type_name -> google.protobuf.Timestamp
+	344, // 148: stewardmesh.v1.Goal.created_at:type_name -> google.protobuf.Timestamp
+	344, // 149: stewardmesh.v1.Goal.updated_at:type_name -> google.protobuf.Timestamp
 	19,  // 150: stewardmesh.v1.ListEffectiveTagsRequest.target_type:type_name -> stewardmesh.v1.ThreadTargetType
 	163, // 151: stewardmesh.v1.ListEffectiveTagsResponse.items:type_name -> stewardmesh.v1.EffectiveTag
 	154, // 152: stewardmesh.v1.EffectiveTag.tag:type_name -> stewardmesh.v1.Tag
@@ -27215,64 +27351,64 @@ var file_stewardmesh_proto_depIdxs = []int32{
 	20,  // 155: stewardmesh.v1.SetTagRuleRequest.mode:type_name -> stewardmesh.v1.TagRuleMode
 	19,  // 156: stewardmesh.v1.TagRule.target_type:type_name -> stewardmesh.v1.ThreadTargetType
 	20,  // 157: stewardmesh.v1.TagRule.mode:type_name -> stewardmesh.v1.TagRuleMode
-	343, // 158: stewardmesh.v1.TagRule.created_at:type_name -> google.protobuf.Timestamp
-	343, // 159: stewardmesh.v1.TagRule.updated_at:type_name -> google.protobuf.Timestamp
+	344, // 158: stewardmesh.v1.TagRule.created_at:type_name -> google.protobuf.Timestamp
+	344, // 159: stewardmesh.v1.TagRule.updated_at:type_name -> google.protobuf.Timestamp
 	19,  // 160: stewardmesh.v1.DeleteTagRuleRequest.target_type:type_name -> stewardmesh.v1.ThreadTargetType
 	19,  // 161: stewardmesh.v1.ListGoalLinksRequest.target_type:type_name -> stewardmesh.v1.ThreadTargetType
 	171, // 162: stewardmesh.v1.ListGoalLinksResponse.items:type_name -> stewardmesh.v1.GoalLink
 	19,  // 163: stewardmesh.v1.LinkGoalRequest.target_type:type_name -> stewardmesh.v1.ThreadTargetType
 	19,  // 164: stewardmesh.v1.GoalLink.target_type:type_name -> stewardmesh.v1.ThreadTargetType
-	343, // 165: stewardmesh.v1.GoalLink.created_at:type_name -> google.protobuf.Timestamp
+	344, // 165: stewardmesh.v1.GoalLink.created_at:type_name -> google.protobuf.Timestamp
 	19,  // 166: stewardmesh.v1.UnlinkGoalRequest.target_type:type_name -> stewardmesh.v1.ThreadTargetType
 	178, // 167: stewardmesh.v1.ListBlobsResponse.items:type_name -> stewardmesh.v1.VaultBlob
-	343, // 168: stewardmesh.v1.VaultBlob.created_at:type_name -> google.protobuf.Timestamp
+	344, // 168: stewardmesh.v1.VaultBlob.created_at:type_name -> google.protobuf.Timestamp
 	178, // 169: stewardmesh.v1.VaultBlobContent.blob:type_name -> stewardmesh.v1.VaultBlob
-	343, // 170: stewardmesh.v1.VaultDownloadAuthorization.expires_at:type_name -> google.protobuf.Timestamp
-	343, // 171: stewardmesh.v1.HorizonPlan.replacement_date:type_name -> google.protobuf.Timestamp
-	343, // 172: stewardmesh.v1.HorizonPlan.derived_replacement_date:type_name -> google.protobuf.Timestamp
-	343, // 173: stewardmesh.v1.HorizonPlan.effective_from:type_name -> google.protobuf.Timestamp
-	343, // 174: stewardmesh.v1.HorizonPlan.created_at:type_name -> google.protobuf.Timestamp
-	343, // 175: stewardmesh.v1.HorizonPlan.updated_at:type_name -> google.protobuf.Timestamp
-	343, // 176: stewardmesh.v1.HorizonPlanVersion.replacement_date:type_name -> google.protobuf.Timestamp
-	343, // 177: stewardmesh.v1.HorizonPlanVersion.effective_from:type_name -> google.protobuf.Timestamp
-	343, // 178: stewardmesh.v1.HorizonPlanVersion.recorded_at:type_name -> google.protobuf.Timestamp
-	343, // 179: stewardmesh.v1.HorizonPlanVersion.derived_replacement_date:type_name -> google.protobuf.Timestamp
+	344, // 170: stewardmesh.v1.VaultDownloadAuthorization.expires_at:type_name -> google.protobuf.Timestamp
+	344, // 171: stewardmesh.v1.HorizonPlan.replacement_date:type_name -> google.protobuf.Timestamp
+	344, // 172: stewardmesh.v1.HorizonPlan.derived_replacement_date:type_name -> google.protobuf.Timestamp
+	344, // 173: stewardmesh.v1.HorizonPlan.effective_from:type_name -> google.protobuf.Timestamp
+	344, // 174: stewardmesh.v1.HorizonPlan.created_at:type_name -> google.protobuf.Timestamp
+	344, // 175: stewardmesh.v1.HorizonPlan.updated_at:type_name -> google.protobuf.Timestamp
+	344, // 176: stewardmesh.v1.HorizonPlanVersion.replacement_date:type_name -> google.protobuf.Timestamp
+	344, // 177: stewardmesh.v1.HorizonPlanVersion.effective_from:type_name -> google.protobuf.Timestamp
+	344, // 178: stewardmesh.v1.HorizonPlanVersion.recorded_at:type_name -> google.protobuf.Timestamp
+	344, // 179: stewardmesh.v1.HorizonPlanVersion.derived_replacement_date:type_name -> google.protobuf.Timestamp
 	183, // 180: stewardmesh.v1.ListHorizonPlansResponse.items:type_name -> stewardmesh.v1.HorizonPlan
-	343, // 181: stewardmesh.v1.CreateHorizonPlanRequest.replacement_date:type_name -> google.protobuf.Timestamp
-	343, // 182: stewardmesh.v1.CreateHorizonPlanRequest.effective_from:type_name -> google.protobuf.Timestamp
-	343, // 183: stewardmesh.v1.UpdateHorizonPlanRequest.replacement_date:type_name -> google.protobuf.Timestamp
-	343, // 184: stewardmesh.v1.UpdateHorizonPlanRequest.effective_from:type_name -> google.protobuf.Timestamp
+	344, // 181: stewardmesh.v1.CreateHorizonPlanRequest.replacement_date:type_name -> google.protobuf.Timestamp
+	344, // 182: stewardmesh.v1.CreateHorizonPlanRequest.effective_from:type_name -> google.protobuf.Timestamp
+	344, // 183: stewardmesh.v1.UpdateHorizonPlanRequest.replacement_date:type_name -> google.protobuf.Timestamp
+	344, // 184: stewardmesh.v1.UpdateHorizonPlanRequest.effective_from:type_name -> google.protobuf.Timestamp
 	184, // 185: stewardmesh.v1.ListHorizonPlanHistoryResponse.items:type_name -> stewardmesh.v1.HorizonPlanVersion
-	343, // 186: stewardmesh.v1.GetHorizonForecastRequest.as_of:type_name -> google.protobuf.Timestamp
-	340, // 187: stewardmesh.v1.HorizonForecastGroup.amounts_by_kind_minor:type_name -> stewardmesh.v1.HorizonForecastGroup.AmountsByKindMinorEntry
-	343, // 188: stewardmesh.v1.HorizonForecast.as_of:type_name -> google.protobuf.Timestamp
-	341, // 189: stewardmesh.v1.HorizonForecast.totals_by_kind_minor:type_name -> stewardmesh.v1.HorizonForecast.TotalsByKindMinorEntry
+	344, // 186: stewardmesh.v1.GetHorizonForecastRequest.as_of:type_name -> google.protobuf.Timestamp
+	341, // 187: stewardmesh.v1.HorizonForecastGroup.amounts_by_kind_minor:type_name -> stewardmesh.v1.HorizonForecastGroup.AmountsByKindMinorEntry
+	344, // 188: stewardmesh.v1.HorizonForecast.as_of:type_name -> google.protobuf.Timestamp
+	342, // 189: stewardmesh.v1.HorizonForecast.totals_by_kind_minor:type_name -> stewardmesh.v1.HorizonForecast.TotalsByKindMinorEntry
 	192, // 190: stewardmesh.v1.HorizonForecast.groups:type_name -> stewardmesh.v1.HorizonForecastGroup
-	343, // 191: stewardmesh.v1.ExportHorizonCSVRequest.as_of:type_name -> google.protobuf.Timestamp
-	343, // 192: stewardmesh.v1.LedgerVendor.created_at:type_name -> google.protobuf.Timestamp
-	343, // 193: stewardmesh.v1.LedgerVendor.updated_at:type_name -> google.protobuf.Timestamp
-	343, // 194: stewardmesh.v1.LedgerPurchaseOrder.ordered_on:type_name -> google.protobuf.Timestamp
-	343, // 195: stewardmesh.v1.LedgerPurchaseOrder.created_at:type_name -> google.protobuf.Timestamp
-	343, // 196: stewardmesh.v1.LedgerPurchaseOrder.updated_at:type_name -> google.protobuf.Timestamp
-	343, // 197: stewardmesh.v1.CreateLedgerPurchaseOrderRequest.ordered_on:type_name -> google.protobuf.Timestamp
-	343, // 198: stewardmesh.v1.LedgerContract.starts_on:type_name -> google.protobuf.Timestamp
-	343, // 199: stewardmesh.v1.LedgerContract.ends_on:type_name -> google.protobuf.Timestamp
-	343, // 200: stewardmesh.v1.LedgerContract.renews_on:type_name -> google.protobuf.Timestamp
-	343, // 201: stewardmesh.v1.LedgerContract.created_at:type_name -> google.protobuf.Timestamp
-	343, // 202: stewardmesh.v1.LedgerContract.updated_at:type_name -> google.protobuf.Timestamp
-	343, // 203: stewardmesh.v1.CreateLedgerContractRequest.starts_on:type_name -> google.protobuf.Timestamp
-	343, // 204: stewardmesh.v1.CreateLedgerContractRequest.ends_on:type_name -> google.protobuf.Timestamp
-	343, // 205: stewardmesh.v1.CreateLedgerContractRequest.renews_on:type_name -> google.protobuf.Timestamp
-	343, // 206: stewardmesh.v1.LedgerCommitment.starts_on:type_name -> google.protobuf.Timestamp
-	343, // 207: stewardmesh.v1.LedgerCommitment.ends_on:type_name -> google.protobuf.Timestamp
-	343, // 208: stewardmesh.v1.LedgerCommitment.created_at:type_name -> google.protobuf.Timestamp
-	343, // 209: stewardmesh.v1.LedgerCommitment.updated_at:type_name -> google.protobuf.Timestamp
-	343, // 210: stewardmesh.v1.CreateLedgerCommitmentRequest.starts_on:type_name -> google.protobuf.Timestamp
-	343, // 211: stewardmesh.v1.CreateLedgerCommitmentRequest.ends_on:type_name -> google.protobuf.Timestamp
-	343, // 212: stewardmesh.v1.LedgerBudget.created_at:type_name -> google.protobuf.Timestamp
-	343, // 213: stewardmesh.v1.LedgerBudget.updated_at:type_name -> google.protobuf.Timestamp
-	343, // 214: stewardmesh.v1.LedgerCostRecord.created_at:type_name -> google.protobuf.Timestamp
-	343, // 215: stewardmesh.v1.LedgerCostRecord.updated_at:type_name -> google.protobuf.Timestamp
+	344, // 191: stewardmesh.v1.ExportHorizonCSVRequest.as_of:type_name -> google.protobuf.Timestamp
+	344, // 192: stewardmesh.v1.LedgerVendor.created_at:type_name -> google.protobuf.Timestamp
+	344, // 193: stewardmesh.v1.LedgerVendor.updated_at:type_name -> google.protobuf.Timestamp
+	344, // 194: stewardmesh.v1.LedgerPurchaseOrder.ordered_on:type_name -> google.protobuf.Timestamp
+	344, // 195: stewardmesh.v1.LedgerPurchaseOrder.created_at:type_name -> google.protobuf.Timestamp
+	344, // 196: stewardmesh.v1.LedgerPurchaseOrder.updated_at:type_name -> google.protobuf.Timestamp
+	344, // 197: stewardmesh.v1.CreateLedgerPurchaseOrderRequest.ordered_on:type_name -> google.protobuf.Timestamp
+	344, // 198: stewardmesh.v1.LedgerContract.starts_on:type_name -> google.protobuf.Timestamp
+	344, // 199: stewardmesh.v1.LedgerContract.ends_on:type_name -> google.protobuf.Timestamp
+	344, // 200: stewardmesh.v1.LedgerContract.renews_on:type_name -> google.protobuf.Timestamp
+	344, // 201: stewardmesh.v1.LedgerContract.created_at:type_name -> google.protobuf.Timestamp
+	344, // 202: stewardmesh.v1.LedgerContract.updated_at:type_name -> google.protobuf.Timestamp
+	344, // 203: stewardmesh.v1.CreateLedgerContractRequest.starts_on:type_name -> google.protobuf.Timestamp
+	344, // 204: stewardmesh.v1.CreateLedgerContractRequest.ends_on:type_name -> google.protobuf.Timestamp
+	344, // 205: stewardmesh.v1.CreateLedgerContractRequest.renews_on:type_name -> google.protobuf.Timestamp
+	344, // 206: stewardmesh.v1.LedgerCommitment.starts_on:type_name -> google.protobuf.Timestamp
+	344, // 207: stewardmesh.v1.LedgerCommitment.ends_on:type_name -> google.protobuf.Timestamp
+	344, // 208: stewardmesh.v1.LedgerCommitment.created_at:type_name -> google.protobuf.Timestamp
+	344, // 209: stewardmesh.v1.LedgerCommitment.updated_at:type_name -> google.protobuf.Timestamp
+	344, // 210: stewardmesh.v1.CreateLedgerCommitmentRequest.starts_on:type_name -> google.protobuf.Timestamp
+	344, // 211: stewardmesh.v1.CreateLedgerCommitmentRequest.ends_on:type_name -> google.protobuf.Timestamp
+	344, // 212: stewardmesh.v1.LedgerBudget.created_at:type_name -> google.protobuf.Timestamp
+	344, // 213: stewardmesh.v1.LedgerBudget.updated_at:type_name -> google.protobuf.Timestamp
+	344, // 214: stewardmesh.v1.LedgerCostRecord.created_at:type_name -> google.protobuf.Timestamp
+	344, // 215: stewardmesh.v1.LedgerCostRecord.updated_at:type_name -> google.protobuf.Timestamp
 	209, // 216: stewardmesh.v1.ReconcileLedgerCostResponse.record:type_name -> stewardmesh.v1.LedgerCostRecord
 	197, // 217: stewardmesh.v1.LedgerSnapshot.vendors:type_name -> stewardmesh.v1.LedgerVendor
 	199, // 218: stewardmesh.v1.LedgerSnapshot.purchase_orders:type_name -> stewardmesh.v1.LedgerPurchaseOrder
@@ -27280,440 +27416,442 @@ var file_stewardmesh_proto_depIdxs = []int32{
 	205, // 220: stewardmesh.v1.LedgerSnapshot.commitments:type_name -> stewardmesh.v1.LedgerCommitment
 	207, // 221: stewardmesh.v1.LedgerSnapshot.budgets:type_name -> stewardmesh.v1.LedgerBudget
 	209, // 222: stewardmesh.v1.LedgerSnapshot.costs:type_name -> stewardmesh.v1.LedgerCostRecord
-	342, // 223: stewardmesh.v1.LedgerBudgetVariance.amounts_by_kind_minor:type_name -> stewardmesh.v1.LedgerBudgetVariance.AmountsByKindMinorEntry
-	343, // 224: stewardmesh.v1.StackProduct.created_at:type_name -> google.protobuf.Timestamp
-	343, // 225: stewardmesh.v1.StackProduct.updated_at:type_name -> google.protobuf.Timestamp
-	343, // 226: stewardmesh.v1.StackVersion.released_on:type_name -> google.protobuf.Timestamp
-	343, // 227: stewardmesh.v1.StackVersion.created_at:type_name -> google.protobuf.Timestamp
-	343, // 228: stewardmesh.v1.StackVersion.updated_at:type_name -> google.protobuf.Timestamp
-	343, // 229: stewardmesh.v1.CreateStackVersionRequest.released_on:type_name -> google.protobuf.Timestamp
-	343, // 230: stewardmesh.v1.StackInstallation.installed_at:type_name -> google.protobuf.Timestamp
-	343, // 231: stewardmesh.v1.StackInstallation.last_used_at:type_name -> google.protobuf.Timestamp
-	343, // 232: stewardmesh.v1.StackInstallation.removed_at:type_name -> google.protobuf.Timestamp
-	343, // 233: stewardmesh.v1.StackInstallation.created_at:type_name -> google.protobuf.Timestamp
-	343, // 234: stewardmesh.v1.StackInstallation.updated_at:type_name -> google.protobuf.Timestamp
-	343, // 235: stewardmesh.v1.RecordStackInstallationRequest.installed_at:type_name -> google.protobuf.Timestamp
-	343, // 236: stewardmesh.v1.RecordStackInstallationRequest.last_used_at:type_name -> google.protobuf.Timestamp
-	343, // 237: stewardmesh.v1.RecordStackInstallationRequest.removed_at:type_name -> google.protobuf.Timestamp
-	343, // 238: stewardmesh.v1.UpdateStackInstallationStateRequest.last_used_at:type_name -> google.protobuf.Timestamp
-	343, // 239: stewardmesh.v1.UpdateStackInstallationStateRequest.removed_at:type_name -> google.protobuf.Timestamp
-	343, // 240: stewardmesh.v1.StackLicense.starts_on:type_name -> google.protobuf.Timestamp
-	343, // 241: stewardmesh.v1.StackLicense.expires_on:type_name -> google.protobuf.Timestamp
-	343, // 242: stewardmesh.v1.StackLicense.created_at:type_name -> google.protobuf.Timestamp
-	343, // 243: stewardmesh.v1.StackLicense.updated_at:type_name -> google.protobuf.Timestamp
-	343, // 244: stewardmesh.v1.CreateStackLicenseRequest.starts_on:type_name -> google.protobuf.Timestamp
-	343, // 245: stewardmesh.v1.CreateStackLicenseRequest.expires_on:type_name -> google.protobuf.Timestamp
-	343, // 246: stewardmesh.v1.UpdateStackLicenseEntitlementRequest.starts_on:type_name -> google.protobuf.Timestamp
-	343, // 247: stewardmesh.v1.UpdateStackLicenseEntitlementRequest.expires_on:type_name -> google.protobuf.Timestamp
-	343, // 248: stewardmesh.v1.StackAssignment.assigned_at:type_name -> google.protobuf.Timestamp
-	343, // 249: stewardmesh.v1.StackAssignment.last_used_at:type_name -> google.protobuf.Timestamp
-	343, // 250: stewardmesh.v1.StackAssignment.ended_at:type_name -> google.protobuf.Timestamp
-	343, // 251: stewardmesh.v1.StackAssignment.created_at:type_name -> google.protobuf.Timestamp
-	343, // 252: stewardmesh.v1.StackAssignment.updated_at:type_name -> google.protobuf.Timestamp
-	343, // 253: stewardmesh.v1.CreateStackAssignmentRequest.assigned_at:type_name -> google.protobuf.Timestamp
-	343, // 254: stewardmesh.v1.CreateStackAssignmentRequest.last_used_at:type_name -> google.protobuf.Timestamp
-	343, // 255: stewardmesh.v1.CreateStackAssignmentRequest.ended_at:type_name -> google.protobuf.Timestamp
-	343, // 256: stewardmesh.v1.UpdateStackAssignmentUsageRequest.last_used_at:type_name -> google.protobuf.Timestamp
-	343, // 257: stewardmesh.v1.EndStackAssignmentRequest.ended_at:type_name -> google.protobuf.Timestamp
+	343, // 223: stewardmesh.v1.LedgerBudgetVariance.amounts_by_kind_minor:type_name -> stewardmesh.v1.LedgerBudgetVariance.AmountsByKindMinorEntry
+	344, // 224: stewardmesh.v1.StackProduct.created_at:type_name -> google.protobuf.Timestamp
+	344, // 225: stewardmesh.v1.StackProduct.updated_at:type_name -> google.protobuf.Timestamp
+	344, // 226: stewardmesh.v1.StackVersion.released_on:type_name -> google.protobuf.Timestamp
+	344, // 227: stewardmesh.v1.StackVersion.created_at:type_name -> google.protobuf.Timestamp
+	344, // 228: stewardmesh.v1.StackVersion.updated_at:type_name -> google.protobuf.Timestamp
+	344, // 229: stewardmesh.v1.CreateStackVersionRequest.released_on:type_name -> google.protobuf.Timestamp
+	344, // 230: stewardmesh.v1.StackInstallation.installed_at:type_name -> google.protobuf.Timestamp
+	344, // 231: stewardmesh.v1.StackInstallation.last_used_at:type_name -> google.protobuf.Timestamp
+	344, // 232: stewardmesh.v1.StackInstallation.removed_at:type_name -> google.protobuf.Timestamp
+	344, // 233: stewardmesh.v1.StackInstallation.created_at:type_name -> google.protobuf.Timestamp
+	344, // 234: stewardmesh.v1.StackInstallation.updated_at:type_name -> google.protobuf.Timestamp
+	344, // 235: stewardmesh.v1.RecordStackInstallationRequest.installed_at:type_name -> google.protobuf.Timestamp
+	344, // 236: stewardmesh.v1.RecordStackInstallationRequest.last_used_at:type_name -> google.protobuf.Timestamp
+	344, // 237: stewardmesh.v1.RecordStackInstallationRequest.removed_at:type_name -> google.protobuf.Timestamp
+	344, // 238: stewardmesh.v1.UpdateStackInstallationStateRequest.last_used_at:type_name -> google.protobuf.Timestamp
+	344, // 239: stewardmesh.v1.UpdateStackInstallationStateRequest.removed_at:type_name -> google.protobuf.Timestamp
+	344, // 240: stewardmesh.v1.StackLicense.starts_on:type_name -> google.protobuf.Timestamp
+	344, // 241: stewardmesh.v1.StackLicense.expires_on:type_name -> google.protobuf.Timestamp
+	344, // 242: stewardmesh.v1.StackLicense.created_at:type_name -> google.protobuf.Timestamp
+	344, // 243: stewardmesh.v1.StackLicense.updated_at:type_name -> google.protobuf.Timestamp
+	344, // 244: stewardmesh.v1.CreateStackLicenseRequest.starts_on:type_name -> google.protobuf.Timestamp
+	344, // 245: stewardmesh.v1.CreateStackLicenseRequest.expires_on:type_name -> google.protobuf.Timestamp
+	344, // 246: stewardmesh.v1.UpdateStackLicenseEntitlementRequest.starts_on:type_name -> google.protobuf.Timestamp
+	344, // 247: stewardmesh.v1.UpdateStackLicenseEntitlementRequest.expires_on:type_name -> google.protobuf.Timestamp
+	344, // 248: stewardmesh.v1.StackAssignment.assigned_at:type_name -> google.protobuf.Timestamp
+	344, // 249: stewardmesh.v1.StackAssignment.last_used_at:type_name -> google.protobuf.Timestamp
+	344, // 250: stewardmesh.v1.StackAssignment.ended_at:type_name -> google.protobuf.Timestamp
+	344, // 251: stewardmesh.v1.StackAssignment.created_at:type_name -> google.protobuf.Timestamp
+	344, // 252: stewardmesh.v1.StackAssignment.updated_at:type_name -> google.protobuf.Timestamp
+	344, // 253: stewardmesh.v1.CreateStackAssignmentRequest.assigned_at:type_name -> google.protobuf.Timestamp
+	344, // 254: stewardmesh.v1.CreateStackAssignmentRequest.last_used_at:type_name -> google.protobuf.Timestamp
+	344, // 255: stewardmesh.v1.CreateStackAssignmentRequest.ended_at:type_name -> google.protobuf.Timestamp
+	344, // 256: stewardmesh.v1.UpdateStackAssignmentUsageRequest.last_used_at:type_name -> google.protobuf.Timestamp
+	344, // 257: stewardmesh.v1.EndStackAssignmentRequest.ended_at:type_name -> google.protobuf.Timestamp
 	218, // 258: stewardmesh.v1.StackSnapshot.products:type_name -> stewardmesh.v1.StackProduct
 	221, // 259: stewardmesh.v1.StackSnapshot.versions:type_name -> stewardmesh.v1.StackVersion
 	224, // 260: stewardmesh.v1.StackSnapshot.installations:type_name -> stewardmesh.v1.StackInstallation
 	227, // 261: stewardmesh.v1.StackSnapshot.licenses:type_name -> stewardmesh.v1.StackLicense
 	230, // 262: stewardmesh.v1.StackSnapshot.assignments:type_name -> stewardmesh.v1.StackAssignment
-	343, // 263: stewardmesh.v1.GetStackAnalyticsRequest.as_of:type_name -> google.protobuf.Timestamp
-	343, // 264: stewardmesh.v1.StackAnalytics.as_of:type_name -> google.protobuf.Timestamp
+	344, // 263: stewardmesh.v1.GetStackAnalyticsRequest.as_of:type_name -> google.protobuf.Timestamp
+	344, // 264: stewardmesh.v1.StackAnalytics.as_of:type_name -> google.protobuf.Timestamp
 	236, // 265: stewardmesh.v1.StackAnalytics.compliance_conditions:type_name -> stewardmesh.v1.StackCondition
-	344, // 266: stewardmesh.v1.StackExchangeRecord.payload:type_name -> google.protobuf.Struct
+	345, // 266: stewardmesh.v1.StackExchangeRecord.payload:type_name -> google.protobuf.Struct
 	238, // 267: stewardmesh.v1.ExportStackRecordsResponse.records:type_name -> stewardmesh.v1.StackExchangeRecord
 	238, // 268: stewardmesh.v1.ImportStackRecordsRequest.records:type_name -> stewardmesh.v1.StackExchangeRecord
-	245, // 269: stewardmesh.v1.ListSignalRulesResponse.items:type_name -> stewardmesh.v1.SignalRule
-	343, // 270: stewardmesh.v1.SignalRule.created_at:type_name -> google.protobuf.Timestamp
-	343, // 271: stewardmesh.v1.SignalRule.updated_at:type_name -> google.protobuf.Timestamp
-	250, // 272: stewardmesh.v1.ListSignalAlertsResponse.items:type_name -> stewardmesh.v1.SignalAlert
-	343, // 273: stewardmesh.v1.SignalAlert.due_at:type_name -> google.protobuf.Timestamp
-	343, // 274: stewardmesh.v1.SignalAlert.acknowledged_at:type_name -> google.protobuf.Timestamp
-	343, // 275: stewardmesh.v1.SignalAlert.first_detected_at:type_name -> google.protobuf.Timestamp
-	343, // 276: stewardmesh.v1.SignalAlert.last_observed_at:type_name -> google.protobuf.Timestamp
-	343, // 277: stewardmesh.v1.SignalAlert.resolved_at:type_name -> google.protobuf.Timestamp
-	253, // 278: stewardmesh.v1.ListSignalAlertHistoryResponse.items:type_name -> stewardmesh.v1.SignalAlertHistory
-	343, // 279: stewardmesh.v1.SignalAlertHistory.occurred_at:type_name -> google.protobuf.Timestamp
-	343, // 280: stewardmesh.v1.EvaluateSignalsRequest.as_of:type_name -> google.protobuf.Timestamp
-	343, // 281: stewardmesh.v1.SignalEvaluationResult.as_of:type_name -> google.protobuf.Timestamp
-	263, // 282: stewardmesh.v1.ListSignalSubscriptionsResponse.items:type_name -> stewardmesh.v1.SignalSubscription
-	262, // 283: stewardmesh.v1.ListSignalSubscriptionTargetsResponse.items:type_name -> stewardmesh.v1.SignalSubscriptionTarget
-	343, // 284: stewardmesh.v1.SignalSubscription.created_at:type_name -> google.protobuf.Timestamp
-	343, // 285: stewardmesh.v1.SignalDelivery.next_attempt_at:type_name -> google.protobuf.Timestamp
-	343, // 286: stewardmesh.v1.SignalDelivery.created_at:type_name -> google.protobuf.Timestamp
-	343, // 287: stewardmesh.v1.SignalDelivery.updated_at:type_name -> google.protobuf.Timestamp
-	343, // 288: stewardmesh.v1.ListPendingSignalDeliveriesRequest.as_of:type_name -> google.protobuf.Timestamp
-	267, // 289: stewardmesh.v1.ListPendingSignalDeliveriesResponse.items:type_name -> stewardmesh.v1.SignalDelivery
-	343, // 290: stewardmesh.v1.ExchangeOwnershipMetadata.claimed_at:type_name -> google.protobuf.Timestamp
-	273, // 291: stewardmesh.v1.ExchangeRecord.dependencies:type_name -> stewardmesh.v1.ExchangeReference
-	275, // 292: stewardmesh.v1.ExchangeRecord.provenance:type_name -> stewardmesh.v1.ExchangeProvenance
-	276, // 293: stewardmesh.v1.ExchangeRecord.ownership:type_name -> stewardmesh.v1.ExchangeOwnershipMetadata
-	277, // 294: stewardmesh.v1.ExchangeRecord.file:type_name -> stewardmesh.v1.ExchangeFileMetadata
-	344, // 295: stewardmesh.v1.ExchangeRecord.payload:type_name -> google.protobuf.Struct
-	343, // 296: stewardmesh.v1.ExchangeManifest.exported_at:type_name -> google.protobuf.Timestamp
-	278, // 297: stewardmesh.v1.ExchangeManifest.records:type_name -> stewardmesh.v1.ExchangeRecord
-	274, // 298: stewardmesh.v1.ExchangeManifest.schemas:type_name -> stewardmesh.v1.ExchangeSchemaReference
-	273, // 299: stewardmesh.v1.ExchangeRecordDescriptor.dependencies:type_name -> stewardmesh.v1.ExchangeReference
-	280, // 300: stewardmesh.v1.ListExchangeRecordsResponse.items:type_name -> stewardmesh.v1.ExchangeRecordDescriptor
-	289, // 301: stewardmesh.v1.ListExchangePackagesResponse.items:type_name -> stewardmesh.v1.ExchangePackage
-	273, // 302: stewardmesh.v1.ExportExchangePackageRequest.selection:type_name -> stewardmesh.v1.ExchangeReference
-	273, // 303: stewardmesh.v1.ExchangeRecordOutcome.missing_dependencies:type_name -> stewardmesh.v1.ExchangeReference
-	288, // 304: stewardmesh.v1.ExchangePackage.records:type_name -> stewardmesh.v1.ExchangeRecordOutcome
-	343, // 305: stewardmesh.v1.ExchangePackage.created_at:type_name -> google.protobuf.Timestamp
-	343, // 306: stewardmesh.v1.ExchangePackage.updated_at:type_name -> google.protobuf.Timestamp
-	289, // 307: stewardmesh.v1.ImportExchangePackageResponse.package:type_name -> stewardmesh.v1.ExchangePackage
-	293, // 308: stewardmesh.v1.ListReachEndpointsResponse.items:type_name -> stewardmesh.v1.ReachEndpoint
-	296, // 309: stewardmesh.v1.ListReachProvidersResponse.items:type_name -> stewardmesh.v1.ReachProvider
-	343, // 310: stewardmesh.v1.ReachProvider.created_at:type_name -> google.protobuf.Timestamp
-	343, // 311: stewardmesh.v1.ReachProvider.updated_at:type_name -> google.protobuf.Timestamp
-	303, // 312: stewardmesh.v1.ListReachProviderTestsResponse.items:type_name -> stewardmesh.v1.ReachProviderTest
-	343, // 313: stewardmesh.v1.ReachProviderTest.tested_at:type_name -> google.protobuf.Timestamp
-	306, // 314: stewardmesh.v1.ListReachTemplatesResponse.items:type_name -> stewardmesh.v1.ReachTemplate
-	343, // 315: stewardmesh.v1.ReachTemplate.created_at:type_name -> google.protobuf.Timestamp
-	343, // 316: stewardmesh.v1.ReachTemplate.updated_at:type_name -> google.protobuf.Timestamp
-	312, // 317: stewardmesh.v1.ListReachGroupsResponse.items:type_name -> stewardmesh.v1.ReachSubscriberGroup
-	309, // 318: stewardmesh.v1.ReachSubscriberGroup.recipients:type_name -> stewardmesh.v1.ReachRecipient
-	343, // 319: stewardmesh.v1.ReachSubscriberGroup.created_at:type_name -> google.protobuf.Timestamp
-	343, // 320: stewardmesh.v1.ReachSubscriberGroup.updated_at:type_name -> google.protobuf.Timestamp
-	309, // 321: stewardmesh.v1.CreateReachGroupRequest.recipients:type_name -> stewardmesh.v1.ReachRecipient
-	309, // 322: stewardmesh.v1.UpdateReachGroupRequest.recipients:type_name -> stewardmesh.v1.ReachRecipient
-	317, // 323: stewardmesh.v1.ListReachMessagesResponse.items:type_name -> stewardmesh.v1.ReachMessage
-	309, // 324: stewardmesh.v1.ReachMessage.recipients:type_name -> stewardmesh.v1.ReachRecipient
-	343, // 325: stewardmesh.v1.ReachMessage.next_attempt_at:type_name -> google.protobuf.Timestamp
-	343, // 326: stewardmesh.v1.ReachMessage.created_at:type_name -> google.protobuf.Timestamp
-	343, // 327: stewardmesh.v1.ReachMessage.updated_at:type_name -> google.protobuf.Timestamp
-	344, // 328: stewardmesh.v1.SendReachMessageRequest.variables:type_name -> google.protobuf.Struct
-	322, // 329: stewardmesh.v1.ListReachMessageAttemptsResponse.items:type_name -> stewardmesh.v1.ReachDeliveryAttempt
-	343, // 330: stewardmesh.v1.ReachDeliveryAttempt.next_attempt_at:type_name -> google.protobuf.Timestamp
-	343, // 331: stewardmesh.v1.ReachDeliveryAttempt.occurred_at:type_name -> google.protobuf.Timestamp
-	329, // 332: stewardmesh.v1.ListBridgeClientsResponse.items:type_name -> stewardmesh.v1.BridgeClient
-	21,  // 333: stewardmesh.v1.CreateBridgeClientRequest.allowed_scopes:type_name -> stewardmesh.v1.BridgeScope
-	21,  // 334: stewardmesh.v1.BridgeClient.allowed_scopes:type_name -> stewardmesh.v1.BridgeScope
-	343, // 335: stewardmesh.v1.BridgeClient.created_at:type_name -> google.protobuf.Timestamp
-	343, // 336: stewardmesh.v1.BridgeClient.revoked_at:type_name -> google.protobuf.Timestamp
-	333, // 337: stewardmesh.v1.ListBridgeGrantsResponse.items:type_name -> stewardmesh.v1.BridgeGrant
-	21,  // 338: stewardmesh.v1.BridgeGrant.scopes:type_name -> stewardmesh.v1.BridgeScope
-	343, // 339: stewardmesh.v1.BridgeGrant.access_expires_at:type_name -> google.protobuf.Timestamp
-	343, // 340: stewardmesh.v1.BridgeGrant.refresh_expires_at:type_name -> google.protobuf.Timestamp
-	343, // 341: stewardmesh.v1.BridgeGrant.created_at:type_name -> google.protobuf.Timestamp
-	343, // 342: stewardmesh.v1.BridgeGrant.last_used_at:type_name -> google.protobuf.Timestamp
-	343, // 343: stewardmesh.v1.BridgeGrant.revoked_at:type_name -> google.protobuf.Timestamp
-	22,  // 344: stewardmesh.v1.FoundationService.GetOrganization:input_type -> stewardmesh.v1.GetOrganizationRequest
-	325, // 345: stewardmesh.v1.BridgeService.ListClients:input_type -> stewardmesh.v1.ListBridgeClientsRequest
-	327, // 346: stewardmesh.v1.BridgeService.CreateClient:input_type -> stewardmesh.v1.CreateBridgeClientRequest
-	328, // 347: stewardmesh.v1.BridgeService.RevokeClient:input_type -> stewardmesh.v1.RevokeBridgeClientRequest
-	330, // 348: stewardmesh.v1.BridgeService.ListGrants:input_type -> stewardmesh.v1.ListBridgeGrantsRequest
-	332, // 349: stewardmesh.v1.BridgeService.RevokeGrant:input_type -> stewardmesh.v1.RevokeBridgeGrantRequest
-	24,  // 350: stewardmesh.v1.PatternsService.ListTemplates:input_type -> stewardmesh.v1.ListPatternsTemplatesRequest
-	28,  // 351: stewardmesh.v1.PatternsService.CreateTemplate:input_type -> stewardmesh.v1.CreatePatternsTemplateRequest
-	26,  // 352: stewardmesh.v1.PatternsService.GetTemplate:input_type -> stewardmesh.v1.GetPatternsTemplateRequest
-	27,  // 353: stewardmesh.v1.PatternsService.GetTemplateSchema:input_type -> stewardmesh.v1.GetPatternsTemplateSchemaRequest
-	29,  // 354: stewardmesh.v1.PatternsService.CopyTemplate:input_type -> stewardmesh.v1.CopyPatternsTemplateRequest
-	30,  // 355: stewardmesh.v1.PatternsService.CreateTemplateVersion:input_type -> stewardmesh.v1.CreatePatternsTemplateVersionRequest
-	31,  // 356: stewardmesh.v1.PatternsService.ValidateRecord:input_type -> stewardmesh.v1.ValidatePatternsRecordRequest
-	32,  // 357: stewardmesh.v1.PatternsService.ExportCSVTemplate:input_type -> stewardmesh.v1.ExportPatternsCSVTemplateRequest
-	39,  // 358: stewardmesh.v1.GuardService.GetBootstrapStatus:input_type -> stewardmesh.v1.GetBootstrapStatusRequest
-	41,  // 359: stewardmesh.v1.GuardService.BootstrapAdministrator:input_type -> stewardmesh.v1.BootstrapAdministratorRequest
-	42,  // 360: stewardmesh.v1.GuardService.AuthenticateLocal:input_type -> stewardmesh.v1.AuthenticateLocalRequest
-	43,  // 361: stewardmesh.v1.GuardService.GetSession:input_type -> stewardmesh.v1.GetSessionRequest
-	44,  // 362: stewardmesh.v1.GuardService.Logout:input_type -> stewardmesh.v1.LogoutRequest
-	50,  // 363: stewardmesh.v1.GuardService.ListGuardAccess:input_type -> stewardmesh.v1.ListGuardAccessRequest
-	55,  // 364: stewardmesh.v1.GuardService.CreateRole:input_type -> stewardmesh.v1.CreateRoleRequest
-	57,  // 365: stewardmesh.v1.GuardService.CreateRoleAssignment:input_type -> stewardmesh.v1.CreateRoleAssignmentRequest
-	58,  // 366: stewardmesh.v1.GuardService.DeleteRoleAssignment:input_type -> stewardmesh.v1.DeleteRoleAssignmentRequest
-	60,  // 367: stewardmesh.v1.GuardService.ListResourceOwnership:input_type -> stewardmesh.v1.ListResourceOwnershipRequest
-	63,  // 368: stewardmesh.v1.GuardService.RegisterResourceOwnership:input_type -> stewardmesh.v1.RegisterResourceOwnershipRequest
-	64,  // 369: stewardmesh.v1.GuardService.ClaimResourceOwnership:input_type -> stewardmesh.v1.ClaimResourceOwnershipRequest
-	66,  // 370: stewardmesh.v1.AssetService.ListAssetModels:input_type -> stewardmesh.v1.ListAssetModelsRequest
-	69,  // 371: stewardmesh.v1.AssetService.GetAssetModel:input_type -> stewardmesh.v1.GetAssetModelRequest
-	70,  // 372: stewardmesh.v1.AssetService.GetAssetModelInventory:input_type -> stewardmesh.v1.GetAssetModelInventoryRequest
-	73,  // 373: stewardmesh.v1.AssetService.ResolveAssetModel:input_type -> stewardmesh.v1.ResolveAssetModelRequest
-	68,  // 374: stewardmesh.v1.AssetService.CreateAssetModel:input_type -> stewardmesh.v1.CreateAssetModelRequest
-	74,  // 375: stewardmesh.v1.AssetService.UpdateAssetModel:input_type -> stewardmesh.v1.UpdateAssetModelRequest
-	75,  // 376: stewardmesh.v1.AssetService.RetireAssetModel:input_type -> stewardmesh.v1.RetireAssetModelRequest
-	65,  // 377: stewardmesh.v1.AssetService.ListAssets:input_type -> stewardmesh.v1.ListAssetsRequest
-	80,  // 378: stewardmesh.v1.AssetService.GetAsset:input_type -> stewardmesh.v1.GetAssetRequest
-	77,  // 379: stewardmesh.v1.AssetService.CreateAsset:input_type -> stewardmesh.v1.CreateAssetRequest
-	78,  // 380: stewardmesh.v1.AssetService.CreateAssetsFromModel:input_type -> stewardmesh.v1.CreateAssetsFromModelRequest
-	81,  // 381: stewardmesh.v1.AssetService.UpdateAsset:input_type -> stewardmesh.v1.UpdateAssetRequest
-	82,  // 382: stewardmesh.v1.AssetService.ListAssetLifecycle:input_type -> stewardmesh.v1.ListAssetLifecycleRequest
-	84,  // 383: stewardmesh.v1.AssetService.ResolveAssetIdentifier:input_type -> stewardmesh.v1.ResolveAssetIdentifierRequest
-	85,  // 384: stewardmesh.v1.AssetService.ListAssetIdentifiers:input_type -> stewardmesh.v1.ListAssetIdentifiersRequest
-	87,  // 385: stewardmesh.v1.AssetService.CreateAssetIdentifier:input_type -> stewardmesh.v1.CreateAssetIdentifierRequest
-	89,  // 386: stewardmesh.v1.AssetService.ReplaceAssetIdentifier:input_type -> stewardmesh.v1.ReplaceAssetIdentifierRequest
-	91,  // 387: stewardmesh.v1.AssetService.DeactivateAssetIdentifier:input_type -> stewardmesh.v1.DeactivateAssetIdentifierRequest
-	93,  // 388: stewardmesh.v1.AssetService.ListAssetLabelTemplates:input_type -> stewardmesh.v1.ListAssetLabelTemplatesRequest
-	96,  // 389: stewardmesh.v1.AssetService.GenerateAssetLabelBatch:input_type -> stewardmesh.v1.GenerateAssetLabelBatchRequest
-	103, // 390: stewardmesh.v1.PeopleService.ListSites:input_type -> stewardmesh.v1.ListSitesRequest
-	105, // 391: stewardmesh.v1.PeopleService.CreateSite:input_type -> stewardmesh.v1.CreateSiteRequest
-	108, // 392: stewardmesh.v1.PeopleService.ListBuildings:input_type -> stewardmesh.v1.ListBuildingsRequest
-	110, // 393: stewardmesh.v1.PeopleService.CreateBuilding:input_type -> stewardmesh.v1.CreateBuildingRequest
-	112, // 394: stewardmesh.v1.PeopleService.ListRooms:input_type -> stewardmesh.v1.ListRoomsRequest
-	114, // 395: stewardmesh.v1.PeopleService.CreateRoom:input_type -> stewardmesh.v1.CreateRoomRequest
-	132, // 396: stewardmesh.v1.PeopleService.ListDepartments:input_type -> stewardmesh.v1.ListDepartmentsRequest
-	134, // 397: stewardmesh.v1.PeopleService.CreateDepartment:input_type -> stewardmesh.v1.CreateDepartmentRequest
-	136, // 398: stewardmesh.v1.PeopleService.SearchIdentities:input_type -> stewardmesh.v1.SearchIdentitiesRequest
-	138, // 399: stewardmesh.v1.PeopleService.CreateIdentity:input_type -> stewardmesh.v1.CreateIdentityRequest
-	144, // 400: stewardmesh.v1.PeopleService.ListAssetAssignments:input_type -> stewardmesh.v1.ListAssetAssignmentsRequest
-	146, // 401: stewardmesh.v1.PeopleService.CreateAssetAssignment:input_type -> stewardmesh.v1.CreateAssetAssignmentRequest
-	147, // 402: stewardmesh.v1.PeopleService.EndAssetAssignment:input_type -> stewardmesh.v1.EndAssetAssignmentRequest
-	140, // 403: stewardmesh.v1.RelationshipGraphService.GetRelationshipGraph:input_type -> stewardmesh.v1.GetRelationshipGraphRequest
-	116, // 404: stewardmesh.v1.DirectoryImportService.ListDirectoryImportSources:input_type -> stewardmesh.v1.ListDirectoryImportSourcesRequest
-	119, // 405: stewardmesh.v1.DirectoryImportService.ListDirectoryImports:input_type -> stewardmesh.v1.ListDirectoryImportsRequest
-	121, // 406: stewardmesh.v1.DirectoryImportService.GetDirectoryImport:input_type -> stewardmesh.v1.GetDirectoryImportRequest
-	122, // 407: stewardmesh.v1.DirectoryImportService.PreviewDirectoryImport:input_type -> stewardmesh.v1.PreviewDirectoryImportRequest
-	123, // 408: stewardmesh.v1.DirectoryImportService.ApplyDirectoryImport:input_type -> stewardmesh.v1.ApplyDirectoryImportRequest
-	124, // 409: stewardmesh.v1.DirectoryImportService.RetryDirectoryImport:input_type -> stewardmesh.v1.RetryDirectoryImportRequest
-	149, // 410: stewardmesh.v1.ThreadsService.ListTags:input_type -> stewardmesh.v1.ListTagsRequest
-	151, // 411: stewardmesh.v1.ThreadsService.GetTag:input_type -> stewardmesh.v1.GetTagRequest
-	152, // 412: stewardmesh.v1.ThreadsService.CreateTag:input_type -> stewardmesh.v1.CreateTagRequest
-	153, // 413: stewardmesh.v1.ThreadsService.UpdateTag:input_type -> stewardmesh.v1.UpdateTagRequest
-	155, // 414: stewardmesh.v1.ThreadsService.ListGoals:input_type -> stewardmesh.v1.ListGoalsRequest
-	157, // 415: stewardmesh.v1.ThreadsService.GetGoal:input_type -> stewardmesh.v1.GetGoalRequest
-	158, // 416: stewardmesh.v1.ThreadsService.CreateGoal:input_type -> stewardmesh.v1.CreateGoalRequest
-	159, // 417: stewardmesh.v1.ThreadsService.UpdateGoal:input_type -> stewardmesh.v1.UpdateGoalRequest
-	161, // 418: stewardmesh.v1.ThreadsService.ListEffectiveTags:input_type -> stewardmesh.v1.ListEffectiveTagsRequest
-	164, // 419: stewardmesh.v1.ThreadsService.SetTagRule:input_type -> stewardmesh.v1.SetTagRuleRequest
-	166, // 420: stewardmesh.v1.ThreadsService.DeleteTagRule:input_type -> stewardmesh.v1.DeleteTagRuleRequest
-	168, // 421: stewardmesh.v1.ThreadsService.ListGoalLinks:input_type -> stewardmesh.v1.ListGoalLinksRequest
-	170, // 422: stewardmesh.v1.ThreadsService.LinkGoal:input_type -> stewardmesh.v1.LinkGoalRequest
-	172, // 423: stewardmesh.v1.ThreadsService.UnlinkGoal:input_type -> stewardmesh.v1.UnlinkGoalRequest
-	174, // 424: stewardmesh.v1.VaultService.ListBlobs:input_type -> stewardmesh.v1.ListBlobsRequest
-	176, // 425: stewardmesh.v1.VaultService.GetBlob:input_type -> stewardmesh.v1.GetBlobRequest
-	177, // 426: stewardmesh.v1.VaultService.CreateBlob:input_type -> stewardmesh.v1.CreateBlobRequest
-	179, // 427: stewardmesh.v1.VaultService.DownloadBlob:input_type -> stewardmesh.v1.DownloadBlobRequest
-	181, // 428: stewardmesh.v1.VaultService.AuthorizeDownload:input_type -> stewardmesh.v1.AuthorizeBlobDownloadRequest
-	185, // 429: stewardmesh.v1.HorizonService.ListPlans:input_type -> stewardmesh.v1.ListHorizonPlansRequest
-	187, // 430: stewardmesh.v1.HorizonService.CreatePlan:input_type -> stewardmesh.v1.CreateHorizonPlanRequest
-	188, // 431: stewardmesh.v1.HorizonService.UpdatePlan:input_type -> stewardmesh.v1.UpdateHorizonPlanRequest
-	189, // 432: stewardmesh.v1.HorizonService.ListPlanHistory:input_type -> stewardmesh.v1.ListHorizonPlanHistoryRequest
-	191, // 433: stewardmesh.v1.HorizonService.GetForecast:input_type -> stewardmesh.v1.GetHorizonForecastRequest
-	194, // 434: stewardmesh.v1.HorizonService.ExportCSV:input_type -> stewardmesh.v1.ExportHorizonCSVRequest
-	196, // 435: stewardmesh.v1.LedgerService.GetSnapshot:input_type -> stewardmesh.v1.GetLedgerSnapshotRequest
-	198, // 436: stewardmesh.v1.LedgerService.CreateVendor:input_type -> stewardmesh.v1.CreateLedgerVendorRequest
-	200, // 437: stewardmesh.v1.LedgerService.CreatePurchaseOrder:input_type -> stewardmesh.v1.CreateLedgerPurchaseOrderRequest
-	201, // 438: stewardmesh.v1.LedgerService.UpdatePurchaseOrderStatus:input_type -> stewardmesh.v1.UpdateLedgerPurchaseOrderStatusRequest
-	203, // 439: stewardmesh.v1.LedgerService.CreateContract:input_type -> stewardmesh.v1.CreateLedgerContractRequest
-	204, // 440: stewardmesh.v1.LedgerService.UpdateContractStatus:input_type -> stewardmesh.v1.UpdateLedgerContractStatusRequest
-	206, // 441: stewardmesh.v1.LedgerService.CreateCommitment:input_type -> stewardmesh.v1.CreateLedgerCommitmentRequest
-	208, // 442: stewardmesh.v1.LedgerService.CreateBudget:input_type -> stewardmesh.v1.CreateLedgerBudgetRequest
-	210, // 443: stewardmesh.v1.LedgerService.ReconcileCost:input_type -> stewardmesh.v1.ReconcileLedgerCostRequest
-	213, // 444: stewardmesh.v1.LedgerService.GetBudgetVariance:input_type -> stewardmesh.v1.GetLedgerBudgetVarianceRequest
-	215, // 445: stewardmesh.v1.LedgerService.ExportCSV:input_type -> stewardmesh.v1.ExportLedgerCSVRequest
-	217, // 446: stewardmesh.v1.StackService.GetSnapshot:input_type -> stewardmesh.v1.GetStackSnapshotRequest
-	235, // 447: stewardmesh.v1.StackService.GetAnalytics:input_type -> stewardmesh.v1.GetStackAnalyticsRequest
-	219, // 448: stewardmesh.v1.StackService.CreateProduct:input_type -> stewardmesh.v1.CreateStackProductRequest
-	220, // 449: stewardmesh.v1.StackService.UpdateProductStatus:input_type -> stewardmesh.v1.UpdateStackProductStatusRequest
-	222, // 450: stewardmesh.v1.StackService.CreateVersion:input_type -> stewardmesh.v1.CreateStackVersionRequest
-	223, // 451: stewardmesh.v1.StackService.UpdateVersionStatus:input_type -> stewardmesh.v1.UpdateStackVersionStatusRequest
-	225, // 452: stewardmesh.v1.StackService.RecordInstallation:input_type -> stewardmesh.v1.RecordStackInstallationRequest
-	226, // 453: stewardmesh.v1.StackService.UpdateInstallationState:input_type -> stewardmesh.v1.UpdateStackInstallationStateRequest
-	228, // 454: stewardmesh.v1.StackService.CreateLicense:input_type -> stewardmesh.v1.CreateStackLicenseRequest
-	229, // 455: stewardmesh.v1.StackService.UpdateLicenseEntitlement:input_type -> stewardmesh.v1.UpdateStackLicenseEntitlementRequest
-	231, // 456: stewardmesh.v1.StackService.CreateAssignment:input_type -> stewardmesh.v1.CreateStackAssignmentRequest
-	232, // 457: stewardmesh.v1.StackService.UpdateAssignmentUsage:input_type -> stewardmesh.v1.UpdateStackAssignmentUsageRequest
-	233, // 458: stewardmesh.v1.StackService.EndAssignment:input_type -> stewardmesh.v1.EndStackAssignmentRequest
-	239, // 459: stewardmesh.v1.StackService.ExportRecords:input_type -> stewardmesh.v1.ExportStackRecordsRequest
-	241, // 460: stewardmesh.v1.StackService.ImportRecords:input_type -> stewardmesh.v1.ImportStackRecordsRequest
-	243, // 461: stewardmesh.v1.SignalsService.ListRules:input_type -> stewardmesh.v1.ListSignalRulesRequest
-	246, // 462: stewardmesh.v1.SignalsService.CreateRule:input_type -> stewardmesh.v1.CreateSignalRuleRequest
-	247, // 463: stewardmesh.v1.SignalsService.UpdateRule:input_type -> stewardmesh.v1.UpdateSignalRuleRequest
-	248, // 464: stewardmesh.v1.SignalsService.ListAlerts:input_type -> stewardmesh.v1.ListSignalAlertsRequest
-	251, // 465: stewardmesh.v1.SignalsService.ListAlertHistory:input_type -> stewardmesh.v1.ListSignalAlertHistoryRequest
-	254, // 466: stewardmesh.v1.SignalsService.Evaluate:input_type -> stewardmesh.v1.EvaluateSignalsRequest
-	256, // 467: stewardmesh.v1.SignalsService.AcknowledgeAlert:input_type -> stewardmesh.v1.AcknowledgeSignalAlertRequest
-	257, // 468: stewardmesh.v1.SignalsService.AssignAlert:input_type -> stewardmesh.v1.AssignSignalAlertRequest
-	258, // 469: stewardmesh.v1.SignalsService.ListSubscriptions:input_type -> stewardmesh.v1.ListSignalSubscriptionsRequest
-	260, // 470: stewardmesh.v1.SignalsService.ListSubscriptionTargets:input_type -> stewardmesh.v1.ListSignalSubscriptionTargetsRequest
-	264, // 471: stewardmesh.v1.SignalsService.CreateSubscription:input_type -> stewardmesh.v1.CreateSignalSubscriptionRequest
-	265, // 472: stewardmesh.v1.SignalsService.DeleteSubscription:input_type -> stewardmesh.v1.DeleteSignalSubscriptionRequest
-	268, // 473: stewardmesh.v1.SignalsService.ListPendingDeliveries:input_type -> stewardmesh.v1.ListPendingSignalDeliveriesRequest
-	270, // 474: stewardmesh.v1.SignalsService.RecordDeliveryAttempt:input_type -> stewardmesh.v1.RecordSignalDeliveryAttemptRequest
-	271, // 475: stewardmesh.v1.SignalsService.ExportCSV:input_type -> stewardmesh.v1.ExportSignalsCSVRequest
-	281, // 476: stewardmesh.v1.ExchangeService.ListExchangeRecords:input_type -> stewardmesh.v1.ListExchangeRecordsRequest
-	283, // 477: stewardmesh.v1.ExchangeService.ListExchangePackages:input_type -> stewardmesh.v1.ListExchangePackagesRequest
-	285, // 478: stewardmesh.v1.ExchangeService.ExportExchangePackage:input_type -> stewardmesh.v1.ExportExchangePackageRequest
-	287, // 479: stewardmesh.v1.ExchangeService.ImportExchangePackage:input_type -> stewardmesh.v1.ImportExchangePackageRequest
-	291, // 480: stewardmesh.v1.ReachService.ListEndpoints:input_type -> stewardmesh.v1.ListReachEndpointsRequest
-	294, // 481: stewardmesh.v1.ReachService.ListProviders:input_type -> stewardmesh.v1.ListReachProvidersRequest
-	297, // 482: stewardmesh.v1.ReachService.CreateProvider:input_type -> stewardmesh.v1.CreateReachProviderRequest
-	298, // 483: stewardmesh.v1.ReachService.UpdateProvider:input_type -> stewardmesh.v1.UpdateReachProviderRequest
-	299, // 484: stewardmesh.v1.ReachService.RotateProviderSecret:input_type -> stewardmesh.v1.RotateReachProviderSecretRequest
-	300, // 485: stewardmesh.v1.ReachService.TestProvider:input_type -> stewardmesh.v1.TestReachProviderRequest
-	301, // 486: stewardmesh.v1.ReachService.ListProviderTests:input_type -> stewardmesh.v1.ListReachProviderTestsRequest
-	304, // 487: stewardmesh.v1.ReachService.ListTemplates:input_type -> stewardmesh.v1.ListReachTemplatesRequest
-	307, // 488: stewardmesh.v1.ReachService.CreateTemplate:input_type -> stewardmesh.v1.CreateReachTemplateRequest
-	308, // 489: stewardmesh.v1.ReachService.UpdateTemplate:input_type -> stewardmesh.v1.UpdateReachTemplateRequest
-	310, // 490: stewardmesh.v1.ReachService.ListGroups:input_type -> stewardmesh.v1.ListReachGroupsRequest
-	313, // 491: stewardmesh.v1.ReachService.CreateGroup:input_type -> stewardmesh.v1.CreateReachGroupRequest
-	314, // 492: stewardmesh.v1.ReachService.UpdateGroup:input_type -> stewardmesh.v1.UpdateReachGroupRequest
-	315, // 493: stewardmesh.v1.ReachService.ListMessages:input_type -> stewardmesh.v1.ListReachMessagesRequest
-	318, // 494: stewardmesh.v1.ReachService.SendMessage:input_type -> stewardmesh.v1.SendReachMessageRequest
-	319, // 495: stewardmesh.v1.ReachService.RetryMessage:input_type -> stewardmesh.v1.RetryReachMessageRequest
-	320, // 496: stewardmesh.v1.ReachService.ListMessageAttempts:input_type -> stewardmesh.v1.ListReachMessageAttemptsRequest
-	323, // 497: stewardmesh.v1.ReachService.ProcessSignals:input_type -> stewardmesh.v1.ProcessReachSignalsRequest
-	23,  // 498: stewardmesh.v1.FoundationService.GetOrganization:output_type -> stewardmesh.v1.Organization
-	326, // 499: stewardmesh.v1.BridgeService.ListClients:output_type -> stewardmesh.v1.ListBridgeClientsResponse
-	329, // 500: stewardmesh.v1.BridgeService.CreateClient:output_type -> stewardmesh.v1.BridgeClient
-	329, // 501: stewardmesh.v1.BridgeService.RevokeClient:output_type -> stewardmesh.v1.BridgeClient
-	331, // 502: stewardmesh.v1.BridgeService.ListGrants:output_type -> stewardmesh.v1.ListBridgeGrantsResponse
-	333, // 503: stewardmesh.v1.BridgeService.RevokeGrant:output_type -> stewardmesh.v1.BridgeGrant
-	25,  // 504: stewardmesh.v1.PatternsService.ListTemplates:output_type -> stewardmesh.v1.ListPatternsTemplatesResponse
-	34,  // 505: stewardmesh.v1.PatternsService.CreateTemplate:output_type -> stewardmesh.v1.PatternsTemplate
-	34,  // 506: stewardmesh.v1.PatternsService.GetTemplate:output_type -> stewardmesh.v1.PatternsTemplate
-	34,  // 507: stewardmesh.v1.PatternsService.GetTemplateSchema:output_type -> stewardmesh.v1.PatternsTemplate
-	34,  // 508: stewardmesh.v1.PatternsService.CopyTemplate:output_type -> stewardmesh.v1.PatternsTemplate
-	34,  // 509: stewardmesh.v1.PatternsService.CreateTemplateVersion:output_type -> stewardmesh.v1.PatternsTemplate
-	38,  // 510: stewardmesh.v1.PatternsService.ValidateRecord:output_type -> stewardmesh.v1.PatternsValidationResult
-	33,  // 511: stewardmesh.v1.PatternsService.ExportCSVTemplate:output_type -> stewardmesh.v1.ExportPatternsCSVTemplateResponse
-	40,  // 512: stewardmesh.v1.GuardService.GetBootstrapStatus:output_type -> stewardmesh.v1.BootstrapStatus
-	46,  // 513: stewardmesh.v1.GuardService.BootstrapAdministrator:output_type -> stewardmesh.v1.AuthenticationSession
-	46,  // 514: stewardmesh.v1.GuardService.AuthenticateLocal:output_type -> stewardmesh.v1.AuthenticationSession
-	46,  // 515: stewardmesh.v1.GuardService.GetSession:output_type -> stewardmesh.v1.AuthenticationSession
-	45,  // 516: stewardmesh.v1.GuardService.Logout:output_type -> stewardmesh.v1.LogoutResponse
-	51,  // 517: stewardmesh.v1.GuardService.ListGuardAccess:output_type -> stewardmesh.v1.ListGuardAccessResponse
-	53,  // 518: stewardmesh.v1.GuardService.CreateRole:output_type -> stewardmesh.v1.GuardRole
-	56,  // 519: stewardmesh.v1.GuardService.CreateRoleAssignment:output_type -> stewardmesh.v1.GuardRoleAssignment
-	59,  // 520: stewardmesh.v1.GuardService.DeleteRoleAssignment:output_type -> stewardmesh.v1.DeleteRoleAssignmentResponse
-	61,  // 521: stewardmesh.v1.GuardService.ListResourceOwnership:output_type -> stewardmesh.v1.ListResourceOwnershipResponse
-	62,  // 522: stewardmesh.v1.GuardService.RegisterResourceOwnership:output_type -> stewardmesh.v1.GuardResourceOwnership
-	62,  // 523: stewardmesh.v1.GuardService.ClaimResourceOwnership:output_type -> stewardmesh.v1.GuardResourceOwnership
-	67,  // 524: stewardmesh.v1.AssetService.ListAssetModels:output_type -> stewardmesh.v1.ListAssetModelsResponse
-	101, // 525: stewardmesh.v1.AssetService.GetAssetModel:output_type -> stewardmesh.v1.AssetModel
-	72,  // 526: stewardmesh.v1.AssetService.GetAssetModelInventory:output_type -> stewardmesh.v1.AssetModelInventory
-	101, // 527: stewardmesh.v1.AssetService.ResolveAssetModel:output_type -> stewardmesh.v1.AssetModel
-	101, // 528: stewardmesh.v1.AssetService.CreateAssetModel:output_type -> stewardmesh.v1.AssetModel
-	101, // 529: stewardmesh.v1.AssetService.UpdateAssetModel:output_type -> stewardmesh.v1.AssetModel
-	101, // 530: stewardmesh.v1.AssetService.RetireAssetModel:output_type -> stewardmesh.v1.AssetModel
-	76,  // 531: stewardmesh.v1.AssetService.ListAssets:output_type -> stewardmesh.v1.ListAssetsResponse
-	99,  // 532: stewardmesh.v1.AssetService.GetAsset:output_type -> stewardmesh.v1.Asset
-	99,  // 533: stewardmesh.v1.AssetService.CreateAsset:output_type -> stewardmesh.v1.Asset
-	79,  // 534: stewardmesh.v1.AssetService.CreateAssetsFromModel:output_type -> stewardmesh.v1.CreateAssetsFromModelResponse
-	99,  // 535: stewardmesh.v1.AssetService.UpdateAsset:output_type -> stewardmesh.v1.Asset
-	83,  // 536: stewardmesh.v1.AssetService.ListAssetLifecycle:output_type -> stewardmesh.v1.ListAssetLifecycleResponse
-	98,  // 537: stewardmesh.v1.AssetService.ResolveAssetIdentifier:output_type -> stewardmesh.v1.AssetIdentifier
-	86,  // 538: stewardmesh.v1.AssetService.ListAssetIdentifiers:output_type -> stewardmesh.v1.ListAssetIdentifiersResponse
-	88,  // 539: stewardmesh.v1.AssetService.CreateAssetIdentifier:output_type -> stewardmesh.v1.CreateAssetIdentifierResponse
-	90,  // 540: stewardmesh.v1.AssetService.ReplaceAssetIdentifier:output_type -> stewardmesh.v1.ReplaceAssetIdentifierResponse
-	92,  // 541: stewardmesh.v1.AssetService.DeactivateAssetIdentifier:output_type -> stewardmesh.v1.DeactivateAssetIdentifierResponse
-	94,  // 542: stewardmesh.v1.AssetService.ListAssetLabelTemplates:output_type -> stewardmesh.v1.ListAssetLabelTemplatesResponse
-	97,  // 543: stewardmesh.v1.AssetService.GenerateAssetLabelBatch:output_type -> stewardmesh.v1.AssetLabelArtifact
-	104, // 544: stewardmesh.v1.PeopleService.ListSites:output_type -> stewardmesh.v1.ListSitesResponse
-	106, // 545: stewardmesh.v1.PeopleService.CreateSite:output_type -> stewardmesh.v1.Site
-	109, // 546: stewardmesh.v1.PeopleService.ListBuildings:output_type -> stewardmesh.v1.ListBuildingsResponse
-	111, // 547: stewardmesh.v1.PeopleService.CreateBuilding:output_type -> stewardmesh.v1.Building
-	113, // 548: stewardmesh.v1.PeopleService.ListRooms:output_type -> stewardmesh.v1.ListRoomsResponse
-	115, // 549: stewardmesh.v1.PeopleService.CreateRoom:output_type -> stewardmesh.v1.Room
-	133, // 550: stewardmesh.v1.PeopleService.ListDepartments:output_type -> stewardmesh.v1.ListDepartmentsResponse
-	135, // 551: stewardmesh.v1.PeopleService.CreateDepartment:output_type -> stewardmesh.v1.Department
-	137, // 552: stewardmesh.v1.PeopleService.SearchIdentities:output_type -> stewardmesh.v1.SearchIdentitiesResponse
-	139, // 553: stewardmesh.v1.PeopleService.CreateIdentity:output_type -> stewardmesh.v1.DirectoryIdentity
-	145, // 554: stewardmesh.v1.PeopleService.ListAssetAssignments:output_type -> stewardmesh.v1.ListAssetAssignmentsResponse
-	148, // 555: stewardmesh.v1.PeopleService.CreateAssetAssignment:output_type -> stewardmesh.v1.AssetAssignment
-	148, // 556: stewardmesh.v1.PeopleService.EndAssetAssignment:output_type -> stewardmesh.v1.AssetAssignment
-	141, // 557: stewardmesh.v1.RelationshipGraphService.GetRelationshipGraph:output_type -> stewardmesh.v1.RelationshipGraph
-	118, // 558: stewardmesh.v1.DirectoryImportService.ListDirectoryImportSources:output_type -> stewardmesh.v1.ListDirectoryImportSourcesResponse
-	120, // 559: stewardmesh.v1.DirectoryImportService.ListDirectoryImports:output_type -> stewardmesh.v1.ListDirectoryImportsResponse
-	130, // 560: stewardmesh.v1.DirectoryImportService.GetDirectoryImport:output_type -> stewardmesh.v1.DirectoryImportBatchDetail
-	131, // 561: stewardmesh.v1.DirectoryImportService.PreviewDirectoryImport:output_type -> stewardmesh.v1.DirectoryImportOperationResult
-	131, // 562: stewardmesh.v1.DirectoryImportService.ApplyDirectoryImport:output_type -> stewardmesh.v1.DirectoryImportOperationResult
-	131, // 563: stewardmesh.v1.DirectoryImportService.RetryDirectoryImport:output_type -> stewardmesh.v1.DirectoryImportOperationResult
-	150, // 564: stewardmesh.v1.ThreadsService.ListTags:output_type -> stewardmesh.v1.ListTagsResponse
-	154, // 565: stewardmesh.v1.ThreadsService.GetTag:output_type -> stewardmesh.v1.Tag
-	154, // 566: stewardmesh.v1.ThreadsService.CreateTag:output_type -> stewardmesh.v1.Tag
-	154, // 567: stewardmesh.v1.ThreadsService.UpdateTag:output_type -> stewardmesh.v1.Tag
-	156, // 568: stewardmesh.v1.ThreadsService.ListGoals:output_type -> stewardmesh.v1.ListGoalsResponse
-	160, // 569: stewardmesh.v1.ThreadsService.GetGoal:output_type -> stewardmesh.v1.Goal
-	160, // 570: stewardmesh.v1.ThreadsService.CreateGoal:output_type -> stewardmesh.v1.Goal
-	160, // 571: stewardmesh.v1.ThreadsService.UpdateGoal:output_type -> stewardmesh.v1.Goal
-	162, // 572: stewardmesh.v1.ThreadsService.ListEffectiveTags:output_type -> stewardmesh.v1.ListEffectiveTagsResponse
-	165, // 573: stewardmesh.v1.ThreadsService.SetTagRule:output_type -> stewardmesh.v1.TagRule
-	167, // 574: stewardmesh.v1.ThreadsService.DeleteTagRule:output_type -> stewardmesh.v1.DeleteTagRuleResponse
-	169, // 575: stewardmesh.v1.ThreadsService.ListGoalLinks:output_type -> stewardmesh.v1.ListGoalLinksResponse
-	171, // 576: stewardmesh.v1.ThreadsService.LinkGoal:output_type -> stewardmesh.v1.GoalLink
-	173, // 577: stewardmesh.v1.ThreadsService.UnlinkGoal:output_type -> stewardmesh.v1.UnlinkGoalResponse
-	175, // 578: stewardmesh.v1.VaultService.ListBlobs:output_type -> stewardmesh.v1.ListBlobsResponse
-	178, // 579: stewardmesh.v1.VaultService.GetBlob:output_type -> stewardmesh.v1.VaultBlob
-	178, // 580: stewardmesh.v1.VaultService.CreateBlob:output_type -> stewardmesh.v1.VaultBlob
-	180, // 581: stewardmesh.v1.VaultService.DownloadBlob:output_type -> stewardmesh.v1.VaultBlobContent
-	182, // 582: stewardmesh.v1.VaultService.AuthorizeDownload:output_type -> stewardmesh.v1.VaultDownloadAuthorization
-	186, // 583: stewardmesh.v1.HorizonService.ListPlans:output_type -> stewardmesh.v1.ListHorizonPlansResponse
-	183, // 584: stewardmesh.v1.HorizonService.CreatePlan:output_type -> stewardmesh.v1.HorizonPlan
-	183, // 585: stewardmesh.v1.HorizonService.UpdatePlan:output_type -> stewardmesh.v1.HorizonPlan
-	190, // 586: stewardmesh.v1.HorizonService.ListPlanHistory:output_type -> stewardmesh.v1.ListHorizonPlanHistoryResponse
-	193, // 587: stewardmesh.v1.HorizonService.GetForecast:output_type -> stewardmesh.v1.HorizonForecast
-	195, // 588: stewardmesh.v1.HorizonService.ExportCSV:output_type -> stewardmesh.v1.ExportHorizonCSVResponse
-	212, // 589: stewardmesh.v1.LedgerService.GetSnapshot:output_type -> stewardmesh.v1.LedgerSnapshot
-	197, // 590: stewardmesh.v1.LedgerService.CreateVendor:output_type -> stewardmesh.v1.LedgerVendor
-	199, // 591: stewardmesh.v1.LedgerService.CreatePurchaseOrder:output_type -> stewardmesh.v1.LedgerPurchaseOrder
-	199, // 592: stewardmesh.v1.LedgerService.UpdatePurchaseOrderStatus:output_type -> stewardmesh.v1.LedgerPurchaseOrder
-	202, // 593: stewardmesh.v1.LedgerService.CreateContract:output_type -> stewardmesh.v1.LedgerContract
-	202, // 594: stewardmesh.v1.LedgerService.UpdateContractStatus:output_type -> stewardmesh.v1.LedgerContract
-	205, // 595: stewardmesh.v1.LedgerService.CreateCommitment:output_type -> stewardmesh.v1.LedgerCommitment
-	207, // 596: stewardmesh.v1.LedgerService.CreateBudget:output_type -> stewardmesh.v1.LedgerBudget
-	211, // 597: stewardmesh.v1.LedgerService.ReconcileCost:output_type -> stewardmesh.v1.ReconcileLedgerCostResponse
-	214, // 598: stewardmesh.v1.LedgerService.GetBudgetVariance:output_type -> stewardmesh.v1.LedgerBudgetVariance
-	216, // 599: stewardmesh.v1.LedgerService.ExportCSV:output_type -> stewardmesh.v1.ExportLedgerCSVResponse
-	234, // 600: stewardmesh.v1.StackService.GetSnapshot:output_type -> stewardmesh.v1.StackSnapshot
-	237, // 601: stewardmesh.v1.StackService.GetAnalytics:output_type -> stewardmesh.v1.StackAnalytics
-	218, // 602: stewardmesh.v1.StackService.CreateProduct:output_type -> stewardmesh.v1.StackProduct
-	218, // 603: stewardmesh.v1.StackService.UpdateProductStatus:output_type -> stewardmesh.v1.StackProduct
-	221, // 604: stewardmesh.v1.StackService.CreateVersion:output_type -> stewardmesh.v1.StackVersion
-	221, // 605: stewardmesh.v1.StackService.UpdateVersionStatus:output_type -> stewardmesh.v1.StackVersion
-	224, // 606: stewardmesh.v1.StackService.RecordInstallation:output_type -> stewardmesh.v1.StackInstallation
-	224, // 607: stewardmesh.v1.StackService.UpdateInstallationState:output_type -> stewardmesh.v1.StackInstallation
-	227, // 608: stewardmesh.v1.StackService.CreateLicense:output_type -> stewardmesh.v1.StackLicense
-	227, // 609: stewardmesh.v1.StackService.UpdateLicenseEntitlement:output_type -> stewardmesh.v1.StackLicense
-	230, // 610: stewardmesh.v1.StackService.CreateAssignment:output_type -> stewardmesh.v1.StackAssignment
-	230, // 611: stewardmesh.v1.StackService.UpdateAssignmentUsage:output_type -> stewardmesh.v1.StackAssignment
-	230, // 612: stewardmesh.v1.StackService.EndAssignment:output_type -> stewardmesh.v1.StackAssignment
-	240, // 613: stewardmesh.v1.StackService.ExportRecords:output_type -> stewardmesh.v1.ExportStackRecordsResponse
-	242, // 614: stewardmesh.v1.StackService.ImportRecords:output_type -> stewardmesh.v1.StackImportResult
-	244, // 615: stewardmesh.v1.SignalsService.ListRules:output_type -> stewardmesh.v1.ListSignalRulesResponse
-	245, // 616: stewardmesh.v1.SignalsService.CreateRule:output_type -> stewardmesh.v1.SignalRule
-	245, // 617: stewardmesh.v1.SignalsService.UpdateRule:output_type -> stewardmesh.v1.SignalRule
-	249, // 618: stewardmesh.v1.SignalsService.ListAlerts:output_type -> stewardmesh.v1.ListSignalAlertsResponse
-	252, // 619: stewardmesh.v1.SignalsService.ListAlertHistory:output_type -> stewardmesh.v1.ListSignalAlertHistoryResponse
-	255, // 620: stewardmesh.v1.SignalsService.Evaluate:output_type -> stewardmesh.v1.SignalEvaluationResult
-	250, // 621: stewardmesh.v1.SignalsService.AcknowledgeAlert:output_type -> stewardmesh.v1.SignalAlert
-	250, // 622: stewardmesh.v1.SignalsService.AssignAlert:output_type -> stewardmesh.v1.SignalAlert
-	259, // 623: stewardmesh.v1.SignalsService.ListSubscriptions:output_type -> stewardmesh.v1.ListSignalSubscriptionsResponse
-	261, // 624: stewardmesh.v1.SignalsService.ListSubscriptionTargets:output_type -> stewardmesh.v1.ListSignalSubscriptionTargetsResponse
-	263, // 625: stewardmesh.v1.SignalsService.CreateSubscription:output_type -> stewardmesh.v1.SignalSubscription
-	266, // 626: stewardmesh.v1.SignalsService.DeleteSubscription:output_type -> stewardmesh.v1.DeleteSignalSubscriptionResponse
-	269, // 627: stewardmesh.v1.SignalsService.ListPendingDeliveries:output_type -> stewardmesh.v1.ListPendingSignalDeliveriesResponse
-	267, // 628: stewardmesh.v1.SignalsService.RecordDeliveryAttempt:output_type -> stewardmesh.v1.SignalDelivery
-	272, // 629: stewardmesh.v1.SignalsService.ExportCSV:output_type -> stewardmesh.v1.ExportSignalsCSVResponse
-	282, // 630: stewardmesh.v1.ExchangeService.ListExchangeRecords:output_type -> stewardmesh.v1.ListExchangeRecordsResponse
-	284, // 631: stewardmesh.v1.ExchangeService.ListExchangePackages:output_type -> stewardmesh.v1.ListExchangePackagesResponse
-	286, // 632: stewardmesh.v1.ExchangeService.ExportExchangePackage:output_type -> stewardmesh.v1.ExchangeExportArtifact
-	290, // 633: stewardmesh.v1.ExchangeService.ImportExchangePackage:output_type -> stewardmesh.v1.ImportExchangePackageResponse
-	292, // 634: stewardmesh.v1.ReachService.ListEndpoints:output_type -> stewardmesh.v1.ListReachEndpointsResponse
-	295, // 635: stewardmesh.v1.ReachService.ListProviders:output_type -> stewardmesh.v1.ListReachProvidersResponse
-	296, // 636: stewardmesh.v1.ReachService.CreateProvider:output_type -> stewardmesh.v1.ReachProvider
-	296, // 637: stewardmesh.v1.ReachService.UpdateProvider:output_type -> stewardmesh.v1.ReachProvider
-	296, // 638: stewardmesh.v1.ReachService.RotateProviderSecret:output_type -> stewardmesh.v1.ReachProvider
-	303, // 639: stewardmesh.v1.ReachService.TestProvider:output_type -> stewardmesh.v1.ReachProviderTest
-	302, // 640: stewardmesh.v1.ReachService.ListProviderTests:output_type -> stewardmesh.v1.ListReachProviderTestsResponse
-	305, // 641: stewardmesh.v1.ReachService.ListTemplates:output_type -> stewardmesh.v1.ListReachTemplatesResponse
-	306, // 642: stewardmesh.v1.ReachService.CreateTemplate:output_type -> stewardmesh.v1.ReachTemplate
-	306, // 643: stewardmesh.v1.ReachService.UpdateTemplate:output_type -> stewardmesh.v1.ReachTemplate
-	311, // 644: stewardmesh.v1.ReachService.ListGroups:output_type -> stewardmesh.v1.ListReachGroupsResponse
-	312, // 645: stewardmesh.v1.ReachService.CreateGroup:output_type -> stewardmesh.v1.ReachSubscriberGroup
-	312, // 646: stewardmesh.v1.ReachService.UpdateGroup:output_type -> stewardmesh.v1.ReachSubscriberGroup
-	316, // 647: stewardmesh.v1.ReachService.ListMessages:output_type -> stewardmesh.v1.ListReachMessagesResponse
-	317, // 648: stewardmesh.v1.ReachService.SendMessage:output_type -> stewardmesh.v1.ReachMessage
-	317, // 649: stewardmesh.v1.ReachService.RetryMessage:output_type -> stewardmesh.v1.ReachMessage
-	321, // 650: stewardmesh.v1.ReachService.ListMessageAttempts:output_type -> stewardmesh.v1.ListReachMessageAttemptsResponse
-	324, // 651: stewardmesh.v1.ReachService.ProcessSignals:output_type -> stewardmesh.v1.ReachProcessResult
-	498, // [498:652] is the sub-list for method output_type
-	344, // [344:498] is the sub-list for method input_type
-	344, // [344:344] is the sub-list for extension type_name
-	344, // [344:344] is the sub-list for extension extendee
-	0,   // [0:344] is the sub-list for field type_name
+	289, // 269: stewardmesh.v1.StackImportResult.records:type_name -> stewardmesh.v1.ExchangeRecordOutcome
+	243, // 270: stewardmesh.v1.StackImportResult.pending_ownership:type_name -> stewardmesh.v1.StackImportOwnership
+	246, // 271: stewardmesh.v1.ListSignalRulesResponse.items:type_name -> stewardmesh.v1.SignalRule
+	344, // 272: stewardmesh.v1.SignalRule.created_at:type_name -> google.protobuf.Timestamp
+	344, // 273: stewardmesh.v1.SignalRule.updated_at:type_name -> google.protobuf.Timestamp
+	251, // 274: stewardmesh.v1.ListSignalAlertsResponse.items:type_name -> stewardmesh.v1.SignalAlert
+	344, // 275: stewardmesh.v1.SignalAlert.due_at:type_name -> google.protobuf.Timestamp
+	344, // 276: stewardmesh.v1.SignalAlert.acknowledged_at:type_name -> google.protobuf.Timestamp
+	344, // 277: stewardmesh.v1.SignalAlert.first_detected_at:type_name -> google.protobuf.Timestamp
+	344, // 278: stewardmesh.v1.SignalAlert.last_observed_at:type_name -> google.protobuf.Timestamp
+	344, // 279: stewardmesh.v1.SignalAlert.resolved_at:type_name -> google.protobuf.Timestamp
+	254, // 280: stewardmesh.v1.ListSignalAlertHistoryResponse.items:type_name -> stewardmesh.v1.SignalAlertHistory
+	344, // 281: stewardmesh.v1.SignalAlertHistory.occurred_at:type_name -> google.protobuf.Timestamp
+	344, // 282: stewardmesh.v1.EvaluateSignalsRequest.as_of:type_name -> google.protobuf.Timestamp
+	344, // 283: stewardmesh.v1.SignalEvaluationResult.as_of:type_name -> google.protobuf.Timestamp
+	264, // 284: stewardmesh.v1.ListSignalSubscriptionsResponse.items:type_name -> stewardmesh.v1.SignalSubscription
+	263, // 285: stewardmesh.v1.ListSignalSubscriptionTargetsResponse.items:type_name -> stewardmesh.v1.SignalSubscriptionTarget
+	344, // 286: stewardmesh.v1.SignalSubscription.created_at:type_name -> google.protobuf.Timestamp
+	344, // 287: stewardmesh.v1.SignalDelivery.next_attempt_at:type_name -> google.protobuf.Timestamp
+	344, // 288: stewardmesh.v1.SignalDelivery.created_at:type_name -> google.protobuf.Timestamp
+	344, // 289: stewardmesh.v1.SignalDelivery.updated_at:type_name -> google.protobuf.Timestamp
+	344, // 290: stewardmesh.v1.ListPendingSignalDeliveriesRequest.as_of:type_name -> google.protobuf.Timestamp
+	268, // 291: stewardmesh.v1.ListPendingSignalDeliveriesResponse.items:type_name -> stewardmesh.v1.SignalDelivery
+	344, // 292: stewardmesh.v1.ExchangeOwnershipMetadata.claimed_at:type_name -> google.protobuf.Timestamp
+	274, // 293: stewardmesh.v1.ExchangeRecord.dependencies:type_name -> stewardmesh.v1.ExchangeReference
+	276, // 294: stewardmesh.v1.ExchangeRecord.provenance:type_name -> stewardmesh.v1.ExchangeProvenance
+	277, // 295: stewardmesh.v1.ExchangeRecord.ownership:type_name -> stewardmesh.v1.ExchangeOwnershipMetadata
+	278, // 296: stewardmesh.v1.ExchangeRecord.file:type_name -> stewardmesh.v1.ExchangeFileMetadata
+	345, // 297: stewardmesh.v1.ExchangeRecord.payload:type_name -> google.protobuf.Struct
+	344, // 298: stewardmesh.v1.ExchangeManifest.exported_at:type_name -> google.protobuf.Timestamp
+	279, // 299: stewardmesh.v1.ExchangeManifest.records:type_name -> stewardmesh.v1.ExchangeRecord
+	275, // 300: stewardmesh.v1.ExchangeManifest.schemas:type_name -> stewardmesh.v1.ExchangeSchemaReference
+	274, // 301: stewardmesh.v1.ExchangeRecordDescriptor.dependencies:type_name -> stewardmesh.v1.ExchangeReference
+	281, // 302: stewardmesh.v1.ListExchangeRecordsResponse.items:type_name -> stewardmesh.v1.ExchangeRecordDescriptor
+	290, // 303: stewardmesh.v1.ListExchangePackagesResponse.items:type_name -> stewardmesh.v1.ExchangePackage
+	274, // 304: stewardmesh.v1.ExportExchangePackageRequest.selection:type_name -> stewardmesh.v1.ExchangeReference
+	274, // 305: stewardmesh.v1.ExchangeRecordOutcome.missing_dependencies:type_name -> stewardmesh.v1.ExchangeReference
+	289, // 306: stewardmesh.v1.ExchangePackage.records:type_name -> stewardmesh.v1.ExchangeRecordOutcome
+	344, // 307: stewardmesh.v1.ExchangePackage.created_at:type_name -> google.protobuf.Timestamp
+	344, // 308: stewardmesh.v1.ExchangePackage.updated_at:type_name -> google.protobuf.Timestamp
+	290, // 309: stewardmesh.v1.ImportExchangePackageResponse.package:type_name -> stewardmesh.v1.ExchangePackage
+	294, // 310: stewardmesh.v1.ListReachEndpointsResponse.items:type_name -> stewardmesh.v1.ReachEndpoint
+	297, // 311: stewardmesh.v1.ListReachProvidersResponse.items:type_name -> stewardmesh.v1.ReachProvider
+	344, // 312: stewardmesh.v1.ReachProvider.created_at:type_name -> google.protobuf.Timestamp
+	344, // 313: stewardmesh.v1.ReachProvider.updated_at:type_name -> google.protobuf.Timestamp
+	304, // 314: stewardmesh.v1.ListReachProviderTestsResponse.items:type_name -> stewardmesh.v1.ReachProviderTest
+	344, // 315: stewardmesh.v1.ReachProviderTest.tested_at:type_name -> google.protobuf.Timestamp
+	307, // 316: stewardmesh.v1.ListReachTemplatesResponse.items:type_name -> stewardmesh.v1.ReachTemplate
+	344, // 317: stewardmesh.v1.ReachTemplate.created_at:type_name -> google.protobuf.Timestamp
+	344, // 318: stewardmesh.v1.ReachTemplate.updated_at:type_name -> google.protobuf.Timestamp
+	313, // 319: stewardmesh.v1.ListReachGroupsResponse.items:type_name -> stewardmesh.v1.ReachSubscriberGroup
+	310, // 320: stewardmesh.v1.ReachSubscriberGroup.recipients:type_name -> stewardmesh.v1.ReachRecipient
+	344, // 321: stewardmesh.v1.ReachSubscriberGroup.created_at:type_name -> google.protobuf.Timestamp
+	344, // 322: stewardmesh.v1.ReachSubscriberGroup.updated_at:type_name -> google.protobuf.Timestamp
+	310, // 323: stewardmesh.v1.CreateReachGroupRequest.recipients:type_name -> stewardmesh.v1.ReachRecipient
+	310, // 324: stewardmesh.v1.UpdateReachGroupRequest.recipients:type_name -> stewardmesh.v1.ReachRecipient
+	318, // 325: stewardmesh.v1.ListReachMessagesResponse.items:type_name -> stewardmesh.v1.ReachMessage
+	310, // 326: stewardmesh.v1.ReachMessage.recipients:type_name -> stewardmesh.v1.ReachRecipient
+	344, // 327: stewardmesh.v1.ReachMessage.next_attempt_at:type_name -> google.protobuf.Timestamp
+	344, // 328: stewardmesh.v1.ReachMessage.created_at:type_name -> google.protobuf.Timestamp
+	344, // 329: stewardmesh.v1.ReachMessage.updated_at:type_name -> google.protobuf.Timestamp
+	345, // 330: stewardmesh.v1.SendReachMessageRequest.variables:type_name -> google.protobuf.Struct
+	323, // 331: stewardmesh.v1.ListReachMessageAttemptsResponse.items:type_name -> stewardmesh.v1.ReachDeliveryAttempt
+	344, // 332: stewardmesh.v1.ReachDeliveryAttempt.next_attempt_at:type_name -> google.protobuf.Timestamp
+	344, // 333: stewardmesh.v1.ReachDeliveryAttempt.occurred_at:type_name -> google.protobuf.Timestamp
+	330, // 334: stewardmesh.v1.ListBridgeClientsResponse.items:type_name -> stewardmesh.v1.BridgeClient
+	21,  // 335: stewardmesh.v1.CreateBridgeClientRequest.allowed_scopes:type_name -> stewardmesh.v1.BridgeScope
+	21,  // 336: stewardmesh.v1.BridgeClient.allowed_scopes:type_name -> stewardmesh.v1.BridgeScope
+	344, // 337: stewardmesh.v1.BridgeClient.created_at:type_name -> google.protobuf.Timestamp
+	344, // 338: stewardmesh.v1.BridgeClient.revoked_at:type_name -> google.protobuf.Timestamp
+	334, // 339: stewardmesh.v1.ListBridgeGrantsResponse.items:type_name -> stewardmesh.v1.BridgeGrant
+	21,  // 340: stewardmesh.v1.BridgeGrant.scopes:type_name -> stewardmesh.v1.BridgeScope
+	344, // 341: stewardmesh.v1.BridgeGrant.access_expires_at:type_name -> google.protobuf.Timestamp
+	344, // 342: stewardmesh.v1.BridgeGrant.refresh_expires_at:type_name -> google.protobuf.Timestamp
+	344, // 343: stewardmesh.v1.BridgeGrant.created_at:type_name -> google.protobuf.Timestamp
+	344, // 344: stewardmesh.v1.BridgeGrant.last_used_at:type_name -> google.protobuf.Timestamp
+	344, // 345: stewardmesh.v1.BridgeGrant.revoked_at:type_name -> google.protobuf.Timestamp
+	22,  // 346: stewardmesh.v1.FoundationService.GetOrganization:input_type -> stewardmesh.v1.GetOrganizationRequest
+	326, // 347: stewardmesh.v1.BridgeService.ListClients:input_type -> stewardmesh.v1.ListBridgeClientsRequest
+	328, // 348: stewardmesh.v1.BridgeService.CreateClient:input_type -> stewardmesh.v1.CreateBridgeClientRequest
+	329, // 349: stewardmesh.v1.BridgeService.RevokeClient:input_type -> stewardmesh.v1.RevokeBridgeClientRequest
+	331, // 350: stewardmesh.v1.BridgeService.ListGrants:input_type -> stewardmesh.v1.ListBridgeGrantsRequest
+	333, // 351: stewardmesh.v1.BridgeService.RevokeGrant:input_type -> stewardmesh.v1.RevokeBridgeGrantRequest
+	24,  // 352: stewardmesh.v1.PatternsService.ListTemplates:input_type -> stewardmesh.v1.ListPatternsTemplatesRequest
+	28,  // 353: stewardmesh.v1.PatternsService.CreateTemplate:input_type -> stewardmesh.v1.CreatePatternsTemplateRequest
+	26,  // 354: stewardmesh.v1.PatternsService.GetTemplate:input_type -> stewardmesh.v1.GetPatternsTemplateRequest
+	27,  // 355: stewardmesh.v1.PatternsService.GetTemplateSchema:input_type -> stewardmesh.v1.GetPatternsTemplateSchemaRequest
+	29,  // 356: stewardmesh.v1.PatternsService.CopyTemplate:input_type -> stewardmesh.v1.CopyPatternsTemplateRequest
+	30,  // 357: stewardmesh.v1.PatternsService.CreateTemplateVersion:input_type -> stewardmesh.v1.CreatePatternsTemplateVersionRequest
+	31,  // 358: stewardmesh.v1.PatternsService.ValidateRecord:input_type -> stewardmesh.v1.ValidatePatternsRecordRequest
+	32,  // 359: stewardmesh.v1.PatternsService.ExportCSVTemplate:input_type -> stewardmesh.v1.ExportPatternsCSVTemplateRequest
+	39,  // 360: stewardmesh.v1.GuardService.GetBootstrapStatus:input_type -> stewardmesh.v1.GetBootstrapStatusRequest
+	41,  // 361: stewardmesh.v1.GuardService.BootstrapAdministrator:input_type -> stewardmesh.v1.BootstrapAdministratorRequest
+	42,  // 362: stewardmesh.v1.GuardService.AuthenticateLocal:input_type -> stewardmesh.v1.AuthenticateLocalRequest
+	43,  // 363: stewardmesh.v1.GuardService.GetSession:input_type -> stewardmesh.v1.GetSessionRequest
+	44,  // 364: stewardmesh.v1.GuardService.Logout:input_type -> stewardmesh.v1.LogoutRequest
+	50,  // 365: stewardmesh.v1.GuardService.ListGuardAccess:input_type -> stewardmesh.v1.ListGuardAccessRequest
+	55,  // 366: stewardmesh.v1.GuardService.CreateRole:input_type -> stewardmesh.v1.CreateRoleRequest
+	57,  // 367: stewardmesh.v1.GuardService.CreateRoleAssignment:input_type -> stewardmesh.v1.CreateRoleAssignmentRequest
+	58,  // 368: stewardmesh.v1.GuardService.DeleteRoleAssignment:input_type -> stewardmesh.v1.DeleteRoleAssignmentRequest
+	60,  // 369: stewardmesh.v1.GuardService.ListResourceOwnership:input_type -> stewardmesh.v1.ListResourceOwnershipRequest
+	63,  // 370: stewardmesh.v1.GuardService.RegisterResourceOwnership:input_type -> stewardmesh.v1.RegisterResourceOwnershipRequest
+	64,  // 371: stewardmesh.v1.GuardService.ClaimResourceOwnership:input_type -> stewardmesh.v1.ClaimResourceOwnershipRequest
+	66,  // 372: stewardmesh.v1.AssetService.ListAssetModels:input_type -> stewardmesh.v1.ListAssetModelsRequest
+	69,  // 373: stewardmesh.v1.AssetService.GetAssetModel:input_type -> stewardmesh.v1.GetAssetModelRequest
+	70,  // 374: stewardmesh.v1.AssetService.GetAssetModelInventory:input_type -> stewardmesh.v1.GetAssetModelInventoryRequest
+	73,  // 375: stewardmesh.v1.AssetService.ResolveAssetModel:input_type -> stewardmesh.v1.ResolveAssetModelRequest
+	68,  // 376: stewardmesh.v1.AssetService.CreateAssetModel:input_type -> stewardmesh.v1.CreateAssetModelRequest
+	74,  // 377: stewardmesh.v1.AssetService.UpdateAssetModel:input_type -> stewardmesh.v1.UpdateAssetModelRequest
+	75,  // 378: stewardmesh.v1.AssetService.RetireAssetModel:input_type -> stewardmesh.v1.RetireAssetModelRequest
+	65,  // 379: stewardmesh.v1.AssetService.ListAssets:input_type -> stewardmesh.v1.ListAssetsRequest
+	80,  // 380: stewardmesh.v1.AssetService.GetAsset:input_type -> stewardmesh.v1.GetAssetRequest
+	77,  // 381: stewardmesh.v1.AssetService.CreateAsset:input_type -> stewardmesh.v1.CreateAssetRequest
+	78,  // 382: stewardmesh.v1.AssetService.CreateAssetsFromModel:input_type -> stewardmesh.v1.CreateAssetsFromModelRequest
+	81,  // 383: stewardmesh.v1.AssetService.UpdateAsset:input_type -> stewardmesh.v1.UpdateAssetRequest
+	82,  // 384: stewardmesh.v1.AssetService.ListAssetLifecycle:input_type -> stewardmesh.v1.ListAssetLifecycleRequest
+	84,  // 385: stewardmesh.v1.AssetService.ResolveAssetIdentifier:input_type -> stewardmesh.v1.ResolveAssetIdentifierRequest
+	85,  // 386: stewardmesh.v1.AssetService.ListAssetIdentifiers:input_type -> stewardmesh.v1.ListAssetIdentifiersRequest
+	87,  // 387: stewardmesh.v1.AssetService.CreateAssetIdentifier:input_type -> stewardmesh.v1.CreateAssetIdentifierRequest
+	89,  // 388: stewardmesh.v1.AssetService.ReplaceAssetIdentifier:input_type -> stewardmesh.v1.ReplaceAssetIdentifierRequest
+	91,  // 389: stewardmesh.v1.AssetService.DeactivateAssetIdentifier:input_type -> stewardmesh.v1.DeactivateAssetIdentifierRequest
+	93,  // 390: stewardmesh.v1.AssetService.ListAssetLabelTemplates:input_type -> stewardmesh.v1.ListAssetLabelTemplatesRequest
+	96,  // 391: stewardmesh.v1.AssetService.GenerateAssetLabelBatch:input_type -> stewardmesh.v1.GenerateAssetLabelBatchRequest
+	103, // 392: stewardmesh.v1.PeopleService.ListSites:input_type -> stewardmesh.v1.ListSitesRequest
+	105, // 393: stewardmesh.v1.PeopleService.CreateSite:input_type -> stewardmesh.v1.CreateSiteRequest
+	108, // 394: stewardmesh.v1.PeopleService.ListBuildings:input_type -> stewardmesh.v1.ListBuildingsRequest
+	110, // 395: stewardmesh.v1.PeopleService.CreateBuilding:input_type -> stewardmesh.v1.CreateBuildingRequest
+	112, // 396: stewardmesh.v1.PeopleService.ListRooms:input_type -> stewardmesh.v1.ListRoomsRequest
+	114, // 397: stewardmesh.v1.PeopleService.CreateRoom:input_type -> stewardmesh.v1.CreateRoomRequest
+	132, // 398: stewardmesh.v1.PeopleService.ListDepartments:input_type -> stewardmesh.v1.ListDepartmentsRequest
+	134, // 399: stewardmesh.v1.PeopleService.CreateDepartment:input_type -> stewardmesh.v1.CreateDepartmentRequest
+	136, // 400: stewardmesh.v1.PeopleService.SearchIdentities:input_type -> stewardmesh.v1.SearchIdentitiesRequest
+	138, // 401: stewardmesh.v1.PeopleService.CreateIdentity:input_type -> stewardmesh.v1.CreateIdentityRequest
+	144, // 402: stewardmesh.v1.PeopleService.ListAssetAssignments:input_type -> stewardmesh.v1.ListAssetAssignmentsRequest
+	146, // 403: stewardmesh.v1.PeopleService.CreateAssetAssignment:input_type -> stewardmesh.v1.CreateAssetAssignmentRequest
+	147, // 404: stewardmesh.v1.PeopleService.EndAssetAssignment:input_type -> stewardmesh.v1.EndAssetAssignmentRequest
+	140, // 405: stewardmesh.v1.RelationshipGraphService.GetRelationshipGraph:input_type -> stewardmesh.v1.GetRelationshipGraphRequest
+	116, // 406: stewardmesh.v1.DirectoryImportService.ListDirectoryImportSources:input_type -> stewardmesh.v1.ListDirectoryImportSourcesRequest
+	119, // 407: stewardmesh.v1.DirectoryImportService.ListDirectoryImports:input_type -> stewardmesh.v1.ListDirectoryImportsRequest
+	121, // 408: stewardmesh.v1.DirectoryImportService.GetDirectoryImport:input_type -> stewardmesh.v1.GetDirectoryImportRequest
+	122, // 409: stewardmesh.v1.DirectoryImportService.PreviewDirectoryImport:input_type -> stewardmesh.v1.PreviewDirectoryImportRequest
+	123, // 410: stewardmesh.v1.DirectoryImportService.ApplyDirectoryImport:input_type -> stewardmesh.v1.ApplyDirectoryImportRequest
+	124, // 411: stewardmesh.v1.DirectoryImportService.RetryDirectoryImport:input_type -> stewardmesh.v1.RetryDirectoryImportRequest
+	149, // 412: stewardmesh.v1.ThreadsService.ListTags:input_type -> stewardmesh.v1.ListTagsRequest
+	151, // 413: stewardmesh.v1.ThreadsService.GetTag:input_type -> stewardmesh.v1.GetTagRequest
+	152, // 414: stewardmesh.v1.ThreadsService.CreateTag:input_type -> stewardmesh.v1.CreateTagRequest
+	153, // 415: stewardmesh.v1.ThreadsService.UpdateTag:input_type -> stewardmesh.v1.UpdateTagRequest
+	155, // 416: stewardmesh.v1.ThreadsService.ListGoals:input_type -> stewardmesh.v1.ListGoalsRequest
+	157, // 417: stewardmesh.v1.ThreadsService.GetGoal:input_type -> stewardmesh.v1.GetGoalRequest
+	158, // 418: stewardmesh.v1.ThreadsService.CreateGoal:input_type -> stewardmesh.v1.CreateGoalRequest
+	159, // 419: stewardmesh.v1.ThreadsService.UpdateGoal:input_type -> stewardmesh.v1.UpdateGoalRequest
+	161, // 420: stewardmesh.v1.ThreadsService.ListEffectiveTags:input_type -> stewardmesh.v1.ListEffectiveTagsRequest
+	164, // 421: stewardmesh.v1.ThreadsService.SetTagRule:input_type -> stewardmesh.v1.SetTagRuleRequest
+	166, // 422: stewardmesh.v1.ThreadsService.DeleteTagRule:input_type -> stewardmesh.v1.DeleteTagRuleRequest
+	168, // 423: stewardmesh.v1.ThreadsService.ListGoalLinks:input_type -> stewardmesh.v1.ListGoalLinksRequest
+	170, // 424: stewardmesh.v1.ThreadsService.LinkGoal:input_type -> stewardmesh.v1.LinkGoalRequest
+	172, // 425: stewardmesh.v1.ThreadsService.UnlinkGoal:input_type -> stewardmesh.v1.UnlinkGoalRequest
+	174, // 426: stewardmesh.v1.VaultService.ListBlobs:input_type -> stewardmesh.v1.ListBlobsRequest
+	176, // 427: stewardmesh.v1.VaultService.GetBlob:input_type -> stewardmesh.v1.GetBlobRequest
+	177, // 428: stewardmesh.v1.VaultService.CreateBlob:input_type -> stewardmesh.v1.CreateBlobRequest
+	179, // 429: stewardmesh.v1.VaultService.DownloadBlob:input_type -> stewardmesh.v1.DownloadBlobRequest
+	181, // 430: stewardmesh.v1.VaultService.AuthorizeDownload:input_type -> stewardmesh.v1.AuthorizeBlobDownloadRequest
+	185, // 431: stewardmesh.v1.HorizonService.ListPlans:input_type -> stewardmesh.v1.ListHorizonPlansRequest
+	187, // 432: stewardmesh.v1.HorizonService.CreatePlan:input_type -> stewardmesh.v1.CreateHorizonPlanRequest
+	188, // 433: stewardmesh.v1.HorizonService.UpdatePlan:input_type -> stewardmesh.v1.UpdateHorizonPlanRequest
+	189, // 434: stewardmesh.v1.HorizonService.ListPlanHistory:input_type -> stewardmesh.v1.ListHorizonPlanHistoryRequest
+	191, // 435: stewardmesh.v1.HorizonService.GetForecast:input_type -> stewardmesh.v1.GetHorizonForecastRequest
+	194, // 436: stewardmesh.v1.HorizonService.ExportCSV:input_type -> stewardmesh.v1.ExportHorizonCSVRequest
+	196, // 437: stewardmesh.v1.LedgerService.GetSnapshot:input_type -> stewardmesh.v1.GetLedgerSnapshotRequest
+	198, // 438: stewardmesh.v1.LedgerService.CreateVendor:input_type -> stewardmesh.v1.CreateLedgerVendorRequest
+	200, // 439: stewardmesh.v1.LedgerService.CreatePurchaseOrder:input_type -> stewardmesh.v1.CreateLedgerPurchaseOrderRequest
+	201, // 440: stewardmesh.v1.LedgerService.UpdatePurchaseOrderStatus:input_type -> stewardmesh.v1.UpdateLedgerPurchaseOrderStatusRequest
+	203, // 441: stewardmesh.v1.LedgerService.CreateContract:input_type -> stewardmesh.v1.CreateLedgerContractRequest
+	204, // 442: stewardmesh.v1.LedgerService.UpdateContractStatus:input_type -> stewardmesh.v1.UpdateLedgerContractStatusRequest
+	206, // 443: stewardmesh.v1.LedgerService.CreateCommitment:input_type -> stewardmesh.v1.CreateLedgerCommitmentRequest
+	208, // 444: stewardmesh.v1.LedgerService.CreateBudget:input_type -> stewardmesh.v1.CreateLedgerBudgetRequest
+	210, // 445: stewardmesh.v1.LedgerService.ReconcileCost:input_type -> stewardmesh.v1.ReconcileLedgerCostRequest
+	213, // 446: stewardmesh.v1.LedgerService.GetBudgetVariance:input_type -> stewardmesh.v1.GetLedgerBudgetVarianceRequest
+	215, // 447: stewardmesh.v1.LedgerService.ExportCSV:input_type -> stewardmesh.v1.ExportLedgerCSVRequest
+	217, // 448: stewardmesh.v1.StackService.GetSnapshot:input_type -> stewardmesh.v1.GetStackSnapshotRequest
+	235, // 449: stewardmesh.v1.StackService.GetAnalytics:input_type -> stewardmesh.v1.GetStackAnalyticsRequest
+	219, // 450: stewardmesh.v1.StackService.CreateProduct:input_type -> stewardmesh.v1.CreateStackProductRequest
+	220, // 451: stewardmesh.v1.StackService.UpdateProductStatus:input_type -> stewardmesh.v1.UpdateStackProductStatusRequest
+	222, // 452: stewardmesh.v1.StackService.CreateVersion:input_type -> stewardmesh.v1.CreateStackVersionRequest
+	223, // 453: stewardmesh.v1.StackService.UpdateVersionStatus:input_type -> stewardmesh.v1.UpdateStackVersionStatusRequest
+	225, // 454: stewardmesh.v1.StackService.RecordInstallation:input_type -> stewardmesh.v1.RecordStackInstallationRequest
+	226, // 455: stewardmesh.v1.StackService.UpdateInstallationState:input_type -> stewardmesh.v1.UpdateStackInstallationStateRequest
+	228, // 456: stewardmesh.v1.StackService.CreateLicense:input_type -> stewardmesh.v1.CreateStackLicenseRequest
+	229, // 457: stewardmesh.v1.StackService.UpdateLicenseEntitlement:input_type -> stewardmesh.v1.UpdateStackLicenseEntitlementRequest
+	231, // 458: stewardmesh.v1.StackService.CreateAssignment:input_type -> stewardmesh.v1.CreateStackAssignmentRequest
+	232, // 459: stewardmesh.v1.StackService.UpdateAssignmentUsage:input_type -> stewardmesh.v1.UpdateStackAssignmentUsageRequest
+	233, // 460: stewardmesh.v1.StackService.EndAssignment:input_type -> stewardmesh.v1.EndStackAssignmentRequest
+	239, // 461: stewardmesh.v1.StackService.ExportRecords:input_type -> stewardmesh.v1.ExportStackRecordsRequest
+	241, // 462: stewardmesh.v1.StackService.ImportRecords:input_type -> stewardmesh.v1.ImportStackRecordsRequest
+	244, // 463: stewardmesh.v1.SignalsService.ListRules:input_type -> stewardmesh.v1.ListSignalRulesRequest
+	247, // 464: stewardmesh.v1.SignalsService.CreateRule:input_type -> stewardmesh.v1.CreateSignalRuleRequest
+	248, // 465: stewardmesh.v1.SignalsService.UpdateRule:input_type -> stewardmesh.v1.UpdateSignalRuleRequest
+	249, // 466: stewardmesh.v1.SignalsService.ListAlerts:input_type -> stewardmesh.v1.ListSignalAlertsRequest
+	252, // 467: stewardmesh.v1.SignalsService.ListAlertHistory:input_type -> stewardmesh.v1.ListSignalAlertHistoryRequest
+	255, // 468: stewardmesh.v1.SignalsService.Evaluate:input_type -> stewardmesh.v1.EvaluateSignalsRequest
+	257, // 469: stewardmesh.v1.SignalsService.AcknowledgeAlert:input_type -> stewardmesh.v1.AcknowledgeSignalAlertRequest
+	258, // 470: stewardmesh.v1.SignalsService.AssignAlert:input_type -> stewardmesh.v1.AssignSignalAlertRequest
+	259, // 471: stewardmesh.v1.SignalsService.ListSubscriptions:input_type -> stewardmesh.v1.ListSignalSubscriptionsRequest
+	261, // 472: stewardmesh.v1.SignalsService.ListSubscriptionTargets:input_type -> stewardmesh.v1.ListSignalSubscriptionTargetsRequest
+	265, // 473: stewardmesh.v1.SignalsService.CreateSubscription:input_type -> stewardmesh.v1.CreateSignalSubscriptionRequest
+	266, // 474: stewardmesh.v1.SignalsService.DeleteSubscription:input_type -> stewardmesh.v1.DeleteSignalSubscriptionRequest
+	269, // 475: stewardmesh.v1.SignalsService.ListPendingDeliveries:input_type -> stewardmesh.v1.ListPendingSignalDeliveriesRequest
+	271, // 476: stewardmesh.v1.SignalsService.RecordDeliveryAttempt:input_type -> stewardmesh.v1.RecordSignalDeliveryAttemptRequest
+	272, // 477: stewardmesh.v1.SignalsService.ExportCSV:input_type -> stewardmesh.v1.ExportSignalsCSVRequest
+	282, // 478: stewardmesh.v1.ExchangeService.ListExchangeRecords:input_type -> stewardmesh.v1.ListExchangeRecordsRequest
+	284, // 479: stewardmesh.v1.ExchangeService.ListExchangePackages:input_type -> stewardmesh.v1.ListExchangePackagesRequest
+	286, // 480: stewardmesh.v1.ExchangeService.ExportExchangePackage:input_type -> stewardmesh.v1.ExportExchangePackageRequest
+	288, // 481: stewardmesh.v1.ExchangeService.ImportExchangePackage:input_type -> stewardmesh.v1.ImportExchangePackageRequest
+	292, // 482: stewardmesh.v1.ReachService.ListEndpoints:input_type -> stewardmesh.v1.ListReachEndpointsRequest
+	295, // 483: stewardmesh.v1.ReachService.ListProviders:input_type -> stewardmesh.v1.ListReachProvidersRequest
+	298, // 484: stewardmesh.v1.ReachService.CreateProvider:input_type -> stewardmesh.v1.CreateReachProviderRequest
+	299, // 485: stewardmesh.v1.ReachService.UpdateProvider:input_type -> stewardmesh.v1.UpdateReachProviderRequest
+	300, // 486: stewardmesh.v1.ReachService.RotateProviderSecret:input_type -> stewardmesh.v1.RotateReachProviderSecretRequest
+	301, // 487: stewardmesh.v1.ReachService.TestProvider:input_type -> stewardmesh.v1.TestReachProviderRequest
+	302, // 488: stewardmesh.v1.ReachService.ListProviderTests:input_type -> stewardmesh.v1.ListReachProviderTestsRequest
+	305, // 489: stewardmesh.v1.ReachService.ListTemplates:input_type -> stewardmesh.v1.ListReachTemplatesRequest
+	308, // 490: stewardmesh.v1.ReachService.CreateTemplate:input_type -> stewardmesh.v1.CreateReachTemplateRequest
+	309, // 491: stewardmesh.v1.ReachService.UpdateTemplate:input_type -> stewardmesh.v1.UpdateReachTemplateRequest
+	311, // 492: stewardmesh.v1.ReachService.ListGroups:input_type -> stewardmesh.v1.ListReachGroupsRequest
+	314, // 493: stewardmesh.v1.ReachService.CreateGroup:input_type -> stewardmesh.v1.CreateReachGroupRequest
+	315, // 494: stewardmesh.v1.ReachService.UpdateGroup:input_type -> stewardmesh.v1.UpdateReachGroupRequest
+	316, // 495: stewardmesh.v1.ReachService.ListMessages:input_type -> stewardmesh.v1.ListReachMessagesRequest
+	319, // 496: stewardmesh.v1.ReachService.SendMessage:input_type -> stewardmesh.v1.SendReachMessageRequest
+	320, // 497: stewardmesh.v1.ReachService.RetryMessage:input_type -> stewardmesh.v1.RetryReachMessageRequest
+	321, // 498: stewardmesh.v1.ReachService.ListMessageAttempts:input_type -> stewardmesh.v1.ListReachMessageAttemptsRequest
+	324, // 499: stewardmesh.v1.ReachService.ProcessSignals:input_type -> stewardmesh.v1.ProcessReachSignalsRequest
+	23,  // 500: stewardmesh.v1.FoundationService.GetOrganization:output_type -> stewardmesh.v1.Organization
+	327, // 501: stewardmesh.v1.BridgeService.ListClients:output_type -> stewardmesh.v1.ListBridgeClientsResponse
+	330, // 502: stewardmesh.v1.BridgeService.CreateClient:output_type -> stewardmesh.v1.BridgeClient
+	330, // 503: stewardmesh.v1.BridgeService.RevokeClient:output_type -> stewardmesh.v1.BridgeClient
+	332, // 504: stewardmesh.v1.BridgeService.ListGrants:output_type -> stewardmesh.v1.ListBridgeGrantsResponse
+	334, // 505: stewardmesh.v1.BridgeService.RevokeGrant:output_type -> stewardmesh.v1.BridgeGrant
+	25,  // 506: stewardmesh.v1.PatternsService.ListTemplates:output_type -> stewardmesh.v1.ListPatternsTemplatesResponse
+	34,  // 507: stewardmesh.v1.PatternsService.CreateTemplate:output_type -> stewardmesh.v1.PatternsTemplate
+	34,  // 508: stewardmesh.v1.PatternsService.GetTemplate:output_type -> stewardmesh.v1.PatternsTemplate
+	34,  // 509: stewardmesh.v1.PatternsService.GetTemplateSchema:output_type -> stewardmesh.v1.PatternsTemplate
+	34,  // 510: stewardmesh.v1.PatternsService.CopyTemplate:output_type -> stewardmesh.v1.PatternsTemplate
+	34,  // 511: stewardmesh.v1.PatternsService.CreateTemplateVersion:output_type -> stewardmesh.v1.PatternsTemplate
+	38,  // 512: stewardmesh.v1.PatternsService.ValidateRecord:output_type -> stewardmesh.v1.PatternsValidationResult
+	33,  // 513: stewardmesh.v1.PatternsService.ExportCSVTemplate:output_type -> stewardmesh.v1.ExportPatternsCSVTemplateResponse
+	40,  // 514: stewardmesh.v1.GuardService.GetBootstrapStatus:output_type -> stewardmesh.v1.BootstrapStatus
+	46,  // 515: stewardmesh.v1.GuardService.BootstrapAdministrator:output_type -> stewardmesh.v1.AuthenticationSession
+	46,  // 516: stewardmesh.v1.GuardService.AuthenticateLocal:output_type -> stewardmesh.v1.AuthenticationSession
+	46,  // 517: stewardmesh.v1.GuardService.GetSession:output_type -> stewardmesh.v1.AuthenticationSession
+	45,  // 518: stewardmesh.v1.GuardService.Logout:output_type -> stewardmesh.v1.LogoutResponse
+	51,  // 519: stewardmesh.v1.GuardService.ListGuardAccess:output_type -> stewardmesh.v1.ListGuardAccessResponse
+	53,  // 520: stewardmesh.v1.GuardService.CreateRole:output_type -> stewardmesh.v1.GuardRole
+	56,  // 521: stewardmesh.v1.GuardService.CreateRoleAssignment:output_type -> stewardmesh.v1.GuardRoleAssignment
+	59,  // 522: stewardmesh.v1.GuardService.DeleteRoleAssignment:output_type -> stewardmesh.v1.DeleteRoleAssignmentResponse
+	61,  // 523: stewardmesh.v1.GuardService.ListResourceOwnership:output_type -> stewardmesh.v1.ListResourceOwnershipResponse
+	62,  // 524: stewardmesh.v1.GuardService.RegisterResourceOwnership:output_type -> stewardmesh.v1.GuardResourceOwnership
+	62,  // 525: stewardmesh.v1.GuardService.ClaimResourceOwnership:output_type -> stewardmesh.v1.GuardResourceOwnership
+	67,  // 526: stewardmesh.v1.AssetService.ListAssetModels:output_type -> stewardmesh.v1.ListAssetModelsResponse
+	101, // 527: stewardmesh.v1.AssetService.GetAssetModel:output_type -> stewardmesh.v1.AssetModel
+	72,  // 528: stewardmesh.v1.AssetService.GetAssetModelInventory:output_type -> stewardmesh.v1.AssetModelInventory
+	101, // 529: stewardmesh.v1.AssetService.ResolveAssetModel:output_type -> stewardmesh.v1.AssetModel
+	101, // 530: stewardmesh.v1.AssetService.CreateAssetModel:output_type -> stewardmesh.v1.AssetModel
+	101, // 531: stewardmesh.v1.AssetService.UpdateAssetModel:output_type -> stewardmesh.v1.AssetModel
+	101, // 532: stewardmesh.v1.AssetService.RetireAssetModel:output_type -> stewardmesh.v1.AssetModel
+	76,  // 533: stewardmesh.v1.AssetService.ListAssets:output_type -> stewardmesh.v1.ListAssetsResponse
+	99,  // 534: stewardmesh.v1.AssetService.GetAsset:output_type -> stewardmesh.v1.Asset
+	99,  // 535: stewardmesh.v1.AssetService.CreateAsset:output_type -> stewardmesh.v1.Asset
+	79,  // 536: stewardmesh.v1.AssetService.CreateAssetsFromModel:output_type -> stewardmesh.v1.CreateAssetsFromModelResponse
+	99,  // 537: stewardmesh.v1.AssetService.UpdateAsset:output_type -> stewardmesh.v1.Asset
+	83,  // 538: stewardmesh.v1.AssetService.ListAssetLifecycle:output_type -> stewardmesh.v1.ListAssetLifecycleResponse
+	98,  // 539: stewardmesh.v1.AssetService.ResolveAssetIdentifier:output_type -> stewardmesh.v1.AssetIdentifier
+	86,  // 540: stewardmesh.v1.AssetService.ListAssetIdentifiers:output_type -> stewardmesh.v1.ListAssetIdentifiersResponse
+	88,  // 541: stewardmesh.v1.AssetService.CreateAssetIdentifier:output_type -> stewardmesh.v1.CreateAssetIdentifierResponse
+	90,  // 542: stewardmesh.v1.AssetService.ReplaceAssetIdentifier:output_type -> stewardmesh.v1.ReplaceAssetIdentifierResponse
+	92,  // 543: stewardmesh.v1.AssetService.DeactivateAssetIdentifier:output_type -> stewardmesh.v1.DeactivateAssetIdentifierResponse
+	94,  // 544: stewardmesh.v1.AssetService.ListAssetLabelTemplates:output_type -> stewardmesh.v1.ListAssetLabelTemplatesResponse
+	97,  // 545: stewardmesh.v1.AssetService.GenerateAssetLabelBatch:output_type -> stewardmesh.v1.AssetLabelArtifact
+	104, // 546: stewardmesh.v1.PeopleService.ListSites:output_type -> stewardmesh.v1.ListSitesResponse
+	106, // 547: stewardmesh.v1.PeopleService.CreateSite:output_type -> stewardmesh.v1.Site
+	109, // 548: stewardmesh.v1.PeopleService.ListBuildings:output_type -> stewardmesh.v1.ListBuildingsResponse
+	111, // 549: stewardmesh.v1.PeopleService.CreateBuilding:output_type -> stewardmesh.v1.Building
+	113, // 550: stewardmesh.v1.PeopleService.ListRooms:output_type -> stewardmesh.v1.ListRoomsResponse
+	115, // 551: stewardmesh.v1.PeopleService.CreateRoom:output_type -> stewardmesh.v1.Room
+	133, // 552: stewardmesh.v1.PeopleService.ListDepartments:output_type -> stewardmesh.v1.ListDepartmentsResponse
+	135, // 553: stewardmesh.v1.PeopleService.CreateDepartment:output_type -> stewardmesh.v1.Department
+	137, // 554: stewardmesh.v1.PeopleService.SearchIdentities:output_type -> stewardmesh.v1.SearchIdentitiesResponse
+	139, // 555: stewardmesh.v1.PeopleService.CreateIdentity:output_type -> stewardmesh.v1.DirectoryIdentity
+	145, // 556: stewardmesh.v1.PeopleService.ListAssetAssignments:output_type -> stewardmesh.v1.ListAssetAssignmentsResponse
+	148, // 557: stewardmesh.v1.PeopleService.CreateAssetAssignment:output_type -> stewardmesh.v1.AssetAssignment
+	148, // 558: stewardmesh.v1.PeopleService.EndAssetAssignment:output_type -> stewardmesh.v1.AssetAssignment
+	141, // 559: stewardmesh.v1.RelationshipGraphService.GetRelationshipGraph:output_type -> stewardmesh.v1.RelationshipGraph
+	118, // 560: stewardmesh.v1.DirectoryImportService.ListDirectoryImportSources:output_type -> stewardmesh.v1.ListDirectoryImportSourcesResponse
+	120, // 561: stewardmesh.v1.DirectoryImportService.ListDirectoryImports:output_type -> stewardmesh.v1.ListDirectoryImportsResponse
+	130, // 562: stewardmesh.v1.DirectoryImportService.GetDirectoryImport:output_type -> stewardmesh.v1.DirectoryImportBatchDetail
+	131, // 563: stewardmesh.v1.DirectoryImportService.PreviewDirectoryImport:output_type -> stewardmesh.v1.DirectoryImportOperationResult
+	131, // 564: stewardmesh.v1.DirectoryImportService.ApplyDirectoryImport:output_type -> stewardmesh.v1.DirectoryImportOperationResult
+	131, // 565: stewardmesh.v1.DirectoryImportService.RetryDirectoryImport:output_type -> stewardmesh.v1.DirectoryImportOperationResult
+	150, // 566: stewardmesh.v1.ThreadsService.ListTags:output_type -> stewardmesh.v1.ListTagsResponse
+	154, // 567: stewardmesh.v1.ThreadsService.GetTag:output_type -> stewardmesh.v1.Tag
+	154, // 568: stewardmesh.v1.ThreadsService.CreateTag:output_type -> stewardmesh.v1.Tag
+	154, // 569: stewardmesh.v1.ThreadsService.UpdateTag:output_type -> stewardmesh.v1.Tag
+	156, // 570: stewardmesh.v1.ThreadsService.ListGoals:output_type -> stewardmesh.v1.ListGoalsResponse
+	160, // 571: stewardmesh.v1.ThreadsService.GetGoal:output_type -> stewardmesh.v1.Goal
+	160, // 572: stewardmesh.v1.ThreadsService.CreateGoal:output_type -> stewardmesh.v1.Goal
+	160, // 573: stewardmesh.v1.ThreadsService.UpdateGoal:output_type -> stewardmesh.v1.Goal
+	162, // 574: stewardmesh.v1.ThreadsService.ListEffectiveTags:output_type -> stewardmesh.v1.ListEffectiveTagsResponse
+	165, // 575: stewardmesh.v1.ThreadsService.SetTagRule:output_type -> stewardmesh.v1.TagRule
+	167, // 576: stewardmesh.v1.ThreadsService.DeleteTagRule:output_type -> stewardmesh.v1.DeleteTagRuleResponse
+	169, // 577: stewardmesh.v1.ThreadsService.ListGoalLinks:output_type -> stewardmesh.v1.ListGoalLinksResponse
+	171, // 578: stewardmesh.v1.ThreadsService.LinkGoal:output_type -> stewardmesh.v1.GoalLink
+	173, // 579: stewardmesh.v1.ThreadsService.UnlinkGoal:output_type -> stewardmesh.v1.UnlinkGoalResponse
+	175, // 580: stewardmesh.v1.VaultService.ListBlobs:output_type -> stewardmesh.v1.ListBlobsResponse
+	178, // 581: stewardmesh.v1.VaultService.GetBlob:output_type -> stewardmesh.v1.VaultBlob
+	178, // 582: stewardmesh.v1.VaultService.CreateBlob:output_type -> stewardmesh.v1.VaultBlob
+	180, // 583: stewardmesh.v1.VaultService.DownloadBlob:output_type -> stewardmesh.v1.VaultBlobContent
+	182, // 584: stewardmesh.v1.VaultService.AuthorizeDownload:output_type -> stewardmesh.v1.VaultDownloadAuthorization
+	186, // 585: stewardmesh.v1.HorizonService.ListPlans:output_type -> stewardmesh.v1.ListHorizonPlansResponse
+	183, // 586: stewardmesh.v1.HorizonService.CreatePlan:output_type -> stewardmesh.v1.HorizonPlan
+	183, // 587: stewardmesh.v1.HorizonService.UpdatePlan:output_type -> stewardmesh.v1.HorizonPlan
+	190, // 588: stewardmesh.v1.HorizonService.ListPlanHistory:output_type -> stewardmesh.v1.ListHorizonPlanHistoryResponse
+	193, // 589: stewardmesh.v1.HorizonService.GetForecast:output_type -> stewardmesh.v1.HorizonForecast
+	195, // 590: stewardmesh.v1.HorizonService.ExportCSV:output_type -> stewardmesh.v1.ExportHorizonCSVResponse
+	212, // 591: stewardmesh.v1.LedgerService.GetSnapshot:output_type -> stewardmesh.v1.LedgerSnapshot
+	197, // 592: stewardmesh.v1.LedgerService.CreateVendor:output_type -> stewardmesh.v1.LedgerVendor
+	199, // 593: stewardmesh.v1.LedgerService.CreatePurchaseOrder:output_type -> stewardmesh.v1.LedgerPurchaseOrder
+	199, // 594: stewardmesh.v1.LedgerService.UpdatePurchaseOrderStatus:output_type -> stewardmesh.v1.LedgerPurchaseOrder
+	202, // 595: stewardmesh.v1.LedgerService.CreateContract:output_type -> stewardmesh.v1.LedgerContract
+	202, // 596: stewardmesh.v1.LedgerService.UpdateContractStatus:output_type -> stewardmesh.v1.LedgerContract
+	205, // 597: stewardmesh.v1.LedgerService.CreateCommitment:output_type -> stewardmesh.v1.LedgerCommitment
+	207, // 598: stewardmesh.v1.LedgerService.CreateBudget:output_type -> stewardmesh.v1.LedgerBudget
+	211, // 599: stewardmesh.v1.LedgerService.ReconcileCost:output_type -> stewardmesh.v1.ReconcileLedgerCostResponse
+	214, // 600: stewardmesh.v1.LedgerService.GetBudgetVariance:output_type -> stewardmesh.v1.LedgerBudgetVariance
+	216, // 601: stewardmesh.v1.LedgerService.ExportCSV:output_type -> stewardmesh.v1.ExportLedgerCSVResponse
+	234, // 602: stewardmesh.v1.StackService.GetSnapshot:output_type -> stewardmesh.v1.StackSnapshot
+	237, // 603: stewardmesh.v1.StackService.GetAnalytics:output_type -> stewardmesh.v1.StackAnalytics
+	218, // 604: stewardmesh.v1.StackService.CreateProduct:output_type -> stewardmesh.v1.StackProduct
+	218, // 605: stewardmesh.v1.StackService.UpdateProductStatus:output_type -> stewardmesh.v1.StackProduct
+	221, // 606: stewardmesh.v1.StackService.CreateVersion:output_type -> stewardmesh.v1.StackVersion
+	221, // 607: stewardmesh.v1.StackService.UpdateVersionStatus:output_type -> stewardmesh.v1.StackVersion
+	224, // 608: stewardmesh.v1.StackService.RecordInstallation:output_type -> stewardmesh.v1.StackInstallation
+	224, // 609: stewardmesh.v1.StackService.UpdateInstallationState:output_type -> stewardmesh.v1.StackInstallation
+	227, // 610: stewardmesh.v1.StackService.CreateLicense:output_type -> stewardmesh.v1.StackLicense
+	227, // 611: stewardmesh.v1.StackService.UpdateLicenseEntitlement:output_type -> stewardmesh.v1.StackLicense
+	230, // 612: stewardmesh.v1.StackService.CreateAssignment:output_type -> stewardmesh.v1.StackAssignment
+	230, // 613: stewardmesh.v1.StackService.UpdateAssignmentUsage:output_type -> stewardmesh.v1.StackAssignment
+	230, // 614: stewardmesh.v1.StackService.EndAssignment:output_type -> stewardmesh.v1.StackAssignment
+	240, // 615: stewardmesh.v1.StackService.ExportRecords:output_type -> stewardmesh.v1.ExportStackRecordsResponse
+	242, // 616: stewardmesh.v1.StackService.ImportRecords:output_type -> stewardmesh.v1.StackImportResult
+	245, // 617: stewardmesh.v1.SignalsService.ListRules:output_type -> stewardmesh.v1.ListSignalRulesResponse
+	246, // 618: stewardmesh.v1.SignalsService.CreateRule:output_type -> stewardmesh.v1.SignalRule
+	246, // 619: stewardmesh.v1.SignalsService.UpdateRule:output_type -> stewardmesh.v1.SignalRule
+	250, // 620: stewardmesh.v1.SignalsService.ListAlerts:output_type -> stewardmesh.v1.ListSignalAlertsResponse
+	253, // 621: stewardmesh.v1.SignalsService.ListAlertHistory:output_type -> stewardmesh.v1.ListSignalAlertHistoryResponse
+	256, // 622: stewardmesh.v1.SignalsService.Evaluate:output_type -> stewardmesh.v1.SignalEvaluationResult
+	251, // 623: stewardmesh.v1.SignalsService.AcknowledgeAlert:output_type -> stewardmesh.v1.SignalAlert
+	251, // 624: stewardmesh.v1.SignalsService.AssignAlert:output_type -> stewardmesh.v1.SignalAlert
+	260, // 625: stewardmesh.v1.SignalsService.ListSubscriptions:output_type -> stewardmesh.v1.ListSignalSubscriptionsResponse
+	262, // 626: stewardmesh.v1.SignalsService.ListSubscriptionTargets:output_type -> stewardmesh.v1.ListSignalSubscriptionTargetsResponse
+	264, // 627: stewardmesh.v1.SignalsService.CreateSubscription:output_type -> stewardmesh.v1.SignalSubscription
+	267, // 628: stewardmesh.v1.SignalsService.DeleteSubscription:output_type -> stewardmesh.v1.DeleteSignalSubscriptionResponse
+	270, // 629: stewardmesh.v1.SignalsService.ListPendingDeliveries:output_type -> stewardmesh.v1.ListPendingSignalDeliveriesResponse
+	268, // 630: stewardmesh.v1.SignalsService.RecordDeliveryAttempt:output_type -> stewardmesh.v1.SignalDelivery
+	273, // 631: stewardmesh.v1.SignalsService.ExportCSV:output_type -> stewardmesh.v1.ExportSignalsCSVResponse
+	283, // 632: stewardmesh.v1.ExchangeService.ListExchangeRecords:output_type -> stewardmesh.v1.ListExchangeRecordsResponse
+	285, // 633: stewardmesh.v1.ExchangeService.ListExchangePackages:output_type -> stewardmesh.v1.ListExchangePackagesResponse
+	287, // 634: stewardmesh.v1.ExchangeService.ExportExchangePackage:output_type -> stewardmesh.v1.ExchangeExportArtifact
+	291, // 635: stewardmesh.v1.ExchangeService.ImportExchangePackage:output_type -> stewardmesh.v1.ImportExchangePackageResponse
+	293, // 636: stewardmesh.v1.ReachService.ListEndpoints:output_type -> stewardmesh.v1.ListReachEndpointsResponse
+	296, // 637: stewardmesh.v1.ReachService.ListProviders:output_type -> stewardmesh.v1.ListReachProvidersResponse
+	297, // 638: stewardmesh.v1.ReachService.CreateProvider:output_type -> stewardmesh.v1.ReachProvider
+	297, // 639: stewardmesh.v1.ReachService.UpdateProvider:output_type -> stewardmesh.v1.ReachProvider
+	297, // 640: stewardmesh.v1.ReachService.RotateProviderSecret:output_type -> stewardmesh.v1.ReachProvider
+	304, // 641: stewardmesh.v1.ReachService.TestProvider:output_type -> stewardmesh.v1.ReachProviderTest
+	303, // 642: stewardmesh.v1.ReachService.ListProviderTests:output_type -> stewardmesh.v1.ListReachProviderTestsResponse
+	306, // 643: stewardmesh.v1.ReachService.ListTemplates:output_type -> stewardmesh.v1.ListReachTemplatesResponse
+	307, // 644: stewardmesh.v1.ReachService.CreateTemplate:output_type -> stewardmesh.v1.ReachTemplate
+	307, // 645: stewardmesh.v1.ReachService.UpdateTemplate:output_type -> stewardmesh.v1.ReachTemplate
+	312, // 646: stewardmesh.v1.ReachService.ListGroups:output_type -> stewardmesh.v1.ListReachGroupsResponse
+	313, // 647: stewardmesh.v1.ReachService.CreateGroup:output_type -> stewardmesh.v1.ReachSubscriberGroup
+	313, // 648: stewardmesh.v1.ReachService.UpdateGroup:output_type -> stewardmesh.v1.ReachSubscriberGroup
+	317, // 649: stewardmesh.v1.ReachService.ListMessages:output_type -> stewardmesh.v1.ListReachMessagesResponse
+	318, // 650: stewardmesh.v1.ReachService.SendMessage:output_type -> stewardmesh.v1.ReachMessage
+	318, // 651: stewardmesh.v1.ReachService.RetryMessage:output_type -> stewardmesh.v1.ReachMessage
+	322, // 652: stewardmesh.v1.ReachService.ListMessageAttempts:output_type -> stewardmesh.v1.ListReachMessageAttemptsResponse
+	325, // 653: stewardmesh.v1.ReachService.ProcessSignals:output_type -> stewardmesh.v1.ReachProcessResult
+	500, // [500:654] is the sub-list for method output_type
+	346, // [346:500] is the sub-list for method input_type
+	346, // [346:346] is the sub-list for extension type_name
+	346, // [346:346] is the sub-list for extension extendee
+	0,   // [0:346] is the sub-list for field type_name
 }
 
 func init() { file_stewardmesh_proto_init() }
@@ -27727,7 +27865,7 @@ func file_stewardmesh_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_stewardmesh_proto_rawDesc), len(file_stewardmesh_proto_rawDesc)),
 			NumEnums:      22,
-			NumMessages:   321,
+			NumMessages:   322,
 			NumExtensions: 0,
 			NumServices:   16,
 		},

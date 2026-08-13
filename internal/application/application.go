@@ -278,7 +278,7 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 	if err != nil {
 		return fail(fmt.Errorf("initialize Ledger: %w", err))
 	}
-	stackService, err := stack.NewService(runtime.stackStore, stackReferenceValidator{
+	stackService, stackImporter, err := stack.NewServiceWithExchangeImporter(runtime.stackStore, stackReferenceValidator{
 		atlas: atlasService, vault: vaultService, people: runtime.peopleStore, ledger: runtime.ledgerStore,
 		organizationID: cfg.OrganizationID,
 	}, runtime.auditor, stack.ServiceConfig{OrganizationID: cfg.OrganizationID})
@@ -337,7 +337,7 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 	if err != nil {
 		return fail(fmt.Errorf("initialize Atlas Codes labels: %w", err))
 	}
-	stackExchangeProvider, err := exchange.NewStackProvider(stackService)
+	stackExchangeProvider, err := exchange.NewStackProvider(stackService, stackImporter)
 	if err != nil {
 		return fail(fmt.Errorf("initialize Exchange Stack provider: %w", err))
 	}

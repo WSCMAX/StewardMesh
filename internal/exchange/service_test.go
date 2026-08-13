@@ -340,6 +340,80 @@ func TestServiceRetainsCommittedOutcomeAndOwnershipUntilProviderAuditRepairs(t *
 	}
 }
 
+func TestServiceReconcilesProviderWriteThatReturnsAnUncommittedError(t *testing.T) {
+	record := testRecord("test.record", "ambiguous-commit-record", []exchange.Reference{})
+	sourceProvider := &exchangeTestProvider{types: []string{"test.record"}, records: []exchange.Record{record}}
+	source, _ := exchange.NewService(repository.NewMemoryExchangeStore(), foundation.NopAuditor{}, newExchangeOwnership("ambiguous-source"), exchange.ServiceConfig{
+		OrganizationID: "ambiguous-source", SourceSystemID: "ambiguous-system", Schemas: newExchangePatterns(t, "test.record"), Now: fixedExchangeNow,
+	}, sourceProvider)
+	artifact, err := source.Export(context.Background(), "source-operator", exchange.ExportRequest{
+		Selection: []exchange.Reference{{Type: "test.record", ID: record.ID}}, FileMode: exchange.FileModeMetadata,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	provider := &exchangeTestProvider{types: []string{"test.record"}, exists: make(map[string]bool), ambiguousFailures: 1}
+	ownership := newExchangeOwnership("ambiguous-target")
+	target, _ := exchange.NewService(repository.NewMemoryExchangeStore(), foundation.NopAuditor{}, ownership, exchange.ServiceConfig{
+		OrganizationID: "ambiguous-target", SourceSystemID: "target-system", Schemas: newExchangePatterns(t, "test.record"), Now: fixedExchangeNow,
+	}, provider)
+	first, err := target.Import(context.Background(), "target-operator", artifact.Bytes)
+	if err == nil || first.Package.Status != exchange.StatusFailed || first.Package.CreatedCount != 1 || len(first.Package.Records) != 1 ||
+		len(first.Package.Progress) != 1 || first.Package.Progress[0].Phase != "committed" {
+		t.Fatalf("ambiguous provider commit was not promoted to truthful durable state: %#v err=%v", first, err)
+	}
+	if len(provider.imported) != 1 || !ownership.values["test.record:ambiguous-commit-record"].WriteLocked {
+		t.Fatalf("ambiguous provider commit lost its row or ownership fence: imported=%#v ownership=%#v", provider.imported, ownership.values)
+	}
+
+	recovered, err := target.Import(context.Background(), "retry-operator", artifact.Bytes)
+	if err != nil || recovered.Package.Status != exchange.StatusCompleted || recovered.Package.CreatedCount != 1 || len(recovered.Package.Progress) != 0 {
+		t.Fatalf("ambiguous provider commit did not repair: %#v err=%v", recovered, err)
+	}
+	if len(provider.imported) != 1 || provider.calls != 2 || provider.repairCalls != 1 || provider.exactCalls != 2 {
+		t.Fatalf("ambiguous provider retry duplicated work or skipped verification: imported=%#v calls=%d repairs=%d exact=%d", provider.imported, provider.calls, provider.repairCalls, provider.exactCalls)
+	}
+}
+
+func TestServiceFailsClosedWhenAmbiguousProviderCommitCannotBeVerified(t *testing.T) {
+	record := testRecord("test.record", "unverified-commit-record", []exchange.Reference{})
+	sourceProvider := &exchangeTestProvider{types: []string{"test.record"}, records: []exchange.Record{record}}
+	source, _ := exchange.NewService(repository.NewMemoryExchangeStore(), foundation.NopAuditor{}, newExchangeOwnership("unverified-source"), exchange.ServiceConfig{
+		OrganizationID: "unverified-source", SourceSystemID: "unverified-system", Schemas: newExchangePatterns(t, "test.record"), Now: fixedExchangeNow,
+	}, sourceProvider)
+	artifact, err := source.Export(context.Background(), "source-operator", exchange.ExportRequest{
+		Selection: []exchange.Reference{{Type: "test.record", ID: record.ID}}, FileMode: exchange.FileModeMetadata,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	provider := &exchangeTestProvider{
+		types: []string{"test.record"}, exists: make(map[string]bool), ambiguousFailures: 1, failExactOnCall: 2,
+	}
+	ownership := newExchangeOwnership("unverified-target")
+	target, _ := exchange.NewService(repository.NewMemoryExchangeStore(), foundation.NopAuditor{}, ownership, exchange.ServiceConfig{
+		OrganizationID: "unverified-target", SourceSystemID: "target-system", Schemas: newExchangePatterns(t, "test.record"), Now: fixedExchangeNow,
+	}, provider)
+	first, err := target.Import(context.Background(), "target-operator", artifact.Bytes)
+	if err == nil || first.Package.Status != exchange.StatusFailed || first.Package.CreatedCount != 0 || len(first.Package.Records) != 0 ||
+		len(first.Package.Progress) != 1 || first.Package.Progress[0].Phase != "intent" || !first.Package.Progress[0].OwnershipReady {
+		t.Fatalf("unverified provider commit did not retain its fail-closed recovery state: %#v err=%v", first, err)
+	}
+	if len(provider.imported) != 1 || !ownership.values["test.record:unverified-commit-record"].WriteLocked {
+		t.Fatalf("unverified provider commit was compensated unsafely: imported=%#v ownership=%#v", provider.imported, ownership.values)
+	}
+
+	recovered, err := target.Import(context.Background(), "retry-operator", artifact.Bytes)
+	if err != nil || recovered.Package.Status != exchange.StatusCompleted || recovered.Package.CreatedCount != 1 || len(recovered.Package.Progress) != 0 {
+		t.Fatalf("unverified provider commit did not recover through exact retry: %#v err=%v", recovered, err)
+	}
+	if len(provider.imported) != 1 || provider.calls != 2 || provider.exactCalls != 2 {
+		t.Fatalf("unverified provider retry duplicated work: imported=%#v calls=%d exact=%d", provider.imported, provider.calls, provider.exactCalls)
+	}
+}
+
 func TestServiceRecoversCreatedTruthAfterCrashBetweenProviderWriteAndReceiptCheckpoint(t *testing.T) {
 	now := fixedExchangeNow()
 	record := testRecord("test.record", "crash-record", []exchange.Reference{})
@@ -702,8 +776,11 @@ type exchangeTestProvider struct {
 	failOnCall        int
 	calls             int
 	committedFailures int
+	ambiguousFailures int
 	repairCalls       int
 	operationTokens   []string
+	exactCalls        int
+	failExactOnCall   int
 	fileReads         int
 	fileContent       map[string][]byte
 }
@@ -718,6 +795,10 @@ func (p *exchangeTestProvider) Exists(_ context.Context, reference exchange.Refe
 	return p.exists[reference.Key()], nil
 }
 func (p *exchangeTestProvider) ImportRecordExists(_ context.Context, record exchange.Record, _ []byte) (bool, error) {
+	p.exactCalls++
+	if p.failExactOnCall > 0 && p.exactCalls == p.failExactOnCall {
+		return false, errors.New("injected exact provider read failure")
+	}
 	return p.exists[exchange.Reference{Type: record.Type, ID: record.ID}.Key()], nil
 }
 func (p *exchangeTestProvider) ImportRecord(_ context.Context, operation exchange.ProviderImportOperation, _ string, record exchange.Record, _ []byte) (exchange.ProviderImportResult, error) {
@@ -745,6 +826,15 @@ func (p *exchangeTestProvider) ImportRecord(_ context.Context, operation exchang
 		}
 		p.committedFailures--
 		return exchange.ProviderImportResult{Committed: true, Created: created}, errors.New("post-commit provider audit failure")
+	}
+	if p.ambiguousFailures > 0 {
+		created := !p.exists[key]
+		p.exists[key] = true
+		if created {
+			p.imported = append(p.imported, key)
+		}
+		p.ambiguousFailures--
+		return exchange.ProviderImportResult{}, errors.New("ambiguous provider response after write")
 	}
 	if p.exists[key] {
 		return exchange.ProviderImportResult{Committed: true}, nil

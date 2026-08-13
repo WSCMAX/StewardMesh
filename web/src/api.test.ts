@@ -26,7 +26,7 @@ test('announces an expired authenticated request without treating initial sessio
     .mockResolvedValueOnce(new Response(JSON.stringify({ error: { message: 'expired' } }), { status: 401, headers: { 'Content-Type': 'application/json' } }))
     .mockResolvedValueOnce(new Response(JSON.stringify({ error: { message: 'sign in is required' } }), { status: 401, headers: { 'Content-Type': 'application/json' } })))
 
-  await expect(requestJSON('/api/v1/assets')).rejects.toMatchObject({ status: 401 })
+  await expect(requestJSON('/api/v1/assets')).rejects.toMatchObject({ status: 401, body: { error: { message: 'expired' } } })
   expect(listener).toHaveBeenCalledOnce()
   await expect(requestJSON('/api/v1/auth/session')).rejects.toMatchObject({ status: 401 })
   expect(listener).toHaveBeenCalledOnce()

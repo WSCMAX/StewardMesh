@@ -99,7 +99,7 @@ func TestServiceTracksEntitlementsUsageFinancialProvenanceAndCompliance(t *testi
 	}
 }
 
-func TestServiceExportsAndIdempotentlyImportsDependencyOrderedRecords(t *testing.T) {
+func TestServiceExportsAndPreflightsDependencyOrderedRecordsForDurableImport(t *testing.T) {
 	now := time.Date(2026, time.August, 13, 12, 0, 0, 0, time.UTC)
 	source := newTestService(t, newTestStore(), &testReferences{}, &testAuditor{}, "source-org", now)
 	product, err := source.CreateProduct(context.Background(), CreateProductInput{ID: "product", Name: "Database", Publisher: "Example", SourceSystemID: "CATALOG", SourceRecordID: "product"})
@@ -131,24 +131,17 @@ func TestServiceExportsAndIdempotentlyImportsDependencyOrderedRecords(t *testing
 	if len(records) != 5 || records[0].Type != "stack.product" || records[1].Type != "stack.version" || records[2].Type != "stack.license" {
 		t.Fatalf("unexpected portable records %#v", records)
 	}
+	normalized, err := NormalizeImportRecords("EXCHANGE-SOURCE", reverseRecords(records))
+	if err != nil || len(normalized) != 5 || normalized[0].Type != "stack.product" || normalized[1].Type != "stack.version" || normalized[0].SourceSystemID != "catalog" || normalized[1].SourceSystemID != "exchange-source" {
+		t.Fatalf("unexpected normalized import %#v err=%v", normalized, err)
+	}
 	targetStore := newTestStore()
 	target := newTestService(t, targetStore, &testReferences{}, &testAuditor{}, "target-org", now)
-	result, err := target.ImportRecords(context.Background(), "exchange-source", reverseRecords(records))
-	if err != nil {
-		t.Fatal(err)
+	if _, err := target.ImportRecords(context.Background(), "exchange-source", records); !errors.Is(err, ErrDurableImportRequired) {
+		t.Fatalf("unsafe batch import was not rejected: %v", err)
 	}
-	if result.Created != 5 || result.Unchanged != 0 {
-		t.Fatalf("unexpected first import result %#v", result)
-	}
-	replayed, err := target.ImportRecords(context.Background(), "exchange-source", records)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if replayed.Created != 0 || replayed.Unchanged != 5 {
-		t.Fatalf("unexpected replay result %#v", replayed)
-	}
-	if snapshot, err := target.Snapshot(context.Background()); err != nil || len(snapshot.Products)+len(snapshot.Versions)+len(snapshot.Installations)+len(snapshot.Licenses)+len(snapshot.Assignments) != 5 {
-		t.Fatalf("unexpected target snapshot %#v, %v", snapshot, err)
+	if snapshot, err := target.Snapshot(context.Background()); err != nil || len(snapshot.Products)+len(snapshot.Versions)+len(snapshot.Installations)+len(snapshot.Licenses)+len(snapshot.Assignments) != 0 {
+		t.Fatalf("rejected unsafe import wrote records %#v, %v", snapshot, err)
 	}
 
 	changed := append([]ExchangeRecord(nil), records...)
@@ -158,8 +151,8 @@ func TestServiceExportsAndIdempotentlyImportsDependencyOrderedRecords(t *testing
 	}
 	payload.Name = "Conflicting name"
 	changed[0].Payload = mustJSON(t, payload)
-	if _, err := target.ImportRecords(context.Background(), "exchange-source", changed); !errors.Is(err, ErrConflict) {
-		t.Fatalf("expected source replay conflict, got %v", err)
+	if _, err := NormalizeImportRecords("exchange-source", changed); err != nil {
+		t.Fatalf("a valid changed payload should pass read-only normalization before durable conflict detection: %v", err)
 	}
 }
 
@@ -207,7 +200,7 @@ func TestServiceRejectsTamperedPortableRecordsBeforeWriting(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			targetStore := newTestStore()
 			target := newTestService(t, targetStore, &testReferences{}, &testAuditor{}, "target-org", now)
-			if _, err := target.ImportRecords(context.Background(), "exchange-source", mutate(cloneExchangeRecords(records))); !errors.Is(err, ErrInvalidInput) {
+			if _, err := NormalizeImportRecords("exchange-source", mutate(cloneExchangeRecords(records))); !errors.Is(err, ErrInvalidInput) {
 				t.Fatalf("expected invalid portable record, got %v", err)
 			}
 			snapshot, err := target.Snapshot(context.Background())
@@ -229,10 +222,9 @@ func TestServiceImportsMaximumLengthRecordIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	target := newTestService(t, newTestStore(), &testReferences{}, &testAuditor{}, "target-org", now)
-	result, err := target.ImportRecords(context.Background(), "exchange-source", records)
-	if err != nil || result.Created != 1 {
-		t.Fatalf("maximum-length identity should import, result=%#v err=%v", result, err)
+	normalized, err := NormalizeImportRecords("exchange-source", records)
+	if err != nil || len(normalized) != 1 || normalized[0].ID != maximumID {
+		t.Fatalf("maximum-length identity should preflight, result=%#v err=%v", normalized, err)
 	}
 }
 

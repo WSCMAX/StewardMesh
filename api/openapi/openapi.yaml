@@ -2965,6 +2965,7 @@ paths:
   /api/v1/stack/exchange/import:
     post:
       summary: Idempotently import dependency-aware portable Stack records
+      description: The legacy JSON envelope omits schema identity and is permanently pinned to the five v1 built-in Stack templates so exact retries remain byte-identical across later built-in schema releases.
       operationId: importStackRecords
       tags: [Stack]
       x-requirement: REQ-STACK-001
@@ -2972,12 +2973,22 @@ paths:
       parameters: [{$ref: '#/components/parameters/CSRFToken'}]
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/StackExchangeImportRequest'}}}}
       responses:
-        '200': {description: Created and unchanged record counts, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/StackImportResult'}}}}
-        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '200': {description: 'Durable Exchange receipt projection with created, unchanged, holding, ownership-lock, and replay outcomes', headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}, X-Exchange-Package-ID: {schema: {$ref: '#/components/schemas/ExchangeStableID'}}, X-Idempotent-Replay: {schema: {type: boolean}}}, content: {application/json: {schema: {$ref: '#/components/schemas/StackImportResult'}}}}
+        '400':
+          description: Invalid request before reservation, or a durable validation failure after reservation
+          headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}, X-Exchange-Package-ID: {schema: {$ref: '#/components/schemas/ExchangeStableID'}}, X-Idempotent-Replay: {schema: {type: boolean}}}
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - {$ref: '#/components/schemas/Error'}
+                  - {$ref: '#/components/schemas/StackImportFailure'}
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
-        '409': {$ref: '#/components/responses/Conflict'}
-        '422': {$ref: '#/components/responses/UnprocessableEntity'}
+        '409': {description: Durable history or current Stack data conflicts with the package, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}, X-Exchange-Package-ID: {schema: {$ref: '#/components/schemas/ExchangeStableID'}}, X-Idempotent-Replay: {schema: {type: boolean}}}, content: {application/json: {schema: {$ref: '#/components/schemas/StackImportFailure'}}}}
+        '413': {description: Stack import exceeds a configured limit, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}, X-Exchange-Package-ID: {schema: {$ref: '#/components/schemas/ExchangeStableID'}}, X-Idempotent-Replay: {schema: {type: boolean}}}, content: {application/json: {schema: {$ref: '#/components/schemas/StackImportFailure'}}}}
+        '422': {description: Stack import dependency or integrity failure, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}, X-Exchange-Package-ID: {schema: {$ref: '#/components/schemas/ExchangeStableID'}}, X-Idempotent-Replay: {schema: {type: boolean}}}, content: {application/json: {schema: {$ref: '#/components/schemas/StackImportFailure'}}}}
+        '500': {description: 'Import failed after reservation; packageId, checkpointed outcomes, and pending ownership make the exact request safely resumable', headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}, X-Exchange-Package-ID: {schema: {$ref: '#/components/schemas/ExchangeStableID'}}, X-Idempotent-Replay: {schema: {type: boolean}}}, content: {application/json: {schema: {$ref: '#/components/schemas/StackImportFailure'}}}}
   /api/v1/signals/rules:
     get:
       summary: List organization alert rules
@@ -6033,6 +6044,7 @@ components:
     StackExchangeImportRequest:
       type: object
       additionalProperties: false
+      description: Schema-less legacy Stack import request pinned to the v1 built-in Stack templates.
       required: [sourceSystemId, records]
       properties:
         sourceSystemId: {$ref: '#/components/schemas/StackID'}
@@ -6040,10 +6052,37 @@ components:
     StackImportResult:
       type: object
       additionalProperties: false
-      required: [created, unchanged]
+      description: Durable Exchange projection. A failed response includes the same shape under import so any committed prefix is explicit and the exact request can resume by deterministic packageId.
+      required: [packageId, status, created, unchanged, holding, replay, records, pendingOwnership]
       properties:
-        created: {type: integer, minimum: 0}
-        unchanged: {type: integer, minimum: 0}
+        packageId: {$ref: '#/components/schemas/ExchangeStableID'}
+        status: {$ref: '#/components/schemas/ExchangePackageStatus'}
+        created: {type: integer, minimum: 0, maximum: 10000}
+        unchanged: {type: integer, minimum: 0, maximum: 10000}
+        holding: {type: integer, minimum: 0, maximum: 10000}
+        replay: {type: boolean}
+        errorCode: {type: string, pattern: '^[a-z][a-z0-9_]{0,63}$'}
+        records: {type: array, maxItems: 10000, items: {$ref: '#/components/schemas/ExchangeRecordOutcome'}}
+        pendingOwnership:
+          type: array
+          maxItems: 10000
+          description: Guard locks that exist while a provider outcome still awaits deterministic recovery. Empty after every terminal success.
+          items: {$ref: '#/components/schemas/StackImportOwnership'}
+    StackImportOwnership:
+      type: object
+      additionalProperties: false
+      required: [type, id, writeLocked]
+      properties:
+        type: {$ref: '#/components/schemas/ExchangeRecordType'}
+        id: {$ref: '#/components/schemas/ExchangeStableID'}
+        writeLocked: {type: boolean}
+    StackImportFailure:
+      type: object
+      additionalProperties: false
+      required: [error, import]
+      properties:
+        error: {$ref: '#/components/schemas/Error/properties/error'}
+        import: {$ref: '#/components/schemas/StackImportResult'}
     SignalID:
       type: string
       pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'

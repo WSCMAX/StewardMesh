@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import axe from 'axe-core'
 import { beforeEach, expect, test, vi } from 'vitest'
-import StackManager, { parseStackAnalytics, parseStackSnapshot } from './StackManager'
+import StackManager, { parseStackAnalytics, parseStackImportResult, parseStackSnapshot } from './StackManager'
 
 // Requirement: REQ-STACK-001. Feature: software.licenses.
 
@@ -19,6 +19,14 @@ const analytics = {
     { code: 'expiring', severity: 'warning', productId: 'writer', licenseId: 'license-1', daysUntilExpiry: 19, humanReadableState: 'License expires in 19 days.' },
     { code: 'over_assigned', severity: 'critical', productId: 'writer', licenseId: 'license-1', entitledQuantity: 1, assignedQuantity: 2, humanReadableState: '2 seats are assigned against 1 entitled seat.' },
   ],
+}
+const importResult = {
+  packageId: `stack-import-${'a'.repeat(64)}`, status: 'completed', created: 1, unchanged: 1, holding: 0, replay: false,
+  records: [
+    { type: 'stack.product', id: 'portable', revision: 1, checksum: 'b'.repeat(64), status: 'created', missingDependencies: [], writeLocked: true },
+    { type: 'stack.product', id: 'existing', revision: 1, checksum: 'c'.repeat(64), status: 'unchanged', missingDependencies: [], writeLocked: true },
+  ],
+  pendingOwnership: [],
 }
 
 function response(value: unknown, status = 200) { return new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } }) }
@@ -111,7 +119,7 @@ test('retires products and ends assignments through explicit lifecycle controls'
 
 test('imports exported records and reports replay totals', async () => {
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    if (String(input) === '/api/v1/stack/exchange/import' && init?.method === 'POST') return response({ created: 1, unchanged: 1 })
+    if (String(input) === '/api/v1/stack/exchange/import' && init?.method === 'POST') return response(importResult)
     return fetchForRead(input)
   })
   vi.stubGlobal('fetch', fetchMock)
@@ -124,9 +132,53 @@ test('imports exported records and reports replay totals', async () => {
   fireEvent.change(scoped.getByLabelText('Source system ID'), { target: { value: 'exchange-upload' } })
   fireEvent.change(scoped.getByLabelText('Exported JSON'), { target: { value: '{"records":[{"type":"stack.product","id":"portable","revision":1,"dependencies":[],"payload":{}}]}' } })
   fireEvent.click(scoped.getByRole('button', { name: 'Import records' }))
-  expect(await screen.findByText('Import complete: 1 created and 1 unchanged.')).toBeInTheDocument()
+  expect(await screen.findByText(new RegExp(`Import complete: 1 created, 1 unchanged, and 0 holding.*${importResult.packageId}`))).toBeInTheDocument()
+  expect(screen.getByRole('heading', { name: 'Latest import receipt' })).toBeInTheDocument()
+  expect(screen.getAllByText('Write locked until claimed')).toHaveLength(2)
   const call = fetchMock.mock.calls.find(([path]) => path === '/api/v1/stack/exchange/import')
   expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({ sourceSystemId: 'exchange-upload', records: [{ type: 'stack.product' }] })
+})
+
+test('shows the durable receipt and committed prefix when a Stack import fails', async () => {
+  const failedImport = {
+    ...importResult, status: 'failed', created: 1, unchanged: 0, errorCode: 'package_conflict', records: [importResult.records[0]],
+    pendingOwnership: [{ type: 'stack.version', id: 'portable-version', writeLocked: true }],
+  }
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input) === '/api/v1/stack/exchange/import' && init?.method === 'POST') {
+      return response({
+        error: { code: 'package_conflict', message: 'The durable Stack import did not complete.', correlationId: 'stack-import-test' },
+        import: failedImport,
+      }, 409)
+    }
+    return fetchForRead(input)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  const { container } = render(<StackManager assets={[]} csrfToken="csrf" permissions={['software.read', 'software.write']} />)
+  await screen.findByText('Steward Writer')
+  fireEvent.click(screen.getByText('Import portable records'))
+  const form = screen.getByRole('button', { name: 'Import records' }).closest('form')
+  if (!form) throw new Error('import form missing')
+  const scoped = within(form)
+  fireEvent.change(scoped.getByLabelText('Source system ID'), { target: { value: 'exchange-upload' } })
+  fireEvent.change(scoped.getByLabelText('Exported JSON'), { target: { value: '{"records":[{"type":"stack.product","id":"portable","revision":1,"dependencies":[],"payload":{}}]}' } })
+  fireEvent.click(scoped.getByRole('button', { name: 'Import records' }))
+  expect(await screen.findByRole('alert')).toHaveTextContent(`Receipt ${failedImport.packageId} records 1 created and 0 unchanged. Retry the exact JSON to resume.`)
+  expect(screen.getByText('Failure code:')).toHaveTextContent('package_conflict')
+  expect(screen.getByRole('region', { name: 'Latest Stack import outcomes' })).toHaveTextContent('stack.product:portable')
+  expect(screen.getByText('Pending Guard ownership locks (1)')).toBeInTheDocument()
+  expect(screen.getByRole('region', { name: 'Pending Stack import ownership locks' })).toHaveTextContent('stack.version:portable-version')
+  expect(screen.getByRole('region', { name: 'Pending Stack import ownership locks' })).toHaveTextContent('Write locked until claimed')
+  expect((await axe.run(container)).violations).toEqual([])
+})
+
+test('accepts a processing receipt with an exact pending Guard ownership projection', () => {
+  const processing = {
+    ...importResult,
+    status: 'processing', created: 0, unchanged: 0, records: [], errorCode: 'receipt_read_failed',
+    pendingOwnership: [{ type: 'stack.product', id: 'portable', writeLocked: false }],
+  }
+  expect(parseStackImportResult(processing)).toEqual(processing)
 })
 
 test('explains missing software permission', () => {
@@ -138,4 +190,17 @@ test('rejects malformed optional fields in Stack responses', () => {
   expect(() => parseStackSnapshot({ ...snapshot, licenses: [{ ...snapshot.licenses[0], documentIds: [42] }] })).toThrow('invalid Stack response')
   expect(() => parseStackSnapshot({ ...snapshot, assignments: [{ ...snapshot.assignments[0], revision: 0 }] })).toThrow('invalid Stack response')
   expect(() => parseStackAnalytics({ ...analytics, expiringWithinDays: 0 })).toThrow('invalid Stack analytics response')
+  expect(() => parseStackImportResult({ ...importResult, records: [{ ...importResult.records[0], checksum: 'not-a-digest' }] })).toThrow('invalid Stack import response')
+  expect(() => parseStackImportResult({ ...importResult, created: 2 })).toThrow('invalid Stack import response')
+  expect(() => parseStackImportResult({ ...importResult, pendingOwnership: undefined })).toThrow('invalid Stack import response')
+  expect(() => parseStackImportResult({ ...importResult, pendingOwnership: [{ type: 'stack.product', id: 'pending' }] })).toThrow('invalid Stack import response')
+  expect(() => parseStackImportResult({ ...importResult, pendingOwnership: [{ type: 'stack.product', id: 'pending', writeLocked: true, operationToken: 'private' }] })).toThrow('invalid Stack import response')
+  expect(() => parseStackImportResult({ ...importResult, pendingOwnership: [{ type: 'stack.product', id: 'pending', writeLocked: 'yes' }] })).toThrow('invalid Stack import response')
+  expect(() => parseStackImportResult({ ...importResult, pendingOwnership: [{ type: 'stack.product', id: 'portable', writeLocked: true }] })).toThrow('invalid Stack import response')
+  expect(() => parseStackImportResult({ ...importResult, pendingOwnership: [{ type: 'stack.version', id: 'pending', writeLocked: true }] })).toThrow('invalid Stack import response')
+  expect(() => parseStackImportResult({ ...importResult, pendingOwnership: [
+    { type: 'stack.product', id: 'pending', writeLocked: true },
+    { type: 'stack.product', id: 'pending', writeLocked: true },
+  ] })).toThrow('invalid Stack import response')
+  expect(() => parseStackImportResult({ ...importResult, status: 'failed', errorCode: 'provider_failed', holding: 1, created: 0, unchanged: 0, records: [{ ...importResult.records[0], status: 'holding', writeLocked: false, missingDependencies: [{ type: 'stack.product', id: 'missing' }] }] })).toThrow('invalid Stack import response')
 })

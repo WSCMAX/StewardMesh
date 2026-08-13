@@ -13,19 +13,30 @@ type Assignment = { id: string; licenseId: string; assigneeKind: string; assigne
 type Snapshot = { products: Product[]; versions: Version[]; installations: Installation[]; licenses: License[]; assignments: Assignment[] }
 type Condition = { code: string; severity: string; productId: string; versionId?: string; licenseId?: string; assetId?: string; entitledQuantity?: number; assignedQuantity?: number; underusedQuantity?: number; daysUntilExpiry?: number; humanReadableState: string }
 type Analytics = { asOf: string; expiringWithinDays: number; products: number; activeInstallations: number; activeLicenses: number; entitledQuantity: number; assignedQuantity: number; underusedAssignments: number; complianceConditions: Condition[] }
+type ImportReference = { type: string; id: string }
+type ImportOutcome = ImportReference & { revision: number; checksum: string; status: 'created' | 'unchanged' | 'holding'; missingDependencies: ImportReference[]; writeLocked: boolean }
+type ImportOwnership = ImportReference & { writeLocked: boolean }
+export type StackImportResult = { packageId: string; status: 'processing' | 'completed' | 'holding' | 'failed'; created: number; unchanged: number; holding: number; replay: boolean; errorCode?: string; records: ImportOutcome[]; pendingOwnership: ImportOwnership[] }
 type StackManagerProps = { assets: readonly Asset[]; csrfToken: string; permissions: readonly string[]; onOpenHelp?: () => void }
 
 const emptySnapshot: Snapshot = { products: [], versions: [], installations: [], licenses: [], assignments: [] }
 const emptyAnalytics: Analytics = { asOf: '', expiringWithinDays: 90, products: 0, activeInstallations: 0, activeLicenses: 0, entitledQuantity: 0, assignedQuantity: 0, underusedAssignments: 0, complianceConditions: [] }
+const stableIDPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
+const sha256Pattern = /^[a-f0-9]{64}$/
 
 function isObject(value: unknown): value is Record<string, unknown> { return typeof value === 'object' && value !== null }
 function hasID(value: unknown): value is Record<string, unknown> { return isObject(value) && typeof value.id === 'string' && value.id.length > 0 }
 function validItems(value: unknown, validate: (item: unknown) => boolean) { return Array.isArray(value) && value.every(validate) }
-function validCount(value: unknown) { return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 }
-function validPositive(value: unknown) { return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 }
+function validCount(value: unknown): value is number { return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 }
+function validPositive(value: unknown): value is number { return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 }
 function optionalString(value: unknown) { return value === undefined || typeof value === 'string' }
 function optionalCount(value: unknown) { return value === undefined || validCount(value) }
 function validStringItems(value: unknown) { return Array.isArray(value) && value.every((item) => typeof item === 'string') }
+function importReferenceKey(value: ImportReference) { return `${value.type}\u0000${value.id}` }
+function hasExactKeys(value: Record<string, unknown>, expected: readonly string[]) {
+  const keys = Object.keys(value).sort()
+  return keys.length === expected.length && keys.every((key, index) => key === expected[index])
+}
 function validInstantValue(value: unknown) { return typeof value === 'string' && !Number.isNaN(Date.parse(value)) }
 function optionalInstantValue(value: unknown) { return value === undefined || validInstantValue(value) }
 
@@ -55,6 +66,46 @@ export function parseStackAnalytics(value: unknown): Analytics {
   return value as Analytics
 }
 
+export function parseStackImportResult(value: unknown): StackImportResult {
+  if (!isObject(value) || typeof value.packageId !== 'string' || !stableIDPattern.test(value.packageId)
+    || typeof value.status !== 'string' || !['processing', 'completed', 'holding', 'failed'].includes(value.status)
+    || !validCount(value.created) || value.created > 10_000 || !validCount(value.unchanged) || value.unchanged > 10_000
+    || !validCount(value.holding) || value.holding > 10_000 || typeof value.replay !== 'boolean'
+    || !(value.errorCode === undefined || typeof value.errorCode === 'string' && /^[a-z][a-z0-9_]{0,63}$/.test(value.errorCode))
+    || !validItems(value.records, (item) => isObject(item) && typeof item.type === 'string' && /^[a-z][a-z0-9_.-]{0,63}$/.test(item.type)
+      && typeof item.id === 'string' && stableIDPattern.test(item.id) && validPositive(item.revision)
+      && typeof item.checksum === 'string' && sha256Pattern.test(item.checksum)
+      && typeof item.status === 'string' && ['created', 'unchanged', 'holding'].includes(item.status) && typeof item.writeLocked === 'boolean'
+      && Array.isArray(item.missingDependencies) && item.missingDependencies.length <= 130
+      && item.missingDependencies.every((dependency) => isObject(dependency) && typeof dependency.type === 'string'
+        && /^[a-z][a-z0-9_.-]{0,63}$/.test(dependency.type) && typeof dependency.id === 'string' && stableIDPattern.test(dependency.id)))
+    || !validItems(value.pendingOwnership, (item) => isObject(item)
+      && hasExactKeys(item, ['id', 'type', 'writeLocked'])
+      && typeof item.type === 'string' && /^[a-z][a-z0-9_.-]{0,63}$/.test(item.type)
+      && typeof item.id === 'string' && stableIDPattern.test(item.id) && typeof item.writeLocked === 'boolean')) {
+    throw new Error('invalid Stack import response')
+  }
+  const candidate = value as unknown as StackImportResult
+  const recordKeys = new Set(candidate.records.map(importReferenceKey))
+  const pendingKeys = candidate.pendingOwnership.map(importReferenceKey)
+  if (candidate.records.length > 10_000 || candidate.records.length !== candidate.created + candidate.unchanged + candidate.holding
+    || candidate.status === 'completed' && candidate.holding !== 0 || candidate.status === 'holding' && candidate.holding === 0
+    || (candidate.status === 'processing' || candidate.status === 'failed') && candidate.holding !== 0
+    || candidate.status === 'failed' && typeof candidate.errorCode !== 'string'
+    || (candidate.status === 'completed' || candidate.status === 'holding') && candidate.errorCode !== undefined
+    || candidate.pendingOwnership.length > 10_000
+    || (candidate.status === 'completed' || candidate.status === 'holding') && candidate.pendingOwnership.length !== 0
+    || new Set(pendingKeys).size !== pendingKeys.length || pendingKeys.some((key) => recordKeys.has(key))) {
+    throw new Error('invalid Stack import response')
+  }
+  return candidate
+}
+
+function importResultFromError(cause: ApiRequestError): StackImportResult | undefined {
+  if (!isObject(cause.body) || !('import' in cause.body)) return undefined
+  try { return parseStackImportResult(cause.body.import) } catch { return undefined }
+}
+
 function text(values: FormData, key: string) { return String(values.get(key) ?? '').trim() }
 function date(value: string) { return value ? `${value}T00:00:00Z` : undefined }
 function instant(value: string) { return value ? new Date(value).toISOString() : undefined }
@@ -75,6 +126,7 @@ export default function StackManager({ assets, csrfToken, permissions, onOpenHel
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
+  const [lastImport, setLastImport] = useState<StackImportResult | null>(null)
   const errorRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => { if (error) errorRef.current?.focus() }, [error])
@@ -171,18 +223,28 @@ export default function StackManager({ assets, csrfToken, permissions, onOpenHel
   async function importRecords(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const values = new FormData(event.currentTarget)
-    setBusy('import'); setError(''); setMessage('')
+    setBusy('import'); setError(''); setMessage(''); setLastImport(null)
     try {
       const parsed: unknown = JSON.parse(text(values, 'records'))
       const records = Array.isArray(parsed) ? parsed : isObject(parsed) && Array.isArray(parsed.records) ? parsed.records : null
       if (!records) throw new Error('Paste an exported records array or an object containing records.')
-      const result = await requestJSON('/api/v1/stack/exchange/import', {
+      const result = parseStackImportResult(await requestJSON('/api/v1/stack/exchange/import', {
         method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
         body: JSON.stringify({ sourceSystemId: text(values, 'sourceSystemId'), records }),
-      })
-      if (!isObject(result) || !validCount(result.created) || !validCount(result.unchanged)) throw new Error('The import response was invalid.')
-      await load(); setMessage(`Import complete: ${result.created} created and ${result.unchanged} unchanged.`)
-    } catch (cause) { showError(cause instanceof ApiRequestError || cause instanceof Error ? cause.message : 'The portable records could not be imported.') }
+      }))
+      setLastImport(result)
+      await load()
+      const prefix = result.replay ? 'Import replay complete' : result.status === 'holding' ? 'Import is holding for dependencies' : 'Import complete'
+      setMessage(`${prefix}: ${result.created} created, ${result.unchanged} unchanged, and ${result.holding} holding. Receipt ${result.packageId}.`)
+    } catch (cause) {
+      if (cause instanceof ApiRequestError) {
+        const result = importResultFromError(cause)
+        if (result) {
+          setLastImport(result)
+          showError(`${cause.message} Receipt ${result.packageId} records ${result.created} created and ${result.unchanged} unchanged. Retry the exact JSON to resume.`)
+        } else showError(cause.message)
+      } else showError(cause instanceof Error ? cause.message : 'The portable records could not be imported.')
+    }
     finally { setBusy('') }
   }
 
@@ -195,6 +257,18 @@ export default function StackManager({ assets, csrfToken, permissions, onOpenHel
     </div>
     {error && <div className="mt-4 rounded-lg border border-steward-danger/50 bg-steward-danger/15 p-3 text-[#ffccd1]" ref={errorRef} role="alert" tabIndex={-1}>{error}</div>}
     {message && <p className="mt-4 rounded-lg border border-steward-success/50 bg-steward-success/15 p-3 text-[#aaf0c6]" role="status">{message}</p>}
+    {lastImport && <section aria-labelledby="stack-import-receipt-heading" className={`${subpanelClass} mt-4 min-w-0 p-4`}>
+      <h3 className="font-semibold" id="stack-import-receipt-heading">Latest import receipt</h3>
+      <p className="mt-2 break-all font-mono text-xs text-steward-mist-muted">{lastImport.packageId}</p>
+      <p className="mt-2 text-sm text-steward-mist-muted">{label(lastImport.status)} · {lastImport.created} created · {lastImport.unchanged} unchanged · {lastImport.holding} holding{lastImport.replay ? ' · exact replay' : ''}</p>
+      {lastImport.errorCode && <p className="mt-2 text-sm text-[#ffccd1]">Failure code: <code>{lastImport.errorCode}</code></p>}
+      {lastImport.records.length > 0 && <div aria-label="Latest Stack import outcomes" className={`${tableWrapClass} mt-3`} role="region" tabIndex={0}><table className="min-w-[40rem] w-full text-left text-sm"><thead><tr><th className="p-3" scope="col">Record</th><th className="p-3" scope="col">Outcome</th><th className="p-3" scope="col">Ownership</th></tr></thead><tbody>{lastImport.records.map((outcome) => <tr className="border-t border-white/[0.07]" key={`${outcome.type}:${outcome.id}`}><th className="p-3 break-all font-mono text-xs" scope="row">{outcome.type}:{outcome.id}</th><td className="p-3">{label(outcome.status)}</td><td className="p-3">{outcome.writeLocked ? 'Write locked until claimed' : outcome.status === 'holding' ? 'Not imported' : 'No import lock'}</td></tr>)}</tbody></table></div>}
+      {lastImport.pendingOwnership.length > 0 && <details className="mt-3 rounded-lg border border-steward-warning/40 bg-steward-warning/10 p-3" open>
+        <summary className="cursor-pointer font-semibold">Pending Guard ownership locks ({lastImport.pendingOwnership.length})</summary>
+        <p className="mt-2 text-sm text-steward-mist-muted">Guard recorded these ownership states before the provider outcome became durable. Review them, then retry the exact import JSON to resume safely.</p>
+        <div aria-label="Pending Stack import ownership locks" className={`${tableWrapClass} mt-3`} role="region" tabIndex={0}><table className="min-w-[32rem] w-full text-left text-sm"><thead><tr><th className="p-3" scope="col">Record</th><th className="p-3" scope="col">Guard state</th></tr></thead><tbody>{lastImport.pendingOwnership.map((ownership) => <tr className="border-t border-white/[0.07]" key={`${ownership.type}:${ownership.id}`}><th className="p-3 break-all font-mono text-xs" scope="row">{ownership.type}:{ownership.id}</th><td className="p-3">{ownership.writeLocked ? 'Write locked until claimed' : 'Ownership recorded; writes are not locked'}</td></tr>)}</tbody></table></div>
+      </details>}
+    </section>}
 
     <section aria-labelledby="stack-analytics-heading" className="mt-6">
       <div className="flex flex-wrap items-end justify-between gap-3"><div><p className="text-sm font-semibold text-steward-teal">Live calculation</p><h3 className="mt-1 text-xl font-semibold" id="stack-analytics-heading">Entitlement and compliance summary</h3></div><p className="text-sm text-steward-mist-muted">Expiration window: {analytics.expiringWithinDays} days</p></div>

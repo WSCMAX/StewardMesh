@@ -11,6 +11,7 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -426,7 +427,7 @@ func TestLedgerFinanceWorkflowVarianceReconciliationAndExport(t *testing.T) {
 }
 
 func TestStackSoftwareLicenseWorkflowAnalyticsExchangeAndProtection(t *testing.T) {
-	handler := newGuardServer(t)
+	handler, guardService := newGuardServerWithIdentityAndGuard(t, nil, nil, nil)
 	session := bootstrapAdministrator(t, handler)
 	product := createPeopleRecord[stack.Product](t, handler, session, "/api/v1/stack/products", map[string]any{
 		"id": "writer", "name": "Steward Writer", "publisher": "Example Publisher", "category": "productivity",
@@ -499,6 +500,104 @@ func TestStackSoftwareLicenseWorkflowAnalyticsExchangeAndProtection(t *testing.T
 	handler.ServeHTTP(denied, missingCSRF)
 	if denied.Code != http.StatusForbidden || !strings.Contains(denied.Body.String(), "csrf_failed") {
 		t.Fatalf("expected Stack writes to require CSRF, got %d: %s", denied.Code, denied.Body.String())
+	}
+
+	importPayload, _ := json.Marshal(map[string]any{
+		"sourceSystemId": "external-catalog",
+		"records": []map[string]any{{
+			"type": "stack.product", "id": "imported-product", "revision": 1, "dependencies": []string{},
+			"payload": map[string]any{
+				"id": "imported-product", "organizationId": "attacker-organization", "name": "Imported private product",
+				"publisher": "External publisher", "status": "active", "revision": 1,
+				"createdAt": "2026-08-13T00:00:00Z", "updatedAt": "2026-08-13T00:00:00Z",
+			},
+		}},
+	})
+	administratorAuthentication, err := guardService.AuthenticateSession(context.Background(), session.cookie.Value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readCredentials, err := guardService.LoginOIDC(context.Background(), identity.OIDCPrincipal{
+		Issuer: "https://identity.example.test/stack-import", Subject: "stack-import-reader",
+		Email: "stack-import-reader@example.test", EmailVerified: true, DisplayName: "Stack import reader",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	readRole, err := guardService.CreateRole(context.Background(), administratorAuthentication, guard.CreateRoleInput{
+		Name: "Stack import reader", Permissions: []guard.Permission{guard.PermissionSoftwareRead},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := guardService.AssignRole(context.Background(), administratorAuthentication, guard.RoleAssignmentInput{
+		AccountID: readCredentials.Authentication.Principal.Subject, RoleID: readRole.ID, ScopeKind: guard.ScopeOrganization,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	readSession := testSession{cookie: &http.Cookie{Name: localSessionName, Value: readCredentials.Token}, csrfToken: readCredentials.CSRFToken}
+	readDenied := httptest.NewRecorder()
+	handler.ServeHTTP(readDenied, authenticatedRequest(http.MethodPost, "/api/v1/stack/exchange/import", bytes.NewReader(importPayload), readSession))
+	if readDenied.Code != http.StatusForbidden || !strings.Contains(readDenied.Body.String(), `"code":"permission_denied"`) || strings.Contains(readDenied.Body.String(), "Imported private product") {
+		t.Fatalf("read-only Stack importer was not safely denied: %d: %s", readDenied.Code, readDenied.Body.String())
+	}
+	if _, err := guardService.ImportedResourceOwnership(context.Background(), "example-org", "stack.product", "imported-product"); !errors.Is(err, guard.ErrNotFound) {
+		t.Fatalf("denied import created ownership: %v", err)
+	}
+
+	imported := httptest.NewRecorder()
+	handler.ServeHTTP(imported, authenticatedRequest(http.MethodPost, "/api/v1/stack/exchange/import", bytes.NewReader(importPayload), session))
+	if imported.Code != http.StatusOK || imported.Header().Get("X-Exchange-Package-ID") == "" || imported.Header().Get("X-Idempotent-Replay") != "false" ||
+		!strings.Contains(imported.Body.String(), `"status":"completed"`) || !strings.Contains(imported.Body.String(), `"created":1`) || !strings.Contains(imported.Body.String(), `"writeLocked":true`) {
+		t.Fatalf("durable Stack import response was incomplete: %d headers=%v body=%s", imported.Code, imported.Header(), imported.Body.String())
+	}
+	packageID := imported.Header().Get("X-Exchange-Package-ID")
+	locked, err := guardService.ImportedResourceOwnership(context.Background(), "example-org", "stack.product", "imported-product")
+	if err != nil || !locked.WriteLocked || locked.SourceSystemID != "external-catalog" || locked.SourceRecordID != "stack.product:imported-product" || locked.OrganizationID != "example-org" {
+		t.Fatalf("durable Stack import ownership was incorrect: %#v err=%v", locked, err)
+	}
+	if _, err := guardService.ImportedResourceOwnership(context.Background(), "attacker-organization", "stack.product", "imported-product"); !errors.Is(err, guard.ErrNotFound) {
+		t.Fatalf("payload organization escaped the configured organization: %v", err)
+	}
+	replayedImport := httptest.NewRecorder()
+	handler.ServeHTTP(replayedImport, authenticatedRequest(http.MethodPost, "/api/v1/stack/exchange/import", bytes.NewReader(importPayload), session))
+	if replayedImport.Code != http.StatusOK || replayedImport.Header().Get("X-Exchange-Package-ID") != packageID || replayedImport.Header().Get("X-Idempotent-Replay") != "true" || !strings.Contains(replayedImport.Body.String(), `"replay":true`) {
+		t.Fatalf("exact Stack HTTP retry did not replay: %d headers=%v body=%s", replayedImport.Code, replayedImport.Header(), replayedImport.Body.String())
+	}
+	lockedMutationPayload := bytes.NewBufferString(`{"status":"retired","revision":1}`)
+	lockedMutation := httptest.NewRecorder()
+	handler.ServeHTTP(lockedMutation, authenticatedRequest(http.MethodPut, "/api/v1/stack/products/imported-product/status", lockedMutationPayload, session))
+	if lockedMutation.Code != http.StatusLocked || !strings.Contains(lockedMutation.Body.String(), `"code":"ownership_locked"`) {
+		t.Fatalf("imported Stack ownership did not enforce the normal mutation lock: %d: %s", lockedMutation.Code, lockedMutation.Body.String())
+	}
+
+	partialFailurePayload, _ := json.Marshal(map[string]any{
+		"sourceSystemId": "conflict-catalog",
+		"records": []map[string]any{
+			{
+				"type": "stack.product", "id": "aaa-prefix-product", "revision": 1, "dependencies": []string{},
+				"payload": map[string]any{"id": "aaa-prefix-product", "name": "Committed prefix product", "publisher": "External", "status": "active", "revision": 1},
+			},
+			{
+				"type": "stack.product", "id": "writer", "revision": 1, "dependencies": []string{},
+				"payload": map[string]any{"id": "writer", "name": "Conflicting replacement", "publisher": "External", "status": "active", "revision": 1},
+			},
+		},
+	})
+	partialFailure := httptest.NewRecorder()
+	handler.ServeHTTP(partialFailure, authenticatedRequest(http.MethodPost, "/api/v1/stack/exchange/import", bytes.NewReader(partialFailurePayload), session))
+	if partialFailure.Code != http.StatusConflict || partialFailure.Header().Get("X-Exchange-Package-ID") == "" ||
+		partialFailure.Header().Get("X-Idempotent-Replay") != "false" ||
+		!strings.Contains(partialFailure.Body.String(), `"code":"package_conflict"`) || !strings.Contains(partialFailure.Body.String(), `"status":"failed"`) ||
+		!strings.Contains(partialFailure.Body.String(), `"created":1`) || !strings.Contains(partialFailure.Body.String(), `"id":"aaa-prefix-product"`) ||
+		strings.Contains(partialFailure.Body.String(), `"id":"writer","revision"`) {
+		t.Fatalf("failed Stack HTTP import hid or misstated its committed prefix: %d headers=%v body=%s", partialFailure.Code, partialFailure.Header(), partialFailure.Body.String())
+	}
+	partialPackageID := partialFailure.Header().Get("X-Exchange-Package-ID")
+	partialRetry := httptest.NewRecorder()
+	handler.ServeHTTP(partialRetry, authenticatedRequest(http.MethodPost, "/api/v1/stack/exchange/import", bytes.NewReader(partialFailurePayload), session))
+	if partialRetry.Code != http.StatusConflict || partialRetry.Header().Get("X-Exchange-Package-ID") != partialPackageID || !strings.Contains(partialRetry.Body.String(), `"created":1`) {
+		t.Fatalf("failed Stack HTTP import retry did not address the same receipt: %d headers=%v body=%s", partialRetry.Code, partialRetry.Header(), partialRetry.Body.String())
 	}
 }
 
@@ -2725,7 +2824,7 @@ func newGuardServerWithDirectory(t *testing.T, limiter guard.AttemptLimiter, oid
 	if err != nil {
 		t.Fatal(err)
 	}
-	stackService, err := stack.NewService(repository.NewMemoryStackStore(), allowHTTPStackReferences{}, foundation.NopAuditor{}, stack.ServiceConfig{
+	stackService, stackImporter, err := stack.NewServiceWithExchangeImporter(repository.NewMemoryStackStore(), allowHTTPStackReferences{}, foundation.NopAuditor{}, stack.ServiceConfig{
 		OrganizationID: organization.ID,
 		Now: func() time.Time {
 			return time.Date(2026, time.August, 13, 0, 0, 0, 0, time.UTC)
@@ -2774,7 +2873,7 @@ func newGuardServerWithDirectory(t *testing.T, limiter guard.AttemptLimiter, oid
 	if err != nil {
 		t.Fatal(err)
 	}
-	stackExchangeProvider, err := exchange.NewStackProvider(stackService)
+	stackExchangeProvider, err := exchange.NewStackProvider(stackService, stackImporter)
 	if err != nil {
 		t.Fatal(err)
 	}

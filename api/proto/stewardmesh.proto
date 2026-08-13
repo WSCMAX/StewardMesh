@@ -2261,6 +2261,8 @@ message ExportStackRecordsResponse {
   repeated StackExchangeRecord records = 1;
 }
 
+// Legacy schema-less Stack import requests are pinned to the five v1 built-in
+// Stack templates so exact retries remain stable across later schema releases.
 message ImportStackRecordsRequest {
   string source_system_id = 1;
   repeated StackExchangeRecord records = 2;
@@ -2269,6 +2271,23 @@ message ImportStackRecordsRequest {
 message StackImportResult {
   int32 created = 1;
   int32 unchanged = 2;
+  // Deterministic Exchange receipt identity for exact retry/recovery.
+  string package_id = 3;
+  // "processing", "completed", "holding", or "failed".
+  string status = 4;
+  int32 holding = 5;
+  bool replay = 6;
+  string error_code = 7;
+  // Checkpointed outcomes make any committed prefix and ownership lock explicit.
+  repeated ExchangeRecordOutcome records = 8;
+  // Guard locks that exist while the provider outcome still awaits recovery.
+  repeated StackImportOwnership pending_ownership = 9;
+}
+
+message StackImportOwnership {
+  string type = 1;
+  string id = 2;
+  bool write_locked = 3;
 }
 
 message ListSignalRulesRequest {}

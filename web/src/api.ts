@@ -18,11 +18,13 @@ function captureCorrelation(response: Response) {
 
 export class ApiRequestError extends Error {
   status: number
+  body?: unknown
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, body?: unknown) {
     super(message)
     this.name = 'ApiRequestError'
     this.status = status
+    this.body = body
   }
 }
 
@@ -39,10 +41,11 @@ async function requestAPI(path: string, init: RequestInit | undefined, accept: s
   captureCorrelation(response)
   if (!response.ok) {
     let message = 'The request could not be completed.'
+    let responseBody: unknown
     try {
-      const body = await response.json() as unknown
-      if (typeof body === 'object' && body !== null) {
-        const error = (body as Record<string, unknown>).error
+      responseBody = await response.json() as unknown
+      if (typeof responseBody === 'object' && responseBody !== null) {
+        const error = (responseBody as Record<string, unknown>).error
         if (typeof error === 'object' && error !== null) {
           const candidate = (error as Record<string, unknown>).message
           if (typeof candidate === 'string' && candidate.length > 0 && candidate.length <= 300) message = candidate
@@ -54,7 +57,7 @@ async function requestAPI(path: string, init: RequestInit | undefined, accept: s
     if (response.status === 401 && path !== '/api/v1/auth/session' && path !== '/api/v1/auth/login' && path !== '/api/v1/auth/bootstrap') {
       window.dispatchEvent(new CustomEvent(authenticationRequiredEventName))
     }
-    throw new ApiRequestError(response.status, message)
+    throw new ApiRequestError(response.status, message, responseBody)
   }
   return response
 }

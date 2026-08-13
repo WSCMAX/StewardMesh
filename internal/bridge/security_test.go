@@ -43,6 +43,7 @@ type mutableGuardStore struct {
 	guard.Store
 	removeIntegrations atomic.Bool
 	removeAssets       atomic.Bool
+	removeSignalsWrite atomic.Bool
 	assetScopeSite     atomic.Value
 }
 
@@ -58,7 +59,7 @@ func (s *mutableGuardStore) FindSessionByTokenHash(ctx context.Context, organiza
 
 func (s *mutableGuardStore) current(access guard.Access) guard.Access {
 	site, _ := s.assetScopeSite.Load().(string)
-	if !s.removeIntegrations.Load() && !s.removeAssets.Load() && site == "" {
+	if !s.removeIntegrations.Load() && !s.removeAssets.Load() && !s.removeSignalsWrite.Load() && site == "" {
 		return access
 	}
 	grants := make([]guard.Grant, 0, len(access.Grants))
@@ -67,6 +68,9 @@ func (s *mutableGuardStore) current(access guard.Access) guard.Access {
 			continue
 		}
 		if s.removeAssets.Load() && grant.Permission == guard.PermissionAssetsRead {
+			continue
+		}
+		if s.removeSignalsWrite.Load() && grant.Permission == guard.PermissionSignalsWrite {
 			continue
 		}
 		if site != "" && grant.Permission == guard.PermissionAssetsRead {
@@ -107,6 +111,17 @@ func (a *testAuditor) operationEvents() []foundation.AuditEvent {
 	return result
 }
 
+func (a *testAuditor) allEvents() []foundation.AuditEvent {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	result := make([]foundation.AuditEvent, len(a.events))
+	for index, event := range a.events {
+		event.Metadata = cloneMetadata(event.Metadata)
+		result[index] = event
+	}
+	return result
+}
+
 func cloneMetadata(input map[string]string) map[string]string {
 	result := make(map[string]string, len(input))
 	for key, value := range input {
@@ -127,10 +142,21 @@ func (r atlasAssetReader) Get(ctx context.Context, id string) (domain.Asset, err
 	return r.service.GetAsset(ctx, id)
 }
 
-type emptySignalsEvaluator struct{}
+type testSignalsEvaluator struct {
+	mu         sync.Mutex
+	candidates []signals.Candidate
+}
 
-func (emptySignalsEvaluator) Evaluate(context.Context, signals.Rule, time.Time) ([]signals.Candidate, error) {
-	return nil, nil
+func (e *testSignalsEvaluator) Evaluate(context.Context, signals.Rule, time.Time) ([]signals.Candidate, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return append([]signals.Candidate(nil), e.candidates...), nil
+}
+
+func (e *testSignalsEvaluator) set(candidates ...signals.Candidate) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.candidates = append([]signals.Candidate(nil), candidates...)
 }
 
 type emptySignalTargets struct{}
@@ -142,6 +168,8 @@ func (emptySignalTargets) ListSubscriptionTargets(context.Context, string) ([]si
 type bridgeHarness struct {
 	service     *bridge.Service
 	atlas       *atlas.Service
+	signals     *signals.Service
+	evaluator   *testSignalsEvaluator
 	guard       *guard.Service
 	store       *mutableGuardStore
 	auditor     *testAuditor
@@ -172,7 +200,8 @@ func newBridgeHarness(t *testing.T) *bridgeHarness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	signalsService, err := signals.NewService(repository.NewMemorySignalsStore(), emptySignalsEvaluator{}, auditor, signals.ServiceConfig{OrganizationID: organizationID, SubscriptionTargets: emptySignalTargets{}, Now: clock.Now})
+	evaluator := &testSignalsEvaluator{}
+	signalsService, err := signals.NewService(repository.NewMemorySignalsStore(), evaluator, auditor, signals.ServiceConfig{OrganizationID: organizationID, SubscriptionTargets: emptySignalTargets{}, Now: clock.Now})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +210,74 @@ func newBridgeHarness(t *testing.T) *bridgeHarness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &bridgeHarness{service: service, atlas: atlasService, guard: guardService, store: guardStore, auditor: auditor, clock: clock, credentials: credentials}
+	return &bridgeHarness{service: service, atlas: atlasService, signals: signalsService, evaluator: evaluator, guard: guardService, store: guardStore, auditor: auditor, clock: clock, credentials: credentials}
+}
+
+func (h *bridgeHarness) createSignalAlert(t *testing.T) signals.Alert {
+	t.Helper()
+	h.evaluator.set(signals.Candidate{TargetType: "contract", TargetID: "mcp-contract-1", Title: "MCP renewal", Summary: "Contract renewal needs review."})
+	if _, err := h.signals.CreateRule(t.Context(), signals.CreateRuleInput{ID: "mcp-rule-1", Name: "MCP renewals", Condition: signals.ConditionRenewal, Severity: signals.SeverityWarning}); err != nil {
+		t.Fatal(err)
+	}
+	if result, err := h.signals.Evaluate(t.Context(), h.clock.Now()); err != nil || result.Created != 1 {
+		t.Fatalf("create MCP alert result=%#v err=%v", result, err)
+	}
+	alerts, err := h.signals.ListAlerts(t.Context(), signals.AlertQuery{Status: signals.StatusActive, Limit: 10})
+	if err != nil || len(alerts) != 1 {
+		t.Fatalf("list MCP alert alerts=%#v err=%v", alerts, err)
+	}
+	return alerts[0]
+}
+
+func signalMCP(t *testing.T, harness *bridgeHarness) (*mcp.ClientSession, func()) {
+	t.Helper()
+	access, err := harness.service.AuthenticateLocalSession(t.Context(), harness.credentials.Token, "mcp:resources signals:read signals:acknowledge")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return connectStdio(t, harness.service, access)
+}
+
+func callMCPTool(t *testing.T, session *mcp.ClientSession, name string, arguments map[string]any) *mcp.CallToolResult {
+	t.Helper()
+	result, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: name, Arguments: arguments})
+	if err != nil || result == nil || result.IsError {
+		t.Fatalf("call MCP tool %s result=%#v err=%v", name, result, err)
+	}
+	return result
+}
+
+func requireMCPToolFailure(t *testing.T, session *mcp.ClientSession, name string, arguments map[string]any) {
+	t.Helper()
+	result, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: name, Arguments: arguments})
+	if err == nil && result != nil && !result.IsError {
+		t.Fatalf("MCP tool %s unexpectedly succeeded: %#v", name, result)
+	}
+}
+
+func decodeStructured[T any](t *testing.T, result *mcp.CallToolResult) T {
+	t.Helper()
+	encoded, err := json.Marshal(result.StructuredContent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded T
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("decode structured MCP result: %v (%s)", err, encoded)
+	}
+	return decoded
+}
+
+type confirmationResult struct {
+	ConfirmationToken string    `json:"confirmationToken"`
+	Action            string    `json:"action"`
+	Summary           string    `json:"summary"`
+	ExpiresAt         time.Time `json:"expiresAt"`
+}
+
+func prepareMCPAcknowledgement(t *testing.T, session *mcp.ClientSession, alert signals.Alert) confirmationResult {
+	t.Helper()
+	return decodeStructured[confirmationResult](t, callMCPTool(t, session, "prepare_acknowledge_alert", map[string]any{"alertId": alert.ID, "revision": alert.Revision}))
 }
 
 func (h *bridgeHarness) oauthAccess(t *testing.T) (bridge.Access, string) {
@@ -289,6 +385,129 @@ func TestStdioRevalidatesSessionRevocationAndExpiryPerOperation(t *testing.T) {
 		if _, err := session.ListTools(t.Context(), nil); err == nil {
 			t.Fatal("stdio operation survived session/access expiry")
 		}
+	})
+}
+
+func TestMCPAcknowledgementRequiresExactFreshAuthorizedConfirmation(t *testing.T) {
+	t.Run("discovery exact confirmation replay and audit redaction", func(t *testing.T) {
+		harness := newBridgeHarness(t)
+		alert := harness.createSignalAlert(t)
+		session, stop := signalMCP(t, harness)
+		defer stop()
+
+		listed, err := session.ListTools(t.Context(), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tools := make(map[string]*mcp.Tool, len(listed.Tools))
+		for _, tool := range listed.Tools {
+			tools[tool.Name] = tool
+		}
+		if len(tools) != 3 || tools["list_alerts"] == nil || tools["prepare_acknowledge_alert"] == nil || tools["confirm_acknowledge_alert"] == nil {
+			t.Fatalf("scope-reduced MCP tools=%v", tools)
+		}
+		prepareTool, confirmTool := tools["prepare_acknowledge_alert"], tools["confirm_acknowledge_alert"]
+		if prepareTool.Annotations == nil || !prepareTool.Annotations.ReadOnlyHint || confirmTool.Annotations == nil || confirmTool.Annotations.ReadOnlyHint || confirmTool.Annotations.DestructiveHint == nil || *confirmTool.Annotations.DestructiveHint {
+			t.Fatalf("unsafe acknowledgement annotations prepare=%#v confirm=%#v", prepareTool.Annotations, confirmTool.Annotations)
+		}
+
+		challenge := prepareMCPAcknowledgement(t, session, alert)
+		if challenge.ConfirmationToken == "" || challenge.Action != "signals.alert.acknowledge" || challenge.Summary == "" || !challenge.ExpiresAt.After(harness.clock.Now()) {
+			t.Fatalf("invalid MCP confirmation challenge %#v", challenge)
+		}
+		unchanged, err := harness.signals.GetAlert(t.Context(), alert.ID)
+		if err != nil || unchanged.Status != signals.StatusActive || unchanged.Revision != alert.Revision {
+			t.Fatalf("prepare mutated alert=%#v err=%v", unchanged, err)
+		}
+
+		requireMCPToolFailure(t, session, "confirm_acknowledge_alert", map[string]any{
+			"alertId": alert.ID, "revision": alert.Revision + 1, "confirmationToken": challenge.ConfirmationToken,
+		})
+		unchanged, err = harness.signals.GetAlert(t.Context(), alert.ID)
+		if err != nil || unchanged.Status != signals.StatusActive || unchanged.Revision != alert.Revision {
+			t.Fatalf("changed arguments mutated alert=%#v err=%v", unchanged, err)
+		}
+
+		confirmed := decodeStructured[struct {
+			Alert struct {
+				ID       string              `json:"id"`
+				Status   signals.AlertStatus `json:"status"`
+				Revision int64               `json:"revision"`
+			} `json:"alert"`
+		}](t, callMCPTool(t, session, "confirm_acknowledge_alert", map[string]any{
+			"alertId": alert.ID, "revision": alert.Revision, "confirmationToken": challenge.ConfirmationToken,
+		}))
+		if confirmed.Alert.ID != alert.ID || confirmed.Alert.Status != signals.StatusAcknowledged || confirmed.Alert.Revision != alert.Revision+1 {
+			t.Fatalf("unexpected acknowledged alert %#v", confirmed.Alert)
+		}
+		requireMCPToolFailure(t, session, "confirm_acknowledge_alert", map[string]any{
+			"alertId": alert.ID, "revision": alert.Revision, "confirmationToken": challenge.ConfirmationToken,
+		})
+
+		for _, event := range harness.auditor.allEvents() {
+			if strings.Contains(event.Action, challenge.ConfirmationToken) || strings.Contains(event.ResourceID, challenge.ConfirmationToken) {
+				t.Fatalf("audit identity leaked confirmation token: %#v", event)
+			}
+			for key, value := range event.Metadata {
+				if strings.Contains(key, challenge.ConfirmationToken) || strings.Contains(value, challenge.ConfirmationToken) {
+					t.Fatalf("audit metadata leaked confirmation token in %q", key)
+				}
+			}
+		}
+	})
+
+	t.Run("expired confirmation", func(t *testing.T) {
+		harness := newBridgeHarness(t)
+		alert := harness.createSignalAlert(t)
+		session, stop := signalMCP(t, harness)
+		defer stop()
+		challenge := prepareMCPAcknowledgement(t, session, alert)
+		harness.clock.Add(3 * time.Minute)
+		requireMCPToolFailure(t, session, "confirm_acknowledge_alert", map[string]any{
+			"alertId": alert.ID, "revision": alert.Revision, "confirmationToken": challenge.ConfirmationToken,
+		})
+		stored, err := harness.signals.GetAlert(t.Context(), alert.ID)
+		if err != nil || stored.Status != signals.StatusActive || stored.Revision != alert.Revision {
+			t.Fatalf("expired confirmation mutated alert=%#v err=%v", stored, err)
+		}
+	})
+
+	t.Run("permission revoked after prepare", func(t *testing.T) {
+		harness := newBridgeHarness(t)
+		alert := harness.createSignalAlert(t)
+		session, stop := signalMCP(t, harness)
+		defer stop()
+		challenge := prepareMCPAcknowledgement(t, session, alert)
+		harness.store.removeSignalsWrite.Store(true)
+		requireMCPToolFailure(t, session, "confirm_acknowledge_alert", map[string]any{
+			"alertId": alert.ID, "revision": alert.Revision, "confirmationToken": challenge.ConfirmationToken,
+		})
+		harness.store.removeSignalsWrite.Store(false)
+		callMCPTool(t, session, "confirm_acknowledge_alert", map[string]any{
+			"alertId": alert.ID, "revision": alert.Revision, "confirmationToken": challenge.ConfirmationToken,
+		})
+	})
+
+	t.Run("external ownership lock after prepare", func(t *testing.T) {
+		harness := newBridgeHarness(t)
+		alert := harness.createSignalAlert(t)
+		session, stop := signalMCP(t, harness)
+		defer stop()
+		challenge := prepareMCPAcknowledgement(t, session, alert)
+		if _, created, err := harness.guard.RegisterImportedResourceOwnership(t.Context(), harness.credentials.Authentication.Principal.Subject, guard.ResourceOwnershipInput{
+			ResourceType: "signal_alert", ResourceID: alert.ID, SourceSystemID: "mcp-external-source", SourceRecordID: "alert-1",
+		}); err != nil || !created {
+			t.Fatalf("register external ownership created=%t err=%v", created, err)
+		}
+		requireMCPToolFailure(t, session, "confirm_acknowledge_alert", map[string]any{
+			"alertId": alert.ID, "revision": alert.Revision, "confirmationToken": challenge.ConfirmationToken,
+		})
+		if _, err := harness.guard.ClaimResourceOwnership(t.Context(), harness.credentials.Authentication, "signal_alert", alert.ID); err != nil {
+			t.Fatal(err)
+		}
+		callMCPTool(t, session, "confirm_acknowledge_alert", map[string]any{
+			"alertId": alert.ID, "revision": alert.Revision, "confirmationToken": challenge.ConfirmationToken,
+		})
 	})
 }
 

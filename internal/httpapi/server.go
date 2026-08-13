@@ -1333,8 +1333,12 @@ func (s *Server) exportHorizonCSV(w http.ResponseWriter, r *http.Request, _ guar
 func horizonForecastQuery(r *http.Request) (horizon.ForecastQuery, error) {
 	values := r.URL.Query()
 	query := horizon.ForecastQuery{GroupBy: values.Get("groupBy")}
-	if raw := strings.TrimSpace(values.Get("scenarios")); raw != "" {
-		query.Scenarios = strings.Split(raw, ",")
+	for _, raw := range values["scenarios"] {
+		for _, scenario := range strings.Split(raw, ",") {
+			if scenario = strings.TrimSpace(scenario); scenario != "" {
+				query.Scenarios = append(query.Scenarios, scenario)
+			}
+		}
 	}
 	if raw := strings.TrimSpace(values.Get("asOf")); raw != "" {
 		parsed, err := time.Parse(time.RFC3339, raw)

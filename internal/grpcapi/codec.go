@@ -48,8 +48,10 @@ func messageValue(message protoreflect.Message) (any, error) {
 		return value.AsMap(), nil
 	}
 	result := make(map[string]any)
+	seen := make(map[protoreflect.FieldNumber]struct{})
 	var conversionError error
 	message.Range(func(field protoreflect.FieldDescriptor, value protoreflect.Value) bool {
+		seen[field.Number()] = struct{}{}
 		converted, err := fieldValue(field, value)
 		if err != nil {
 			conversionError = fmt.Errorf("convert %s: %w", field.FullName(), err)
@@ -58,7 +60,23 @@ func messageValue(message protoreflect.Message) (any, error) {
 		result[field.JSONName()] = converted
 		return true
 	})
-	return result, conversionError
+	if conversionError != nil {
+		return nil, conversionError
+	}
+	fields := message.Descriptor().Fields()
+	for index := 0; index < fields.Len(); index++ {
+		field := fields.Get(index)
+		if _, populated := seen[field.Number()]; populated {
+			continue
+		}
+		switch {
+		case field.IsMap():
+			result[field.JSONName()] = map[string]any{}
+		case field.IsList():
+			result[field.JSONName()] = []any{}
+		}
+	}
+	return result, nil
 }
 
 func fieldValue(field protoreflect.FieldDescriptor, value protoreflect.Value) (any, error) {

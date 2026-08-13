@@ -43,6 +43,46 @@ func TestMessageObjectUsesRESTEnumWireValues(t *testing.T) {
 	}
 }
 
+func TestMessageObjectPreservesEmptyRESTCollections(t *testing.T) {
+	stackRequest, err := messageObject(&stewardmeshv1.ImportStackRecordsRequest{
+		SourceSystemId: "source-one",
+		Records: []*stewardmeshv1.StackExchangeRecord{{
+			Type: "stack.product", Id: "product-one", Revision: 1,
+			Dependencies: []string{},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	records, ok := stackRequest["records"].([]any)
+	if !ok || len(records) != 1 {
+		t.Fatalf("records = %#v, want one record", stackRequest["records"])
+	}
+	record, ok := records[0].(map[string]any)
+	if !ok {
+		t.Fatalf("record = %#v, want object", records[0])
+	}
+	dependencies, ok := record["dependencies"].([]any)
+	if !ok || len(dependencies) != 0 {
+		t.Fatalf("dependencies = %#v, want explicit empty array", record["dependencies"])
+	}
+
+	modelRequest, err := messageObject(&stewardmeshv1.CreateAssetModelRequest{
+		Model: &stewardmeshv1.AssetModel{Id: "model-one", Specifications: map[string]string{}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model, ok := modelRequest["model"].(map[string]any)
+	if !ok {
+		t.Fatalf("model = %#v, want object", modelRequest["model"])
+	}
+	specifications, ok := model["specifications"].(map[string]any)
+	if !ok || len(specifications) != 0 {
+		t.Fatalf("specifications = %#v, want explicit empty object", model["specifications"])
+	}
+}
+
 func TestResponseMessagePopulatesRepresentativeJSONFields(t *testing.T) {
 	instant := time.Date(2026, time.August, 13, 21, 15, 14, 123456789, time.UTC)
 
@@ -173,5 +213,30 @@ func TestPrepareRequestExtractsPathQueryHeaderAndBody(t *testing.T) {
 	}
 	if want := map[string]any{"name": "Portable Workstation"}; !reflect.DeepEqual(body, want) {
 		t.Fatalf("body = %#v, want %#v", body, want)
+	}
+}
+
+func TestConfiguredSearchAndRepeatedScenarioQueriesMatchREST(t *testing.T) {
+	gateway := &Gateway{}
+	for _, test := range []struct {
+		name       string
+		fullMethod string
+		object     map[string]any
+		wantPath   string
+	}{
+		{name: "asset models", fullMethod: "/stewardmesh.v1.AssetService/ListAssetModels", object: map[string]any{"search": "portable workstation"}, wantPath: "/api/v1/asset-models?q=portable+workstation"},
+		{name: "assets", fullMethod: "/stewardmesh.v1.AssetService/ListAssets", object: map[string]any{"search": "asset tag"}, wantPath: "/api/v1/assets?q=asset+tag"},
+		{name: "identities", fullMethod: "/stewardmesh.v1.PeopleService/SearchIdentities", object: map[string]any{"query": "Ada Lovelace"}, wantPath: "/api/v1/identities?q=Ada+Lovelace"},
+		{name: "horizon scenarios", fullMethod: "/stewardmesh.v1.HorizonService/GetForecast", object: map[string]any{"scenarios": []any{"baseline", "accelerated"}}, wantPath: "/api/v1/horizon/forecast?scenarios=baseline&scenarios=accelerated"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			prepared, err := gateway.prepareRequest(context.Background(), routes()[test.fullMethod], test.object)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if prepared.path != test.wantPath {
+				t.Fatalf("path = %q, want %q", prepared.path, test.wantPath)
+			}
+		})
 	}
 }

@@ -279,8 +279,12 @@ func (g *Gateway) invoke(ctx context.Context, fullMethod string, output protoref
 		// browser CSRF. Do not disclose the browser-only token in this transport.
 		delete(object, "csrfToken")
 	}
-	enrichOrganizationScopes(value, g.organizationID)
-	return responseMessage(output, value)
+	response, err := responseMessage(output, value)
+	if err != nil {
+		return nil, err
+	}
+	enrichAuthorizationScopes(response.ProtoReflect(), g.organizationID)
+	return response, nil
 }
 
 func (g *Gateway) authenticateTransport(ctx context.Context, token string) (context.Context, guard.Authentication, error) {
@@ -308,6 +312,9 @@ type preparedRequest struct {
 }
 
 func (g *Gateway) prepareRequest(ctx context.Context, configured route, object map[string]any) (preparedRequest, error) {
+	if err := transformRequestPresence(configured.transform, object); err != nil {
+		return preparedRequest{}, err
+	}
 	path := configured.path
 	markers := pathMarkerPattern.FindAllStringSubmatch(path, -1)
 	for _, marker := range markers {
@@ -407,6 +414,55 @@ func (g *Gateway) prepareRequest(ctx context.Context, configured route, object m
 	return preparedRequest{ctx: ctx, method: configured.method, path: path, headers: headers, body: body}, nil
 }
 
+func transformRequestPresence(transform requestTransform, object map[string]any) error {
+	switch transform {
+	case transformNone:
+		return nil
+	case transformPatternsFieldPresence:
+		items, ok := object["fields"].([]any)
+		if !ok {
+			return errors.New("fields must be an array")
+		}
+		for _, item := range items {
+			field, ok := item.(map[string]any)
+			if !ok {
+				return errors.New("fields must contain objects")
+			}
+			if err := applyPresenceFlag(field, "minimum", "hasMinimum"); err != nil {
+				return err
+			}
+			if err := applyPresenceFlag(field, "maximum", "hasMaximum"); err != nil {
+				return err
+			}
+		}
+		return nil
+	case transformSignalEnabledPresence:
+		return applyPresenceFlag(object, "enabled", "hasEnabled")
+	default:
+		return errors.New("request presence conversion is unavailable")
+	}
+}
+
+func applyPresenceFlag(object map[string]any, valueField, presenceField string) error {
+	present, _ := object[presenceField].(bool)
+	_, hasValue := object[valueField]
+	delete(object, presenceField)
+	if !present {
+		if hasValue {
+			return fmt.Errorf("%s requires %s", valueField, presenceField)
+		}
+		delete(object, valueField)
+		return nil
+	}
+	if !hasValue {
+		object[valueField] = false
+		if valueField == "minimum" || valueField == "maximum" {
+			object[valueField] = float64(0)
+		}
+	}
+	return nil
+}
+
 func bearerToken(ctx context.Context) (string, error) {
 	incoming, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
@@ -477,25 +533,40 @@ func stringValues(values []string) []any {
 	return result
 }
 
-func enrichOrganizationScopes(value any, organizationID string) {
-	if organizationID == "" {
+func enrichAuthorizationScopes(message protoreflect.Message, organizationID string) {
+	if !message.IsValid() || organizationID == "" || message.Descriptor().FullName() == "google.protobuf.Struct" {
 		return
 	}
-	switch item := value.(type) {
-	case []any:
-		for _, child := range item {
-			enrichOrganizationScopes(child, organizationID)
+	if message.Descriptor().FullName() == "stewardmesh.v1.AuthorizationScope" {
+		field := message.Descriptor().Fields().ByName("organization_id")
+		if field != nil && message.Get(field).String() == "" {
+			message.Set(field, protoreflect.ValueOfString(organizationID))
 		}
-	case map[string]any:
-		if scope, ok := item["scope"].(map[string]any); ok {
-			if _, exists := scope["organizationId"]; !exists {
-				scope["organizationId"] = organizationID
-			}
-		}
-		for _, child := range item {
-			enrichOrganizationScopes(child, organizationID)
-		}
+		return
 	}
+	message.Range(func(field protoreflect.FieldDescriptor, value protoreflect.Value) bool {
+		if field.IsMap() {
+			if field.MapValue().Kind() == protoreflect.MessageKind {
+				value.Map().Range(func(_ protoreflect.MapKey, item protoreflect.Value) bool {
+					enrichAuthorizationScopes(item.Message(), organizationID)
+					return true
+				})
+			}
+			return true
+		}
+		if field.Kind() != protoreflect.MessageKind {
+			return true
+		}
+		if field.IsList() {
+			list := value.List()
+			for index := 0; index < list.Len(); index++ {
+				enrichAuthorizationScopes(list.Get(index).Message(), organizationID)
+			}
+			return true
+		}
+		enrichAuthorizationScopes(value.Message(), organizationID)
+		return true
+	})
 }
 
 type httpResult struct {
@@ -585,10 +656,50 @@ func responseMessage(descriptor protoreflect.MessageDescriptor, value any) (prot
 	if err := populateMessage(message.ProtoReflect(), value); err != nil {
 		return nil, status.Error(codes.Internal, "REST response could not be translated")
 	}
+	synthesizeResponsePresence(message.ProtoReflect(), value)
 	if proto.Size(message) > MaximumMessageBytes {
 		return nil, status.Error(codes.ResourceExhausted, "response exceeds the gRPC transport limit")
 	}
 	return message, nil
+}
+
+func synthesizeResponsePresence(message protoreflect.Message, value any) {
+	object, ok := value.(map[string]any)
+	if !ok || !message.IsValid() || message.Descriptor().FullName() == "google.protobuf.Struct" {
+		return
+	}
+	if message.Descriptor().FullName() == "stewardmesh.v1.PatternsField" {
+		for _, pair := range [][2]string{{"minimum", "has_minimum"}, {"maximum", "has_maximum"}} {
+			if raw, exists := object[pair[0]]; exists && raw != nil {
+				field := message.Descriptor().Fields().ByName(protoreflect.Name(pair[1]))
+				if field != nil {
+					message.Set(field, protoreflect.ValueOfBool(true))
+				}
+			}
+		}
+	}
+	fields := message.Descriptor().Fields()
+	for name, raw := range object {
+		field := fieldByJSONName(fields, name)
+		if field == nil || field.Kind() != protoreflect.MessageKind || !message.Has(field) {
+			continue
+		}
+		if field.IsMap() {
+			continue
+		}
+		if field.IsList() {
+			items, ok := raw.([]any)
+			if !ok {
+				continue
+			}
+			list := message.Get(field).List()
+			for index := 0; index < list.Len() && index < len(items); index++ {
+				synthesizeResponsePresence(list.Get(index).Message(), items[index])
+			}
+			continue
+		}
+		synthesizeResponsePresence(message.Get(field).Message(), raw)
+	}
 }
 
 func newDynamicMessage(descriptor protoreflect.MessageDescriptor) protoreflect.Message {

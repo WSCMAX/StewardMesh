@@ -416,6 +416,7 @@ func TestBootstrapTrustRequiresExplicitLoopbackPeer(t *testing.T) {
 
 func TestPatternsValidateRecordAllowsOrganizationIDAsStructKey(t *testing.T) {
 	const recordOrganizationID = "user-record-organization"
+	const recordScopeKind = "user-authored-scope"
 	requests := 0
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++
@@ -431,10 +432,12 @@ func TestPatternsValidateRecordAllowsOrganizationIDAsStructKey(t *testing.T) {
 			t.Errorf("values = %#v, want object", body["values"])
 		} else if got := values["organizationId"]; got != recordOrganizationID {
 			t.Errorf("values.organizationId = %#v, want %q", got, recordOrganizationID)
+		} else if scope, ok := values["scope"].(map[string]any); !ok || scope["kind"] != recordScopeKind {
+			t.Errorf("values.scope = %#v, want user-authored Struct data", values["scope"])
 		}
 		writeTestJSON(w, http.StatusOK, map[string]any{
 			"status":            "valid",
-			"normalizedValues":  map[string]any{"organizationId": recordOrganizationID},
+			"normalizedValues":  map[string]any{"organizationId": recordOrganizationID, "scope": map[string]any{"kind": recordScopeKind}},
 			"errors":            []any{},
 			"holdingReferences": []any{},
 		})
@@ -447,7 +450,10 @@ func TestPatternsValidateRecordAllowsOrganizationIDAsStructKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	values, err := structpb.NewStruct(map[string]any{"organizationId": recordOrganizationID})
+	values, err := structpb.NewStruct(map[string]any{
+		"organizationId": recordOrganizationID,
+		"scope":          map[string]any{"kind": recordScopeKind},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -463,6 +469,127 @@ func TestPatternsValidateRecordAllowsOrganizationIDAsStructKey(t *testing.T) {
 	}
 	if response == nil || requests != 1 {
 		t.Fatalf("response = %v, HTTP requests = %d; want one ordinary REST result", response, requests)
+	}
+	normalizedField := response.ProtoReflect().Descriptor().Fields().ByName("normalized_values")
+	normalized, ok := response.ProtoReflect().Get(normalizedField).Message().Interface().(*structpb.Struct)
+	if !ok {
+		t.Fatalf("normalized values type = %T, want google.protobuf.Struct", response.ProtoReflect().Get(normalizedField).Message().Interface())
+	}
+	scope, ok := normalized.AsMap()["scope"].(map[string]any)
+	if !ok || scope["kind"] != recordScopeKind {
+		t.Fatalf("normalized scope = %#v, want preserved user data", normalized.AsMap()["scope"])
+	}
+	if _, injected := scope["organizationId"]; injected {
+		t.Fatalf("transport organization was injected into user-owned Struct scope: %#v", scope)
+	}
+}
+
+func TestTypedAuthorizationScopeDerivesOrganization(t *testing.T) {
+	response, err := responseMessage((&stewardmeshv1.ListGuardAccessResponse{}).ProtoReflect().Descriptor(), map[string]any{
+		"accounts":             []any{},
+		"roles":                []any{},
+		"policyBundles":        []any{},
+		"availablePermissions": []any{},
+		"assignments": []any{map[string]any{
+			"id": "assignment-one", "accountId": "account-one", "roleId": "role-one",
+			"scope": map[string]any{"kind": "site", "resourceId": "site-one"},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	enrichAuthorizationScopes(response.ProtoReflect(), "example-org")
+	assignments := response.ProtoReflect().Get(response.ProtoReflect().Descriptor().Fields().ByName("assignments")).List()
+	if assignments.Len() != 1 {
+		t.Fatalf("assignments = %d, want one", assignments.Len())
+	}
+	assignment := assignments.Get(0).Message()
+	scope := assignment.Get(assignment.Descriptor().Fields().ByName("scope")).Message()
+	if got := scope.Get(scope.Descriptor().Fields().ByName("organization_id")).String(); got != "example-org" {
+		t.Fatalf("typed scope organization = %q, want derived organization", got)
+	}
+}
+
+func TestPresenceHelpersTranslateToStrictRESTContracts(t *testing.T) {
+	requests := 0
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode %s: %v", r.URL.Path, err)
+		}
+		switch r.URL.Path {
+		case "/api/v1/templates":
+			fields, ok := body["fields"].([]any)
+			if !ok || len(fields) != 1 {
+				t.Fatalf("Patterns fields = %#v", body["fields"])
+			}
+			field := fields[0].(map[string]any)
+			if field["minimum"] != float64(0) || field["maximum"] != float64(0) || field["hasMinimum"] != nil || field["hasMaximum"] != nil {
+				t.Fatalf("Patterns REST presence body = %#v", field)
+			}
+			writeTestJSON(w, http.StatusCreated, map[string]any{
+				"id": "bounded-zero", "recordType": "custom.zero", "name": "Bounded zero", "version": 1,
+				"builtIn": false, "status": "active", "createdBy": "administrator", "createdAt": "2026-08-13T12:00:00Z",
+				"fields": []any{map[string]any{
+					"key": "count", "label": "Count", "type": "number", "required": true,
+					"minimum": 0, "maximum": 0, "accessibleLabel": "Count", "csvHeader": "count",
+				}},
+			})
+		case "/api/v1/signals/rules":
+			if enabled, exists := body["enabled"]; !exists || enabled != false || body["hasEnabled"] != nil {
+				t.Fatalf("Signals REST presence body = %#v", body)
+			}
+			writeTestJSON(w, http.StatusCreated, map[string]any{
+				"id": "disabled-rule", "name": "Disabled rule", "condition": "renewal", "severity": "warning",
+				"enabled": false, "thresholdDays": []any{}, "createdBy": "administrator", "revision": 1,
+				"createdAt": "2026-08-13T12:00:00Z", "updatedAt": "2026-08-13T12:00:00Z",
+			})
+		default:
+			t.Fatalf("unexpected route %s", r.URL.Path)
+		}
+	})
+	gateway, err := New(handler, Options{AllowedOrigin: "https://stewardmesh.example.test", Guard: &fakeAuthenticator{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer opaque-session"))
+	patternsService := stewardmeshv1.File_stewardmesh_proto.Services().ByName("PatternsService")
+	patternsMethod := patternsService.Methods().ByName("CreateTemplate")
+	patternsResponse, err := gateway.invoke(ctx, "/stewardmesh.v1.PatternsService/CreateTemplate", patternsMethod.Output(), &stewardmeshv1.CreatePatternsTemplateRequest{
+		Id: "bounded-zero", RecordType: "custom.zero", Name: "Bounded zero",
+		Fields: []*stewardmeshv1.PatternsField{{
+			Key: "count", Label: "Count", Type: stewardmeshv1.PatternsFieldType_PATTERNS_FIELD_TYPE_NUMBER,
+			Required: true, Minimum: 0, HasMinimum: true, Maximum: 0, HasMaximum: true,
+			AccessibleLabel: "Count", CsvHeader: "count",
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	patterns := patternsResponse.ProtoReflect()
+	fields := patterns.Get(patterns.Descriptor().Fields().ByName("fields")).List()
+	if fields.Len() != 1 {
+		t.Fatalf("Patterns response fields = %d", fields.Len())
+	}
+	field := fields.Get(0).Message()
+	if !field.Get(field.Descriptor().Fields().ByName("has_minimum")).Bool() || !field.Get(field.Descriptor().Fields().ByName("has_maximum")).Bool() {
+		t.Fatalf("Patterns response lost explicit zero presence: %v", field.Interface())
+	}
+
+	signalsService := stewardmeshv1.File_stewardmesh_proto.Services().ByName("SignalsService")
+	signalsMethod := signalsService.Methods().ByName("CreateRule")
+	signalsResponse, err := gateway.invoke(ctx, "/stewardmesh.v1.SignalsService/CreateRule", signalsMethod.Output(), &stewardmeshv1.CreateSignalRuleRequest{
+		Id: "disabled-rule", Name: "Disabled rule", Condition: "renewal", Severity: "warning", Enabled: false, HasEnabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if enabled := signalsResponse.ProtoReflect().Get(signalsResponse.ProtoReflect().Descriptor().Fields().ByName("enabled")).Bool(); enabled {
+		t.Fatal("explicit disabled Signals rule became enabled")
+	}
+	if requests != 2 {
+		t.Fatalf("HTTP requests = %d, want two", requests)
 	}
 }
 

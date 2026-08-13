@@ -22,6 +22,14 @@ const (
 	responseDeleted
 )
 
+type requestTransform uint8
+
+const (
+	transformNone requestTransform = iota
+	transformPatternsFieldPresence
+	transformSignalEnabledPresence
+)
+
 type route struct {
 	method       string
 	path         string
@@ -34,6 +42,7 @@ type route struct {
 	rawBodyField string
 	contentType  string
 	responseKind responseKind
+	transform    requestTransform
 }
 
 func endpoint(method, path string) route { return route{method: method, path: path} }
@@ -49,11 +58,11 @@ func routes() map[string]route {
 		"/stewardmesh.v1.BridgeService/RevokeGrant":  endpoint(http.MethodDelete, "/api/v1/bridge/grants/{grantId}"),
 
 		"/stewardmesh.v1.PatternsService/ListTemplates":         endpoint(http.MethodGet, "/api/v1/templates"),
-		"/stewardmesh.v1.PatternsService/CreateTemplate":        endpoint(http.MethodPost, "/api/v1/templates"),
+		"/stewardmesh.v1.PatternsService/CreateTemplate":        {method: http.MethodPost, path: "/api/v1/templates", transform: transformPatternsFieldPresence},
 		"/stewardmesh.v1.PatternsService/GetTemplate":           endpoint(http.MethodGet, "/api/v1/templates/{templateId}"),
 		"/stewardmesh.v1.PatternsService/GetTemplateSchema":     endpoint(http.MethodGet, "/api/v1/templates/{templateId}/schema"),
 		"/stewardmesh.v1.PatternsService/CopyTemplate":          {method: http.MethodPost, path: "/api/v1/templates/{sourceTemplateId}/copy", queryFields: map[string]string{"sourceVersion": "version"}},
-		"/stewardmesh.v1.PatternsService/CreateTemplateVersion": endpoint(http.MethodPost, "/api/v1/templates/{templateId}/versions"),
+		"/stewardmesh.v1.PatternsService/CreateTemplateVersion": {method: http.MethodPost, path: "/api/v1/templates/{templateId}/versions", transform: transformPatternsFieldPresence},
 		"/stewardmesh.v1.PatternsService/ValidateRecord":        {method: http.MethodPost, path: "/api/v1/templates/{templateId}/validate", queryFields: map[string]string{"version": "version"}},
 		"/stewardmesh.v1.PatternsService/ExportCSVTemplate":     {method: http.MethodGet, path: "/api/v1/templates/{templateId}/template.csv", queryFields: map[string]string{"version": "version"}, responseKind: responseCSV},
 
@@ -70,14 +79,14 @@ func routes() map[string]route {
 		"/stewardmesh.v1.GuardService/RegisterResourceOwnership": endpoint(http.MethodPost, "/api/v1/guard/resource-ownership"),
 		"/stewardmesh.v1.GuardService/ClaimResourceOwnership":    endpoint(http.MethodPost, "/api/v1/guard/resource-ownership/{resourceType}/{resourceId}/claim"),
 
-		"/stewardmesh.v1.AssetService/ListAssetModels":           endpoint(http.MethodGet, "/api/v1/asset-models"),
+		"/stewardmesh.v1.AssetService/ListAssetModels":           {method: http.MethodGet, path: "/api/v1/asset-models", queryFields: map[string]string{"search": "q"}},
 		"/stewardmesh.v1.AssetService/GetAssetModel":             endpoint(http.MethodGet, "/api/v1/asset-models/{modelId}"),
 		"/stewardmesh.v1.AssetService/GetAssetModelInventory":    endpoint(http.MethodGet, "/api/v1/asset-models/{modelId}/inventory"),
 		"/stewardmesh.v1.AssetService/ResolveAssetModel":         endpoint(http.MethodGet, "/api/v1/asset-models/resolve"),
 		"/stewardmesh.v1.AssetService/CreateAssetModel":          {method: http.MethodPost, path: "/api/v1/asset-models", flatten: []string{"model"}},
 		"/stewardmesh.v1.AssetService/UpdateAssetModel":          {method: http.MethodPut, path: "/api/v1/asset-models/{id}", pathFields: map[string]string{"id": "model.id"}, flatten: []string{"model"}},
 		"/stewardmesh.v1.AssetService/RetireAssetModel":          {method: http.MethodPost, path: "/api/v1/asset-models/{modelId}/retire", queryFields: map[string]string{"revision": "revision"}},
-		"/stewardmesh.v1.AssetService/ListAssets":                endpoint(http.MethodGet, "/api/v1/assets"),
+		"/stewardmesh.v1.AssetService/ListAssets":                {method: http.MethodGet, path: "/api/v1/assets", queryFields: map[string]string{"search": "q"}},
 		"/stewardmesh.v1.AssetService/GetAsset":                  endpoint(http.MethodGet, "/api/v1/assets/{assetId}"),
 		"/stewardmesh.v1.AssetService/CreateAsset":               {method: http.MethodPost, path: "/api/v1/assets", flatten: []string{"asset"}},
 		"/stewardmesh.v1.AssetService/CreateAssetsFromModel":     endpoint(http.MethodPost, "/api/v1/asset-models/{modelId}/assets/bulk"),
@@ -99,7 +108,7 @@ func routes() map[string]route {
 		"/stewardmesh.v1.PeopleService/CreateRoom":            endpoint(http.MethodPost, "/api/v1/rooms"),
 		"/stewardmesh.v1.PeopleService/ListDepartments":       endpoint(http.MethodGet, "/api/v1/departments"),
 		"/stewardmesh.v1.PeopleService/CreateDepartment":      endpoint(http.MethodPost, "/api/v1/departments"),
-		"/stewardmesh.v1.PeopleService/SearchIdentities":      endpoint(http.MethodGet, "/api/v1/identities"),
+		"/stewardmesh.v1.PeopleService/SearchIdentities":      {method: http.MethodGet, path: "/api/v1/identities", queryFields: map[string]string{"query": "q"}},
 		"/stewardmesh.v1.PeopleService/CreateIdentity":        endpoint(http.MethodPost, "/api/v1/identities"),
 		"/stewardmesh.v1.PeopleService/ListAssetAssignments":  endpoint(http.MethodGet, "/api/v1/assets/{assetId}/assignments"),
 		"/stewardmesh.v1.PeopleService/CreateAssetAssignment": endpoint(http.MethodPost, "/api/v1/assets/{assetId}/assignments"),
@@ -171,7 +180,7 @@ func routes() map[string]route {
 		"/stewardmesh.v1.StackService/ImportRecords":            endpoint(http.MethodPost, "/api/v1/stack/exchange/import"),
 
 		"/stewardmesh.v1.SignalsService/ListRules":               endpoint(http.MethodGet, "/api/v1/signals/rules"),
-		"/stewardmesh.v1.SignalsService/CreateRule":              endpoint(http.MethodPost, "/api/v1/signals/rules"),
+		"/stewardmesh.v1.SignalsService/CreateRule":              {method: http.MethodPost, path: "/api/v1/signals/rules", transform: transformSignalEnabledPresence},
 		"/stewardmesh.v1.SignalsService/UpdateRule":              endpoint(http.MethodPut, "/api/v1/signals/rules/{ruleId}"),
 		"/stewardmesh.v1.SignalsService/ListAlerts":              endpoint(http.MethodGet, "/api/v1/signals/alerts"),
 		"/stewardmesh.v1.SignalsService/ListAlertHistory":        endpoint(http.MethodGet, "/api/v1/signals/alerts/{alertId}/history"),

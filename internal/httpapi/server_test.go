@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -548,6 +549,18 @@ func TestHorizonLifecyclePlanForecastHistoryAndExport(t *testing.T) {
 	if exportResponse.Code != http.StatusOK || !strings.HasPrefix(exportResponse.Header().Get("Content-Type"), "text/csv") ||
 		!strings.Contains(exportResponse.Header().Get("Content-Disposition"), "horizon-forecast") || !strings.Contains(exportResponse.Body.String(), "FY2027") {
 		t.Fatalf("unexpected Horizon export %d headers=%v body=%s", exportResponse.Code, exportResponse.Header(), exportResponse.Body.String())
+	}
+}
+
+func TestHorizonForecastQueryAcceptsRepeatedAndCommaSeparatedScenarios(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/horizon/forecast?scenarios=baseline&scenarios=accelerated%2Cconservative", nil)
+	query, err := horizonForecastQuery(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"baseline", "accelerated", "conservative"}
+	if !slices.Equal(query.Scenarios, want) {
+		t.Fatalf("scenarios = %#v, want %#v", query.Scenarios, want)
 	}
 }
 

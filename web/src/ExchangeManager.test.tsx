@@ -60,6 +60,7 @@ test('renders selectable records and visible holding outcomes accessibly on a na
   expect(screen.getByRole('link', { name: 'Guard' })).toHaveAttribute('href', '#workspace-guard')
   expect(screen.getByRole('region', { name: 'Portable records' })).toHaveClass('overflow-x-auto')
   expect(screen.getByRole('region', { name: 'Outcomes for package package-import' })).toHaveClass('overflow-x-auto')
+  expect(screen.getByRole('region', { name: 'Exchange package workflow' })).toBeInTheDocument()
   expect(container.firstElementChild).toHaveClass('min-w-0')
   expect((await axe.run(container)).violations).toEqual([])
 })

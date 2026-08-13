@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -168,6 +170,95 @@ func TestInvokeRejectsNestedOrganizationIdentity(t *testing.T) {
 	}
 }
 
+func TestAtlasMutationsRejectPopulatedResponseOnlyFields(t *testing.T) {
+	type mutationSpec struct {
+		name       string
+		fullMethod string
+		prefix     string
+		fields     []string
+		request    func() (proto.Message, protoreflect.Message)
+	}
+	specs := []mutationSpec{
+		{
+			name: "create model", fullMethod: "/stewardmesh.v1.AssetService/CreateAssetModel", prefix: "model",
+			fields: []string{"status", "instanceCount", "revision", "createdAt", "updatedAt"},
+			request: func() (proto.Message, protoreflect.Message) {
+				model := &stewardmeshv1.AssetModel{Id: "model-one", Manufacturer: "Example", Name: "Model one", Kind: "server"}
+				return &stewardmeshv1.CreateAssetModelRequest{Model: model}, model.ProtoReflect()
+			},
+		},
+		{
+			name: "update model", fullMethod: "/stewardmesh.v1.AssetService/UpdateAssetModel", prefix: "model",
+			fields: []string{"status", "instanceCount", "createdAt", "updatedAt"},
+			request: func() (proto.Message, protoreflect.Message) {
+				model := &stewardmeshv1.AssetModel{Id: "model-one", Manufacturer: "Example", Name: "Model one", Kind: "server", Revision: 1}
+				return &stewardmeshv1.UpdateAssetModelRequest{Model: model}, model.ProtoReflect()
+			},
+		},
+		{
+			name: "create asset", fullMethod: "/stewardmesh.v1.AssetService/CreateAsset", prefix: "asset",
+			fields: []string{"revision", "createdAt", "updatedAt", "modelContext"},
+			request: func() (proto.Message, protoreflect.Message) {
+				asset := &stewardmeshv1.Asset{Id: "asset-one", Name: "Asset one", Kind: "server", Status: "active"}
+				return &stewardmeshv1.CreateAssetRequest{Asset: asset}, asset.ProtoReflect()
+			},
+		},
+		{
+			name: "update asset response", fullMethod: "/stewardmesh.v1.AssetService/UpdateAsset", prefix: "asset",
+			fields: []string{"createdAt", "updatedAt", "modelContext"},
+			request: func() (proto.Message, protoreflect.Message) {
+				asset := &stewardmeshv1.Asset{Id: "asset-one", Name: "Asset one", Kind: "server", Status: "active", Revision: 1}
+				return &stewardmeshv1.UpdateAssetRequest{Asset: asset}, asset.ProtoReflect()
+			},
+		},
+		{
+			name: "bulk create asset", fullMethod: "/stewardmesh.v1.AssetService/CreateAssetsFromModel", prefix: "items[0]",
+			fields: []string{"revision", "createdAt", "updatedAt", "modelContext"},
+			request: func() (proto.Message, protoreflect.Message) {
+				asset := &stewardmeshv1.Asset{Id: "asset-one", Name: "Asset one", Kind: "server", Status: "active"}
+				return &stewardmeshv1.CreateAssetsFromModelRequest{ModelId: "model-one", Items: []*stewardmeshv1.Asset{asset}}, asset.ProtoReflect()
+			},
+		},
+	}
+	gateway := &Gateway{}
+	configuredRoutes := routes()
+	instant := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)
+	for _, spec := range specs {
+		for _, fieldName := range spec.fields {
+			t.Run(spec.name+" "+fieldName, func(t *testing.T) {
+				request, target := spec.request()
+				field := target.Descriptor().Fields().ByJSONName(fieldName)
+				if field == nil {
+					t.Fatalf("field %s is not declared", fieldName)
+				}
+				switch fieldName {
+				case "createdAt", "updatedAt":
+					target.Set(field, protoreflect.ValueOfMessage(timestamppb.New(instant).ProtoReflect()))
+				case "modelContext":
+					target.Set(field, protoreflect.ValueOfMessage((&stewardmeshv1.AssetModelContext{Name: "response snapshot"}).ProtoReflect()))
+				default:
+					switch field.Kind() {
+					case protoreflect.StringKind:
+						target.Set(field, protoreflect.ValueOfString("active"))
+					case protoreflect.Int32Kind, protoreflect.Int64Kind:
+						target.Set(field, protoreflect.ValueOfInt64(1))
+					default:
+						t.Fatalf("unsupported field kind %s", field.Kind())
+					}
+				}
+				object, err := messageObject(request)
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, err = gateway.prepareRequest(context.Background(), configuredRoutes[spec.fullMethod], object)
+				if err == nil || !strings.Contains(err.Error(), spec.prefix+"."+fieldName+" is response-only") {
+					t.Fatalf("error=%v", err)
+				}
+			})
+		}
+	}
+}
+
 func TestPrepareRequestExtractsPathQueryHeaderAndBody(t *testing.T) {
 	gateway := &Gateway{}
 	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("x-correlation-id", "correlation-one"))
@@ -213,6 +304,41 @@ func TestPrepareRequestExtractsPathQueryHeaderAndBody(t *testing.T) {
 	}
 	if want := map[string]any{"name": "Portable Workstation"}; !reflect.DeepEqual(body, want) {
 		t.Fatalf("body = %#v, want %#v", body, want)
+	}
+}
+
+func TestVaultMultipartRejectsUnsafeMediaTypesAndKeepsEmptyFilePart(t *testing.T) {
+	for _, mediaType := range []string{
+		"text/plain\r\nX-Injected: true",
+		"text/plain; charset=utf-8",
+		"TEXT/PLAIN",
+		strings.Repeat("a", 128),
+	} {
+		t.Run(mediaType, func(t *testing.T) {
+			_, _, err := multipartBody(map[string]any{"name": "file.txt", "mediaType": mediaType, "content": []byte{}})
+			if err == nil || err.Error() != "mediaType is invalid" {
+				t.Fatalf("error=%v", err)
+			}
+		})
+	}
+	body, contentType, err := multipartBody(map[string]any{"name": "empty.txt", "mediaType": "text/plain", "content": []byte{}})
+	if err != nil || len(body) == 0 || !strings.HasPrefix(contentType, "multipart/form-data; boundary=") {
+		t.Fatalf("empty multipart body=%d contentType=%q err=%v", len(body), contentType, err)
+	}
+}
+
+func TestReachVariablesAreStringMapAtTheWireBoundary(t *testing.T) {
+	request := &stewardmeshv1.SendReachMessageRequest{Variables: map[string]string{"title": "Database renewal", "severity": "warning"}}
+	object, err := messageObject(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := object["variables"], map[string]any{"title": "Database renewal", "severity": "warning"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("variables=%#v, want %#v", got, want)
+	}
+	field := request.ProtoReflect().Descriptor().Fields().ByName("variables")
+	if !field.IsMap() || field.MapKey().Kind() != protoreflect.StringKind || field.MapValue().Kind() != protoreflect.StringKind {
+		t.Fatalf("variables descriptor=%v, want map<string,string>", field)
 	}
 }
 

@@ -46,14 +46,14 @@ REST endpoints:
 - `GET /api/v1/blobs/{blobId}/content`
 - `POST /api/v1/blobs/{blobId}/download-authorization`
 
-OpenAPI and protobuf contracts carry the same safe metadata, upload, content, and authorization shapes. `storage.ObjectStore` is the local/S3 byte contract, while `storage.MetadataStore` is the memory/PostgreSQL record contract. This separation lets future repository and object providers vary independently.
+OpenAPI and protobuf contracts carry the same safe metadata, upload, content, and authorization shapes. `storage.ObjectStore` is the local/S3 byte contract, while `storage.MetadataStore` is the memory/PostgreSQL record contract. This separation lets future repository and object providers vary independently. Trusted in-process downloads use a single organization-matched Vault capability that checks Guard `storage.read` at the transport, audits authorization, and opens context-cancellable integrity-verified content from that same service instance.
 
 Migration `0014_vault_blobs.sql` creates organization-scoped metadata, unique private object keys, paired provenance/resource constraints, checksum/provider checks, and a recent-files index. Adapter conformance tests cover tenant isolation, conflicts, traversal, symlinks, cancellation-safe cleanup, size limits, checksums, encryption headers, unsafe endpoints, conditional writes, missing objects, and expiring downloads.
 
 ## Audit events
 
 - `vault.blob.created` records safe provider, MIME type, size, checksum, source, and resource metadata.
-- `vault.blob.download_authorized` records provider and expiration.
+- `vault.blob.download_authorized` records provider and either expiration for a short-lived URL or the bounded `in_process` delivery mode.
 
 Both include `REQ-STORAGE-001` and `storage.blobs`. They do not contain object keys, file content, access keys, secret keys, session tokens, session cookies, CSRF tokens, or signed URLs.
 

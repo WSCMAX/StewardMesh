@@ -22,9 +22,11 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	stewardmeshv1 "github.com/maxlemke/stewardmesh/api/proto"
+	"github.com/maxlemke/stewardmesh/internal/foundation"
 	"github.com/maxlemke/stewardmesh/internal/guard"
 	"github.com/maxlemke/stewardmesh/internal/httpapi"
 	"github.com/maxlemke/stewardmesh/internal/storage"
@@ -51,13 +53,21 @@ const (
 // room for protobuf framing around the 32 MiB Exchange archive contract.
 const MaximumMessageBytes = 34 << 20
 
-var pathMarkerPattern = regexp.MustCompile(`\{([^{}]+)\}`)
+var (
+	pathMarkerPattern    = regexp.MustCompile(`\{([^{}]+)\}`)
+	correlationIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
+)
+
+type TransportGuard interface {
+	httpapi.SessionAuthenticator
+	CheckPermission(context.Context, guard.Authentication, guard.Permission, guard.Scope) error
+}
 
 type Options struct {
 	AllowedOrigin       string
 	SessionCookieSecure bool
 	OrganizationID      string
-	Guard               httpapi.SessionAuthenticator
+	Guard               TransportGuard
 	Vault               *storage.Service
 }
 
@@ -66,9 +76,10 @@ type Gateway struct {
 	allowedOrigin     string
 	sessionCookieName string
 	organizationID    string
-	guard             httpapi.SessionAuthenticator
+	guard             TransportGuard
 	vault             *storage.Service
 	routes            map[string]route
+	transportRejected sync.Map
 }
 
 type gatewayService interface{ isStewardMeshGateway() }
@@ -90,6 +101,9 @@ func New(handler http.Handler, options Options) (*Gateway, error) {
 	if err != nil || parsedOrigin.Scheme == "" || parsedOrigin.Host == "" {
 		return nil, errors.New("gRPC application origin must be an absolute URL")
 	}
+	if options.Vault != nil && strings.TrimSpace(options.OrganizationID) != options.Vault.OrganizationID() {
+		return nil, errors.New("gRPC Vault organization must match the application organization")
+	}
 	cookieName := localSessionCookie
 	if options.SessionCookieSecure {
 		cookieName = secureSessionCookie
@@ -109,8 +123,28 @@ func New(handler http.Handler, options Options) (*Gateway, error) {
 // descriptor-driven registration is validated against an explicit route
 // allowlist before the server can start.
 func (g *Gateway) RegisterAll(registrar grpc.ServiceRegistrar) error {
+	return g.register(registrar, func(route) bool { return true })
+}
+
+// RegisterPublic registers only the three unauthenticated Guard entry points.
+// Production uses this on the small-envelope listener so public requests never
+// reach the authenticated binary allocation boundary.
+func (g *Gateway) RegisterPublic(registrar grpc.ServiceRegistrar) error {
+	return g.register(registrar, func(configured route) bool { return configured.public })
+}
+
+// RegisterProtected registers every authenticated RPC, including Guard session
+// and logout operations, on the separately bounded domain listener.
+func (g *Gateway) RegisterProtected(registrar grpc.ServiceRegistrar) error {
+	return g.register(registrar, func(configured route) bool { return !configured.public })
+}
+
+func (g *Gateway) register(registrar grpc.ServiceRegistrar, include func(route) bool) error {
 	if g == nil || registrar == nil {
 		return errors.New("gRPC gateway and registrar are required")
+	}
+	if include == nil {
+		return errors.New("gRPC route selection is required")
 	}
 	if err := g.validateRoutes(); err != nil {
 		return err
@@ -125,10 +159,17 @@ func (g *Gateway) RegisterAll(registrar grpc.ServiceRegistrar) error {
 		}
 		for methodIndex := 0; methodIndex < service.Methods().Len(); methodIndex++ {
 			method := service.Methods().Get(methodIndex)
+			fullMethod := "/" + string(service.FullName()) + "/" + string(method.Name())
+			if !include(g.routes[fullMethod]) {
+				continue
+			}
 			description.Methods = append(description.Methods, grpc.MethodDesc{
 				MethodName: string(method.Name()),
 				Handler:    g.methodHandler(service, method),
 			})
+		}
+		if len(description.Methods) == 0 {
+			continue
 		}
 		registrar.RegisterService(&description, g)
 	}
@@ -194,6 +235,9 @@ func (g *Gateway) methodHandler(service protoreflect.ServiceDescriptor, method p
 			}
 			return nil, status.Error(codes.InvalidArgument, "protobuf request is invalid")
 		}
+		if _, rejected := g.transportRejected.LoadAndDelete(request); rejected {
+			return nil, status.Error(codes.ResourceExhausted, "protobuf request exceeds the gRPC transport limit")
+		}
 		handler := func(callContext context.Context, rawRequest any) (any, error) {
 			message, ok := rawRequest.(proto.Message)
 			if !ok {
@@ -223,12 +267,12 @@ func (g *Gateway) invoke(ctx context.Context, fullMethod string, output protoref
 	delete(requestObject, "csrfToken")
 
 	token := ""
+	var authentication guard.Authentication
 	if !configured.public {
 		token, err = bearerToken(ctx)
 		if err != nil {
 			return nil, err
 		}
-		var authentication guard.Authentication
 		ctx, authentication, err = g.authenticateTransport(ctx, token)
 		if err != nil {
 			return nil, err
@@ -251,7 +295,7 @@ func (g *Gateway) invoke(ctx context.Context, fullMethod string, output protoref
 		prepared.headers.Set("Origin", g.allowedOrigin)
 	}
 	if configured.responseKind == responseVaultDownload {
-		return g.downloadVault(ctx, output, prepared, responseContext)
+		return g.downloadVault(ctx, output, authentication, prepared, responseContext)
 	}
 
 	result, err := g.perform(prepared)
@@ -411,13 +455,22 @@ func (g *Gateway) prepareRequest(ctx context.Context, configured route, object m
 	if len(body) > maximumBodyBytes {
 		return preparedRequest{}, fmt.Errorf("request exceeds the gRPC transport limit")
 	}
-	if incoming, ok := metadata.FromIncomingContext(ctx); ok {
-		values := incoming.Get("x-correlation-id")
-		if len(values) == 1 && len(values[0]) <= 128 {
-			headers.Set("X-Correlation-ID", values[0])
-		}
+	if correlationID := incomingCorrelationID(ctx); correlationID != "" {
+		headers.Set("X-Correlation-ID", correlationID)
 	}
 	return preparedRequest{ctx: ctx, method: configured.method, path: path, headers: headers, body: body}, nil
+}
+
+func incomingCorrelationID(ctx context.Context) string {
+	incoming, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return ""
+	}
+	values := incoming.Get("x-correlation-id")
+	if len(values) != 1 || !correlationIDPattern.MatchString(values[0]) {
+		return ""
+	}
+	return values[0]
 }
 
 func transformRequestPresence(transform requestTransform, object map[string]any) error {
@@ -444,9 +497,69 @@ func transformRequestPresence(transform requestTransform, object map[string]any)
 		return nil
 	case transformSignalEnabledPresence:
 		return applyPresenceFlag(object, "enabled", "hasEnabled")
+	case transformAtlasCreateModel:
+		return rejectNestedMutationFields(object, "model", "status", "instanceCount", "revision", "createdAt", "updatedAt")
+	case transformAtlasUpdateModel:
+		return rejectNestedMutationFields(object, "model", "status", "instanceCount", "createdAt", "updatedAt")
+	case transformAtlasCreateAsset:
+		return rejectNestedMutationFields(object, "asset", "revision", "createdAt", "updatedAt", "modelContext")
+	case transformAtlasUpdateAsset:
+		return rejectNestedMutationFields(object, "asset", "createdAt", "updatedAt", "modelContext")
+	case transformAtlasBulkCreateAssets:
+		return rejectMutationListFields(object, "items", "revision", "createdAt", "updatedAt", "modelContext")
+	case transformVaultCreateBlob:
+		// Proto3 bytes cannot distinguish omission from an explicit empty file.
+		// CreateBlob always denotes an upload, so both wire forms mean a present,
+		// zero-byte file and match the REST multipart contract.
+		if _, ok := object["content"]; !ok {
+			object["content"] = []byte{}
+		}
+		return nil
 	default:
 		return errors.New("request presence conversion is unavailable")
 	}
+}
+
+func rejectNestedMutationFields(object map[string]any, container string, fields ...string) error {
+	raw, ok := object[container]
+	if !ok {
+		return nil
+	}
+	nested, ok := raw.(map[string]any)
+	if !ok {
+		return fmt.Errorf("%s must be an object", container)
+	}
+	return rejectMutationFields(nested, container, fields...)
+}
+
+func rejectMutationListFields(object map[string]any, container string, fields ...string) error {
+	raw, ok := object[container]
+	if !ok {
+		return nil
+	}
+	items, ok := raw.([]any)
+	if !ok {
+		return fmt.Errorf("%s must be an array", container)
+	}
+	for index, rawItem := range items {
+		item, ok := rawItem.(map[string]any)
+		if !ok {
+			return fmt.Errorf("%s must contain objects", container)
+		}
+		if err := rejectMutationFields(item, fmt.Sprintf("%s[%d]", container, index), fields...); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func rejectMutationFields(object map[string]any, prefix string, fields ...string) error {
+	for _, field := range fields {
+		if _, populated := object[field]; populated {
+			return fmt.Errorf("%s.%s is response-only", prefix, field)
+		}
+	}
+	return nil
 }
 
 func applyPresenceFlag(object map[string]any, valueField, presenceField string) error {
@@ -924,7 +1037,7 @@ func addQueryValue(query url.Values, name string, value any) error {
 
 func multipartBody(object map[string]any) ([]byte, string, error) {
 	content, ok := object["content"].([]byte)
-	if !ok || len(content) == 0 {
+	if !ok {
 		return nil, "", errors.New("content is required")
 	}
 	name, _ := object["name"].(string)
@@ -934,6 +1047,10 @@ func multipartBody(object map[string]any) ([]byte, string, error) {
 	}
 	if strings.TrimSpace(mediaType) == "" {
 		mediaType = "application/octet-stream"
+	}
+	parsedMediaType, parameters, err := mime.ParseMediaType(mediaType)
+	if err != nil || parsedMediaType != mediaType || len(parameters) != 0 || len(mediaType) > 127 || strings.ContainsAny(mediaType, "\r\n") {
+		return nil, "", errors.New("mediaType is invalid")
 	}
 	var buffer bytes.Buffer
 	writer := multipart.NewWriter(&buffer)
@@ -960,7 +1077,7 @@ func multipartBody(object map[string]any) ([]byte, string, error) {
 	return buffer.Bytes(), writer.FormDataContentType(), nil
 }
 
-func (g *Gateway) downloadVault(ctx context.Context, output protoreflect.MessageDescriptor, _ preparedRequest, request map[string]any) (proto.Message, error) {
+func (g *Gateway) downloadVault(ctx context.Context, output protoreflect.MessageDescriptor, authentication guard.Authentication, _ preparedRequest, request map[string]any) (proto.Message, error) {
 	if g.vault == nil {
 		return nil, status.Error(codes.Unavailable, "vault_unavailable: Vault storage is unavailable")
 	}
@@ -968,24 +1085,37 @@ func (g *Gateway) downloadVault(ctx context.Context, output protoreflect.Message
 	if blobID == "" {
 		return nil, status.Error(codes.InvalidArgument, "blobId is required")
 	}
-	authorization, err := g.prepareRequest(ctx, endpoint(http.MethodPost, "/api/v1/blobs/{blobId}/download-authorization"), map[string]any{"blobId": blobID})
-	if err != nil {
-		return nil, status.Error(codes.InvalidArgument, err.Error())
+	if err := g.guard.CheckPermission(ctx, authentication, guard.PermissionStorageRead, guard.Scope{
+		Kind: guard.ScopeOrganization, OrganizationID: g.organizationID, ResourceID: g.organizationID,
+	}); err != nil {
+		return nil, status.Error(codes.PermissionDenied, "permission_denied: permission is required for this operation")
 	}
-	authorization.remoteAddr = peerAddress(ctx)
-	authorized, err := g.perform(authorization)
-	if err != nil {
-		return nil, err
+	correlationID := incomingCorrelationID(ctx)
+	if correlationID == "" {
+		generatedCorrelationID, err := foundation.NewCorrelationID()
+		if err != nil {
+			return nil, status.Error(codes.Internal, "request correlation could not be created")
+		}
+		correlationID = generatedCorrelationID
 	}
-	if authorized.status < 200 || authorized.status >= 300 {
-		return nil, httpStatusError(authorized)
-	}
-	blob, content, err := g.vault.OpenBlob(ctx, blobID)
+	ctx = foundation.WithScope(ctx, foundation.Scope{
+		OrganizationID: g.organizationID, ActorID: authentication.Principal.Subject, CorrelationID: correlationID,
+	})
+	blob, content, err := g.vault.AuthorizeAndOpenBlob(ctx, blobID)
 	if err != nil {
 		if contextErr := ctx.Err(); contextErr != nil {
 			return nil, contextStatus(contextErr)
 		}
-		return nil, status.Error(codes.Internal, "vault_error: the Vault operation could not be completed")
+		switch {
+		case errors.Is(err, storage.ErrNotFound):
+			return nil, status.Error(codes.NotFound, "not_found: the requested Vault file was not found")
+		case errors.Is(err, storage.ErrInvalidInput):
+			return nil, status.Error(codes.InvalidArgument, "validation_failed: Vault file details are invalid")
+		case errors.Is(err, storage.ErrIntegrity):
+			return nil, status.Error(codes.DataLoss, "integrity_failed: Vault could not verify the stored file")
+		default:
+			return nil, status.Error(codes.Internal, "vault_error: the Vault operation could not be completed")
+		}
 	}
 	defer content.Close()
 	contents, err := io.ReadAll(io.LimitReader(content, maximumBodyBytes+1))

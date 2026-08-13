@@ -311,7 +311,7 @@ func (s *Service) OpenBlob(ctx context.Context, id string) (Blob, io.ReadCloser,
 	if err != nil {
 		return Blob{}, nil, err
 	}
-	return blob, &integrityReader{reader: content, expected: blob.SHA256, hash: sha256.New()}, nil
+	return blob, &integrityReader{ctx: ctx, reader: content, expected: blob.SHA256, hash: sha256.New()}, nil
 }
 
 func (s *Service) OpenAuthorizedBlob(ctx context.Context, id, token string) (Blob, io.ReadCloser, error) {
@@ -326,8 +326,34 @@ func (s *Service) OpenAuthorizedBlob(ctx context.Context, id, token string) (Blo
 	if err != nil {
 		return Blob{}, nil, err
 	}
-	return blob, &integrityReader{reader: content, expected: blob.SHA256, hash: sha256.New()}, nil
+	return blob, &integrityReader{ctx: ctx, reader: content, expected: blob.SHA256, hash: sha256.New()}, nil
 }
+
+// AuthorizeAndOpenBlob is the atomic in-process download seam used by trusted
+// transports. It binds authorization audit and verified content to this exact
+// service instance, so metadata from one Vault cannot authorize bytes from
+// another. Callers must enforce Guard storage.read before invoking it.
+func (s *Service) AuthorizeAndOpenBlob(ctx context.Context, id string) (Blob, io.ReadCloser, error) {
+	blob, err := s.GetBlob(ctx, id)
+	if err != nil {
+		return Blob{}, nil, err
+	}
+	content, err := s.objects.Open(ctx, blob.objectKey)
+	if err != nil {
+		return Blob{}, nil, err
+	}
+	if err := s.audit(ctx, "vault.blob.download_authorized", blob, map[string]string{
+		"provider": blob.Provider, "delivery": "in_process",
+	}); err != nil {
+		_ = content.Close()
+		return Blob{}, nil, fmt.Errorf("audit Vault in-process download authorization: %w", err)
+	}
+	return blob, &integrityReader{ctx: ctx, reader: content, expected: blob.SHA256, hash: sha256.New()}, nil
+}
+
+// OrganizationID identifies the immutable tenant boundary owned by this
+// service. Transport adapters use it to reject mismatched capabilities.
+func (s *Service) OrganizationID() string { return s.organizationID }
 
 func (s *Service) AuthorizeDownload(ctx context.Context, id string) (DownloadAuthorization, error) {
 	blob, err := s.GetBlob(ctx, id)
@@ -405,6 +431,7 @@ func (s *Service) audit(ctx context.Context, action string, blob Blob, metadata 
 }
 
 type integrityReader struct {
+	ctx      context.Context
 	reader   io.ReadCloser
 	expected string
 	hash     interface {
@@ -415,9 +442,15 @@ type integrityReader struct {
 }
 
 func (r *integrityReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
 	n, err := r.reader.Read(p)
 	if n > 0 {
 		_, _ = r.hash.Write(p[:n])
+	}
+	if contextErr := r.ctx.Err(); contextErr != nil {
+		return n, contextErr
 	}
 	if errors.Is(err, io.EOF) && !r.verified {
 		r.verified = true

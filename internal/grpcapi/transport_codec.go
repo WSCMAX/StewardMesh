@@ -4,6 +4,7 @@ package grpcapi
 
 import (
 	"fmt"
+	"sync"
 
 	stewardmeshv1 "github.com/maxlemke/stewardmesh/api/proto"
 	"google.golang.org/grpc/codes"
@@ -21,6 +22,7 @@ const MaximumPublicMessageBytes = 64 << 10
 
 type transportCodec struct {
 	publicInputs map[protoreflect.FullName]struct{}
+	rejected     *sync.Map
 }
 
 // TransportCodec returns the standard protobuf wire codec with a pre-unmarshal
@@ -41,7 +43,11 @@ func (g *Gateway) TransportCodec() grpcencoding.Codec {
 			}
 		}
 	}
-	return transportCodec{publicInputs: publicInputs}
+	var rejected *sync.Map
+	if g != nil {
+		rejected = &g.transportRejected
+	}
+	return transportCodec{publicInputs: publicInputs, rejected: rejected}
 }
 
 func (transportCodec) Marshal(value any) ([]byte, error) {
@@ -62,6 +68,13 @@ func (codec transportCodec) Unmarshal(data []byte, value any) error {
 		limit = MaximumPublicMessageBytes
 	}
 	if len(data) > limit {
+		if codec.rejected != nil {
+			// grpc-go rewrites codec errors to Internal before the method handler
+			// can preserve their status. Mark this exact request and let the
+			// handler return ResourceExhausted without decoding attacker bytes.
+			codec.rejected.Store(message, struct{}{})
+			return nil
+		}
 		return status.Error(codes.ResourceExhausted, "protobuf request exceeds the gRPC transport limit")
 	}
 	return proto.UnmarshalOptions{DiscardUnknown: true, RecursionLimit: 64}.Unmarshal(data, message)

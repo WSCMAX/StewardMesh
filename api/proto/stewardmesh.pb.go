@@ -21860,8 +21860,11 @@ type CreateReachProviderRequest struct {
 	Sender     string                 `protobuf:"bytes,5,opt,name=sender,proto3" json:"sender,omitempty"`
 	// An env: or external: reference under a deployment-owned resolver. Raw OAuth
 	// tokens, passwords, signing keys, and provider credentials are invalid.
-	SecretRef     string `protobuf:"bytes,6,opt,name=secret_ref,json=secretRef,proto3" json:"secret_ref,omitempty"`
-	Enabled       bool   `protobuf:"varint,7,opt,name=enabled,proto3" json:"enabled,omitempty"`
+	SecretRef string `protobuf:"bytes,6,opt,name=secret_ref,json=secretRef,proto3" json:"secret_ref,omitempty"`
+	// Omission defaults to enabled. Presence is required to create a disabled
+	// provider because an absent proto3 scalar is otherwise indistinguishable
+	// from an explicit false value.
+	Enabled       *bool `protobuf:"varint,7,opt,name=enabled,proto3,oneof" json:"enabled,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -21939,8 +21942,8 @@ func (x *CreateReachProviderRequest) GetSecretRef() string {
 }
 
 func (x *CreateReachProviderRequest) GetEnabled() bool {
-	if x != nil {
-		return x.Enabled
+	if x != nil && x.Enabled != nil {
+		return *x.Enabled
 	}
 	return false
 }
@@ -23337,7 +23340,7 @@ func (x *ReachMessage) GetUpdatedAt() *timestamppb.Timestamp {
 type SendReachMessageRequest struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	GroupId        string                 `protobuf:"bytes,1,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`
-	Variables      *structpb.Struct       `protobuf:"bytes,2,opt,name=variables,proto3" json:"variables,omitempty"`
+	Variables      map[string]string      `protobuf:"bytes,2,rep,name=variables,proto3" json:"variables,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	Confirm        bool                   `protobuf:"varint,3,opt,name=confirm,proto3" json:"confirm,omitempty"`
 	IdempotencyKey string                 `protobuf:"bytes,4,opt,name=idempotency_key,json=idempotencyKey,proto3" json:"idempotency_key,omitempty"`
 	unknownFields  protoimpl.UnknownFields
@@ -23381,7 +23384,7 @@ func (x *SendReachMessageRequest) GetGroupId() string {
 	return ""
 }
 
-func (x *SendReachMessageRequest) GetVariables() *structpb.Struct {
+func (x *SendReachMessageRequest) GetVariables() map[string]string {
 	if x != nil {
 		return x.Variables
 	}
@@ -26272,7 +26275,7 @@ const file_stewardmesh_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\f \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
 	"\n" +
-	"updated_at\x18\r \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"\xc6\x01\n" +
+	"updated_at\x18\r \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"\xd7\x01\n" +
 	"\x1aCreateReachProviderRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x12\n" +
@@ -26281,8 +26284,10 @@ const file_stewardmesh_proto_rawDesc = "" +
 	"endpointId\x12\x16\n" +
 	"\x06sender\x18\x05 \x01(\tR\x06sender\x12\x1d\n" +
 	"\n" +
-	"secret_ref\x18\x06 \x01(\tR\tsecretRef\x12\x18\n" +
-	"\aenabled\x18\a \x01(\bR\aenabled\"\x9f\x01\n" +
+	"secret_ref\x18\x06 \x01(\tR\tsecretRef\x12\x1d\n" +
+	"\aenabled\x18\a \x01(\bH\x00R\aenabled\x88\x01\x01B\n" +
+	"\n" +
+	"\b_enabled\"\x9f\x01\n" +
 	"\x1aUpdateReachProviderRequest\x12\x1f\n" +
 	"\vprovider_id\x18\x01 \x01(\tR\n" +
 	"providerId\x12\x12\n" +
@@ -26424,12 +26429,15 @@ const file_stewardmesh_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\x10 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
 	"\n" +
-	"updated_at\x18\x11 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"\xae\x01\n" +
+	"updated_at\x18\x11 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"\x8b\x02\n" +
 	"\x17SendReachMessageRequest\x12\x19\n" +
-	"\bgroup_id\x18\x01 \x01(\tR\agroupId\x125\n" +
-	"\tvariables\x18\x02 \x01(\v2\x17.google.protobuf.StructR\tvariables\x12\x18\n" +
+	"\bgroup_id\x18\x01 \x01(\tR\agroupId\x12T\n" +
+	"\tvariables\x18\x02 \x03(\v26.stewardmesh.v1.SendReachMessageRequest.VariablesEntryR\tvariables\x12\x18\n" +
 	"\aconfirm\x18\x03 \x01(\bR\aconfirm\x12'\n" +
-	"\x0fidempotency_key\x18\x04 \x01(\tR\x0eidempotencyKey\"S\n" +
+	"\x0fidempotency_key\x18\x04 \x01(\tR\x0eidempotencyKey\x1a<\n" +
+	"\x0eVariablesEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"S\n" +
 	"\x18RetryReachMessageRequest\x12\x1d\n" +
 	"\n" +
 	"message_id\x18\x01 \x01(\tR\tmessageId\x12\x18\n" +
@@ -26843,7 +26851,7 @@ func file_stewardmesh_proto_rawDescGZIP() []byte {
 }
 
 var file_stewardmesh_proto_enumTypes = make([]protoimpl.EnumInfo, 22)
-var file_stewardmesh_proto_msgTypes = make([]protoimpl.MessageInfo, 322)
+var file_stewardmesh_proto_msgTypes = make([]protoimpl.MessageInfo, 323)
 var file_stewardmesh_proto_goTypes = []any{
 	(PatternsFieldType)(0),                         // 0: stewardmesh.v1.PatternsFieldType
 	(PatternsTemplateStatus)(0),                    // 1: stewardmesh.v1.PatternsTemplateStatus
@@ -27189,37 +27197,38 @@ var file_stewardmesh_proto_goTypes = []any{
 	nil,                                            // 341: stewardmesh.v1.HorizonForecastGroup.AmountsByKindMinorEntry
 	nil,                                            // 342: stewardmesh.v1.HorizonForecast.TotalsByKindMinorEntry
 	nil,                                            // 343: stewardmesh.v1.LedgerBudgetVariance.AmountsByKindMinorEntry
-	(*timestamppb.Timestamp)(nil),                  // 344: google.protobuf.Timestamp
-	(*structpb.Struct)(nil),                        // 345: google.protobuf.Struct
+	nil,                                            // 344: stewardmesh.v1.SendReachMessageRequest.VariablesEntry
+	(*timestamppb.Timestamp)(nil),                  // 345: google.protobuf.Timestamp
+	(*structpb.Struct)(nil),                        // 346: google.protobuf.Struct
 }
 var file_stewardmesh_proto_depIdxs = []int32{
-	344, // 0: stewardmesh.v1.Organization.created_at:type_name -> google.protobuf.Timestamp
-	344, // 1: stewardmesh.v1.Organization.updated_at:type_name -> google.protobuf.Timestamp
+	345, // 0: stewardmesh.v1.Organization.created_at:type_name -> google.protobuf.Timestamp
+	345, // 1: stewardmesh.v1.Organization.updated_at:type_name -> google.protobuf.Timestamp
 	34,  // 2: stewardmesh.v1.ListPatternsTemplatesResponse.items:type_name -> stewardmesh.v1.PatternsTemplate
 	35,  // 3: stewardmesh.v1.CreatePatternsTemplateRequest.fields:type_name -> stewardmesh.v1.PatternsField
 	35,  // 4: stewardmesh.v1.CreatePatternsTemplateVersionRequest.fields:type_name -> stewardmesh.v1.PatternsField
-	345, // 5: stewardmesh.v1.ValidatePatternsRecordRequest.values:type_name -> google.protobuf.Struct
+	346, // 5: stewardmesh.v1.ValidatePatternsRecordRequest.values:type_name -> google.protobuf.Struct
 	1,   // 6: stewardmesh.v1.PatternsTemplate.status:type_name -> stewardmesh.v1.PatternsTemplateStatus
 	35,  // 7: stewardmesh.v1.PatternsTemplate.fields:type_name -> stewardmesh.v1.PatternsField
-	344, // 8: stewardmesh.v1.PatternsTemplate.created_at:type_name -> google.protobuf.Timestamp
+	345, // 8: stewardmesh.v1.PatternsTemplate.created_at:type_name -> google.protobuf.Timestamp
 	0,   // 9: stewardmesh.v1.PatternsField.type:type_name -> stewardmesh.v1.PatternsFieldType
 	2,   // 10: stewardmesh.v1.PatternsValidationResult.status:type_name -> stewardmesh.v1.PatternsValidationStatus
-	345, // 11: stewardmesh.v1.PatternsValidationResult.normalized_values:type_name -> google.protobuf.Struct
+	346, // 11: stewardmesh.v1.PatternsValidationResult.normalized_values:type_name -> google.protobuf.Struct
 	36,  // 12: stewardmesh.v1.PatternsValidationResult.errors:type_name -> stewardmesh.v1.PatternsFieldError
 	37,  // 13: stewardmesh.v1.PatternsValidationResult.holding_references:type_name -> stewardmesh.v1.PatternsHoldingReference
 	47,  // 14: stewardmesh.v1.AuthenticationSession.principal:type_name -> stewardmesh.v1.Principal
-	344, // 15: stewardmesh.v1.AuthenticationSession.expires_at:type_name -> google.protobuf.Timestamp
+	345, // 15: stewardmesh.v1.AuthenticationSession.expires_at:type_name -> google.protobuf.Timestamp
 	48,  // 16: stewardmesh.v1.PermissionGrant.scope:type_name -> stewardmesh.v1.AuthorizationScope
 	52,  // 17: stewardmesh.v1.ListGuardAccessResponse.accounts:type_name -> stewardmesh.v1.GuardAccount
 	53,  // 18: stewardmesh.v1.ListGuardAccessResponse.roles:type_name -> stewardmesh.v1.GuardRole
 	56,  // 19: stewardmesh.v1.ListGuardAccessResponse.assignments:type_name -> stewardmesh.v1.GuardRoleAssignment
 	54,  // 20: stewardmesh.v1.ListGuardAccessResponse.policy_bundles:type_name -> stewardmesh.v1.GuardPolicyBundle
 	48,  // 21: stewardmesh.v1.GuardRoleAssignment.scope:type_name -> stewardmesh.v1.AuthorizationScope
-	344, // 22: stewardmesh.v1.GuardRoleAssignment.created_at:type_name -> google.protobuf.Timestamp
+	345, // 22: stewardmesh.v1.GuardRoleAssignment.created_at:type_name -> google.protobuf.Timestamp
 	48,  // 23: stewardmesh.v1.CreateRoleAssignmentRequest.scope:type_name -> stewardmesh.v1.AuthorizationScope
 	62,  // 24: stewardmesh.v1.ListResourceOwnershipResponse.items:type_name -> stewardmesh.v1.GuardResourceOwnership
-	344, // 25: stewardmesh.v1.GuardResourceOwnership.registered_at:type_name -> google.protobuf.Timestamp
-	344, // 26: stewardmesh.v1.GuardResourceOwnership.claimed_at:type_name -> google.protobuf.Timestamp
+	345, // 25: stewardmesh.v1.GuardResourceOwnership.registered_at:type_name -> google.protobuf.Timestamp
+	345, // 26: stewardmesh.v1.GuardResourceOwnership.claimed_at:type_name -> google.protobuf.Timestamp
 	101, // 27: stewardmesh.v1.ListAssetModelsResponse.items:type_name -> stewardmesh.v1.AssetModel
 	101, // 28: stewardmesh.v1.CreateAssetModelRequest.model:type_name -> stewardmesh.v1.AssetModel
 	71,  // 29: stewardmesh.v1.AssetModelInventory.groups:type_name -> stewardmesh.v1.AssetModelInventoryGroup
@@ -27247,41 +27256,41 @@ var file_stewardmesh_proto_depIdxs = []int32{
 	4,   // 51: stewardmesh.v1.GenerateAssetLabelBatchRequest.output:type_name -> stewardmesh.v1.AssetLabelOutput
 	95,  // 52: stewardmesh.v1.AssetLabelArtifact.template:type_name -> stewardmesh.v1.AssetLabelTemplate
 	4,   // 53: stewardmesh.v1.AssetLabelArtifact.output:type_name -> stewardmesh.v1.AssetLabelOutput
-	344, // 54: stewardmesh.v1.AssetLabelArtifact.created_at:type_name -> google.protobuf.Timestamp
+	345, // 54: stewardmesh.v1.AssetLabelArtifact.created_at:type_name -> google.protobuf.Timestamp
 	5,   // 55: stewardmesh.v1.AssetIdentifier.symbology:type_name -> stewardmesh.v1.AssetIdentifierSymbology
 	6,   // 56: stewardmesh.v1.AssetIdentifier.source:type_name -> stewardmesh.v1.AssetIdentifierSource
 	7,   // 57: stewardmesh.v1.AssetIdentifier.status:type_name -> stewardmesh.v1.AssetIdentifierStatus
-	344, // 58: stewardmesh.v1.AssetIdentifier.created_at:type_name -> google.protobuf.Timestamp
-	344, // 59: stewardmesh.v1.AssetIdentifier.updated_at:type_name -> google.protobuf.Timestamp
-	344, // 60: stewardmesh.v1.AssetIdentifier.deactivated_at:type_name -> google.protobuf.Timestamp
-	344, // 61: stewardmesh.v1.Asset.purchase_date:type_name -> google.protobuf.Timestamp
-	344, // 62: stewardmesh.v1.Asset.created_at:type_name -> google.protobuf.Timestamp
-	344, // 63: stewardmesh.v1.Asset.updated_at:type_name -> google.protobuf.Timestamp
+	345, // 58: stewardmesh.v1.AssetIdentifier.created_at:type_name -> google.protobuf.Timestamp
+	345, // 59: stewardmesh.v1.AssetIdentifier.updated_at:type_name -> google.protobuf.Timestamp
+	345, // 60: stewardmesh.v1.AssetIdentifier.deactivated_at:type_name -> google.protobuf.Timestamp
+	345, // 61: stewardmesh.v1.Asset.purchase_date:type_name -> google.protobuf.Timestamp
+	345, // 62: stewardmesh.v1.Asset.created_at:type_name -> google.protobuf.Timestamp
+	345, // 63: stewardmesh.v1.Asset.updated_at:type_name -> google.protobuf.Timestamp
 	100, // 64: stewardmesh.v1.Asset.model_context:type_name -> stewardmesh.v1.AssetModelContext
 	335, // 65: stewardmesh.v1.AssetModelContext.specifications:type_name -> stewardmesh.v1.AssetModelContext.SpecificationsEntry
-	344, // 66: stewardmesh.v1.AssetModelContext.defaults_effective_at:type_name -> google.protobuf.Timestamp
-	344, // 67: stewardmesh.v1.AssetModelContext.applied_at:type_name -> google.protobuf.Timestamp
+	345, // 66: stewardmesh.v1.AssetModelContext.defaults_effective_at:type_name -> google.protobuf.Timestamp
+	345, // 67: stewardmesh.v1.AssetModelContext.applied_at:type_name -> google.protobuf.Timestamp
 	336, // 68: stewardmesh.v1.AssetModel.specifications:type_name -> stewardmesh.v1.AssetModel.SpecificationsEntry
-	344, // 69: stewardmesh.v1.AssetModel.created_at:type_name -> google.protobuf.Timestamp
-	344, // 70: stewardmesh.v1.AssetModel.updated_at:type_name -> google.protobuf.Timestamp
-	344, // 71: stewardmesh.v1.AssetLifecycleEvent.occurred_at:type_name -> google.protobuf.Timestamp
+	345, // 69: stewardmesh.v1.AssetModel.created_at:type_name -> google.protobuf.Timestamp
+	345, // 70: stewardmesh.v1.AssetModel.updated_at:type_name -> google.protobuf.Timestamp
+	345, // 71: stewardmesh.v1.AssetLifecycleEvent.occurred_at:type_name -> google.protobuf.Timestamp
 	106, // 72: stewardmesh.v1.ListSitesResponse.items:type_name -> stewardmesh.v1.Site
 	8,   // 73: stewardmesh.v1.CreateSiteRequest.status:type_name -> stewardmesh.v1.RecordStatus
 	107, // 74: stewardmesh.v1.CreateSiteRequest.address:type_name -> stewardmesh.v1.Address
 	8,   // 75: stewardmesh.v1.Site.status:type_name -> stewardmesh.v1.RecordStatus
-	344, // 76: stewardmesh.v1.Site.created_at:type_name -> google.protobuf.Timestamp
-	344, // 77: stewardmesh.v1.Site.updated_at:type_name -> google.protobuf.Timestamp
+	345, // 76: stewardmesh.v1.Site.created_at:type_name -> google.protobuf.Timestamp
+	345, // 77: stewardmesh.v1.Site.updated_at:type_name -> google.protobuf.Timestamp
 	107, // 78: stewardmesh.v1.Site.address:type_name -> stewardmesh.v1.Address
 	111, // 79: stewardmesh.v1.ListBuildingsResponse.items:type_name -> stewardmesh.v1.Building
 	8,   // 80: stewardmesh.v1.CreateBuildingRequest.status:type_name -> stewardmesh.v1.RecordStatus
 	8,   // 81: stewardmesh.v1.Building.status:type_name -> stewardmesh.v1.RecordStatus
-	344, // 82: stewardmesh.v1.Building.created_at:type_name -> google.protobuf.Timestamp
-	344, // 83: stewardmesh.v1.Building.updated_at:type_name -> google.protobuf.Timestamp
+	345, // 82: stewardmesh.v1.Building.created_at:type_name -> google.protobuf.Timestamp
+	345, // 83: stewardmesh.v1.Building.updated_at:type_name -> google.protobuf.Timestamp
 	115, // 84: stewardmesh.v1.ListRoomsResponse.items:type_name -> stewardmesh.v1.Room
 	8,   // 85: stewardmesh.v1.CreateRoomRequest.status:type_name -> stewardmesh.v1.RecordStatus
 	8,   // 86: stewardmesh.v1.Room.status:type_name -> stewardmesh.v1.RecordStatus
-	344, // 87: stewardmesh.v1.Room.created_at:type_name -> google.protobuf.Timestamp
-	344, // 88: stewardmesh.v1.Room.updated_at:type_name -> google.protobuf.Timestamp
+	345, // 87: stewardmesh.v1.Room.created_at:type_name -> google.protobuf.Timestamp
+	345, // 88: stewardmesh.v1.Room.updated_at:type_name -> google.protobuf.Timestamp
 	117, // 89: stewardmesh.v1.ListDirectoryImportSourcesResponse.items:type_name -> stewardmesh.v1.DirectoryImportSource
 	129, // 90: stewardmesh.v1.ListDirectoryImportsResponse.batches:type_name -> stewardmesh.v1.DirectoryImportBatch
 	337, // 91: stewardmesh.v1.DirectoryImportRecord.directory_attributes:type_name -> stewardmesh.v1.DirectoryImportRecord.DirectoryAttributesEntry
@@ -27290,17 +27299,17 @@ var file_stewardmesh_proto_depIdxs = []int32{
 	13,  // 94: stewardmesh.v1.DirectoryImportItem.action:type_name -> stewardmesh.v1.DirectoryImportAction
 	14,  // 95: stewardmesh.v1.DirectoryImportItem.outcome:type_name -> stewardmesh.v1.DirectoryImportOutcome
 	16,  // 96: stewardmesh.v1.DirectoryImportItem.failure_class:type_name -> stewardmesh.v1.DirectoryImportFailureClass
-	344, // 97: stewardmesh.v1.DirectoryImportItem.updated_at:type_name -> google.protobuf.Timestamp
+	345, // 97: stewardmesh.v1.DirectoryImportItem.updated_at:type_name -> google.protobuf.Timestamp
 	15,  // 98: stewardmesh.v1.DirectoryImportAttempt.operation:type_name -> stewardmesh.v1.DirectoryImportOperation
 	12,  // 99: stewardmesh.v1.DirectoryImportAttempt.status:type_name -> stewardmesh.v1.DirectoryImportBatchStatus
 	16,  // 100: stewardmesh.v1.DirectoryImportAttempt.failure_class:type_name -> stewardmesh.v1.DirectoryImportFailureClass
-	344, // 101: stewardmesh.v1.DirectoryImportAttempt.started_at:type_name -> google.protobuf.Timestamp
-	344, // 102: stewardmesh.v1.DirectoryImportAttempt.completed_at:type_name -> google.protobuf.Timestamp
+	345, // 101: stewardmesh.v1.DirectoryImportAttempt.started_at:type_name -> google.protobuf.Timestamp
+	345, // 102: stewardmesh.v1.DirectoryImportAttempt.completed_at:type_name -> google.protobuf.Timestamp
 	12,  // 103: stewardmesh.v1.DirectoryImportBatch.status:type_name -> stewardmesh.v1.DirectoryImportBatchStatus
 	125, // 104: stewardmesh.v1.DirectoryImportBatch.counts:type_name -> stewardmesh.v1.DirectoryImportCounts
-	344, // 105: stewardmesh.v1.DirectoryImportBatch.created_at:type_name -> google.protobuf.Timestamp
-	344, // 106: stewardmesh.v1.DirectoryImportBatch.updated_at:type_name -> google.protobuf.Timestamp
-	344, // 107: stewardmesh.v1.DirectoryImportBatch.completed_at:type_name -> google.protobuf.Timestamp
+	345, // 105: stewardmesh.v1.DirectoryImportBatch.created_at:type_name -> google.protobuf.Timestamp
+	345, // 106: stewardmesh.v1.DirectoryImportBatch.updated_at:type_name -> google.protobuf.Timestamp
+	345, // 107: stewardmesh.v1.DirectoryImportBatch.completed_at:type_name -> google.protobuf.Timestamp
 	129, // 108: stewardmesh.v1.DirectoryImportBatchDetail.batch:type_name -> stewardmesh.v1.DirectoryImportBatch
 	127, // 109: stewardmesh.v1.DirectoryImportBatchDetail.items:type_name -> stewardmesh.v1.DirectoryImportItem
 	128, // 110: stewardmesh.v1.DirectoryImportBatchDetail.attempts:type_name -> stewardmesh.v1.DirectoryImportAttempt
@@ -27308,8 +27317,8 @@ var file_stewardmesh_proto_depIdxs = []int32{
 	135, // 112: stewardmesh.v1.ListDepartmentsResponse.items:type_name -> stewardmesh.v1.Department
 	8,   // 113: stewardmesh.v1.CreateDepartmentRequest.status:type_name -> stewardmesh.v1.RecordStatus
 	8,   // 114: stewardmesh.v1.Department.status:type_name -> stewardmesh.v1.RecordStatus
-	344, // 115: stewardmesh.v1.Department.created_at:type_name -> google.protobuf.Timestamp
-	344, // 116: stewardmesh.v1.Department.updated_at:type_name -> google.protobuf.Timestamp
+	345, // 115: stewardmesh.v1.Department.created_at:type_name -> google.protobuf.Timestamp
+	345, // 116: stewardmesh.v1.Department.updated_at:type_name -> google.protobuf.Timestamp
 	9,   // 117: stewardmesh.v1.SearchIdentitiesRequest.kind:type_name -> stewardmesh.v1.IdentityKind
 	8,   // 118: stewardmesh.v1.SearchIdentitiesRequest.status:type_name -> stewardmesh.v1.RecordStatus
 	139, // 119: stewardmesh.v1.SearchIdentitiesResponse.items:type_name -> stewardmesh.v1.DirectoryIdentity
@@ -27317,8 +27326,8 @@ var file_stewardmesh_proto_depIdxs = []int32{
 	8,   // 121: stewardmesh.v1.CreateIdentityRequest.status:type_name -> stewardmesh.v1.RecordStatus
 	9,   // 122: stewardmesh.v1.DirectoryIdentity.kind:type_name -> stewardmesh.v1.IdentityKind
 	8,   // 123: stewardmesh.v1.DirectoryIdentity.status:type_name -> stewardmesh.v1.RecordStatus
-	344, // 124: stewardmesh.v1.DirectoryIdentity.created_at:type_name -> google.protobuf.Timestamp
-	344, // 125: stewardmesh.v1.DirectoryIdentity.updated_at:type_name -> google.protobuf.Timestamp
+	345, // 124: stewardmesh.v1.DirectoryIdentity.created_at:type_name -> google.protobuf.Timestamp
+	345, // 125: stewardmesh.v1.DirectoryIdentity.updated_at:type_name -> google.protobuf.Timestamp
 	17,  // 126: stewardmesh.v1.GetRelationshipGraphRequest.kind:type_name -> stewardmesh.v1.RelationshipGraphNodeKind
 	18,  // 127: stewardmesh.v1.GetRelationshipGraphRequest.relationship:type_name -> stewardmesh.v1.RelationshipGraphEdgeKind
 	142, // 128: stewardmesh.v1.RelationshipGraph.nodes:type_name -> stewardmesh.v1.RelationshipGraphNode
@@ -27330,19 +27339,19 @@ var file_stewardmesh_proto_depIdxs = []int32{
 	148, // 134: stewardmesh.v1.ListAssetAssignmentsResponse.items:type_name -> stewardmesh.v1.AssetAssignment
 	10,  // 135: stewardmesh.v1.CreateAssetAssignmentRequest.assignee_kind:type_name -> stewardmesh.v1.AssigneeKind
 	11,  // 136: stewardmesh.v1.CreateAssetAssignmentRequest.role:type_name -> stewardmesh.v1.AssignmentRole
-	344, // 137: stewardmesh.v1.CreateAssetAssignmentRequest.effective_from:type_name -> google.protobuf.Timestamp
-	344, // 138: stewardmesh.v1.EndAssetAssignmentRequest.effective_to:type_name -> google.protobuf.Timestamp
+	345, // 137: stewardmesh.v1.CreateAssetAssignmentRequest.effective_from:type_name -> google.protobuf.Timestamp
+	345, // 138: stewardmesh.v1.EndAssetAssignmentRequest.effective_to:type_name -> google.protobuf.Timestamp
 	10,  // 139: stewardmesh.v1.AssetAssignment.assignee_kind:type_name -> stewardmesh.v1.AssigneeKind
 	11,  // 140: stewardmesh.v1.AssetAssignment.role:type_name -> stewardmesh.v1.AssignmentRole
-	344, // 141: stewardmesh.v1.AssetAssignment.effective_from:type_name -> google.protobuf.Timestamp
-	344, // 142: stewardmesh.v1.AssetAssignment.effective_to:type_name -> google.protobuf.Timestamp
-	344, // 143: stewardmesh.v1.AssetAssignment.created_at:type_name -> google.protobuf.Timestamp
+	345, // 141: stewardmesh.v1.AssetAssignment.effective_from:type_name -> google.protobuf.Timestamp
+	345, // 142: stewardmesh.v1.AssetAssignment.effective_to:type_name -> google.protobuf.Timestamp
+	345, // 143: stewardmesh.v1.AssetAssignment.created_at:type_name -> google.protobuf.Timestamp
 	154, // 144: stewardmesh.v1.ListTagsResponse.items:type_name -> stewardmesh.v1.Tag
-	344, // 145: stewardmesh.v1.Tag.created_at:type_name -> google.protobuf.Timestamp
-	344, // 146: stewardmesh.v1.Tag.updated_at:type_name -> google.protobuf.Timestamp
+	345, // 145: stewardmesh.v1.Tag.created_at:type_name -> google.protobuf.Timestamp
+	345, // 146: stewardmesh.v1.Tag.updated_at:type_name -> google.protobuf.Timestamp
 	160, // 147: stewardmesh.v1.ListGoalsResponse.items:type_name -> stewardmesh.v1.Goal
-	344, // 148: stewardmesh.v1.Goal.created_at:type_name -> google.protobuf.Timestamp
-	344, // 149: stewardmesh.v1.Goal.updated_at:type_name -> google.protobuf.Timestamp
+	345, // 148: stewardmesh.v1.Goal.created_at:type_name -> google.protobuf.Timestamp
+	345, // 149: stewardmesh.v1.Goal.updated_at:type_name -> google.protobuf.Timestamp
 	19,  // 150: stewardmesh.v1.ListEffectiveTagsRequest.target_type:type_name -> stewardmesh.v1.ThreadTargetType
 	163, // 151: stewardmesh.v1.ListEffectiveTagsResponse.items:type_name -> stewardmesh.v1.EffectiveTag
 	154, // 152: stewardmesh.v1.EffectiveTag.tag:type_name -> stewardmesh.v1.Tag
@@ -27351,64 +27360,64 @@ var file_stewardmesh_proto_depIdxs = []int32{
 	20,  // 155: stewardmesh.v1.SetTagRuleRequest.mode:type_name -> stewardmesh.v1.TagRuleMode
 	19,  // 156: stewardmesh.v1.TagRule.target_type:type_name -> stewardmesh.v1.ThreadTargetType
 	20,  // 157: stewardmesh.v1.TagRule.mode:type_name -> stewardmesh.v1.TagRuleMode
-	344, // 158: stewardmesh.v1.TagRule.created_at:type_name -> google.protobuf.Timestamp
-	344, // 159: stewardmesh.v1.TagRule.updated_at:type_name -> google.protobuf.Timestamp
+	345, // 158: stewardmesh.v1.TagRule.created_at:type_name -> google.protobuf.Timestamp
+	345, // 159: stewardmesh.v1.TagRule.updated_at:type_name -> google.protobuf.Timestamp
 	19,  // 160: stewardmesh.v1.DeleteTagRuleRequest.target_type:type_name -> stewardmesh.v1.ThreadTargetType
 	19,  // 161: stewardmesh.v1.ListGoalLinksRequest.target_type:type_name -> stewardmesh.v1.ThreadTargetType
 	171, // 162: stewardmesh.v1.ListGoalLinksResponse.items:type_name -> stewardmesh.v1.GoalLink
 	19,  // 163: stewardmesh.v1.LinkGoalRequest.target_type:type_name -> stewardmesh.v1.ThreadTargetType
 	19,  // 164: stewardmesh.v1.GoalLink.target_type:type_name -> stewardmesh.v1.ThreadTargetType
-	344, // 165: stewardmesh.v1.GoalLink.created_at:type_name -> google.protobuf.Timestamp
+	345, // 165: stewardmesh.v1.GoalLink.created_at:type_name -> google.protobuf.Timestamp
 	19,  // 166: stewardmesh.v1.UnlinkGoalRequest.target_type:type_name -> stewardmesh.v1.ThreadTargetType
 	178, // 167: stewardmesh.v1.ListBlobsResponse.items:type_name -> stewardmesh.v1.VaultBlob
-	344, // 168: stewardmesh.v1.VaultBlob.created_at:type_name -> google.protobuf.Timestamp
+	345, // 168: stewardmesh.v1.VaultBlob.created_at:type_name -> google.protobuf.Timestamp
 	178, // 169: stewardmesh.v1.VaultBlobContent.blob:type_name -> stewardmesh.v1.VaultBlob
-	344, // 170: stewardmesh.v1.VaultDownloadAuthorization.expires_at:type_name -> google.protobuf.Timestamp
-	344, // 171: stewardmesh.v1.HorizonPlan.replacement_date:type_name -> google.protobuf.Timestamp
-	344, // 172: stewardmesh.v1.HorizonPlan.derived_replacement_date:type_name -> google.protobuf.Timestamp
-	344, // 173: stewardmesh.v1.HorizonPlan.effective_from:type_name -> google.protobuf.Timestamp
-	344, // 174: stewardmesh.v1.HorizonPlan.created_at:type_name -> google.protobuf.Timestamp
-	344, // 175: stewardmesh.v1.HorizonPlan.updated_at:type_name -> google.protobuf.Timestamp
-	344, // 176: stewardmesh.v1.HorizonPlanVersion.replacement_date:type_name -> google.protobuf.Timestamp
-	344, // 177: stewardmesh.v1.HorizonPlanVersion.effective_from:type_name -> google.protobuf.Timestamp
-	344, // 178: stewardmesh.v1.HorizonPlanVersion.recorded_at:type_name -> google.protobuf.Timestamp
-	344, // 179: stewardmesh.v1.HorizonPlanVersion.derived_replacement_date:type_name -> google.protobuf.Timestamp
+	345, // 170: stewardmesh.v1.VaultDownloadAuthorization.expires_at:type_name -> google.protobuf.Timestamp
+	345, // 171: stewardmesh.v1.HorizonPlan.replacement_date:type_name -> google.protobuf.Timestamp
+	345, // 172: stewardmesh.v1.HorizonPlan.derived_replacement_date:type_name -> google.protobuf.Timestamp
+	345, // 173: stewardmesh.v1.HorizonPlan.effective_from:type_name -> google.protobuf.Timestamp
+	345, // 174: stewardmesh.v1.HorizonPlan.created_at:type_name -> google.protobuf.Timestamp
+	345, // 175: stewardmesh.v1.HorizonPlan.updated_at:type_name -> google.protobuf.Timestamp
+	345, // 176: stewardmesh.v1.HorizonPlanVersion.replacement_date:type_name -> google.protobuf.Timestamp
+	345, // 177: stewardmesh.v1.HorizonPlanVersion.effective_from:type_name -> google.protobuf.Timestamp
+	345, // 178: stewardmesh.v1.HorizonPlanVersion.recorded_at:type_name -> google.protobuf.Timestamp
+	345, // 179: stewardmesh.v1.HorizonPlanVersion.derived_replacement_date:type_name -> google.protobuf.Timestamp
 	183, // 180: stewardmesh.v1.ListHorizonPlansResponse.items:type_name -> stewardmesh.v1.HorizonPlan
-	344, // 181: stewardmesh.v1.CreateHorizonPlanRequest.replacement_date:type_name -> google.protobuf.Timestamp
-	344, // 182: stewardmesh.v1.CreateHorizonPlanRequest.effective_from:type_name -> google.protobuf.Timestamp
-	344, // 183: stewardmesh.v1.UpdateHorizonPlanRequest.replacement_date:type_name -> google.protobuf.Timestamp
-	344, // 184: stewardmesh.v1.UpdateHorizonPlanRequest.effective_from:type_name -> google.protobuf.Timestamp
+	345, // 181: stewardmesh.v1.CreateHorizonPlanRequest.replacement_date:type_name -> google.protobuf.Timestamp
+	345, // 182: stewardmesh.v1.CreateHorizonPlanRequest.effective_from:type_name -> google.protobuf.Timestamp
+	345, // 183: stewardmesh.v1.UpdateHorizonPlanRequest.replacement_date:type_name -> google.protobuf.Timestamp
+	345, // 184: stewardmesh.v1.UpdateHorizonPlanRequest.effective_from:type_name -> google.protobuf.Timestamp
 	184, // 185: stewardmesh.v1.ListHorizonPlanHistoryResponse.items:type_name -> stewardmesh.v1.HorizonPlanVersion
-	344, // 186: stewardmesh.v1.GetHorizonForecastRequest.as_of:type_name -> google.protobuf.Timestamp
+	345, // 186: stewardmesh.v1.GetHorizonForecastRequest.as_of:type_name -> google.protobuf.Timestamp
 	341, // 187: stewardmesh.v1.HorizonForecastGroup.amounts_by_kind_minor:type_name -> stewardmesh.v1.HorizonForecastGroup.AmountsByKindMinorEntry
-	344, // 188: stewardmesh.v1.HorizonForecast.as_of:type_name -> google.protobuf.Timestamp
+	345, // 188: stewardmesh.v1.HorizonForecast.as_of:type_name -> google.protobuf.Timestamp
 	342, // 189: stewardmesh.v1.HorizonForecast.totals_by_kind_minor:type_name -> stewardmesh.v1.HorizonForecast.TotalsByKindMinorEntry
 	192, // 190: stewardmesh.v1.HorizonForecast.groups:type_name -> stewardmesh.v1.HorizonForecastGroup
-	344, // 191: stewardmesh.v1.ExportHorizonCSVRequest.as_of:type_name -> google.protobuf.Timestamp
-	344, // 192: stewardmesh.v1.LedgerVendor.created_at:type_name -> google.protobuf.Timestamp
-	344, // 193: stewardmesh.v1.LedgerVendor.updated_at:type_name -> google.protobuf.Timestamp
-	344, // 194: stewardmesh.v1.LedgerPurchaseOrder.ordered_on:type_name -> google.protobuf.Timestamp
-	344, // 195: stewardmesh.v1.LedgerPurchaseOrder.created_at:type_name -> google.protobuf.Timestamp
-	344, // 196: stewardmesh.v1.LedgerPurchaseOrder.updated_at:type_name -> google.protobuf.Timestamp
-	344, // 197: stewardmesh.v1.CreateLedgerPurchaseOrderRequest.ordered_on:type_name -> google.protobuf.Timestamp
-	344, // 198: stewardmesh.v1.LedgerContract.starts_on:type_name -> google.protobuf.Timestamp
-	344, // 199: stewardmesh.v1.LedgerContract.ends_on:type_name -> google.protobuf.Timestamp
-	344, // 200: stewardmesh.v1.LedgerContract.renews_on:type_name -> google.protobuf.Timestamp
-	344, // 201: stewardmesh.v1.LedgerContract.created_at:type_name -> google.protobuf.Timestamp
-	344, // 202: stewardmesh.v1.LedgerContract.updated_at:type_name -> google.protobuf.Timestamp
-	344, // 203: stewardmesh.v1.CreateLedgerContractRequest.starts_on:type_name -> google.protobuf.Timestamp
-	344, // 204: stewardmesh.v1.CreateLedgerContractRequest.ends_on:type_name -> google.protobuf.Timestamp
-	344, // 205: stewardmesh.v1.CreateLedgerContractRequest.renews_on:type_name -> google.protobuf.Timestamp
-	344, // 206: stewardmesh.v1.LedgerCommitment.starts_on:type_name -> google.protobuf.Timestamp
-	344, // 207: stewardmesh.v1.LedgerCommitment.ends_on:type_name -> google.protobuf.Timestamp
-	344, // 208: stewardmesh.v1.LedgerCommitment.created_at:type_name -> google.protobuf.Timestamp
-	344, // 209: stewardmesh.v1.LedgerCommitment.updated_at:type_name -> google.protobuf.Timestamp
-	344, // 210: stewardmesh.v1.CreateLedgerCommitmentRequest.starts_on:type_name -> google.protobuf.Timestamp
-	344, // 211: stewardmesh.v1.CreateLedgerCommitmentRequest.ends_on:type_name -> google.protobuf.Timestamp
-	344, // 212: stewardmesh.v1.LedgerBudget.created_at:type_name -> google.protobuf.Timestamp
-	344, // 213: stewardmesh.v1.LedgerBudget.updated_at:type_name -> google.protobuf.Timestamp
-	344, // 214: stewardmesh.v1.LedgerCostRecord.created_at:type_name -> google.protobuf.Timestamp
-	344, // 215: stewardmesh.v1.LedgerCostRecord.updated_at:type_name -> google.protobuf.Timestamp
+	345, // 191: stewardmesh.v1.ExportHorizonCSVRequest.as_of:type_name -> google.protobuf.Timestamp
+	345, // 192: stewardmesh.v1.LedgerVendor.created_at:type_name -> google.protobuf.Timestamp
+	345, // 193: stewardmesh.v1.LedgerVendor.updated_at:type_name -> google.protobuf.Timestamp
+	345, // 194: stewardmesh.v1.LedgerPurchaseOrder.ordered_on:type_name -> google.protobuf.Timestamp
+	345, // 195: stewardmesh.v1.LedgerPurchaseOrder.created_at:type_name -> google.protobuf.Timestamp
+	345, // 196: stewardmesh.v1.LedgerPurchaseOrder.updated_at:type_name -> google.protobuf.Timestamp
+	345, // 197: stewardmesh.v1.CreateLedgerPurchaseOrderRequest.ordered_on:type_name -> google.protobuf.Timestamp
+	345, // 198: stewardmesh.v1.LedgerContract.starts_on:type_name -> google.protobuf.Timestamp
+	345, // 199: stewardmesh.v1.LedgerContract.ends_on:type_name -> google.protobuf.Timestamp
+	345, // 200: stewardmesh.v1.LedgerContract.renews_on:type_name -> google.protobuf.Timestamp
+	345, // 201: stewardmesh.v1.LedgerContract.created_at:type_name -> google.protobuf.Timestamp
+	345, // 202: stewardmesh.v1.LedgerContract.updated_at:type_name -> google.protobuf.Timestamp
+	345, // 203: stewardmesh.v1.CreateLedgerContractRequest.starts_on:type_name -> google.protobuf.Timestamp
+	345, // 204: stewardmesh.v1.CreateLedgerContractRequest.ends_on:type_name -> google.protobuf.Timestamp
+	345, // 205: stewardmesh.v1.CreateLedgerContractRequest.renews_on:type_name -> google.protobuf.Timestamp
+	345, // 206: stewardmesh.v1.LedgerCommitment.starts_on:type_name -> google.protobuf.Timestamp
+	345, // 207: stewardmesh.v1.LedgerCommitment.ends_on:type_name -> google.protobuf.Timestamp
+	345, // 208: stewardmesh.v1.LedgerCommitment.created_at:type_name -> google.protobuf.Timestamp
+	345, // 209: stewardmesh.v1.LedgerCommitment.updated_at:type_name -> google.protobuf.Timestamp
+	345, // 210: stewardmesh.v1.CreateLedgerCommitmentRequest.starts_on:type_name -> google.protobuf.Timestamp
+	345, // 211: stewardmesh.v1.CreateLedgerCommitmentRequest.ends_on:type_name -> google.protobuf.Timestamp
+	345, // 212: stewardmesh.v1.LedgerBudget.created_at:type_name -> google.protobuf.Timestamp
+	345, // 213: stewardmesh.v1.LedgerBudget.updated_at:type_name -> google.protobuf.Timestamp
+	345, // 214: stewardmesh.v1.LedgerCostRecord.created_at:type_name -> google.protobuf.Timestamp
+	345, // 215: stewardmesh.v1.LedgerCostRecord.updated_at:type_name -> google.protobuf.Timestamp
 	209, // 216: stewardmesh.v1.ReconcileLedgerCostResponse.record:type_name -> stewardmesh.v1.LedgerCostRecord
 	197, // 217: stewardmesh.v1.LedgerSnapshot.vendors:type_name -> stewardmesh.v1.LedgerVendor
 	199, // 218: stewardmesh.v1.LedgerSnapshot.purchase_orders:type_name -> stewardmesh.v1.LedgerPurchaseOrder
@@ -27417,81 +27426,81 @@ var file_stewardmesh_proto_depIdxs = []int32{
 	207, // 221: stewardmesh.v1.LedgerSnapshot.budgets:type_name -> stewardmesh.v1.LedgerBudget
 	209, // 222: stewardmesh.v1.LedgerSnapshot.costs:type_name -> stewardmesh.v1.LedgerCostRecord
 	343, // 223: stewardmesh.v1.LedgerBudgetVariance.amounts_by_kind_minor:type_name -> stewardmesh.v1.LedgerBudgetVariance.AmountsByKindMinorEntry
-	344, // 224: stewardmesh.v1.StackProduct.created_at:type_name -> google.protobuf.Timestamp
-	344, // 225: stewardmesh.v1.StackProduct.updated_at:type_name -> google.protobuf.Timestamp
-	344, // 226: stewardmesh.v1.StackVersion.released_on:type_name -> google.protobuf.Timestamp
-	344, // 227: stewardmesh.v1.StackVersion.created_at:type_name -> google.protobuf.Timestamp
-	344, // 228: stewardmesh.v1.StackVersion.updated_at:type_name -> google.protobuf.Timestamp
-	344, // 229: stewardmesh.v1.CreateStackVersionRequest.released_on:type_name -> google.protobuf.Timestamp
-	344, // 230: stewardmesh.v1.StackInstallation.installed_at:type_name -> google.protobuf.Timestamp
-	344, // 231: stewardmesh.v1.StackInstallation.last_used_at:type_name -> google.protobuf.Timestamp
-	344, // 232: stewardmesh.v1.StackInstallation.removed_at:type_name -> google.protobuf.Timestamp
-	344, // 233: stewardmesh.v1.StackInstallation.created_at:type_name -> google.protobuf.Timestamp
-	344, // 234: stewardmesh.v1.StackInstallation.updated_at:type_name -> google.protobuf.Timestamp
-	344, // 235: stewardmesh.v1.RecordStackInstallationRequest.installed_at:type_name -> google.protobuf.Timestamp
-	344, // 236: stewardmesh.v1.RecordStackInstallationRequest.last_used_at:type_name -> google.protobuf.Timestamp
-	344, // 237: stewardmesh.v1.RecordStackInstallationRequest.removed_at:type_name -> google.protobuf.Timestamp
-	344, // 238: stewardmesh.v1.UpdateStackInstallationStateRequest.last_used_at:type_name -> google.protobuf.Timestamp
-	344, // 239: stewardmesh.v1.UpdateStackInstallationStateRequest.removed_at:type_name -> google.protobuf.Timestamp
-	344, // 240: stewardmesh.v1.StackLicense.starts_on:type_name -> google.protobuf.Timestamp
-	344, // 241: stewardmesh.v1.StackLicense.expires_on:type_name -> google.protobuf.Timestamp
-	344, // 242: stewardmesh.v1.StackLicense.created_at:type_name -> google.protobuf.Timestamp
-	344, // 243: stewardmesh.v1.StackLicense.updated_at:type_name -> google.protobuf.Timestamp
-	344, // 244: stewardmesh.v1.CreateStackLicenseRequest.starts_on:type_name -> google.protobuf.Timestamp
-	344, // 245: stewardmesh.v1.CreateStackLicenseRequest.expires_on:type_name -> google.protobuf.Timestamp
-	344, // 246: stewardmesh.v1.UpdateStackLicenseEntitlementRequest.starts_on:type_name -> google.protobuf.Timestamp
-	344, // 247: stewardmesh.v1.UpdateStackLicenseEntitlementRequest.expires_on:type_name -> google.protobuf.Timestamp
-	344, // 248: stewardmesh.v1.StackAssignment.assigned_at:type_name -> google.protobuf.Timestamp
-	344, // 249: stewardmesh.v1.StackAssignment.last_used_at:type_name -> google.protobuf.Timestamp
-	344, // 250: stewardmesh.v1.StackAssignment.ended_at:type_name -> google.protobuf.Timestamp
-	344, // 251: stewardmesh.v1.StackAssignment.created_at:type_name -> google.protobuf.Timestamp
-	344, // 252: stewardmesh.v1.StackAssignment.updated_at:type_name -> google.protobuf.Timestamp
-	344, // 253: stewardmesh.v1.CreateStackAssignmentRequest.assigned_at:type_name -> google.protobuf.Timestamp
-	344, // 254: stewardmesh.v1.CreateStackAssignmentRequest.last_used_at:type_name -> google.protobuf.Timestamp
-	344, // 255: stewardmesh.v1.CreateStackAssignmentRequest.ended_at:type_name -> google.protobuf.Timestamp
-	344, // 256: stewardmesh.v1.UpdateStackAssignmentUsageRequest.last_used_at:type_name -> google.protobuf.Timestamp
-	344, // 257: stewardmesh.v1.EndStackAssignmentRequest.ended_at:type_name -> google.protobuf.Timestamp
+	345, // 224: stewardmesh.v1.StackProduct.created_at:type_name -> google.protobuf.Timestamp
+	345, // 225: stewardmesh.v1.StackProduct.updated_at:type_name -> google.protobuf.Timestamp
+	345, // 226: stewardmesh.v1.StackVersion.released_on:type_name -> google.protobuf.Timestamp
+	345, // 227: stewardmesh.v1.StackVersion.created_at:type_name -> google.protobuf.Timestamp
+	345, // 228: stewardmesh.v1.StackVersion.updated_at:type_name -> google.protobuf.Timestamp
+	345, // 229: stewardmesh.v1.CreateStackVersionRequest.released_on:type_name -> google.protobuf.Timestamp
+	345, // 230: stewardmesh.v1.StackInstallation.installed_at:type_name -> google.protobuf.Timestamp
+	345, // 231: stewardmesh.v1.StackInstallation.last_used_at:type_name -> google.protobuf.Timestamp
+	345, // 232: stewardmesh.v1.StackInstallation.removed_at:type_name -> google.protobuf.Timestamp
+	345, // 233: stewardmesh.v1.StackInstallation.created_at:type_name -> google.protobuf.Timestamp
+	345, // 234: stewardmesh.v1.StackInstallation.updated_at:type_name -> google.protobuf.Timestamp
+	345, // 235: stewardmesh.v1.RecordStackInstallationRequest.installed_at:type_name -> google.protobuf.Timestamp
+	345, // 236: stewardmesh.v1.RecordStackInstallationRequest.last_used_at:type_name -> google.protobuf.Timestamp
+	345, // 237: stewardmesh.v1.RecordStackInstallationRequest.removed_at:type_name -> google.protobuf.Timestamp
+	345, // 238: stewardmesh.v1.UpdateStackInstallationStateRequest.last_used_at:type_name -> google.protobuf.Timestamp
+	345, // 239: stewardmesh.v1.UpdateStackInstallationStateRequest.removed_at:type_name -> google.protobuf.Timestamp
+	345, // 240: stewardmesh.v1.StackLicense.starts_on:type_name -> google.protobuf.Timestamp
+	345, // 241: stewardmesh.v1.StackLicense.expires_on:type_name -> google.protobuf.Timestamp
+	345, // 242: stewardmesh.v1.StackLicense.created_at:type_name -> google.protobuf.Timestamp
+	345, // 243: stewardmesh.v1.StackLicense.updated_at:type_name -> google.protobuf.Timestamp
+	345, // 244: stewardmesh.v1.CreateStackLicenseRequest.starts_on:type_name -> google.protobuf.Timestamp
+	345, // 245: stewardmesh.v1.CreateStackLicenseRequest.expires_on:type_name -> google.protobuf.Timestamp
+	345, // 246: stewardmesh.v1.UpdateStackLicenseEntitlementRequest.starts_on:type_name -> google.protobuf.Timestamp
+	345, // 247: stewardmesh.v1.UpdateStackLicenseEntitlementRequest.expires_on:type_name -> google.protobuf.Timestamp
+	345, // 248: stewardmesh.v1.StackAssignment.assigned_at:type_name -> google.protobuf.Timestamp
+	345, // 249: stewardmesh.v1.StackAssignment.last_used_at:type_name -> google.protobuf.Timestamp
+	345, // 250: stewardmesh.v1.StackAssignment.ended_at:type_name -> google.protobuf.Timestamp
+	345, // 251: stewardmesh.v1.StackAssignment.created_at:type_name -> google.protobuf.Timestamp
+	345, // 252: stewardmesh.v1.StackAssignment.updated_at:type_name -> google.protobuf.Timestamp
+	345, // 253: stewardmesh.v1.CreateStackAssignmentRequest.assigned_at:type_name -> google.protobuf.Timestamp
+	345, // 254: stewardmesh.v1.CreateStackAssignmentRequest.last_used_at:type_name -> google.protobuf.Timestamp
+	345, // 255: stewardmesh.v1.CreateStackAssignmentRequest.ended_at:type_name -> google.protobuf.Timestamp
+	345, // 256: stewardmesh.v1.UpdateStackAssignmentUsageRequest.last_used_at:type_name -> google.protobuf.Timestamp
+	345, // 257: stewardmesh.v1.EndStackAssignmentRequest.ended_at:type_name -> google.protobuf.Timestamp
 	218, // 258: stewardmesh.v1.StackSnapshot.products:type_name -> stewardmesh.v1.StackProduct
 	221, // 259: stewardmesh.v1.StackSnapshot.versions:type_name -> stewardmesh.v1.StackVersion
 	224, // 260: stewardmesh.v1.StackSnapshot.installations:type_name -> stewardmesh.v1.StackInstallation
 	227, // 261: stewardmesh.v1.StackSnapshot.licenses:type_name -> stewardmesh.v1.StackLicense
 	230, // 262: stewardmesh.v1.StackSnapshot.assignments:type_name -> stewardmesh.v1.StackAssignment
-	344, // 263: stewardmesh.v1.GetStackAnalyticsRequest.as_of:type_name -> google.protobuf.Timestamp
-	344, // 264: stewardmesh.v1.StackAnalytics.as_of:type_name -> google.protobuf.Timestamp
+	345, // 263: stewardmesh.v1.GetStackAnalyticsRequest.as_of:type_name -> google.protobuf.Timestamp
+	345, // 264: stewardmesh.v1.StackAnalytics.as_of:type_name -> google.protobuf.Timestamp
 	236, // 265: stewardmesh.v1.StackAnalytics.compliance_conditions:type_name -> stewardmesh.v1.StackCondition
-	345, // 266: stewardmesh.v1.StackExchangeRecord.payload:type_name -> google.protobuf.Struct
+	346, // 266: stewardmesh.v1.StackExchangeRecord.payload:type_name -> google.protobuf.Struct
 	238, // 267: stewardmesh.v1.ExportStackRecordsResponse.records:type_name -> stewardmesh.v1.StackExchangeRecord
 	238, // 268: stewardmesh.v1.ImportStackRecordsRequest.records:type_name -> stewardmesh.v1.StackExchangeRecord
 	289, // 269: stewardmesh.v1.StackImportResult.records:type_name -> stewardmesh.v1.ExchangeRecordOutcome
 	243, // 270: stewardmesh.v1.StackImportResult.pending_ownership:type_name -> stewardmesh.v1.StackImportOwnership
 	246, // 271: stewardmesh.v1.ListSignalRulesResponse.items:type_name -> stewardmesh.v1.SignalRule
-	344, // 272: stewardmesh.v1.SignalRule.created_at:type_name -> google.protobuf.Timestamp
-	344, // 273: stewardmesh.v1.SignalRule.updated_at:type_name -> google.protobuf.Timestamp
+	345, // 272: stewardmesh.v1.SignalRule.created_at:type_name -> google.protobuf.Timestamp
+	345, // 273: stewardmesh.v1.SignalRule.updated_at:type_name -> google.protobuf.Timestamp
 	251, // 274: stewardmesh.v1.ListSignalAlertsResponse.items:type_name -> stewardmesh.v1.SignalAlert
-	344, // 275: stewardmesh.v1.SignalAlert.due_at:type_name -> google.protobuf.Timestamp
-	344, // 276: stewardmesh.v1.SignalAlert.acknowledged_at:type_name -> google.protobuf.Timestamp
-	344, // 277: stewardmesh.v1.SignalAlert.first_detected_at:type_name -> google.protobuf.Timestamp
-	344, // 278: stewardmesh.v1.SignalAlert.last_observed_at:type_name -> google.protobuf.Timestamp
-	344, // 279: stewardmesh.v1.SignalAlert.resolved_at:type_name -> google.protobuf.Timestamp
+	345, // 275: stewardmesh.v1.SignalAlert.due_at:type_name -> google.protobuf.Timestamp
+	345, // 276: stewardmesh.v1.SignalAlert.acknowledged_at:type_name -> google.protobuf.Timestamp
+	345, // 277: stewardmesh.v1.SignalAlert.first_detected_at:type_name -> google.protobuf.Timestamp
+	345, // 278: stewardmesh.v1.SignalAlert.last_observed_at:type_name -> google.protobuf.Timestamp
+	345, // 279: stewardmesh.v1.SignalAlert.resolved_at:type_name -> google.protobuf.Timestamp
 	254, // 280: stewardmesh.v1.ListSignalAlertHistoryResponse.items:type_name -> stewardmesh.v1.SignalAlertHistory
-	344, // 281: stewardmesh.v1.SignalAlertHistory.occurred_at:type_name -> google.protobuf.Timestamp
-	344, // 282: stewardmesh.v1.EvaluateSignalsRequest.as_of:type_name -> google.protobuf.Timestamp
-	344, // 283: stewardmesh.v1.SignalEvaluationResult.as_of:type_name -> google.protobuf.Timestamp
+	345, // 281: stewardmesh.v1.SignalAlertHistory.occurred_at:type_name -> google.protobuf.Timestamp
+	345, // 282: stewardmesh.v1.EvaluateSignalsRequest.as_of:type_name -> google.protobuf.Timestamp
+	345, // 283: stewardmesh.v1.SignalEvaluationResult.as_of:type_name -> google.protobuf.Timestamp
 	264, // 284: stewardmesh.v1.ListSignalSubscriptionsResponse.items:type_name -> stewardmesh.v1.SignalSubscription
 	263, // 285: stewardmesh.v1.ListSignalSubscriptionTargetsResponse.items:type_name -> stewardmesh.v1.SignalSubscriptionTarget
-	344, // 286: stewardmesh.v1.SignalSubscription.created_at:type_name -> google.protobuf.Timestamp
-	344, // 287: stewardmesh.v1.SignalDelivery.next_attempt_at:type_name -> google.protobuf.Timestamp
-	344, // 288: stewardmesh.v1.SignalDelivery.created_at:type_name -> google.protobuf.Timestamp
-	344, // 289: stewardmesh.v1.SignalDelivery.updated_at:type_name -> google.protobuf.Timestamp
-	344, // 290: stewardmesh.v1.ListPendingSignalDeliveriesRequest.as_of:type_name -> google.protobuf.Timestamp
+	345, // 286: stewardmesh.v1.SignalSubscription.created_at:type_name -> google.protobuf.Timestamp
+	345, // 287: stewardmesh.v1.SignalDelivery.next_attempt_at:type_name -> google.protobuf.Timestamp
+	345, // 288: stewardmesh.v1.SignalDelivery.created_at:type_name -> google.protobuf.Timestamp
+	345, // 289: stewardmesh.v1.SignalDelivery.updated_at:type_name -> google.protobuf.Timestamp
+	345, // 290: stewardmesh.v1.ListPendingSignalDeliveriesRequest.as_of:type_name -> google.protobuf.Timestamp
 	268, // 291: stewardmesh.v1.ListPendingSignalDeliveriesResponse.items:type_name -> stewardmesh.v1.SignalDelivery
-	344, // 292: stewardmesh.v1.ExchangeOwnershipMetadata.claimed_at:type_name -> google.protobuf.Timestamp
+	345, // 292: stewardmesh.v1.ExchangeOwnershipMetadata.claimed_at:type_name -> google.protobuf.Timestamp
 	274, // 293: stewardmesh.v1.ExchangeRecord.dependencies:type_name -> stewardmesh.v1.ExchangeReference
 	276, // 294: stewardmesh.v1.ExchangeRecord.provenance:type_name -> stewardmesh.v1.ExchangeProvenance
 	277, // 295: stewardmesh.v1.ExchangeRecord.ownership:type_name -> stewardmesh.v1.ExchangeOwnershipMetadata
 	278, // 296: stewardmesh.v1.ExchangeRecord.file:type_name -> stewardmesh.v1.ExchangeFileMetadata
-	345, // 297: stewardmesh.v1.ExchangeRecord.payload:type_name -> google.protobuf.Struct
-	344, // 298: stewardmesh.v1.ExchangeManifest.exported_at:type_name -> google.protobuf.Timestamp
+	346, // 297: stewardmesh.v1.ExchangeRecord.payload:type_name -> google.protobuf.Struct
+	345, // 298: stewardmesh.v1.ExchangeManifest.exported_at:type_name -> google.protobuf.Timestamp
 	279, // 299: stewardmesh.v1.ExchangeManifest.records:type_name -> stewardmesh.v1.ExchangeRecord
 	275, // 300: stewardmesh.v1.ExchangeManifest.schemas:type_name -> stewardmesh.v1.ExchangeSchemaReference
 	274, // 301: stewardmesh.v1.ExchangeRecordDescriptor.dependencies:type_name -> stewardmesh.v1.ExchangeReference
@@ -27500,45 +27509,45 @@ var file_stewardmesh_proto_depIdxs = []int32{
 	274, // 304: stewardmesh.v1.ExportExchangePackageRequest.selection:type_name -> stewardmesh.v1.ExchangeReference
 	274, // 305: stewardmesh.v1.ExchangeRecordOutcome.missing_dependencies:type_name -> stewardmesh.v1.ExchangeReference
 	289, // 306: stewardmesh.v1.ExchangePackage.records:type_name -> stewardmesh.v1.ExchangeRecordOutcome
-	344, // 307: stewardmesh.v1.ExchangePackage.created_at:type_name -> google.protobuf.Timestamp
-	344, // 308: stewardmesh.v1.ExchangePackage.updated_at:type_name -> google.protobuf.Timestamp
+	345, // 307: stewardmesh.v1.ExchangePackage.created_at:type_name -> google.protobuf.Timestamp
+	345, // 308: stewardmesh.v1.ExchangePackage.updated_at:type_name -> google.protobuf.Timestamp
 	290, // 309: stewardmesh.v1.ImportExchangePackageResponse.package:type_name -> stewardmesh.v1.ExchangePackage
 	294, // 310: stewardmesh.v1.ListReachEndpointsResponse.items:type_name -> stewardmesh.v1.ReachEndpoint
 	297, // 311: stewardmesh.v1.ListReachProvidersResponse.items:type_name -> stewardmesh.v1.ReachProvider
-	344, // 312: stewardmesh.v1.ReachProvider.created_at:type_name -> google.protobuf.Timestamp
-	344, // 313: stewardmesh.v1.ReachProvider.updated_at:type_name -> google.protobuf.Timestamp
+	345, // 312: stewardmesh.v1.ReachProvider.created_at:type_name -> google.protobuf.Timestamp
+	345, // 313: stewardmesh.v1.ReachProvider.updated_at:type_name -> google.protobuf.Timestamp
 	304, // 314: stewardmesh.v1.ListReachProviderTestsResponse.items:type_name -> stewardmesh.v1.ReachProviderTest
-	344, // 315: stewardmesh.v1.ReachProviderTest.tested_at:type_name -> google.protobuf.Timestamp
+	345, // 315: stewardmesh.v1.ReachProviderTest.tested_at:type_name -> google.protobuf.Timestamp
 	307, // 316: stewardmesh.v1.ListReachTemplatesResponse.items:type_name -> stewardmesh.v1.ReachTemplate
-	344, // 317: stewardmesh.v1.ReachTemplate.created_at:type_name -> google.protobuf.Timestamp
-	344, // 318: stewardmesh.v1.ReachTemplate.updated_at:type_name -> google.protobuf.Timestamp
+	345, // 317: stewardmesh.v1.ReachTemplate.created_at:type_name -> google.protobuf.Timestamp
+	345, // 318: stewardmesh.v1.ReachTemplate.updated_at:type_name -> google.protobuf.Timestamp
 	313, // 319: stewardmesh.v1.ListReachGroupsResponse.items:type_name -> stewardmesh.v1.ReachSubscriberGroup
 	310, // 320: stewardmesh.v1.ReachSubscriberGroup.recipients:type_name -> stewardmesh.v1.ReachRecipient
-	344, // 321: stewardmesh.v1.ReachSubscriberGroup.created_at:type_name -> google.protobuf.Timestamp
-	344, // 322: stewardmesh.v1.ReachSubscriberGroup.updated_at:type_name -> google.protobuf.Timestamp
+	345, // 321: stewardmesh.v1.ReachSubscriberGroup.created_at:type_name -> google.protobuf.Timestamp
+	345, // 322: stewardmesh.v1.ReachSubscriberGroup.updated_at:type_name -> google.protobuf.Timestamp
 	310, // 323: stewardmesh.v1.CreateReachGroupRequest.recipients:type_name -> stewardmesh.v1.ReachRecipient
 	310, // 324: stewardmesh.v1.UpdateReachGroupRequest.recipients:type_name -> stewardmesh.v1.ReachRecipient
 	318, // 325: stewardmesh.v1.ListReachMessagesResponse.items:type_name -> stewardmesh.v1.ReachMessage
 	310, // 326: stewardmesh.v1.ReachMessage.recipients:type_name -> stewardmesh.v1.ReachRecipient
-	344, // 327: stewardmesh.v1.ReachMessage.next_attempt_at:type_name -> google.protobuf.Timestamp
-	344, // 328: stewardmesh.v1.ReachMessage.created_at:type_name -> google.protobuf.Timestamp
-	344, // 329: stewardmesh.v1.ReachMessage.updated_at:type_name -> google.protobuf.Timestamp
-	345, // 330: stewardmesh.v1.SendReachMessageRequest.variables:type_name -> google.protobuf.Struct
+	345, // 327: stewardmesh.v1.ReachMessage.next_attempt_at:type_name -> google.protobuf.Timestamp
+	345, // 328: stewardmesh.v1.ReachMessage.created_at:type_name -> google.protobuf.Timestamp
+	345, // 329: stewardmesh.v1.ReachMessage.updated_at:type_name -> google.protobuf.Timestamp
+	344, // 330: stewardmesh.v1.SendReachMessageRequest.variables:type_name -> stewardmesh.v1.SendReachMessageRequest.VariablesEntry
 	323, // 331: stewardmesh.v1.ListReachMessageAttemptsResponse.items:type_name -> stewardmesh.v1.ReachDeliveryAttempt
-	344, // 332: stewardmesh.v1.ReachDeliveryAttempt.next_attempt_at:type_name -> google.protobuf.Timestamp
-	344, // 333: stewardmesh.v1.ReachDeliveryAttempt.occurred_at:type_name -> google.protobuf.Timestamp
+	345, // 332: stewardmesh.v1.ReachDeliveryAttempt.next_attempt_at:type_name -> google.protobuf.Timestamp
+	345, // 333: stewardmesh.v1.ReachDeliveryAttempt.occurred_at:type_name -> google.protobuf.Timestamp
 	330, // 334: stewardmesh.v1.ListBridgeClientsResponse.items:type_name -> stewardmesh.v1.BridgeClient
 	21,  // 335: stewardmesh.v1.CreateBridgeClientRequest.allowed_scopes:type_name -> stewardmesh.v1.BridgeScope
 	21,  // 336: stewardmesh.v1.BridgeClient.allowed_scopes:type_name -> stewardmesh.v1.BridgeScope
-	344, // 337: stewardmesh.v1.BridgeClient.created_at:type_name -> google.protobuf.Timestamp
-	344, // 338: stewardmesh.v1.BridgeClient.revoked_at:type_name -> google.protobuf.Timestamp
+	345, // 337: stewardmesh.v1.BridgeClient.created_at:type_name -> google.protobuf.Timestamp
+	345, // 338: stewardmesh.v1.BridgeClient.revoked_at:type_name -> google.protobuf.Timestamp
 	334, // 339: stewardmesh.v1.ListBridgeGrantsResponse.items:type_name -> stewardmesh.v1.BridgeGrant
 	21,  // 340: stewardmesh.v1.BridgeGrant.scopes:type_name -> stewardmesh.v1.BridgeScope
-	344, // 341: stewardmesh.v1.BridgeGrant.access_expires_at:type_name -> google.protobuf.Timestamp
-	344, // 342: stewardmesh.v1.BridgeGrant.refresh_expires_at:type_name -> google.protobuf.Timestamp
-	344, // 343: stewardmesh.v1.BridgeGrant.created_at:type_name -> google.protobuf.Timestamp
-	344, // 344: stewardmesh.v1.BridgeGrant.last_used_at:type_name -> google.protobuf.Timestamp
-	344, // 345: stewardmesh.v1.BridgeGrant.revoked_at:type_name -> google.protobuf.Timestamp
+	345, // 341: stewardmesh.v1.BridgeGrant.access_expires_at:type_name -> google.protobuf.Timestamp
+	345, // 342: stewardmesh.v1.BridgeGrant.refresh_expires_at:type_name -> google.protobuf.Timestamp
+	345, // 343: stewardmesh.v1.BridgeGrant.created_at:type_name -> google.protobuf.Timestamp
+	345, // 344: stewardmesh.v1.BridgeGrant.last_used_at:type_name -> google.protobuf.Timestamp
+	345, // 345: stewardmesh.v1.BridgeGrant.revoked_at:type_name -> google.protobuf.Timestamp
 	22,  // 346: stewardmesh.v1.FoundationService.GetOrganization:input_type -> stewardmesh.v1.GetOrganizationRequest
 	326, // 347: stewardmesh.v1.BridgeService.ListClients:input_type -> stewardmesh.v1.ListBridgeClientsRequest
 	328, // 348: stewardmesh.v1.BridgeService.CreateClient:input_type -> stewardmesh.v1.CreateBridgeClientRequest
@@ -27859,13 +27868,14 @@ func file_stewardmesh_proto_init() {
 	if File_stewardmesh_proto != nil {
 		return
 	}
+	file_stewardmesh_proto_msgTypes[276].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_stewardmesh_proto_rawDesc), len(file_stewardmesh_proto_rawDesc)),
 			NumEnums:      22,
-			NumMessages:   322,
+			NumMessages:   323,
 			NumExtensions: 0,
 			NumServices:   16,
 		},

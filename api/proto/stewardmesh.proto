@@ -2730,7 +2730,10 @@ message CreateReachProviderRequest {
   // An env: or external: reference under a deployment-owned resolver. Raw OAuth
   // tokens, passwords, signing keys, and provider credentials are invalid.
   string secret_ref = 6;
-  bool enabled = 7;
+  // Omission defaults to enabled. Presence is required to create a disabled
+  // provider because an absent proto3 scalar is otherwise indistinguishable
+  // from an explicit false value.
+  optional bool enabled = 7;
 }
 
 message UpdateReachProviderRequest {
@@ -2881,7 +2884,7 @@ message ReachMessage {
 
 message SendReachMessageRequest {
   string group_id = 1;
-  google.protobuf.Struct variables = 2;
+  map<string, string> variables = 2;
   bool confirm = 3;
   string idempotency_key = 4;
 }

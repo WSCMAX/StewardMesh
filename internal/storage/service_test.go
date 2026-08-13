@@ -88,6 +88,44 @@ func TestServiceCreatesMetadataAndVerifiesContent(t *testing.T) {
 	}
 }
 
+func TestAuthorizeAndOpenBlobBindsAuditContentAndCancellation(t *testing.T) {
+	metadata := newServiceMetadataStore()
+	objects, err := NewLocalBlobStore(t.TempDir(), 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	auditor := &storageTestAuditor{}
+	service, err := NewService(metadata, objects, auditor, ServiceConfig{OrganizationID: "example-org"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := foundation.WithScope(context.Background(), foundation.Scope{OrganizationID: "example-org", ActorID: "account-1", CorrelationID: "request-1"})
+	created, err := service.CreateBlob(ctx, CreateBlobInput{Name: "evidence.txt", MediaType: "text/plain", Content: strings.NewReader("verified")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	auditor.events = nil
+	blob, content, err := service.AuthorizeAndOpenBlob(ctx, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := io.ReadAll(content)
+	_ = content.Close()
+	if err != nil || blob.ID != created.ID || string(loaded) != "verified" {
+		t.Fatalf("blob=%#v content=%q err=%v", blob, loaded, err)
+	}
+	if len(auditor.events) != 1 || auditor.events[0].Action != "vault.blob.download_authorized" || auditor.events[0].Metadata["delivery"] != "in_process" {
+		t.Fatalf("audit=%#v", auditor.events)
+	}
+
+	canceled, cancel := context.WithCancel(context.Background())
+	reader := &integrityReader{ctx: canceled, reader: &cancelingStorageReader{cancel: cancel}, expected: strings.Repeat("0", 64), hash: sha256.New()}
+	_, err = io.ReadAll(reader)
+	if !errors.Is(err, context.Canceled) || reader.reader.(*cancelingStorageReader).reads != 1 {
+		t.Fatalf("cancellation error=%v reads=%d", err, reader.reader.(*cancelingStorageReader).reads)
+	}
+}
+
 func TestServiceRejectsUnsafeMetadata(t *testing.T) {
 	objects, err := NewLocalBlobStore(t.TempDir(), 1024)
 	if err != nil {
@@ -168,3 +206,27 @@ func TestImportBlobVerifiesStoredBytesBeforeReturningUnchanged(t *testing.T) {
 		}
 	}
 }
+
+type storageTestAuditor struct{ events []foundation.AuditEvent }
+
+func (a *storageTestAuditor) Record(_ context.Context, event foundation.AuditEvent) error {
+	a.events = append(a.events, event)
+	return nil
+}
+
+type cancelingStorageReader struct {
+	cancel context.CancelFunc
+	reads  int
+}
+
+func (r *cancelingStorageReader) Read(p []byte) (int, error) {
+	r.reads++
+	r.cancel()
+	if len(p) == 0 {
+		return 0, nil
+	}
+	p[0] = 'x'
+	return 1, nil
+}
+
+func (*cancelingStorageReader) Close() error { return nil }

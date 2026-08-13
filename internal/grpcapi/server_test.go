@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -63,6 +64,26 @@ func TestRegisterAllCoversEveryDeclaredServiceAndRPC(t *testing.T) {
 	}
 	if declaredMethods != 154 || registeredMethods != declaredMethods {
 		t.Fatalf("registered %d methods, descriptor declares %d", registeredMethods, declaredMethods)
+	}
+
+	publicServer := grpc.NewServer()
+	if err := gateway.RegisterPublic(publicServer); err != nil {
+		t.Fatal(err)
+	}
+	public := publicServer.GetServiceInfo()
+	if len(public) != 1 || len(public["stewardmesh.v1.GuardService"].Methods) != 3 {
+		t.Fatalf("public registration=%#v", public)
+	}
+	protectedServer := grpc.NewServer()
+	if err := gateway.RegisterProtected(protectedServer); err != nil {
+		t.Fatal(err)
+	}
+	protectedMethods := 0
+	for _, information := range protectedServer.GetServiceInfo() {
+		protectedMethods += len(information.Methods)
+	}
+	if protectedMethods != 151 {
+		t.Fatalf("protected methods=%d, want 151", protectedMethods)
 	}
 }
 
@@ -335,13 +356,13 @@ func TestTransportCancellationTakesPrecedence(t *testing.T) {
 			t.Fatal(err)
 		}
 		gateway, err := New(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusCreated) }), Options{
-			AllowedOrigin: "https://stewardmesh.example.test", Guard: &fakeAuthenticator{}, Vault: vault,
+			AllowedOrigin: "https://stewardmesh.example.test", OrganizationID: "example-org", Guard: &fakeAuthenticator{}, Vault: vault,
 		})
 		if err != nil {
 			t.Fatal(err)
 		}
 		output := stewardmeshv1.File_stewardmesh_proto.Services().ByName("VaultService").Methods().ByName("DownloadBlob").Output()
-		_, err = gateway.downloadVault(ctx, output, preparedRequest{}, map[string]any{"blobId": blobID})
+		_, err = gateway.downloadVault(ctx, output, guard.Authentication{Principal: guard.Principal{Subject: "administrator"}}, preparedRequest{}, map[string]any{"blobId": blobID})
 		if status.Code(err) != codes.Canceled {
 			t.Fatalf("code=%s err=%v", status.Code(err), err)
 		}
@@ -374,8 +395,12 @@ func TestTransportCodecRequestBoundaries(t *testing.T) {
 		t.Fatalf("public request at limit: %v", err)
 	}
 	publicOverLimit := append(append([]byte(nil), publicAtLimit...), 0)
-	if err := codec.Unmarshal(publicOverLimit, &stewardmeshv1.BootstrapAdministratorRequest{}); status.Code(err) != codes.ResourceExhausted {
-		t.Fatalf("public request over limit code=%s err=%v", status.Code(err), err)
+	publicRequest := &stewardmeshv1.BootstrapAdministratorRequest{}
+	if err := codec.Unmarshal(publicOverLimit, publicRequest); err != nil {
+		t.Fatalf("public request marker: %v", err)
+	}
+	if _, rejected := gateway.transportRejected.LoadAndDelete(publicRequest); !rejected {
+		t.Fatal("public request over limit was not rejected before protobuf decoding")
 	}
 
 	for _, binary := range []struct {
@@ -400,10 +425,43 @@ func TestTransportCodecRequestBoundaries(t *testing.T) {
 				t.Fatalf("request at limit content=%d err=%v", len(binary.content(request)), err)
 			}
 			overLimit := append(append([]byte(nil), atLimit...), 0)
-			if err := codec.Unmarshal(overLimit, binary.newRequest()); status.Code(err) != codes.ResourceExhausted {
-				t.Fatalf("request over limit code=%s err=%v", status.Code(err), err)
+			overRequest := binary.newRequest()
+			if err := codec.Unmarshal(overLimit, overRequest); err != nil {
+				t.Fatalf("request over limit marker: %v", err)
+			}
+			if _, rejected := gateway.transportRejected.LoadAndDelete(overRequest); !rejected {
+				t.Fatal("request over limit was not rejected before protobuf decoding")
 			}
 		})
+	}
+}
+
+func TestRealTransportPreservesPublicResourceExhausted(t *testing.T) {
+	gateway, err := New(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("oversized public request reached the application handler")
+	}), Options{AllowedOrigin: "https://stewardmesh.example.test", Guard: &fakeAuthenticator{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener := bufconn.Listen(1 << 20)
+	server := grpc.NewServer(grpc.MaxRecvMsgSize(MaximumMessageBytes), grpc.ForceServerCodec(gateway.TransportCodec()))
+	if err := gateway.RegisterAll(server); err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(func() { server.Stop(); _ = listener.Close() })
+	connection, err := grpc.NewClient("passthrough:///public-limit", grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return listener.Dial() }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = connection.Close() })
+	request := &stewardmeshv1.BootstrapAdministratorRequest{}
+	unknown := bytesFieldWirePayload(MaximumPublicMessageBytes - 3)
+	unknown[0] = 0x7a
+	request.ProtoReflect().SetUnknown(unknown)
+	_, err = stewardmeshv1.NewGuardServiceClient(connection).BootstrapAdministrator(t.Context(), request)
+	if status.Code(err) != codes.ResourceExhausted {
+		t.Fatalf("code=%s err=%v", status.Code(err), err)
 	}
 }
 
@@ -696,6 +754,17 @@ func TestPresenceHelpersTranslateToStrictRESTContracts(t *testing.T) {
 				"enabled": false, "thresholdDays": []any{}, "createdBy": "administrator", "revision": 1,
 				"createdAt": "2026-08-13T12:00:00Z", "updatedAt": "2026-08-13T12:00:00Z",
 			})
+		case "/api/v1/reach/providers":
+			enabled, exists := body["enabled"]
+			if !exists {
+				enabled = true
+			}
+			writeTestJSON(w, http.StatusCreated, map[string]any{
+				"id": "reach-provider", "organizationId": "example-org", "name": "Reach provider", "kind": "webhook",
+				"endpointId": "webhook-primary", "secretConfigured": true, "enabled": enabled, "revision": 1,
+				"createdBy": "administrator", "updatedBy": "administrator",
+				"createdAt": "2026-08-13T12:00:00Z", "updatedAt": "2026-08-13T12:00:00Z",
+			})
 		default:
 			t.Fatalf("unexpected route %s", r.URL.Path)
 		}
@@ -739,8 +808,117 @@ func TestPresenceHelpersTranslateToStrictRESTContracts(t *testing.T) {
 	if enabled := signalsResponse.ProtoReflect().Get(signalsResponse.ProtoReflect().Descriptor().Fields().ByName("enabled")).Bool(); enabled {
 		t.Fatal("explicit disabled Signals rule became enabled")
 	}
-	if requests != 2 {
-		t.Fatalf("HTTP requests = %d, want two", requests)
+
+	reachService := stewardmeshv1.File_stewardmesh_proto.Services().ByName("ReachService")
+	reachMethod := reachService.Methods().ByName("CreateProvider")
+	for _, test := range []struct {
+		name    string
+		enabled *bool
+		want    bool
+	}{
+		{name: "explicit disabled", enabled: proto.Bool(false), want: false},
+		{name: "omitted defaults enabled", want: true},
+	} {
+		t.Run("Reach "+test.name, func(t *testing.T) {
+			response, invokeErr := gateway.invoke(ctx, "/stewardmesh.v1.ReachService/CreateProvider", reachMethod.Output(), &stewardmeshv1.CreateReachProviderRequest{
+				Id: "reach-provider", Name: "Reach provider", Kind: "webhook", EndpointId: "webhook-primary", SecretRef: "env:REACH_WEBHOOK", Enabled: test.enabled,
+			})
+			if invokeErr != nil {
+				t.Fatal(invokeErr)
+			}
+			if enabled := response.ProtoReflect().Get(response.ProtoReflect().Descriptor().Fields().ByName("enabled")).Bool(); enabled != test.want {
+				t.Fatalf("enabled=%t, want %t", enabled, test.want)
+			}
+		})
+	}
+	if requests != 4 {
+		t.Fatalf("HTTP requests = %d, want four", requests)
+	}
+}
+
+func TestVaultGRPCAcceptsAndDownloadsZeroByteFile(t *testing.T) {
+	metadataStore := &grpcMemoryMetadataStore{blobs: make(map[string]storage.Blob)}
+	objects, err := storage.NewLocalBlobStore(t.TempDir(), 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vault, err := storage.NewService(metadataStore, objects, foundation.NopAuditor{}, storage.ServiceConfig{OrganizationID: "example-org"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handlerCalls := 0
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handlerCalls++
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/blobs":
+			if err := r.ParseMultipartForm(1 << 20); err != nil {
+				t.Fatalf("parse multipart: %v", err)
+			}
+			file, header, err := r.FormFile("file")
+			if err != nil {
+				t.Fatalf("read file part: %v", err)
+			}
+			defer file.Close()
+			created, err := vault.CreateBlob(r.Context(), storage.CreateBlobInput{Name: header.Filename, MediaType: header.Header.Get("Content-Type"), Content: file})
+			if err != nil {
+				t.Fatalf("create blob: %v", err)
+			}
+			writeTestJSON(w, http.StatusCreated, created)
+		default:
+			t.Fatalf("unexpected Vault route %s %s", r.Method, r.URL.Path)
+		}
+	})
+	gateway, err := New(handler, Options{AllowedOrigin: "https://stewardmesh.example.test", OrganizationID: "example-org", Guard: &fakeAuthenticator{}, Vault: vault})
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener := bufconn.Listen(1 << 20)
+	server := grpc.NewServer(grpc.InTapHandle(gateway.TapHandle), grpc.ForceServerCodec(gateway.TransportCodec()))
+	if err := gateway.RegisterAll(server); err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(func() { server.Stop(); _ = listener.Close() })
+	connection, err := grpc.NewClient("passthrough:///zero-byte-vault", grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return listener.Dial() }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = connection.Close() })
+	client := stewardmeshv1.NewVaultServiceClient(connection)
+	ctx := metadata.NewOutgoingContext(context.Background(), metadata.Pairs("authorization", "Bearer opaque-session"))
+	created, err := client.CreateBlob(ctx, &stewardmeshv1.CreateBlobRequest{Name: "empty.txt", MediaType: "text/plain", Content: []byte{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.GetSizeBytes() != 0 || created.GetSha256() != "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" {
+		t.Fatalf("zero-byte metadata size=%d sha256=%q", created.GetSizeBytes(), created.GetSha256())
+	}
+	downloaded, err := client.DownloadBlob(ctx, &stewardmeshv1.DownloadBlobRequest{BlobId: created.GetId()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if downloaded.GetBlob().GetId() != created.GetId() || len(downloaded.GetContent()) != 0 {
+		t.Fatalf("downloaded=%#v", downloaded)
+	}
+	if handlerCalls != 1 {
+		t.Fatalf("HTTP handler calls=%d, want only the CreateBlob request; direct download authorization and bytes must stay bound to one Vault", handlerCalls)
+	}
+}
+
+func TestGatewayRejectsMismatchedVaultOrganization(t *testing.T) {
+	objects, err := storage.NewLocalBlobStore(t.TempDir(), 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vault, err := storage.NewService(&grpcMemoryMetadataStore{blobs: make(map[string]storage.Blob)}, objects, foundation.NopAuditor{}, storage.ServiceConfig{OrganizationID: "other-org"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = New(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}), Options{
+		AllowedOrigin: "https://stewardmesh.example.test", OrganizationID: "example-org", Guard: &fakeAuthenticator{}, Vault: vault,
+	})
+	if err == nil || err.Error() != "gRPC Vault organization must match the application organization" {
+		t.Fatalf("error=%v", err)
 	}
 }
 
@@ -792,7 +970,10 @@ func TestAssetLabelUsesActualPostMetadataWithoutConsumingReadRoute(t *testing.T)
 	}
 }
 
-type fakeAuthenticator struct{ calls int }
+type fakeAuthenticator struct {
+	calls         int
+	permissionErr error
+}
 
 func (f *fakeAuthenticator) AuthenticateSession(_ context.Context, token string) (guard.Authentication, error) {
 	f.calls++
@@ -804,6 +985,10 @@ func (f *fakeAuthenticator) AuthenticateSession(_ context.Context, token string)
 		Principal: guard.Principal{Subject: "administrator", OrganizationID: "example-org", Username: "administrator"},
 		Grants:    []guard.Grant{{Permission: guard.PermissionGuardManage, Scope: guard.Scope{Kind: guard.ScopeOrganization, OrganizationID: "example-org", ResourceID: "example-org"}}},
 	}, nil
+}
+
+func (f *fakeAuthenticator) CheckPermission(context.Context, guard.Authentication, guard.Permission, guard.Scope) error {
+	return f.permissionErr
 }
 
 type grpcTestMetadataStore struct{ blob storage.Blob }
@@ -857,6 +1042,44 @@ func (r *grpcCancelingReader) Read([]byte) (int, error) {
 }
 
 func (*grpcCancelingReader) Close() error { return nil }
+
+type grpcMemoryMetadataStore struct {
+	mu    sync.Mutex
+	blobs map[string]storage.Blob
+}
+
+func (s *grpcMemoryMetadataStore) ListBlobs(_ context.Context, organizationID string) ([]storage.Blob, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	items := make([]storage.Blob, 0, len(s.blobs))
+	for _, blob := range s.blobs {
+		if blob.OrganizationID == organizationID {
+			items = append(items, blob)
+		}
+	}
+	return items, nil
+}
+
+func (s *grpcMemoryMetadataStore) GetBlob(_ context.Context, organizationID, id string) (storage.Blob, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	blob, ok := s.blobs[organizationID+"\x00"+id]
+	if !ok {
+		return storage.Blob{}, storage.ErrNotFound
+	}
+	return blob, nil
+}
+
+func (s *grpcMemoryMetadataStore) CreateBlob(_ context.Context, blob storage.Blob) (storage.Blob, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := blob.OrganizationID + "\x00" + blob.ID
+	if _, exists := s.blobs[key]; exists {
+		return storage.Blob{}, storage.ErrConflict
+	}
+	s.blobs[key] = blob
+	return blob, nil
+}
 
 func writeTestJSON(w http.ResponseWriter, statusCode int, value any) {
 	w.Header().Set("Content-Type", "application/json")

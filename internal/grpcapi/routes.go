@@ -28,6 +28,12 @@ const (
 	transformNone requestTransform = iota
 	transformPatternsFieldPresence
 	transformSignalEnabledPresence
+	transformAtlasCreateModel
+	transformAtlasUpdateModel
+	transformAtlasCreateAsset
+	transformAtlasUpdateAsset
+	transformAtlasBulkCreateAssets
+	transformVaultCreateBlob
 )
 
 type route struct {
@@ -83,14 +89,14 @@ func routes() map[string]route {
 		"/stewardmesh.v1.AssetService/GetAssetModel":             endpoint(http.MethodGet, "/api/v1/asset-models/{modelId}"),
 		"/stewardmesh.v1.AssetService/GetAssetModelInventory":    endpoint(http.MethodGet, "/api/v1/asset-models/{modelId}/inventory"),
 		"/stewardmesh.v1.AssetService/ResolveAssetModel":         endpoint(http.MethodGet, "/api/v1/asset-models/resolve"),
-		"/stewardmesh.v1.AssetService/CreateAssetModel":          {method: http.MethodPost, path: "/api/v1/asset-models", flatten: []string{"model"}},
-		"/stewardmesh.v1.AssetService/UpdateAssetModel":          {method: http.MethodPut, path: "/api/v1/asset-models/{id}", pathFields: map[string]string{"id": "model.id"}, flatten: []string{"model"}},
+		"/stewardmesh.v1.AssetService/CreateAssetModel":          {method: http.MethodPost, path: "/api/v1/asset-models", flatten: []string{"model"}, transform: transformAtlasCreateModel},
+		"/stewardmesh.v1.AssetService/UpdateAssetModel":          {method: http.MethodPut, path: "/api/v1/asset-models/{id}", pathFields: map[string]string{"id": "model.id"}, flatten: []string{"model"}, transform: transformAtlasUpdateModel},
 		"/stewardmesh.v1.AssetService/RetireAssetModel":          {method: http.MethodPost, path: "/api/v1/asset-models/{modelId}/retire", queryFields: map[string]string{"revision": "revision"}},
 		"/stewardmesh.v1.AssetService/ListAssets":                {method: http.MethodGet, path: "/api/v1/assets", queryFields: map[string]string{"search": "q"}},
 		"/stewardmesh.v1.AssetService/GetAsset":                  endpoint(http.MethodGet, "/api/v1/assets/{assetId}"),
-		"/stewardmesh.v1.AssetService/CreateAsset":               {method: http.MethodPost, path: "/api/v1/assets", flatten: []string{"asset"}},
-		"/stewardmesh.v1.AssetService/CreateAssetsFromModel":     endpoint(http.MethodPost, "/api/v1/asset-models/{modelId}/assets/bulk"),
-		"/stewardmesh.v1.AssetService/UpdateAsset":               {method: http.MethodPut, path: "/api/v1/assets/{id}", pathFields: map[string]string{"id": "asset.id"}, flatten: []string{"asset"}},
+		"/stewardmesh.v1.AssetService/CreateAsset":               {method: http.MethodPost, path: "/api/v1/assets", flatten: []string{"asset"}, transform: transformAtlasCreateAsset},
+		"/stewardmesh.v1.AssetService/CreateAssetsFromModel":     {method: http.MethodPost, path: "/api/v1/asset-models/{modelId}/assets/bulk", transform: transformAtlasBulkCreateAssets},
+		"/stewardmesh.v1.AssetService/UpdateAsset":               {method: http.MethodPut, path: "/api/v1/assets/{id}", pathFields: map[string]string{"id": "asset.id"}, flatten: []string{"asset"}, transform: transformAtlasUpdateAsset},
 		"/stewardmesh.v1.AssetService/ListAssetLifecycle":        endpoint(http.MethodGet, "/api/v1/assets/{assetId}/lifecycle"),
 		"/stewardmesh.v1.AssetService/ResolveAssetIdentifier":    endpoint(http.MethodPost, "/api/v1/asset-identifiers/resolve"),
 		"/stewardmesh.v1.AssetService/ListAssetIdentifiers":      endpoint(http.MethodGet, "/api/v1/assets/{assetId}/identifiers"),
@@ -140,7 +146,7 @@ func routes() map[string]route {
 
 		"/stewardmesh.v1.VaultService/ListBlobs":         endpoint(http.MethodGet, "/api/v1/blobs"),
 		"/stewardmesh.v1.VaultService/GetBlob":           endpoint(http.MethodGet, "/api/v1/blobs/{blobId}"),
-		"/stewardmesh.v1.VaultService/CreateBlob":        {method: http.MethodPost, path: "/api/v1/blobs", requestKind: requestMultipart},
+		"/stewardmesh.v1.VaultService/CreateBlob":        {method: http.MethodPost, path: "/api/v1/blobs", requestKind: requestMultipart, transform: transformVaultCreateBlob},
 		"/stewardmesh.v1.VaultService/DownloadBlob":      {method: http.MethodGet, path: "/api/v1/blobs/{blobId}/content", responseKind: responseVaultDownload},
 		"/stewardmesh.v1.VaultService/AuthorizeDownload": endpoint(http.MethodPost, "/api/v1/blobs/{blobId}/download-authorization"),
 

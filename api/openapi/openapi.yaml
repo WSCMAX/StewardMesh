@@ -1,4 +1,4 @@
-# Requirements: REQ-API-001, REQ-ATLAS-001, REQ-ATLAS-MODELS-001, REQ-ATLAS-CODES-001, REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005, REQ-DIRECTORY-EXPANSION-007, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-HORIZON-001, REQ-LEDGER-001, REQ-STACK-001, REQ-SIGNALS-001, REQ-REACH-001, REQ-EXCHANGE-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001, SEC-MCP-001.
+# Requirements: REQ-API-001, REQ-ATLAS-001, REQ-ATLAS-MODELS-001, REQ-ATLAS-CODES-001, REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005, REQ-DIRECTORY-EXPANSION-007, REQ-DIRECTORY-EXPANSION-008, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-HORIZON-001, REQ-LEDGER-001, REQ-STACK-001, REQ-SIGNALS-001, REQ-REACH-001, REQ-EXCHANGE-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001, SEC-MCP-001.
 openapi: 3.1.0
 info:
   title: StewardMesh API
@@ -1554,6 +1554,42 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/DirectoryImportSourceCollection'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+  /api/v1/graph:
+    get:
+      summary: Read the permission-scoped relationship graph
+      operationId: getRelationshipGraph
+      tags: [People]
+      x-requirement: REQ-DIRECTORY-EXPANSION-008
+      x-required-permission: directory.read
+      description: Projects visible People, location, imported-group, and permitted Atlas records into a bounded typed graph. Directory and asset visibility are derived exclusively from authenticated Guard grants and cannot be supplied by the client.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - name: search
+          in: query
+          schema: {type: string, maxLength: 200}
+          description: Case-insensitive record-label anchor search. When relationship is set, connected endpoint records are retained as context within the response limit.
+        - name: kind
+          in: query
+          schema: {$ref: '#/components/schemas/RelationshipGraphNodeKind'}
+          description: Anchor record type. When relationship is set, connected endpoint records of other types are retained as context within the response limit.
+        - name: relationship
+          in: query
+          schema: {$ref: '#/components/schemas/RelationshipGraphEdgeKind'}
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 500, default: 100}
+      responses:
+        '200':
+          description: Typed records and relationships restricted to the caller's intersected visibility scopes
+          headers:
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RelationshipGraph'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '503': {$ref: '#/components/responses/ServiceUnavailable'}
@@ -4663,6 +4699,49 @@ components:
     DirectoryReferenceID:
       type: string
       pattern: '^[a-f0-9]{32}$'
+    RelationshipGraphNodeKind:
+      type: string
+      enum: [organization, site, building, room, department, person, shared, public, lab, group, subject, asset]
+    RelationshipGraphEdgeKind:
+      type: string
+      enum: [contains, belongs_to, located_at, member_of, assigned_to]
+    RelationshipGraphAttributes:
+      type: object
+      maxProperties: 8
+      propertyNames: {pattern: '^[a-z][a-z0-9_-]{0,63}$'}
+      additionalProperties: {type: string, maxLength: 200}
+    RelationshipGraphNode:
+      type: object
+      additionalProperties: false
+      required: [id, kind, label]
+      properties:
+        id: {type: string, pattern: '^[a-z][a-z0-9_-]{0,63}:[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$'}
+        kind: {$ref: '#/components/schemas/RelationshipGraphNodeKind'}
+        label: {type: string, minLength: 1, maxLength: 320}
+        attributes: {$ref: '#/components/schemas/RelationshipGraphAttributes'}
+    RelationshipGraphEdge:
+      type: object
+      additionalProperties: false
+      required: [id, from, to, kind]
+      properties:
+        id: {type: string, minLength: 1, maxLength: 320}
+        from: {type: string, pattern: '^[a-z][a-z0-9_-]{0,63}:[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$'}
+        to: {type: string, pattern: '^[a-z][a-z0-9_-]{0,63}:[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$'}
+        kind: {$ref: '#/components/schemas/RelationshipGraphEdgeKind'}
+        attributes: {$ref: '#/components/schemas/RelationshipGraphAttributes'}
+    RelationshipGraph:
+      type: object
+      additionalProperties: false
+      required: [nodes, edges]
+      properties:
+        nodes:
+          type: array
+          maxItems: 500
+          items: {$ref: '#/components/schemas/RelationshipGraphNode'}
+        edges:
+          type: array
+          maxItems: 2000
+          items: {$ref: '#/components/schemas/RelationshipGraphEdge'}
     AssetLifecycleEvent:
       type: object
       required: [id, organizationId, assetId, toStatus, revision, actorId, occurredAt]

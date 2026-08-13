@@ -1,6 +1,6 @@
 package postgres
 
-// Requirements: REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-002. Features: identity.directory, integrations.protocols.
+// Requirements: REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-008. Features: identity.directory, integrations.protocols, threads.relationships.
 
 import (
 	"context"
@@ -461,7 +461,7 @@ func (s *PeopleStore) DeleteIdentity(ctx context.Context, organizationID, id str
 }
 
 func (s *PeopleStore) SearchIdentities(ctx context.Context, organizationID string, filter people.IdentityQuery, visibility people.Visibility) ([]people.Identity, error) {
-	if organizationID == "" || visibility.Empty() || filter.Limit < 1 || filter.Limit > 100 {
+	if organizationID == "" || visibility.Empty() || filter.Limit < 1 || filter.Limit > people.MaximumStoreIdentitySearchLimit {
 		return nil, people.ErrInvalidInput
 	}
 	query := strings.Builder{}

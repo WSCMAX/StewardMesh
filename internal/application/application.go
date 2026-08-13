@@ -1,7 +1,7 @@
 // Package application constructs StewardMesh's transport-neutral HTTP
 // application and owns the lifecycle of its shared runtime dependencies.
-// Requirements: REQ-API-001, REQ-FOUNDATION-001, REQ-ATLAS-001, REQ-ATLAS-CODES-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005, REQ-DIRECTORY-EXPANSION-007, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-STACK-001, REQ-HORIZON-001, REQ-SIGNALS-001, REQ-REACH-001, REQ-EXCHANGE-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001.
-// Features: integrations.protocols, migration.packages.
+// Requirements: REQ-API-001, REQ-FOUNDATION-001, REQ-ATLAS-001, REQ-ATLAS-CODES-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005, REQ-DIRECTORY-EXPANSION-007, REQ-DIRECTORY-EXPANSION-008, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-STACK-001, REQ-HORIZON-001, REQ-SIGNALS-001, REQ-REACH-001, REQ-EXCHANGE-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001.
+// Features: integrations.protocols, threads.relationships, migration.packages.
 package application
 
 import (
@@ -254,7 +254,7 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 			return fail(fmt.Errorf("seed synthetic demo data: %w", err))
 		}
 	}
-	directoryGraph, err := directoryexpansion.NewManagedGraphStore(runtime.directoryImportStore, cfg.OrganizationID)
+	directoryGraph, err := directoryexpansion.NewRelationshipGraphStore(runtime.directoryImportStore, runtime.peopleStore, atlasService, runtime.organization)
 	if err != nil {
 		return fail(fmt.Errorf("initialize directory graph: %w", err))
 	}

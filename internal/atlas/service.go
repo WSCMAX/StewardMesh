@@ -74,6 +74,19 @@ func (s *Service) ListAssets(ctx context.Context, query Query) ([]domain.Asset, 
 	return s.store.ListAssets(ctx, s.organizationID, query)
 }
 
+// ListGraphAssets is the bounded internal read used by the relationship graph.
+// It preserves the public ListAssets maximum of 100 while allowing the graph
+// to honor its independently documented 500-node limit in one deterministic
+// repository query.
+// Requirement: REQ-DIRECTORY-EXPANSION-008.
+func (s *Service) ListGraphAssets(ctx context.Context, query Query) ([]domain.Asset, error) {
+	query, err := normalizeQueryWithMaximum(query, 500)
+	if err != nil {
+		return nil, err
+	}
+	return s.store.ListAssets(ctx, s.organizationID, query)
+}
+
 func (s *Service) GetAsset(ctx context.Context, id string) (domain.Asset, error) {
 	id = strings.TrimSpace(id)
 	if !assetIDPattern.MatchString(id) {
@@ -538,6 +551,10 @@ func normalizeModelIdentity(identity ModelIdentity) (ModelIdentity, error) {
 }
 
 func normalizeQuery(query Query) (Query, error) {
+	return normalizeQueryWithMaximum(query, maximumListLimit)
+}
+
+func normalizeQueryWithMaximum(query Query, maximum int) (Query, error) {
 	query.Search = strings.ToLower(strings.TrimSpace(query.Search))
 	query.Kind = strings.ToLower(strings.TrimSpace(query.Kind))
 	query.Status = strings.ToLower(strings.TrimSpace(query.Status))
@@ -558,7 +575,7 @@ func normalizeQuery(query Query) (Query, error) {
 	if query.Limit == 0 {
 		query.Limit = defaultListLimit
 	}
-	if query.Limit < 1 || query.Limit > maximumListLimit {
+	if query.Limit < 1 || query.Limit > maximum {
 		return Query{}, ErrInvalidInput
 	}
 	return query, nil

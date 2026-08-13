@@ -1,45 +1,52 @@
 package directoryexpansion
 
+// Requirement: REQ-DIRECTORY-EXPANSION-008. Feature: threads.relationships.
+
 import (
 	"context"
-	"sort"
-	"strings"
 )
 
 type MemoryGraph struct{ graph Graph }
 
 func NewMemoryGraph(graph Graph) *MemoryGraph { return &MemoryGraph{graph: graph} }
 func (g *MemoryGraph) Graph(_ context.Context, q GraphQuery) (Graph, error) {
-	limit := q.Limit
-	if limit <= 0 || limit > 500 {
-		limit = 500
+	query, err := normalizeGraphQuery(q, true)
+	if err != nil {
+		return Graph{}, err
 	}
-	search, kind := strings.ToLower(strings.TrimSpace(q.Search)), strings.ToLower(strings.TrimSpace(q.Kind))
-	nodes := make([]Node, 0, len(g.graph.Nodes))
-	allowed := map[string]bool{}
-	for _, n := range g.graph.Nodes {
-		if kind != "" && strings.ToLower(n.Kind) != kind {
-			continue
-		}
-		if search != "" && !strings.Contains(strings.ToLower(n.Label), search) {
-			continue
-		}
-		if len(nodes) >= limit {
-			break
-		}
-		nodes = append(nodes, n)
-		allowed[n.ID] = true
+	// MemoryGraph has no authoritative per-node site or department metadata.
+	// It therefore supports organization-wide reads only instead of guessing at
+	// scoped visibility and becoming a data-discovery oracle when injected into
+	// a transport.
+	if !query.Scope.Directory.All {
+		return emptyGraph(), nil
 	}
-	edges := make([]Edge, 0, len(g.graph.Edges))
-	for _, e := range g.graph.Edges {
-		if q.Relationship != "" && e.Kind != q.Relationship {
-			continue
+	graph := g.graph
+	if !query.Scope.Assets.All {
+		allowedAssets := make(map[string]struct{}, len(query.Scope.Assets.ResourceIDs))
+		for _, resourceID := range query.Scope.Assets.ResourceIDs {
+			allowedAssets[typedNodeID(NodeAsset, resourceID)] = struct{}{}
 		}
-		if allowed[e.From] && allowed[e.To] {
-			edges = append(edges, e)
+		visibleNodes := make([]Node, 0, len(graph.Nodes))
+		visibleIDs := make(map[string]struct{}, len(graph.Nodes))
+		for _, node := range graph.Nodes {
+			if node.Kind == NodeAsset {
+				if _, allowed := allowedAssets[node.ID]; !allowed {
+					continue
+				}
+			}
+			visibleNodes = append(visibleNodes, node)
+			visibleIDs[node.ID] = struct{}{}
 		}
+		visibleEdges := make([]Edge, 0, len(graph.Edges))
+		for _, edge := range graph.Edges {
+			_, fromVisible := visibleIDs[edge.From]
+			_, toVisible := visibleIDs[edge.To]
+			if fromVisible && toVisible {
+				visibleEdges = append(visibleEdges, edge)
+			}
+		}
+		graph = Graph{Nodes: visibleNodes, Edges: visibleEdges}
 	}
-	sort.Slice(nodes, func(i, j int) bool { return nodes[i].ID < nodes[j].ID })
-	sort.Slice(edges, func(i, j int) bool { return edges[i].ID < edges[j].ID })
-	return Graph{Nodes: nodes, Edges: edges}, nil
+	return filterGraph(graph, query), nil
 }

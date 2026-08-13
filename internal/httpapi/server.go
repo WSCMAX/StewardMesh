@@ -1,8 +1,8 @@
 package httpapi
 
 // Requirements: REQ-FOUNDATION-001, REQ-WORKSPACE-001, REQ-ATLAS-001, REQ-ATLAS-CODES-001, REQ-PEOPLE-001,
-// REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-STACK-001, REQ-HORIZON-001, REQ-SIGNALS-001, REQ-REACH-001, REQ-EXCHANGE-001, REQ-API-001, REQ-PLATFORM-VALKEY-001,
-// SEC-GUARD-001, SEC-HTTP-001, SEC-MCP-001. Features include experience.workspace, inventory.models, integrations.protocols, and migration.packages.
+// REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-008, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-STACK-001, REQ-HORIZON-001, REQ-SIGNALS-001, REQ-REACH-001, REQ-EXCHANGE-001, REQ-API-001, REQ-PLATFORM-VALKEY-001,
+// SEC-GUARD-001, SEC-HTTP-001, SEC-MCP-001. Features include experience.workspace, inventory.models, integrations.protocols, threads.relationships, and migration.packages.
 
 import (
 	"context"
@@ -1481,29 +1481,65 @@ func writeVaultError(w http.ResponseWriter, r *http.Request, err error) {
 }
 
 func (s *Server) graphView(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
+	s.noStore(w)
 	if s.graph == nil {
 		writeError(w, r, http.StatusServiceUnavailable, "graph_unavailable", "relationship graph unavailable")
 		return
 	}
-	if _, ok := s.directoryVisibility(w, r, authentication); !ok {
+	visibility, ok := s.directoryVisibility(w, r, authentication)
+	if !ok {
 		return
 	}
 	query := directoryexpansion.GraphQuery{
 		Search:       r.URL.Query().Get("search"),
-		Kind:         r.URL.Query().Get("kind"),
-		Relationship: r.URL.Query().Get("relationship"),
+		Kind:         directoryexpansion.NodeKind(r.URL.Query().Get("kind")),
+		Relationship: directoryexpansion.RelationshipKind(r.URL.Query().Get("relationship")),
+		Scope: directoryexpansion.GraphScope{
+			Directory: visibility,
+			Assets:    s.graphAssetVisibility(authentication),
+		},
 	}
 	if value := r.URL.Query().Get("limit"); value != "" {
-		if parsed, err := strconv.Atoi(value); err == nil {
-			query.Limit = parsed
+		parsed, err := strconv.Atoi(value)
+		if err != nil {
+			writeError(w, r, http.StatusBadRequest, "validation_failed", "relationship graph filters are invalid")
+			return
 		}
+		query.Limit = parsed
 	}
 	graph, err := s.graph.Graph(r.Context(), query)
 	if err != nil {
-		writeError(w, r, http.StatusInternalServerError, "graph_error", "unable to load relationship graph")
+		switch {
+		case errors.Is(err, directoryexpansion.ErrInvalidInput):
+			writeError(w, r, http.StatusBadRequest, "validation_failed", "relationship graph filters are invalid")
+		case errors.Is(err, directoryexpansion.ErrGraphScope):
+			writeError(w, r, http.StatusForbidden, "permission_denied", "directory permission is required for this operation")
+		default:
+			writeError(w, r, http.StatusInternalServerError, "graph_error", "unable to load relationship graph")
+		}
 		return
 	}
 	writeJSON(w, http.StatusOK, graph)
+}
+
+func (s *Server) graphAssetVisibility(authentication guard.Authentication) directoryexpansion.AssetVisibility {
+	visibility := directoryexpansion.AssetVisibility{}
+	for _, grant := range authentication.Grants {
+		if grant.Permission != guard.PermissionAssetsRead || grant.Scope.OrganizationID != s.organization.ID {
+			continue
+		}
+		switch grant.Scope.Kind {
+		case guard.ScopeOrganization:
+			return directoryexpansion.AssetVisibility{All: true}
+		case guard.ScopeResource:
+			visibility.ResourceIDs = append(visibility.ResourceIDs, grant.Scope.ResourceID)
+		case guard.ScopeSite:
+			visibility.SiteIDs = append(visibility.SiteIDs, grant.Scope.ResourceID)
+		case guard.ScopeDepartment:
+			visibility.DepartmentIDs = append(visibility.DepartmentIDs, grant.Scope.ResourceID)
+		}
+	}
+	return visibility
 }
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {

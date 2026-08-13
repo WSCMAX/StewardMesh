@@ -99,7 +99,7 @@ func TestSyntheticSeederUsesDurableMappingsAndExactReplayWithoutChangingProducti
 	if err != nil {
 		t.Fatal(err)
 	}
-	graph, err := graphStore.Graph(ctx, GraphQuery{})
+	graph, err := graphStore.Graph(ctx, GraphQuery{Scope: GraphScope{Directory: people.Visibility{All: true}}})
 	if err != nil || len(graph.Nodes) != 4 || len(graph.Edges) != 3 {
 		t.Fatalf("unexpected synthetic relationship graph %#v err=%v", graph, err)
 	}

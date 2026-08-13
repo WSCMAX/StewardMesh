@@ -3,7 +3,8 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, expect, test, vi } from 'vitest'
 import PeopleDirectory from './PeopleDirectory'
 
-// Requirements: REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, REQ-WORKSPACE-001, A11Y-001, DOC-001, DOC-002.
+// Requirements: REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-008, REQ-WORKSPACE-001, A11Y-001, DOC-001, DOC-002.
+// Feature: threads.relationships.
 
 const timestamp = '2026-08-09T12:00:00Z'
 const site = {
@@ -75,6 +76,7 @@ function installPeopleFetch(options: { assignments?: unknown[]; buildings?: unkn
       }, 201)
     }
     if (path.startsWith('/api/v1/identities?')) return jsonResponse({ items: [person] })
+    if (path.startsWith('/api/v1/graph?')) return jsonResponse({ nodes: [], edges: [] })
     if (path === '/api/v1/assets/asset-1/assignments' && init?.method === 'POST') return jsonResponse(assignment, 201)
     if (path === '/api/v1/assets/asset-1/assignments') return jsonResponse({ items: options.assignments ?? [] })
     if (path === '/api/v1/assets/asset-1/assignments/assignment-1' && init?.method === 'PATCH') {

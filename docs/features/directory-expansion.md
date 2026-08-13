@@ -1,16 +1,19 @@
 # Directory Expansion
 
-- **Canonical IDs:** `identity.directory` for locations and
-  `integrations.protocols` for directory imports
+- **Canonical IDs:** `identity.directory` for locations,
+  `integrations.protocols` for directory imports, and
+  `threads.relationships` for the cross-record graph
 - **Current requirements:** `REQ-DIRECTORY-EXPANSION-001` through
-  `REQ-DIRECTORY-EXPANSION-005`, plus `REQ-DIRECTORY-EXPANSION-007`
+  `REQ-DIRECTORY-EXPANSION-005`, plus `REQ-DIRECTORY-EXPANSION-007` and
+  `REQ-DIRECTORY-EXPANSION-008`
 - **Roadmap issues:** [#24](https://github.com/WSCMAX/StewardMesh/issues/24),
   [#25](https://github.com/WSCMAX/StewardMesh/issues/25),
   [#26](https://github.com/WSCMAX/StewardMesh/issues/26),
   [#27](https://github.com/WSCMAX/StewardMesh/issues/27),
   [#28](https://github.com/WSCMAX/StewardMesh/issues/28),
-  [#29](https://github.com/WSCMAX/StewardMesh/issues/29), and
-  [#30](https://github.com/WSCMAX/StewardMesh/issues/30)
+  [#29](https://github.com/WSCMAX/StewardMesh/issues/29),
+  [#30](https://github.com/WSCMAX/StewardMesh/issues/30), and
+  [#31](https://github.com/WSCMAX/StewardMesh/issues/31)
 
 Directory Expansion extends People with hierarchical locations, optional
 read-only institutional provider connectors, synthetic demo data, and a
@@ -373,3 +376,37 @@ seeding does not contact or require either service. Use the separate
 `integrations` profile when testing only Grouper. Never enable the synthetic
 flag for a production organization or treat the committed fixture credential
 as a deployable secret.
+
+## Relationship graph
+
+`GET /api/v1/graph` is a read-only projection over authoritative People,
+directory-import, and Atlas stores. It returns typed nodes for organizations,
+sites, buildings, rooms, departments, person/shared/public/lab identities,
+imported groups and subjects, and authorized assets. Typed edges represent
+containment, membership, location, department ownership, and asset assignment.
+The projection does not copy records or become a new source of truth.
+
+The server derives directory visibility and Atlas visibility from the
+authenticated Guard grants. An asset must satisfy its `assets.read` grant and
+the caller's directory visibility before it can appear. A resource grant never
+reveals an asset tied only to a hidden site, department, or person. Imported
+groups currently have no site or department boundary, so they are included
+only for organization-wide directory readers. Email addresses, source
+subjects, provider endpoints, credentials, and raw payloads are never graph
+attributes.
+
+Search and node-kind filters select anchor records. A relationship-kind filter
+retains the other endpoint of each matching edge as bounded context, so
+cross-type relationships remain meaningful. The 1–500 record limits are
+bounded and validated. Output is deterministic, uses no-store caching, collapses semantic
+duplicate edges, preserves safe cycles, retains disconnected matching nodes,
+and returns non-null empty arrays when nothing matches. Every returned edge has
+two returned endpoints, preventing a relationship from revealing a hidden
+record indirectly.
+
+People exposes keyboard-native filter controls, a bounded visual overview, a
+complete relationship table, and a separate table for disconnected records.
+Both tables are focusable horizontal regions at narrow widths; the text view is
+authoritative for screen readers and for results larger than the visual's
+40-node overview. The same filter and result contracts are documented in
+OpenAPI and protobuf, while authorization scope remains transport-owned.

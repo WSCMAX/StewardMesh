@@ -150,8 +150,24 @@ func TestNewSeedsClearlyLabeledSyntheticDemoLocationsPeopleMappingsAndRelationsh
 	}
 	var graph directoryexpansion.Graph
 	get("/api/v1/graph", &graph)
-	if len(graph.Nodes) != 4 || len(graph.Edges) != 3 {
-		t.Fatalf("unexpected synthetic graph %#v", graph)
+	if len(graph.Nodes) != 12 || len(graph.Edges) != 12 {
+		t.Fatalf("unexpected complete synthetic relationship graph %#v", graph)
+	}
+	for _, expectedKind := range []directoryexpansion.NodeKind{
+		directoryexpansion.NodeOrganization, directoryexpansion.NodeSite, directoryexpansion.NodeBuilding,
+		directoryexpansion.NodeRoom, directoryexpansion.NodeDepartment, directoryexpansion.NodePerson,
+		directoryexpansion.NodeShared, directoryexpansion.NodeGroup, directoryexpansion.NodeSubject,
+	} {
+		found := false
+		for _, node := range graph.Nodes {
+			if node.Kind == expectedKind {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("synthetic relationship graph omitted %s: %#v", expectedKind, graph.Nodes)
+		}
 	}
 }
 
@@ -237,8 +253,17 @@ func TestNewWiresConfiguredGrouperThroughPreviewApplyAndGraph(t *testing.T) {
 	app.Handler().ServeHTTP(graphResponse, authenticated(http.MethodGet, "/api/v1/graph", nil, ""))
 	var graph directoryexpansion.Graph
 	if graphResponse.Code != http.StatusOK || json.Unmarshal(graphResponse.Body.Bytes(), &graph) != nil ||
-		len(graph.Nodes) != 1 || graph.Nodes[0].Kind != "group" || graph.Nodes[0].Label != "Researchers" {
+		len(graph.Nodes) != 2 || len(graph.Edges) != 1 {
 		t.Fatalf("read configured Grouper graph: %d %s", graphResponse.Code, graphResponse.Body.String())
+	}
+	foundGroup := false
+	for _, node := range graph.Nodes {
+		if node.Kind == directoryexpansion.NodeGroup && node.Label == "Researchers" {
+			foundGroup = true
+		}
+	}
+	if !foundGroup {
+		t.Fatalf("configured Grouper node missing from typed graph: %#v", graph.Nodes)
 	}
 }
 

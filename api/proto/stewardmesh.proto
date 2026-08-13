@@ -113,6 +113,14 @@ service PeopleService {
   rpc EndAssetAssignment(EndAssetAssignmentRequest) returns (AssetAssignment);
 }
 
+// Bounded read-only projection of visible organization records.
+// Requirement: REQ-DIRECTORY-EXPANSION-008. Feature: threads.relationships.
+// Directory and asset visibility are derived from authenticated Guard grants;
+// request messages deliberately contain no organization or visibility scope.
+service RelationshipGraphService {
+  rpc GetRelationshipGraph(GetRelationshipGraphRequest) returns (RelationshipGraph);
+}
+
 // Durable provider-neutral preview, apply, reconciliation, and retry.
 // Requirements: REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005.
 // Features: integrations.protocols, identity.directory.
@@ -1312,6 +1320,58 @@ message DirectoryIdentity {
   uint64 revision = 11;
   google.protobuf.Timestamp created_at = 12;
   google.protobuf.Timestamp updated_at = 13;
+}
+
+message GetRelationshipGraphRequest {
+  string search = 1;
+  RelationshipGraphNodeKind kind = 2;
+  RelationshipGraphEdgeKind relationship = 3;
+  uint32 limit = 4;
+}
+
+message RelationshipGraph {
+  repeated RelationshipGraphNode nodes = 1;
+  repeated RelationshipGraphEdge edges = 2;
+}
+
+message RelationshipGraphNode {
+  string id = 1;
+  RelationshipGraphNodeKind kind = 2;
+  string label = 3;
+  map<string, string> attributes = 4;
+}
+
+message RelationshipGraphEdge {
+  string id = 1;
+  string from = 2;
+  string to = 3;
+  RelationshipGraphEdgeKind kind = 4;
+  map<string, string> attributes = 5;
+}
+
+enum RelationshipGraphNodeKind {
+  RELATIONSHIP_GRAPH_NODE_KIND_UNSPECIFIED = 0;
+  RELATIONSHIP_GRAPH_NODE_KIND_ORGANIZATION = 1;
+  RELATIONSHIP_GRAPH_NODE_KIND_SITE = 2;
+  RELATIONSHIP_GRAPH_NODE_KIND_BUILDING = 3;
+  RELATIONSHIP_GRAPH_NODE_KIND_ROOM = 4;
+  RELATIONSHIP_GRAPH_NODE_KIND_DEPARTMENT = 5;
+  RELATIONSHIP_GRAPH_NODE_KIND_PERSON = 6;
+  RELATIONSHIP_GRAPH_NODE_KIND_SHARED = 7;
+  RELATIONSHIP_GRAPH_NODE_KIND_PUBLIC = 8;
+  RELATIONSHIP_GRAPH_NODE_KIND_LAB = 9;
+  RELATIONSHIP_GRAPH_NODE_KIND_GROUP = 10;
+  RELATIONSHIP_GRAPH_NODE_KIND_SUBJECT = 11;
+  RELATIONSHIP_GRAPH_NODE_KIND_ASSET = 12;
+}
+
+enum RelationshipGraphEdgeKind {
+  RELATIONSHIP_GRAPH_EDGE_KIND_UNSPECIFIED = 0;
+  RELATIONSHIP_GRAPH_EDGE_KIND_CONTAINS = 1;
+  RELATIONSHIP_GRAPH_EDGE_KIND_BELONGS_TO = 2;
+  RELATIONSHIP_GRAPH_EDGE_KIND_LOCATED_AT = 3;
+  RELATIONSHIP_GRAPH_EDGE_KIND_MEMBER_OF = 4;
+  RELATIONSHIP_GRAPH_EDGE_KIND_ASSIGNED_TO = 5;
 }
 
 message ListAssetAssignmentsRequest {

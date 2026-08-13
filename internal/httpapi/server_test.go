@@ -1,7 +1,7 @@
 package httpapi
 
 // Requirements: REQ-FOUNDATION-001, REQ-WORKSPACE-001, REQ-ATLAS-001, REQ-ATLAS-MODELS-001, REQ-ATLAS-CODES-001, REQ-PEOPLE-001,
-// REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-005, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-STACK-001, REQ-HORIZON-001, REQ-SIGNALS-001, REQ-REACH-001, REQ-EXCHANGE-001, REQ-PLATFORM-VALKEY-001,
+// REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-005, REQ-DIRECTORY-EXPANSION-008, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-STACK-001, REQ-HORIZON-001, REQ-SIGNALS-001, REQ-REACH-001, REQ-EXCHANGE-001, REQ-PLATFORM-VALKEY-001,
 // SEC-GUARD-001, SEC-HTTP-001. Features include experience.workspace.
 
 import (
@@ -2115,6 +2115,109 @@ func TestDirectoryImportHTTPRequiresIntegrationPermissionsCSRFAndNoStore(t *test
 	}
 }
 
+func TestRelationshipGraphHTTPIntersectsGuardScopesAndValidatesFilters(t *testing.T) {
+	handler, guardService, _ := newGuardServerWithDirectory(t, nil, nil, nil, nil)
+	administrator := bootstrapAdministrator(t, handler)
+	visibleSite := createPeopleRecord[people.Site](t, handler, administrator, "/api/v1/sites", map[string]any{"name": "Visible Campus", "status": "active"})
+	hiddenSite := createPeopleRecord[people.Site](t, handler, administrator, "/api/v1/sites", map[string]any{"name": "Hidden Campus", "status": "active"})
+	visibleDepartment := createPeopleRecord[people.Department](t, handler, administrator, "/api/v1/departments", map[string]any{"name": "Visible Department", "siteId": visibleSite.ID, "status": "active"})
+	hiddenDepartment := createPeopleRecord[people.Department](t, handler, administrator, "/api/v1/departments", map[string]any{"name": "Hidden Department", "siteId": hiddenSite.ID, "status": "active"})
+	createPeopleRecord[people.Identity](t, handler, administrator, "/api/v1/identities", map[string]any{
+		"kind": "person", "displayName": "Visible Person", "email": "visible@example.test", "departmentId": visibleDepartment.ID, "siteId": visibleSite.ID, "status": "active",
+	})
+	createPeopleRecord[people.Identity](t, handler, administrator, "/api/v1/identities", map[string]any{
+		"kind": "person", "displayName": "Hidden Person", "email": "hidden@example.test", "departmentId": hiddenDepartment.ID, "siteId": hiddenSite.ID, "status": "active",
+	})
+	createPeopleRecord[domain.Asset](t, handler, administrator, "/api/v1/assets", map[string]any{
+		"id": "graph-visible-asset", "name": "Visible Asset", "kind": "computer", "siteId": visibleSite.ID, "departmentId": visibleDepartment.ID, "status": "active",
+	})
+	createPeopleRecord[domain.Asset](t, handler, administrator, "/api/v1/assets", map[string]any{
+		"id": "graph-hidden-asset", "name": "Hidden Asset", "kind": "computer", "siteId": hiddenSite.ID, "departmentId": hiddenDepartment.ID, "status": "active",
+	})
+
+	administratorRequest := authenticatedRequest(http.MethodGet, "/api/v1/graph?limit=500", nil, administrator)
+	administratorResponse := httptest.NewRecorder()
+	handler.ServeHTTP(administratorResponse, administratorRequest)
+	if administratorResponse.Code != http.StatusOK || administratorResponse.Header().Get("Cache-Control") != "no-store" ||
+		!strings.Contains(administratorResponse.Body.String(), "Visible Person") || !strings.Contains(administratorResponse.Body.String(), "Hidden Person") ||
+		strings.Contains(administratorResponse.Body.String(), "visible@example.test") {
+		t.Fatalf("unexpected organization relationship graph %d headers=%#v body=%s", administratorResponse.Code, administratorResponse.Header(), administratorResponse.Body.String())
+	}
+
+	ctx := context.Background()
+	administratorAuthentication, err := guardService.AuthenticateSession(ctx, administrator.cookie.Value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	credentials, err := guardService.LoginOIDC(ctx, identity.OIDCPrincipal{
+		Issuer: "https://identity.example.test/graph", Subject: "scoped-graph-reader", Email: "graph-reader@example.test", EmailVerified: true, DisplayName: "Scoped Graph Reader",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	role, err := guardService.CreateRole(ctx, administratorAuthentication, guard.CreateRoleInput{
+		Name: "Scoped graph reader", Permissions: []guard.Permission{guard.PermissionDirectoryRead, guard.PermissionAssetsRead},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := guardService.AssignRole(ctx, administratorAuthentication, guard.RoleAssignmentInput{
+		AccountID: credentials.Authentication.Principal.Subject, RoleID: role.ID, ScopeKind: guard.ScopeSite, ResourceID: visibleSite.ID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	scoped := testSession{cookie: &http.Cookie{Name: localSessionName, Value: credentials.Token}, csrfToken: credentials.CSRFToken}
+	scopedDirectoryRequest := authenticatedRequest(http.MethodGet, "/api/v1/graph?limit=25", nil, scoped)
+	scopedDirectoryResponse := httptest.NewRecorder()
+	handler.ServeHTTP(scopedDirectoryResponse, scopedDirectoryRequest)
+	if scopedDirectoryResponse.Code != http.StatusOK || !strings.Contains(scopedDirectoryResponse.Body.String(), "Visible Person") ||
+		!strings.Contains(scopedDirectoryResponse.Body.String(), visibleSite.ID) || strings.Contains(scopedDirectoryResponse.Body.String(), "Hidden Person") ||
+		strings.Contains(scopedDirectoryResponse.Body.String(), hiddenSite.ID) {
+		t.Fatalf("unfiltered relationship graph escaped directory scope: %d body=%s", scopedDirectoryResponse.Code, scopedDirectoryResponse.Body.String())
+	}
+	scopedRequest := authenticatedRequest(http.MethodGet, "/api/v1/graph?kind=asset&relationship=located_at&limit=25", nil, scoped)
+	scopedResponse := httptest.NewRecorder()
+	handler.ServeHTTP(scopedResponse, scopedRequest)
+	if scopedResponse.Code != http.StatusOK || scopedResponse.Header().Get("Cache-Control") != "no-store" ||
+		!strings.Contains(scopedResponse.Body.String(), "Visible Asset") || !strings.Contains(scopedResponse.Body.String(), `"kind":"located_at"`) ||
+		!strings.Contains(scopedResponse.Body.String(), visibleSite.ID) || strings.Contains(scopedResponse.Body.String(), "Hidden Asset") ||
+		strings.Contains(scopedResponse.Body.String(), "Hidden Person") || strings.Contains(scopedResponse.Body.String(), hiddenSite.ID) {
+		t.Fatalf("relationship graph escaped intersected scopes: %d headers=%#v body=%s", scopedResponse.Code, scopedResponse.Header(), scopedResponse.Body.String())
+	}
+
+	for _, path := range []string{"/api/v1/graph?limit=not-a-number", "/api/v1/graph?kind=unregistered"} {
+		invalidRequest := authenticatedRequest(http.MethodGet, path, nil, administrator)
+		invalidResponse := httptest.NewRecorder()
+		handler.ServeHTTP(invalidResponse, invalidRequest)
+		if invalidResponse.Code != http.StatusBadRequest || invalidResponse.Header().Get("Cache-Control") != "no-store" {
+			t.Fatalf("invalid graph filter %s was not rejected safely: %d headers=%#v body=%s", path, invalidResponse.Code, invalidResponse.Header(), invalidResponse.Body.String())
+		}
+	}
+
+	assetOnlyCredentials, err := guardService.LoginOIDC(ctx, identity.OIDCPrincipal{
+		Issuer: "https://identity.example.test/graph", Subject: "asset-only-reader", Email: "asset-only@example.test", EmailVerified: true, DisplayName: "Asset Only Reader",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assetRole, err := guardService.CreateRole(ctx, administratorAuthentication, guard.CreateRoleInput{Name: "Asset only reader", Permissions: []guard.Permission{guard.PermissionAssetsRead}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := guardService.AssignRole(ctx, administratorAuthentication, guard.RoleAssignmentInput{
+		AccountID: assetOnlyCredentials.Authentication.Principal.Subject, RoleID: assetRole.ID, ScopeKind: guard.ScopeOrganization, ResourceID: "example-org",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	assetOnly := testSession{cookie: &http.Cookie{Name: localSessionName, Value: assetOnlyCredentials.Token}, csrfToken: assetOnlyCredentials.CSRFToken}
+	deniedRequest := authenticatedRequest(http.MethodGet, "/api/v1/graph", nil, assetOnly)
+	deniedResponse := httptest.NewRecorder()
+	handler.ServeHTTP(deniedResponse, deniedRequest)
+	if deniedResponse.Code != http.StatusForbidden || deniedResponse.Header().Get("Cache-Control") != "no-store" || strings.Contains(deniedResponse.Body.String(), "Visible Asset") {
+		t.Fatalf("graph without directory permission did not fail closed: %d headers=%#v body=%s", deniedResponse.Code, deniedResponse.Header(), deniedResponse.Body.String())
+	}
+}
+
 func TestDirectoryImportHTTPRejectsMissingIdempotencyAndUnknownSource(t *testing.T) {
 	handler, _, _ := newGuardServerWithDirectory(t, nil, nil, nil, nil)
 	session := bootstrapAdministrator(t, handler)
@@ -2286,6 +2389,10 @@ func newGuardServerWithDirectory(t *testing.T, limiter guard.AttemptLimiter, oid
 	if err != nil {
 		t.Fatal(err)
 	}
+	directoryGraph, err := directoryexpansion.NewRelationshipGraphStore(directoryStore, peopleStore, atlasService, organization)
+	if err != nil {
+		t.Fatal(err)
+	}
 	threadsService, err := threads.NewService(repository.NewMemoryThreadsStore(), allowHTTPThreadTargets{}, foundation.NopAuditor{}, threads.ServiceConfig{
 		OrganizationID: organization.ID,
 	})
@@ -2371,6 +2478,7 @@ func newGuardServerWithDirectory(t *testing.T, limiter guard.AttemptLimiter, oid
 		AtlasLabels:      atlasLabelsService,
 		People:           peopleService,
 		DirectoryImports: directoryService,
+		Graph:            directoryGraph,
 		Threads:          threadsService,
 		Vault:            vaultService,
 		Ledger:           ledgerService,

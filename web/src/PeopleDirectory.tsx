@@ -2,12 +2,13 @@ import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } fro
 import type { Asset } from './AtlasInventory'
 import { ApiRequestError, requestJSON } from './api'
 import DirectoryImportManager from './DirectoryImportManager'
+import RelationshipGraphView from './RelationshipGraphView'
 import { documentationHref } from './documentation'
 import { RelatedRecordModeChooser, RelatedRecordWorkflowFrame, useRelatedRecordWorkflow } from './RelatedRecordWorkflow'
 import { buttonClass, inputClass, labelClass, panelClass, plainButtonClass, secondaryButtonClass, subpanelClass } from './ui'
 
-// Requirements: REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-003, REQ-WORKSPACE-001, A11Y-001, DOC-001, DOC-002.
-// Features: identity.directory, experience.workspace.
+// Requirements: REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-008, REQ-WORKSPACE-001, A11Y-001, DOC-001, DOC-002.
+// Features: identity.directory, threads.relationships, experience.workspace.
 
 type RecordStatus = 'active' | 'inactive'
 type IdentityKind = 'person' | 'shared' | 'public' | 'lab'
@@ -874,7 +875,7 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
   }
 
   return (
-    <section aria-labelledby="people-heading" className={`${panelClass} space-y-6 p-5 sm:p-6`} data-feature="identity.directory experience.workspace" data-requirement="REQ-PEOPLE-001 REQ-DIRECTORY-EXPANSION-001 REQ-WORKSPACE-001">
+    <section aria-labelledby="people-heading" className={`${panelClass} space-y-6 p-5 sm:p-6`} data-feature="identity.directory threads.relationships experience.workspace" data-requirement="REQ-PEOPLE-001 REQ-DIRECTORY-EXPANSION-001 REQ-DIRECTORY-EXPANSION-008 REQ-WORKSPACE-001">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="max-w-3xl">
           <p className="text-sm font-semibold text-steward-teal">People — Users, locations, departments, and assignments</p>
@@ -901,6 +902,8 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
       </section>
 
       <DirectoryImportManager csrfToken={csrfToken} onApplied={() => loadDirectory(filters)} permissions={permissions} />
+
+      <RelationshipGraphView permissions={permissions} />
 
       <form aria-label="Filter People directory" className={`${subpanelClass} p-4`} onSubmit={handleSearch} role="search">
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">

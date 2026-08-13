@@ -1,7 +1,7 @@
 // Package directoryexpansion implements provider-neutral directory preview,
 // reconciliation, apply, and retry contracts.
-// Requirements: REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005.
-// Features: integrations.protocols, identity.directory.
+// Requirements: REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005, REQ-DIRECTORY-EXPANSION-008.
+// Features: integrations.protocols, identity.directory, threads.relationships.
 package directoryexpansion
 
 import (
@@ -10,13 +10,16 @@ import (
 	"time"
 
 	"github.com/maxlemke/stewardmesh/internal/guard"
+	"github.com/maxlemke/stewardmesh/internal/people"
 )
 
 const (
 	RequirementID          = "REQ-DIRECTORY-EXPANSION-002"
 	GrouperRequirementID   = "REQ-DIRECTORY-EXPANSION-005"
 	SailPointRequirementID = "REQ-DIRECTORY-EXPANSION-004"
+	GraphRequirementID     = "REQ-DIRECTORY-EXPANSION-008"
 	FeatureID              = "integrations.protocols"
+	GraphFeatureID         = "threads.relationships"
 
 	DefaultListLimit  = 50
 	MaximumListLimit  = 100
@@ -26,6 +29,9 @@ const (
 	MaximumSources    = 100
 	MaximumAttributes = 16
 	MaximumGroupLinks = 256
+	DefaultGraphLimit = 100
+	MaximumGraphLimit = 500
+	MaximumGraphEdges = 2000
 )
 
 var (
@@ -36,6 +42,7 @@ var (
 	ErrNotRetryable     = errors.New("directory import has no retryable failures")
 	ErrConnectorMissing = errors.New("directory source system is not configured")
 	ErrLeaseLost        = errors.New("directory import lease was lost")
+	ErrGraphScope       = errors.New("relationship graph visibility scope is required")
 )
 
 // Address, Building, and Room remain transport-neutral directory location
@@ -378,21 +385,77 @@ type Store interface {
 	FinishOperation(context.Context, string, string, string, Attempt, OperationResult) error
 }
 
+type NodeKind string
+
+const (
+	NodeOrganization NodeKind = "organization"
+	NodeSite         NodeKind = "site"
+	NodeBuilding     NodeKind = "building"
+	NodeRoom         NodeKind = "room"
+	NodeDepartment   NodeKind = "department"
+	NodePerson       NodeKind = "person"
+	NodeShared       NodeKind = "shared"
+	NodePublic       NodeKind = "public"
+	NodeLab          NodeKind = "lab"
+	NodeGroup        NodeKind = "group"
+	NodeSubject      NodeKind = "subject"
+	NodeAsset        NodeKind = "asset"
+)
+
+type RelationshipKind string
+
+const (
+	RelationshipContains   RelationshipKind = "contains"
+	RelationshipBelongsTo  RelationshipKind = "belongs_to"
+	RelationshipLocatedAt  RelationshipKind = "located_at"
+	RelationshipMemberOf   RelationshipKind = "member_of"
+	RelationshipAssignedTo RelationshipKind = "assigned_to"
+)
+
 type Node struct {
-	ID, Kind, Label string
-	Attributes      map[string]string `json:"attributes,omitempty"`
+	ID         string            `json:"id"`
+	Kind       NodeKind          `json:"kind"`
+	Label      string            `json:"label"`
+	Attributes map[string]string `json:"attributes,omitempty"`
 }
 type Edge struct {
-	ID, From, To, Kind string
-	Attributes         map[string]string `json:"attributes,omitempty"`
+	ID         string            `json:"id"`
+	From       string            `json:"from"`
+	To         string            `json:"to"`
+	Kind       RelationshipKind  `json:"kind"`
+	Attributes map[string]string `json:"attributes,omitempty"`
 }
 type Graph struct {
 	Nodes []Node `json:"nodes"`
 	Edges []Edge `json:"edges"`
 }
+
+// AssetVisibility is derived exclusively from authenticated Guard grants.
+// It is deliberately absent from every transport request schema.
+type AssetVisibility struct {
+	All           bool
+	ResourceIDs   []string
+	SiteIDs       []string
+	DepartmentIDs []string
+}
+
+func (v AssetVisibility) Empty() bool {
+	return !v.All && len(v.ResourceIDs) == 0 && len(v.SiteIDs) == 0 && len(v.DepartmentIDs) == 0
+}
+
+// GraphScope is server-owned authorization context. Directory visibility is
+// mandatory; asset visibility is optional and is intersected with it.
+type GraphScope struct {
+	Directory people.Visibility
+	Assets    AssetVisibility
+}
+
 type GraphQuery struct {
-	Search, Kind, Relationship string
-	Limit                      int
+	Search       string
+	Kind         NodeKind
+	Relationship RelationshipKind
+	Limit        int
+	Scope        GraphScope
 }
 type GraphStore interface {
 	Graph(context.Context, GraphQuery) (Graph, error)

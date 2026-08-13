@@ -877,7 +877,7 @@ func TestSyntheticSeederRequiresExplicitEnablement(t *testing.T) {
 
 func TestGraphFiltersNodesAndEdges(t *testing.T) {
 	store := NewMemoryGraph(Graph{Nodes: []Node{{ID: "a", Kind: "person", Label: "Alice"}, {ID: "b", Kind: "group", Label: "Staff"}}, Edges: []Edge{{ID: "e", From: "a", To: "b", Kind: "member_of"}}})
-	graph, err := store.Graph(context.Background(), GraphQuery{Search: "alice"})
+	graph, err := store.Graph(context.Background(), GraphQuery{Search: "alice", Scope: GraphScope{Directory: people.Visibility{All: true}}})
 	if err != nil || len(graph.Nodes) != 1 || len(graph.Edges) != 0 {
 		t.Fatalf("unexpected filtered graph: %#v", graph)
 	}

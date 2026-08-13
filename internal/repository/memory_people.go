@@ -1,6 +1,6 @@
 package repository
 
-// Requirements: REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-002. Features: identity.directory, integrations.protocols.
+// Requirements: REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-008. Features: identity.directory, integrations.protocols, threads.relationships.
 
 import (
 	"context"
@@ -429,7 +429,7 @@ func (s *MemoryPeopleStore) DeleteIdentity(_ context.Context, organizationID, id
 }
 
 func (s *MemoryPeopleStore) SearchIdentities(_ context.Context, organizationID string, query people.IdentityQuery, visibility people.Visibility) ([]people.Identity, error) {
-	if organizationID == "" || visibility.Empty() || query.Limit < 1 || query.Limit > 100 {
+	if organizationID == "" || visibility.Empty() || query.Limit < 1 || query.Limit > people.MaximumStoreIdentitySearchLimit {
 		return nil, people.ErrInvalidInput
 	}
 	s.mu.RLock()

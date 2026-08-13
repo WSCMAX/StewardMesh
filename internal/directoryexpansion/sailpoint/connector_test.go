@@ -308,7 +308,7 @@ func TestConnectorFeedsExactPlanIntoPeopleGraphMappingsAndSailPointAudit(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	graph, err := graphStore.Graph(context.Background(), directoryexpansion.GraphQuery{})
+	graph, err := graphStore.Graph(context.Background(), directoryexpansion.GraphQuery{Scope: directoryexpansion.GraphScope{Directory: people.Visibility{All: true}}})
 	if err != nil || len(graph.Nodes) != 4 || len(graph.Edges) != 3 {
 		t.Fatalf("SailPoint memberships did not reconcile into the directory graph %#v err=%v", graph, err)
 	}

@@ -176,6 +176,13 @@ type IdentityQuery struct {
 	Limit        int
 }
 
+// MaximumStoreIdentitySearchLimit is the repository-level safety bound used by
+// internal projections. The public People service deliberately keeps its
+// smaller 100-record contract; the relationship graph can request up to its
+// documented 500-node response limit without silently truncating first.
+// Requirement: REQ-DIRECTORY-EXPANSION-008.
+const MaximumStoreIdentitySearchLimit = 500
+
 type CreateSiteInput struct {
 	Name    string
 	Address Address

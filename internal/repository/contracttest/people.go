@@ -1,6 +1,6 @@
 package contracttest
 
-// Requirements: REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-002. Features: identity.directory, integrations.protocols.
+// Requirements: REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-008. Features: identity.directory, integrations.protocols, threads.relationships.
 
 import (
 	"context"

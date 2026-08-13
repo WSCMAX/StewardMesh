@@ -1,4 +1,4 @@
-// Requirements: REQ-API-001, SEC-MCP-001, REQ-DIRECTORY-EXPANSION-005, REQ-DIRECTORY-EXPANSION-007, REQ-SIGNALS-001, REQ-REACH-001, REQ-EXCHANGE-001, DOC-001. Features: platform.foundation, integrations.protocols, alerts.rules, messaging.delivery, migration.packages, experience.help.
+// Requirements: REQ-API-001, SEC-MCP-001, REQ-DIRECTORY-EXPANSION-005, REQ-DIRECTORY-EXPANSION-007, REQ-DIRECTORY-EXPANSION-008, REQ-SIGNALS-001, REQ-REACH-001, REQ-EXCHANGE-001, DOC-001. Features: platform.foundation, integrations.protocols, threads.relationships, alerts.rules, messaging.delivery, migration.packages, experience.help.
 
 export type DocumentationTopicID = 'overview' | 'workspace' | 'atlas' | 'horizon' | 'ledger' | 'stack' | 'signals' | 'reach' | 'threads' | 'vault' | 'exchange' | 'people' | 'bridge' | 'guard' | 'guide'
 
@@ -432,7 +432,7 @@ export const documentationPages: readonly DocumentationPage[] = [
     summary: 'Organize places, departments, identities, and effective-dated asset assignments without mixing directory ownership into Atlas.',
     appHref: '#workspace-people',
     appLabel: 'Open People',
-    searchTerms: ['person', 'identity', 'site', 'building', 'room', 'department', 'assignment', 'location', 'grouper', 'nested group', 'directory import', 'synthetic demo', 'demo seed'],
+    searchTerms: ['person', 'identity', 'site', 'building', 'room', 'department', 'assignment', 'location', 'grouper', 'nested group', 'directory import', 'relationship graph', 'connected records', 'cycles', 'synthetic demo', 'demo seed'],
     sections: [
       {
         id: 'directory',
@@ -452,6 +452,13 @@ export const documentationPages: readonly DocumentationPage[] = [
         id: 'assignments',
         title: 'Preserve assignment history',
         paragraphs: ['Asset assignments are effective-dated and support primary user, additional user, and responsible department roles. Ending an assignment preserves the prior stewardship record.'],
+      },
+      {
+        id: 'relationship-graph',
+        title: 'Explore visible record relationships',
+        paragraphs: ['The permission-scoped graph connects visible people, locations, departments, imported groups, and permitted assets without becoming a second source of truth. Filter by record name, record type, relationship type, or result limit.'],
+        bullets: ['The visual is a compact overview; the relationship and disconnected-record tables are the complete keyboard and screen-reader view.', 'Cycles and disconnected records remain visible, while repeated semantic relationships are shown once.', 'Directory and asset grants are intersected by the server. A filter can narrow results but never reveal a record outside your scope.'],
+        callout: { title: 'Scope stays server-owned', body: 'Graph requests do not accept an organization, site, department, resource, or visibility scope. Guard derives access from the signed-in principal.', tone: 'info' },
       },
       {
         id: 'grouper-sync',

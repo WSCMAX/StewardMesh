@@ -19,6 +19,7 @@ import (
 	"github.com/maxlemke/stewardmesh/internal/foundation"
 	"github.com/maxlemke/stewardmesh/internal/grouperfixture"
 	"github.com/maxlemke/stewardmesh/internal/guard"
+	"github.com/maxlemke/stewardmesh/internal/people"
 	"github.com/maxlemke/stewardmesh/internal/repository"
 )
 
@@ -200,7 +201,7 @@ func TestGrouperPreviewApplyNestedGraphDuplicateReplayAndRemoval(t *testing.T) {
 		t.Fatalf("Grouper apply failed %#v err=%v", applied, err)
 	}
 	graphStore, _ := NewManagedGraphStore(store, "example-org")
-	graph, err := graphStore.Graph(context.Background(), GraphQuery{})
+	graph, err := graphStore.Graph(context.Background(), GraphQuery{Scope: GraphScope{Directory: people.Visibility{All: true}}})
 	if err != nil || len(graph.Nodes) != 3 || len(graph.Edges) != 2 {
 		t.Fatalf("nested group graph is incomplete %#v err=%v", graph, err)
 	}
@@ -212,7 +213,7 @@ func TestGrouperPreviewApplyNestedGraphDuplicateReplayAndRemoval(t *testing.T) {
 	if _, err := service.Apply(context.Background(), auth, secondPreview.Batch.ID, "grouper-removal-apply"); err != nil {
 		t.Fatal(err)
 	}
-	graph, _ = graphStore.Graph(context.Background(), GraphQuery{})
+	graph, _ = graphStore.Graph(context.Background(), GraphQuery{Scope: GraphScope{Directory: people.Visibility{All: true}}})
 	if len(graph.Nodes) != 2 || len(graph.Edges) != 1 {
 		t.Fatalf("removed membership remained active in graph: %#v", graph)
 	}

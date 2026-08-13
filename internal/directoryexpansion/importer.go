@@ -714,6 +714,8 @@ func (s *Service) audit(ctx context.Context, attempt Attempt, batch Batch, actio
 	correlationID := attempt.CorrelationID
 	requirementID := RequirementID
 	switch batch.Provider {
+	case EntraProvider:
+		requirementID = EntraRequirementID
 	case GrouperProvider:
 		requirementID = GrouperRequirementID
 	case SailPointProvider:

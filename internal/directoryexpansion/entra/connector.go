@@ -153,7 +153,7 @@ func NewConnector(configuration Config, options Options) (*Connector, error) {
 	}
 	revision := revisionFor(normalized, graphURL.String())
 	return &Connector{
-		system:       directoryexpansion.SourceSystem{ID: normalized.SourceSystemID, Provider: "entra", ConfigRevision: revision},
+		system:       directoryexpansion.SourceSystem{ID: normalized.SourceSystemID, Provider: directoryexpansion.EntraProvider, ConfigRevision: revision},
 		graphBaseURL: graphURL,
 		credentials: clientcredentials.Config{
 			ClientID: normalized.ClientID, ClientSecret: normalized.ClientSecret, TokenURL: tokenURL.String(),

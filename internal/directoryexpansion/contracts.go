@@ -18,6 +18,7 @@ import (
 
 const (
 	RequirementID          = "REQ-DIRECTORY-EXPANSION-002"
+	EntraRequirementID     = "REQ-DIRECTORY-EXPANSION-003"
 	GrouperRequirementID   = "REQ-DIRECTORY-EXPANSION-005"
 	SailPointRequirementID = "REQ-DIRECTORY-EXPANSION-004"
 	GraphRequirementID     = "REQ-DIRECTORY-EXPANSION-008"
@@ -75,7 +76,10 @@ type Room struct {
 // allowlist; provider-specific slices do not require a schema enum migration.
 type Provider string
 
-const SailPointProvider Provider = "sailpoint"
+const (
+	EntraProvider     Provider = "entra"
+	SailPointProvider Provider = "sailpoint"
+)
 
 // SourceSystem identifies one server-configured, read-only connector. Client
 // requests can select this stable identifier but cannot submit credentials or

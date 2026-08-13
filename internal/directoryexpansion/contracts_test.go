@@ -692,6 +692,35 @@ func TestAuditHistoryIsDeterministicAndSanitized(t *testing.T) {
 	}
 }
 
+func TestEntraAuditHistoryUsesConnectorRequirement(t *testing.T) {
+	connector := onePageConnector("entra-primary", true, []Record{{
+		SourceRecordID: "user:entra-ada", Kind: RecordIdentity, IdentityKind: "person",
+		DisplayName: "Ada", Email: "ada@example.com", Status: "active",
+	}})
+	connector.system.Provider = EntraProvider
+	registry, err := NewRegistry(connector)
+	if err != nil {
+		t.Fatal(err)
+	}
+	auditor := &contractAuditor{}
+	service, err := NewService(
+		newContractMemoryStore(),
+		&contractTarget{current: map[string]TargetPlan{}, results: map[string]TargetResult{}, errors: map[string]error{}},
+		auditor,
+		registry,
+		ServiceConfig{OrganizationID: "example-org"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Preview(context.Background(), contractAuthentication(), PreviewRequest{SourceSystemID: "entra-primary"}, "entra-audit-preview"); err != nil {
+		t.Fatal(err)
+	}
+	if len(auditor.events) != 1 || auditor.events[0].Metadata["requirementId"] != EntraRequirementID {
+		t.Fatalf("Entra audit lost connector provenance: %#v", auditor.events)
+	}
+}
+
 func TestFailedRetriesProduceDistinctReplaySafeAuditEvents(t *testing.T) {
 	connector := onePageConnector("hr-primary", true, []Record{{SourceRecordID: "retry", Kind: RecordIdentity, IdentityKind: "person", DisplayName: "Retry", Email: "retry@example.com", Status: "active"}})
 	store := newContractMemoryStore()

@@ -382,15 +382,15 @@ export default function PatternsManager({ csrfToken }: { csrfToken: string }) {
     }
   }
 
-  return <section aria-labelledby="patterns-heading" className={`${panelClass} p-5 sm:p-7`} data-feature="templates.schemas" data-requirement="REQ-PATTERNS-001">
+  return <section aria-labelledby="patterns-heading" className={`${panelClass} min-w-0 max-w-full overflow-hidden p-5 sm:p-7`} data-feature="templates.schemas" data-requirement="REQ-PATTERNS-001">
     <p className="text-xs font-semibold uppercase tracking-[0.18em] text-steward-teal">Patterns</p>
     <h2 className="mt-2 text-2xl font-semibold" id="patterns-heading">Versioned record templates</h2>
     <p className="mt-2 max-w-3xl leading-7 text-steward-mist-muted">Use built-in schemas as form, API, CSV, and Exchange contracts. Custom versions are append-only, and every operation pins the exact template ID and version.</p>
     <p className="mt-2 text-sm text-steward-mist-muted">A missing reference can become a visible holding record only when the field allows it; it is never silently accepted.</p>
     {error && <div aria-live="assertive" className="mt-4 rounded-xl border border-steward-danger/50 bg-steward-danger/10 p-4 text-sm text-[#ffbdc3]" ref={errorRef} role="alert" tabIndex={-1}>{error}</div>}
     {status && <p aria-live="polite" className="mt-4 rounded-xl border border-steward-success/35 bg-steward-success/10 p-4 text-sm text-[#98eab9]" role="status">{status}</p>}
-    {loading ? <p className="mt-5 text-sm text-steward-mist-muted">Loading templates…</p> : <div className="mt-6 grid gap-6 xl:grid-cols-[minmax(15rem,0.7fr)_minmax(0,1.3fr)]">
-      <div>
+    {loading ? <p className="mt-5 text-sm text-steward-mist-muted">Loading templates…</p> : <div className="mt-6 grid min-w-0 gap-6 xl:grid-cols-[minmax(15rem,0.7fr)_minmax(0,1.3fr)]">
+      <div className="min-w-0">
         <label className={labelClass} htmlFor="patternTemplate">Template and version</label>
         <select className={inputClass} id="patternTemplate" onChange={(event) => setSelectedKey(event.target.value)} value={selected ? selectionKey(selected) : ''}>
           {templates.map((template) => <option key={selectionKey(template)} value={selectionKey(template)}>{template.name} · v{template.version}{template.builtIn ? ' · built in' : ''}</option>)}
@@ -420,7 +420,7 @@ export default function PatternsManager({ csrfToken }: { csrfToken: string }) {
           </details>}
         </div>}
       </div>
-      <div>
+      <div className="min-w-0">
         <h3 className="text-lg font-semibold">Field contract</h3>
         <div className="mt-3 grid gap-3 sm:grid-cols-2">
           {selected?.fields.map((field) => <article className={`${subpanelClass} p-4`} key={field.key}>

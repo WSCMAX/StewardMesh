@@ -52,8 +52,9 @@ test('creates a typed custom template and copies a built-in version', async () =
     throw new Error(`unexpected request: ${path}`)
   })
   vi.stubGlobal('fetch', fetchMock)
-  render(<PatternsManager csrfToken="csrf-value" />)
+  const { container } = render(<PatternsManager csrfToken="csrf-value" />)
   await screen.findByText('Asset name')
+  expect(container.querySelector('[data-feature="templates.schemas"]')).toHaveClass('min-w-0', 'max-w-full', 'overflow-hidden')
 
   fireEvent.change(screen.getByLabelText('Name for editable copy'), { target: { value: 'Asset copy' } })
   fireEvent.click(screen.getByRole('button', { name: 'Copy this version' }))

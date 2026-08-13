@@ -56,6 +56,27 @@ func TestLocalBlobStoreConformance(t *testing.T) {
 	}
 }
 
+func TestLocalBlobStoreOpenHonorsCancellation(t *testing.T) {
+	store, err := NewLocalBlobStore(t.TempDir(), 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := "example-org/0123456789abcdef0123456789abcdef"
+	if _, err := store.Put(context.Background(), key, "text/plain", strings.NewReader("hello Vault")); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	content, err := store.Open(ctx, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	defer content.Close()
+	if _, err := io.ReadAll(content); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected canceled read, got %v", err)
+	}
+}
+
 func TestLocalBlobStoreRejectsTraversalOversizeAndSymlinks(t *testing.T) {
 	root := t.TempDir()
 	store, err := NewLocalBlobStore(root, 4)

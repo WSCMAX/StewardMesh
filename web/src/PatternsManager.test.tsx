@@ -62,6 +62,8 @@ test('creates a typed custom template and copies a built-in version', async () =
   expect(copyCall?.[1]?.headers).toMatchObject({ 'X-CSRF-Token': 'csrf-value' })
 
   fireEvent.click(screen.getByText('Create a custom template'))
+  expect(screen.getByLabelText('Record type')).toHaveAttribute('pattern', '[a-z][-a-z0-9.]{1,79}')
+  expect(screen.getByLabelText('Field key')).toHaveAttribute('pattern', '[A-Za-z][-A-Za-z0-9_.]{0,63}')
   fireEvent.change(screen.getByLabelText('Template name'), { target: { value: 'Custom record' } })
   fireEvent.change(screen.getByLabelText('Record type'), { target: { value: 'exchange.row' } })
   fireEvent.change(screen.getByLabelText('Field key'), { target: { value: 'state' } })

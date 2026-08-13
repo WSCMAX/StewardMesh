@@ -812,7 +812,10 @@ enum AssetLabelOutput {
   ASSET_LABEL_OUTPUT_UNSPECIFIED = 0;
   ASSET_LABEL_OUTPUT_SVG = 1;
   ASSET_LABEL_OUTPUT_PDF = 2;
-  ASSET_LABEL_OUTPUT_ZPL = 3;
+  // Device-language output remains an internal qualification seam until a
+  // dated real-device record exists; value 3 must not be reused.
+  reserved 3;
+  reserved "ASSET_LABEL_OUTPUT_ZPL";
 }
 
 message GenerateAssetLabelBatchRequest {
@@ -824,12 +827,12 @@ message GenerateAssetLabelBatchRequest {
   string template_id = 2;
   int64 template_version = 3;
   // One to fifty unique active identifier IDs of one symbology. SVG requires
-  // exactly one; PDF emits one physical page per item; ZPL emits one device
-  // label per item. The adapter rechecks read, write, scope, and ownership for
-  // every selected asset before returning bytes.
+  // exactly one and PDF emits one physical page per item. The adapter rechecks
+  // read, write, scope, and ownership for every selected asset before returning
+  // bytes.
   repeated string identifier_ids = 4;
-  // All rendered human-readable fields are bounded printable ASCII so SVG,
-  // PDF, and ZPL cannot silently substitute different glyphs.
+  // All rendered human-readable fields are bounded printable ASCII so SVG and
+  // PDF cannot silently substitute different glyphs.
   AssetLabelOutput output = 5;
   bool test_print = 6;
 }

@@ -16,8 +16,9 @@ an extension point exists.
 Atlas owns authoritative, organization-scoped Code 128 and QR associations.
 The v1 user surface supports manual entry, paste, USB/Bluetooth
 keyboard-wedge input, optional in-browser camera decoding, accessible
-single/batch label previews, and operator-confirmed SVG or PDF output. ZPL is a
-renderer export with immutable fixtures; StewardMesh does not silently discover,
+single/batch label previews, and operator-confirmed SVG or PDF output. ZPL is an
+internal qualification renderer with immutable fixtures and is not exposed by
+the UI, REST/OpenAPI, or gRPC contract; StewardMesh does not silently discover,
 select, or write to a printer.
 
 Durable associations, history, provenance, conflicts, revisions, and audits
@@ -42,7 +43,7 @@ compile-time column-list constant.
 | Keyboard injection and unintended mutation | Scanner input is ignored while the scanner surface is closed. The operator explicitly selects find or associate mode; association additionally requires a selected asset and server-enforced `assets.write`. Terminators and 250–2,000 ms burst windows are bounded, slow input is retained for deliberate submission, duplicate completed bursts are suppressed, and cancellation changes no record. |
 | Ownership-lock bypass | All association, replacement, deactivation, and label-generation mutations pass Guard permission and resource-write checks. Imported assets remain write-locked until ownership is explicitly claimed. Read-only resolution does not weaken the write boundary. |
 | Encoded-data or secret leakage | Codes are posted in bounded bodies rather than URL paths or query strings. Audit metadata includes IDs, symbology, source, status, primary state, and revision but never encoded/display values. QR generation permits only an opaque identifier or organization-scoped application route. Labels exclude credentials, session/CSRF material, grants, private directory values, and confidential asset fields. |
-| Printer endpoints and credentials | v1 produces browser-downloadable/printable artifacts only. There is no direct network-printer transport, endpoint entry, token passthrough, background discovery, or implicit print call. ZPL metacharacters are escaped and fixtures are byte compared. Any future transport must keep credentials server-side and repeat this review. |
+| Printer endpoints and credentials | v1 exposes browser-downloadable/printable SVG/PDF artifacts only. There is no direct network-printer transport, endpoint entry, token passthrough, background discovery, implicit print call, or public ZPL output. Internal ZPL metacharacter escaping and fixtures retain a qualification seam. Any future transport must keep credentials server-side and repeat this review. |
 | Resource exhaustion and duplicate work | HTTP bodies, text fields, template dimensions, label counts, artifact bytes, cache size, replay lifetime, rendering time, and repository operations are bounded. Per-principal operation windows limit resolution, reads, mutations, and label generation before body decoding; only digested organization/subject/operation keys are retained, and a redacted `429` includes `Retry-After`. Batch generation is cancellable. Idempotency keys and exact snapshot replay prevent duplicate association work while authorization is rechecked before artifact access. |
 | Cross-site request and browser exfiltration | Cookie-authenticated writes require same-origin CSRF tokens. Frontend requests use fixed same-origin API paths, never user-controlled destinations. Sensitive responses use `no-store`; downloadable artifacts expose only allowlisted CORS headers. |
 
@@ -66,7 +67,7 @@ claiming a specific physical model.
 | Camera hardware class | Browser-visible rear/front camera in a secure context with `getUserMedia` and `BarcodeDetector` | Permission denial, missing API, decode failure, stop, cancel, and unmount are tested. Frames are local only. |
 | Symbologies | Code 128-B and QR | Validation, normalized resolution, rendering, quiet zones, and fixtures are covered. Other formats fail safely. |
 | Standard output | One-page vector SVG and one-label-per-page vector PDF | Exact physical dimensions are embedded and shown before confirmation. Browser/OS scaling and media calibration remain operator responsibilities. |
-| Printer language | ZPL at 8 or 12 dpmm as an exported renderer | Golden Code 128 and QR fixtures and escaping are automated. No direct transport or physical Zebra-compatible model is advertised until the qualification record in `atlas-codes-label-printing.md` is completed. |
+| Printer language | None exposed in v1; ZPL remains an internal 8/12-dpmm qualification renderer | Golden Code 128 and QR fixtures and escaping are automated. REST/OpenAPI, gRPC, and the UI reject or omit ZPL until the qualification record in `atlas-codes-label-printing.md` is completed. |
 | Printer hardware class | Laser, inkjet, or thermal device reachable through the browser/OS print path | StewardMesh never selects the device or bypasses the operating-system dialog. Physical stock, DPI, darkness, speed, and calibration are local concerns. |
 
 ## Accessibility validation

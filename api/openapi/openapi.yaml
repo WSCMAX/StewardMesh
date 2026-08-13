@@ -902,7 +902,7 @@ paths:
       operationId: createAssetLabelBatch
       tags: [Atlas Codes]
       x-requirement: REQ-ATLAS-CODES-001
-      description: Generates one label or a bounded selected batch without creating or changing identifier associations. Every selected asset is rechecked for current assets.read, assets.write, matching scope, and imported-resource ownership before cached or newly rendered bytes are returned. Within the bounded replay window, repeating the exact request with the same idempotency key returns identical snapshot bytes and reusing a key for different input is rejected; an expired replay requires a new key. Request cancellation stops generation. SVG is a one-label vector browser/OS artifact, PDF preserves one physical page per selected label, and ZPL preserves one device label per selection as an escaped provider adapter file that never contacts or silently selects a printer. Printable label text is bounded ASCII across all three renderers so no output silently substitutes unsupported characters.
+      description: Generates one label or a bounded selected batch without creating or changing identifier associations. Every selected asset is rechecked for current assets.read, assets.write, matching scope, and imported-resource ownership before cached or newly rendered bytes are returned. Within the bounded replay window, repeating the exact request with the same idempotency key returns identical snapshot bytes and reusing a key for different input is rejected; an expired replay requires a new key. Request cancellation stops generation. SVG is a one-label vector browser/OS artifact and PDF preserves one physical page per selected label. Printable label text is bounded ASCII across both public renderers so no output silently substitutes unsupported characters. Device-language renderers remain internal qualification seams and are not accepted by this API until dated real-device validation exists.
       security: [{localCookieAuth: []}, {secureCookieAuth: []}]
       parameters:
         - $ref: '#/components/parameters/CSRFToken'
@@ -918,9 +918,9 @@ paths:
             schema: {$ref: '#/components/schemas/CreateAssetLabelBatchRequest'}
       responses:
         '200':
-          description: Print-ready vector/PDF output or an operator-controlled ZPL adapter file
+          description: Print-ready vector SVG or PDF output
           headers:
-            Content-Disposition: {description: Inline browser review for SVG/PDF or attachment for ZPL., schema: {type: string}}
+            Content-Disposition: {description: Inline browser review for SVG or PDF., schema: {type: string}}
             X-Label-Batch-ID: {description: Deterministic batch identity for this exact input., schema: {type: string}}
             X-Label-Template-Version: {description: Resolved immutable Patterns-backed template version., schema: {type: integer, format: int64, minimum: 1}}
             X-Label-Width-MM: {description: Physical width of each label in millimeters., schema: {type: number, format: double, minimum: 12, maximum: 300}}
@@ -932,8 +932,6 @@ paths:
             image/svg+xml:
               schema: {type: string, format: binary}
             application/pdf:
-              schema: {type: string, format: binary}
-            application/vnd.zebra-zpl:
               schema: {type: string, format: binary}
         '400': {$ref: '#/components/responses/InvalidRequest'}
         '401': {$ref: '#/components/responses/Unauthorized'}
@@ -4531,7 +4529,7 @@ components:
           items: {$ref: '#/components/schemas/AssetLabelOutput'}
     AssetLabelOutput:
       type: string
-      enum: [svg, pdf, zpl]
+      enum: [svg, pdf]
     CreateAssetLabelBatchRequest:
       type: object
       additionalProperties: false
@@ -4545,7 +4543,7 @@ components:
           maxItems: 50
           uniqueItems: true
           items: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
-        output: {$ref: '#/components/schemas/AssetLabelOutput', description: SVG accepts exactly one identifier; PDF and ZPL accept one to fifty.}
+        output: {$ref: '#/components/schemas/AssetLabelOutput', description: SVG accepts exactly one identifier; PDF accepts one to fifty.}
         testPrint: {type: boolean, default: false}
     CreateAssetIdentifierResponse:
       type: object

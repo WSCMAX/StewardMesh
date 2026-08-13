@@ -37,7 +37,7 @@ type LabelTemplate = {
 
 type Artifact = {
   batchId: string
-  output: 'svg' | 'pdf' | 'zpl'
+  output: 'svg' | 'pdf'
   itemCount: number
   widthMm: number
   heightMm: number
@@ -50,7 +50,7 @@ type Artifact = {
 const maximumBatchSize = 50
 const maximumCandidates = 250
 const maximumArtifactBytes = 4 << 20
-const artifactMediaTypes = { svg: 'image/svg+xml', pdf: 'application/pdf', zpl: 'application/vnd.zebra-zpl' } as const
+const artifactMediaTypes = { svg: 'image/svg+xml', pdf: 'application/pdf' } as const
 const batchIDPattern = /^label-batch-[a-f0-9]{24}$/
 
 function isLabelTemplate(value: unknown): value is LabelTemplate {
@@ -94,7 +94,7 @@ export default function AtlasLabelPrint({ assets, csrfToken }: { assets: readonl
   const [templates, setTemplates] = useState<LabelTemplate[]>([])
   const [selected, setSelected] = useState<string[]>([])
   const [templateId, setTemplateId] = useState('')
-  const [output, setOutput] = useState<'svg' | 'pdf' | 'zpl'>('svg')
+  const [output, setOutput] = useState<'svg' | 'pdf'>('svg')
   const [testPrint, setTestPrint] = useState(true)
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
@@ -207,7 +207,7 @@ export default function AtlasLabelPrint({ assets, csrfToken }: { assets: readonl
     if (!selectedTemplate || selected.length < 1 || selected.length > maximumBatchSize || selectedFormats.size !== 1 || svgBatchInvalid) {
       const detail = selectedFormats.size > 1
         ? 'Select identifiers that use the same code format for one label batch.'
-        : svgBatchInvalid ? 'Browser SVG printing supports one physical label. Choose Vector PDF or ZPL for a selected batch.'
+        : svgBatchInvalid ? 'Browser SVG printing supports one physical label. Choose Vector PDF for a selected batch.'
           : 'Select between 1 and 50 active identifiers and a compatible template.'
       setError(detail)
       queueMicrotask(() => errorRef.current?.focus())
@@ -271,15 +271,9 @@ export default function AtlasLabelPrint({ assets, csrfToken }: { assets: readonl
     if (artifact.output === 'svg') {
       window.print()
       setMessage('The browser print dialog was opened. Choose and confirm the printer, media, scale, and quantity there.')
-    } else if (artifact.output === 'pdf') {
+    } else {
       window.open(artifact.objectUrl ?? '', '_blank', 'noopener,noreferrer')
       setMessage('The PDF viewer was requested. If the browser blocked it, allow the new tab and retry; otherwise use the viewer’s print command to choose and confirm a printer.')
-    } else {
-      const anchor = document.createElement('a')
-      anchor.href = artifact.objectUrl ?? ''
-      anchor.download = artifact.fileName
-      anchor.click()
-      setMessage('ZPL downloaded for an operator-controlled, validated printer workflow. StewardMesh did not contact a printer.')
     }
   }
 
@@ -305,16 +299,15 @@ export default function AtlasLabelPrint({ assets, csrfToken }: { assets: readonl
           <legend className="font-semibold">2. Choose template and output</legend>
           <div className="mt-2 grid min-w-0 gap-3 sm:grid-cols-2">
             <label className="min-w-0 text-sm font-semibold text-steward-mist-muted">Versioned label template<select className={inputClass} disabled={busy === 'preview' || compatibleTemplates.length === 0} onChange={(event) => { invalidateRequest(); setTemplateId(event.target.value) }} value={selectedTemplate?.id ?? ''}>{compatibleTemplates.length === 0 && <option value="">Select one code format</option>}{compatibleTemplates.map((template) => <option key={template.id} value={template.id}>{template.name} · v{template.version} · {template.widthMm} × {template.heightMm} mm</option>)}</select></label>
-            <label className="min-w-0 text-sm font-semibold text-steward-mist-muted">Output path<select className={inputClass} disabled={busy === 'preview'} onChange={(event) => { invalidateRequest(); setOutput(event.target.value as 'svg' | 'pdf' | 'zpl') }} value={output}><option value="svg">Browser/OS print (single vector SVG)</option><option value="pdf">Vector PDF (single or batch)</option><option value="zpl">ZPL adapter file (8 dpmm)</option></select></label>
+            <label className="min-w-0 text-sm font-semibold text-steward-mist-muted">Output path<select className={inputClass} disabled={busy === 'preview'} onChange={(event) => { invalidateRequest(); setOutput(event.target.value as 'svg' | 'pdf') }} value={output}><option value="svg">Browser/OS print (single vector SVG)</option><option value="pdf">Vector PDF (single or batch)</option></select></label>
           </div>
           {selectedTemplate && <dl className="mt-3 grid gap-2 rounded-lg border border-steward-ink-800 p-3 text-sm sm:grid-cols-2"><div><dt className="font-semibold text-steward-mist-muted">Physical label</dt><dd>{selectedTemplate.widthMm} × {selectedTemplate.heightMm} mm · {selectedTemplate.marginMm} mm margins</dd></div><div><dt className="font-semibold text-steward-mist-muted">Code safety</dt><dd>{selectedTemplate.quietZoneMm} mm quiet zone · human-readable text included</dd></div><div><dt className="font-semibold text-steward-mist-muted">Immutable definition</dt><dd>Pattern {selectedTemplate.patternTemplateId}, version {selectedTemplate.patternVersion}</dd></div><div><dt className="font-semibold text-steward-mist-muted">Payload</dt><dd>{selectedTemplate.payloadSource === 'organization_route' ? 'Credential-free app route' : 'Existing identifier value'}</dd></div></dl>}
           <label className="mt-3 flex min-h-11 items-start gap-3 text-sm font-semibold text-steward-mist-muted"><input checked={testPrint} className="mt-0.5 h-5 w-5 shrink-0 accent-steward-teal" disabled={busy === 'preview'} onChange={(event) => { invalidateRequest(); setTestPrint(event.target.checked) }} type="checkbox" /><span>Test print first <span className="block font-normal">Adds a calibration border. Print at 100% scale and measure before a production batch.</span></span></label>
-          {svgBatchInvalid && <p className="mt-2 rounded-lg border border-amber-300/40 bg-amber-950/30 p-3 text-sm">Browser SVG preserves one physical label. Choose Vector PDF or ZPL for a selected batch.</p>}
-          {output === 'zpl' && <p className="mt-2 rounded-lg border border-amber-300/40 bg-amber-950/30 p-3 text-sm">ZPL is an exported adapter file, not a direct printer connection. Use only with a compatible, calibrated device from the documented validation list.</p>}
+          {svgBatchInvalid && <p className="mt-2 rounded-lg border border-amber-300/40 bg-amber-950/30 p-3 text-sm">Browser SVG preserves one physical label. Choose Vector PDF for a selected batch.</p>}
           <div className="mt-4 flex flex-wrap gap-2"><button className={buttonClass} disabled={busy !== '' || !selectedTemplate || selected.length < 1 || selected.length > maximumBatchSize || selectedFormats.size !== 1 || svgBatchInvalid} onClick={() => void generatePreview()} type="button">{busy === 'preview' ? 'Generating…' : artifact ? 'Regenerate preview' : testPrint ? 'Generate test-print preview' : 'Generate preview'}</button>{busy === 'preview' && <button className={secondaryButtonClass} onClick={cancelGeneration} type="button">Cancel generation</button>}{error && busy === '' && <button className={secondaryButtonClass} onClick={() => void generatePreview()} type="button">Retry generation</button>}</div>
         </fieldset>
       </>}
-      {artifact && <section aria-labelledby="atlas-label-review-heading" className="mt-5 min-w-0 border-t border-steward-ink-800 pt-5"><h4 className="font-semibold" id="atlas-label-review-heading">3. Review and confirm</h4><p className="mt-1 break-words text-sm text-steward-mist-muted">{artifact.itemCount} label{artifact.itemCount === 1 ? '' : 's'} · {artifact.widthMm} × {artifact.heightMm} mm each · {artifact.output.toUpperCase()}{artifact.replay ? ' · safe retry replay' : ''}</p>{artifact.previewSrc && <div className="mt-3 max-w-full overflow-auto rounded-lg bg-white p-3"><img alt={`Generated preview of ${artifact.itemCount} Atlas Codes label${artifact.itemCount === 1 ? '' : 's'}`} className="atlas-label-print-preview block h-auto max-w-full bg-white" src={artifact.previewSrc} /></div>}{artifact.objectUrl && artifact.output === 'pdf' && <p className="mt-3 text-sm text-steward-mist-muted">The PDF is ready. Confirm the dimensions, count, and test-print state below before opening its browser viewer.</p>}<label className="mt-4 flex min-h-11 items-start gap-3 rounded-lg border border-steward-blue/35 p-3 text-sm font-semibold"><input checked={confirmed} className="mt-0.5 h-5 w-5 shrink-0 accent-steward-teal" onChange={(event) => setConfirmed(event.target.checked)} type="checkbox" /><span>I reviewed the {artifact.widthMm} × {artifact.heightMm} mm dimensions, selected count, code format, and test-print state. <span className="mt-1 block font-normal text-steward-mist-muted">I will choose and confirm the printer, media, scale, and quantity in the browser/OS or controlled device workflow.</span></span></label><button className={`${buttonClass} mt-3`} disabled={!confirmed} onClick={deliverArtifact} type="button">{artifact.output === 'svg' ? 'Open browser print dialog' : artifact.output === 'pdf' ? 'Open PDF for printing' : 'Download confirmed ZPL'}</button></section>}
+      {artifact && <section aria-labelledby="atlas-label-review-heading" className="mt-5 min-w-0 border-t border-steward-ink-800 pt-5"><h4 className="font-semibold" id="atlas-label-review-heading">3. Review and confirm</h4><p className="mt-1 break-words text-sm text-steward-mist-muted">{artifact.itemCount} label{artifact.itemCount === 1 ? '' : 's'} · {artifact.widthMm} × {artifact.heightMm} mm each · {artifact.output.toUpperCase()}{artifact.replay ? ' · safe retry replay' : ''}</p>{artifact.previewSrc && <div className="mt-3 max-w-full overflow-auto rounded-lg bg-white p-3"><img alt={`Generated preview of ${artifact.itemCount} Atlas Codes label${artifact.itemCount === 1 ? '' : 's'}`} className="atlas-label-print-preview block h-auto max-w-full bg-white" src={artifact.previewSrc} /></div>}{artifact.objectUrl && artifact.output === 'pdf' && <p className="mt-3 text-sm text-steward-mist-muted">The PDF is ready. Confirm the dimensions, count, and test-print state below before opening its browser viewer.</p>}<label className="mt-4 flex min-h-11 items-start gap-3 rounded-lg border border-steward-blue/35 p-3 text-sm font-semibold"><input checked={confirmed} className="mt-0.5 h-5 w-5 shrink-0 accent-steward-teal" onChange={(event) => setConfirmed(event.target.checked)} type="checkbox" /><span>I reviewed the {artifact.widthMm} × {artifact.heightMm} mm dimensions, selected count, code format, and test-print state. <span className="mt-1 block font-normal text-steward-mist-muted">I will choose and confirm the printer, media, scale, and quantity in the browser/OS or controlled device workflow.</span></span></label><button className={`${buttonClass} mt-3`} disabled={!confirmed} onClick={deliverArtifact} type="button">{artifact.output === 'svg' ? 'Open browser print dialog' : 'Open PDF for printing'}</button></section>}
     </div>}
     </section>
   </>

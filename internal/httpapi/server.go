@@ -2979,7 +2979,7 @@ func (s *Server) listAssetLabelTemplates(w http.ResponseWriter, r *http.Request,
 	writeJSON(w, http.StatusOK, map[string]any{
 		"items":            items,
 		"maximumBatchSize": atlascodes.MaximumLabelBatch,
-		"outputs":          []atlascodes.LabelOutput{atlascodes.LabelOutputSVG, atlascodes.LabelOutputPDF, atlascodes.LabelOutputZPL},
+		"outputs":          []atlascodes.LabelOutput{atlascodes.LabelOutputSVG, atlascodes.LabelOutputPDF},
 	})
 }
 
@@ -2996,6 +2996,10 @@ func (s *Server) createAssetLabelBatch(w http.ResponseWriter, r *http.Request, a
 		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid label batch payload")
 		return
 	}
+	if input.Output != atlascodes.LabelOutputSVG && input.Output != atlascodes.LabelOutputPDF {
+		writeAtlasCodesError(w, r, atlascodes.ErrUnsupportedLabelOutput)
+		return
+	}
 	input.IdempotencyKey = r.Header.Get("Idempotency-Key")
 	batch, created, err := s.atlasLabels.CreateBatchAuthorized(r.Context(), input, func(ctx context.Context, asset domain.Asset) error {
 		if !s.canReadAsset(ctx, authentication, asset) {
@@ -3010,12 +3014,8 @@ func (s *Server) createAssetLabelBatch(w http.ResponseWriter, r *http.Request, a
 		writeAtlasCodesError(w, r, err)
 		return
 	}
-	disposition := "inline"
-	if batch.Output == atlascodes.LabelOutputZPL {
-		disposition = "attachment"
-	}
 	w.Header().Set("Content-Type", batch.MediaType)
-	w.Header().Set("Content-Disposition", mime.FormatMediaType(disposition, map[string]string{"filename": batch.FileName}))
+	w.Header().Set("Content-Disposition", mime.FormatMediaType("inline", map[string]string{"filename": batch.FileName}))
 	w.Header().Set("X-Label-Batch-ID", batch.ID)
 	w.Header().Set("X-Label-Template-Version", strconv.FormatInt(batch.Template.Version, 10))
 	w.Header().Set("X-Label-Width-MM", strconv.FormatFloat(batch.Template.WidthMM, 'f', 2, 64))

@@ -70,5 +70,5 @@ export async function requestJSON(path: string, init?: RequestInit): Promise<unk
 // requestArtifact preserves the same correlation, session-expiry, CSRF, and
 // same-origin behavior while leaving vector/PDF/printer-language/package bytes intact.
 export async function requestArtifact(path: string, init?: RequestInit): Promise<Response> {
-  return requestAPI(path, init, 'image/svg+xml, application/pdf, application/vnd.zebra-zpl, application/vnd.stewardmesh.openinventory+zip')
+  return requestAPI(path, init, 'image/svg+xml, application/pdf, application/vnd.stewardmesh.openinventory+zip')
 }

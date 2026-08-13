@@ -127,30 +127,22 @@ test('blocks mixed formats, surfaces cancellation, and reuses the request key fo
   await waitFor(() => expect(screen.getByText(/safe retry replay/)).toBeInTheDocument())
 })
 
-test('exports ZPL only through a reviewed operator-controlled download', async () => {
-  const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined)
-  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+test('does not advertise unqualified device-language output', async () => {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
     if (String(input).endsWith('/asset-label-templates')) return jsonResponse({ items: [template] })
     if (String(input).endsWith('/assets/asset-one/identifiers')) return jsonResponse({ items: [codeIdentifier] })
-    if (String(input).endsWith('/asset-label-batches') && init?.method === 'POST') return new Response('^XA\n^FDLAB-001^FS\n^XZ\n', { headers: {
-      'Content-Type': 'application/vnd.zebra-zpl', 'X-Label-Batch-ID': 'label-batch-cccccccccccccccccccccccc', 'X-Label-Width-MM': '70',
-      'X-Label-Height-MM': '30', 'X-Label-Item-Count': '1', 'X-Idempotent-Replay': 'false',
-    } })
     throw new Error(`unexpected request: ${String(input)}`)
-  }))
+  })
+  vi.stubGlobal('fetch', fetchMock)
   render(<AtlasLabelPrint assets={[assets[0]]} csrfToken="csrf-token" />)
   fireEvent.click(screen.getByRole('button', { name: 'Print labels' }))
-  await screen.findByRole('combobox', { name: 'Output path' })
-  fireEvent.change(screen.getByRole('combobox', { name: 'Output path' }), { target: { value: 'zpl' } })
-  expect(screen.getByText(/not a direct printer connection/)).toBeInTheDocument()
-  fireEvent.click(screen.getByRole('button', { name: 'Generate test-print preview' }))
-  const confirmedDownload = await screen.findByRole('button', { name: 'Download confirmed ZPL' })
-  expect(confirmedDownload).toBeDisabled()
-  expect(click).not.toHaveBeenCalled()
-  fireEvent.click(screen.getByLabelText(/I reviewed the 70 × 30 mm dimensions/))
-  fireEvent.click(confirmedDownload)
-  expect(click).toHaveBeenCalledOnce()
-  expect(await screen.findByText(/did not contact a printer/)).toBeInTheDocument()
+  const output = await screen.findByRole('combobox', { name: 'Output path' })
+  expect(output).toHaveValue('svg')
+  expect(screen.getAllByRole('option').map((option) => option.textContent)).toEqual(expect.arrayContaining([
+    'Browser/OS print (single vector SVG)', 'Vector PDF (single or batch)',
+  ]))
+  expect(screen.queryByRole('option', { name: /ZPL/i })).not.toBeInTheDocument()
+  expect(fetchMock).not.toHaveBeenCalledWith('/api/v1/asset-label-batches', expect.anything())
 })
 
 test('builds one bounded PDF batch from identifiers on multiple visible assets', async () => {

@@ -100,7 +100,8 @@ holding results, and a provider-neutral seam for Exchange packages. See
 Atlas Codes adds organization-scoped Code 128 and QR associations with visible
 provenance, active uniqueness, optimistic replacement and deactivation history,
 Guard ownership locks, redacted audits, explicit scanner workflows, immutable
-physical label templates, and operator-confirmed SVG/PDF/ZPL output. Memory and
+physical label templates, operator-confirmed SVG/PDF output, and an internal
+ZPL qualification seam that is not exposed before real-device validation. Memory and
 PostgreSQL providers, REST/OpenAPI and gRPC contracts, camera/keyboard/manual
 fallbacks, and accessible 320-pixel management and printing panels use the same
 `REQ-ATLAS-CODES-001` rules. See [Atlas Codes](docs/features/atlas-codes.md) and

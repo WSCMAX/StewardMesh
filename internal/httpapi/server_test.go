@@ -1433,7 +1433,8 @@ func TestAtlasCodesLabelTemplatesAndPrintArtifactsAreBoundedRetrySafeAndConfirme
 	templatesResponse := httptest.NewRecorder()
 	handler.ServeHTTP(templatesResponse, templatesRequest)
 	if templatesResponse.Code != http.StatusOK || !strings.Contains(templatesResponse.Body.String(), `"patternTemplateId":"builtin-atlas-label-code128"`) ||
-		!strings.Contains(templatesResponse.Body.String(), `"maximumBatchSize":50`) || !strings.Contains(templatesResponse.Body.String(), `"widthMm":70`) {
+		!strings.Contains(templatesResponse.Body.String(), `"maximumBatchSize":50`) || !strings.Contains(templatesResponse.Body.String(), `"widthMm":70`) ||
+		!strings.Contains(templatesResponse.Body.String(), `"outputs":["svg","pdf"]`) || strings.Contains(templatesResponse.Body.String(), "zpl") {
 		t.Fatalf("unexpected label templates response %d: %s", templatesResponse.Code, templatesResponse.Body.String())
 	}
 
@@ -1478,6 +1479,18 @@ func TestAtlasCodesLabelTemplatesAndPrintArtifactsAreBoundedRetrySafeAndConfirme
 	handler.ServeHTTP(pdfResponse, pdfRequest)
 	if pdfResponse.Code != http.StatusOK || pdfResponse.Header().Get("Content-Type") != "application/pdf" || !bytes.HasPrefix(pdfResponse.Body.Bytes(), []byte("%PDF-1.4")) {
 		t.Fatalf("unexpected PDF label output %d: %q", pdfResponse.Code, pdfResponse.Body.Bytes())
+	}
+	zplPayload, _ := json.Marshal(map[string]any{
+		"templateId": "builtin-atlas-label-code128", "templateVersion": 1,
+		"identifierIds": []string{"label-identifier-one"}, "output": "zpl",
+	})
+	zplRequest := authenticatedRequest(http.MethodPost, "/api/v1/asset-label-batches", bytes.NewReader(zplPayload), session)
+	zplRequest.Header.Set("Idempotency-Key", "http-label-zpl-unqualified")
+	zplResponse := httptest.NewRecorder()
+	handler.ServeHTTP(zplResponse, zplRequest)
+	if zplResponse.Code != http.StatusBadRequest || !strings.Contains(zplResponse.Body.String(), `"code":"validation_failed"`) ||
+		strings.Contains(zplResponse.Header().Get("Content-Type"), "zpl") {
+		t.Fatalf("unqualified ZPL output was advertised by HTTP: %d headers=%#v body=%s", zplResponse.Code, zplResponse.Header(), zplResponse.Body.String())
 	}
 
 	missingCSRF := authenticatedRequest(http.MethodPost, "/api/v1/asset-label-batches", bytes.NewReader(payload), session)

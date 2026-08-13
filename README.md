@@ -186,10 +186,14 @@ privacy boundaries, provider contracts, location behavior, assignments, and
 the guided accessible workflow. Operators should use the
 [directory connector deployment runbook](docs/deployment/directory-connectors.md)
 for least-privilege setup and secret rotation. The
-[phase-one release validation record](docs/validation/directory-expansion-release.md)
+[Directory Expansion release validation record](docs/validation/directory-expansion-release.md)
 defines the security, traceability, container, integration, browser, and
 accessibility gates for `REQ-DIRECTORY-EXPANSION-001` through
 `REQ-DIRECTORY-EXPANSION-009`.
+
+The current combined-branch command, browser, container, gRPC activation, and
+pull-request status is tracked in the
+[integrated phase-one release record](docs/validation/phase-one-release.md).
 
 Bridge can optionally reconcile Internet2 Grouper groups, nested groups, and
 memberships through its read-only SCIM v2 adapter. The default runtime does not

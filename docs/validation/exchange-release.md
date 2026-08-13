@@ -4,11 +4,15 @@
 - **Feature:** `migration.packages`
 - **Roadmap:** [#9](https://github.com/WSCMAX/StewardMesh/issues/9)
 - **Prepared:** 2026-08-13
-- **Final integrated result:** Passed on the final validated feature tree
+- **Current integrated result:** Local combined-branch gates passed; pull
+  request and CI pending
 
-This record is the release evidence for the complete Exchange slice. The
-automated gates and authenticated browser journey below passed against the
-final feature tree before its single signed commit was created.
+This record defines the Exchange release gate and retains its earlier
+slice-level evidence. It is not the final result for the combined phase-one
+branch: later Stack recovery, gRPC, Reach, Directory, and other integrated
+changes require the complete gates and browser journeys to be repeated after
+the final code change. The authoritative combined result is recorded in
+[the phase-one release record](phase-one-release.md).
 
 ## Delivered boundary
 
@@ -56,7 +60,8 @@ release gates rather than assumptions.
 ## Required integrated command gates
 
 Run from a clean final feature branch. PostgreSQL tests must use a clean test
-database with every migration, including `0032`, applied in order.
+database with every migration through `0036` applied in order. Exchange's own
+schema changes remain `0032` and `0035`.
 
 ```text
 go test -race ./...
@@ -125,37 +130,27 @@ section.
 - Capture desktop and narrow screenshots plus a console-error check under
   `output/playwright/exchange/` (git-ignored).
 
-## Final evidence record
+## Earlier slice evidence and required refresh
 
-- **Validation completed:** 2026-08-13T14:11:01Z
-- **Persistence:** isolated PostgreSQL database with migrations through `0032`;
-  checksummed local Vault adapter for the authenticated browser run
-- **Commit identity:** the exact signed commit SHA is recorded in the branch
-  handoff and pull request because a commit cannot contain its own SHA
-- **Backend:** `go test -race ./...`, the PostgreSQL race integration suite,
-  `go vet ./...`, tracecheck, protobuf descriptor generation, `govulncheck`,
-  Compose configuration, and the production Docker build passed
-- **Frontend/contracts:** TypeScript, all 24 Vitest files and 126 tests,
-  production build, npm audit, and OpenAPI lint passed. Redocly reported only
-  the four pre-existing intentional redirect-operation warnings for OIDC/SAML
-  `303` responses.
-- **Authenticated browser:** a synthetic Stack version was exported with its
-  product dependency, downloaded, imported, and replayed. A pre-claim mutation
-  returned the visible Guard lock guidance; the new Guard ownership table
-  claimed the product; the same mutation then succeeded. Durable history
-  remained correct after server restarts.
-- **Accessibility/responsiveness:** axe reported zero WCAG 2.2 AA automated
-  violations on Exchange and Guard. The final authenticated tab reported zero
-  console errors and zero warnings. At 320 CSS pixels, both Exchange and Guard
-  measured `documentScrollWidth = viewportWidth = 320`; only their explicitly
-  labelled record/outcome/ownership table regions scrolled horizontally.
-- **Keyboard:** the mobile record selector received focus and toggled with
-  Space while retaining focus; unit coverage also verifies focus-on-error and
-  status announcements.
-- **Visual evidence:** `output/playwright/exchange/exchange-desktop.png` and
-  `output/playwright/exchange/exchange-mobile-320.png` (git-ignored).
+- **Earlier slice validation:** 2026-08-13T14:11:01Z. The then-current Exchange
+  slice passed its recorded backend, frontend, contract, Compose, container, and
+  authenticated browser checks against an isolated PostgreSQL database and a
+  checksummed local Vault adapter.
+- **Earlier browser scope:** Stack export with a dependency, import, replay,
+  ownership-lock/claim behavior, durable history after restart, keyboard use,
+  automated accessibility checks, and 320-pixel containment.
+- **Final integrated persistence:** **PASS** — a disposable PostgreSQL 18.4
+  database applied every migration through `0036`; a separate read-only
+  application-container smoke retained Guard bootstrap state across restart.
+- **Final integrated commands:** **PASS LOCALLY** — exact final command outcomes
+  and current publication state are recorded in `phase-one-release.md`; prior
+  slice test counts were not reused.
+- **Final integrated browser:** **PASS** — real export/import/replay, bounded
+  failure rendering, ownership denial/claim/success, replay without relocking,
+  durable history, desktop accessibility, clean console, and exact 320-pixel
+  containment were repeated on the combined branch.
 
-The browser run found and resolved two null-versus-empty-array response
-contract defects and page-level overflow from intrinsic table sizing before
-this record was marked passed. No production contents, credentials, cookies,
-tokens, object keys, or database URLs are stored in the evidence.
+The earlier browser run found and resolved two null-versus-empty-array response
+contract defects and page-level overflow from intrinsic table sizing. No
+production contents, credentials, cookies, tokens, object keys, or database URLs
+belong in either the earlier or final evidence.

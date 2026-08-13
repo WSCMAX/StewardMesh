@@ -110,14 +110,17 @@ artifact paths. A failed or skipped required gate blocks phase-one release; an
 environment limitation is reported as a remaining gap and rerun in CI rather
 than recorded as a pass.
 
-The isolated closeout branch passed the full race-enabled Go suite, vet,
-`govulncheck`, tracecheck, protobuf descriptor generation, OpenAPI lint,
-TypeScript, all 28 Vitest files and 143 tests, the production web build, npm
-audit, and default/cache/demo/integrations Compose configuration on 2026-08-13.
-The local Node runtime was 23.7.0 rather than the pinned CI 24.15.0 and emitted
-engine warnings, so CI remains the authoritative supported-runtime rerun.
-PostgreSQL-backed tests could not run locally because no test database was
-listening; application and fixture builds could not start because the local
-Docker daemon was unavailable. Authenticated desktop/320-pixel browser evidence
-must be captured after requirements 006 and 008 are integrated. None of those
-environment-limited checks is recorded as passed here.
+An earlier isolated closeout branch passed its available Go, web, contract,
+traceability, dependency, and Compose-configuration checks, but it lacked a
+PostgreSQL service, image builds, the integrated requirements 006/008 browser
+journeys, and the supported Node runtime. That historical checkpoint is not a
+final phase-one pass and its test counts are intentionally not reused.
+
+The combined branch now includes all nine Directory Expansion requirements and
+migrations through `0036`, including later non-Directory schema changes. The
+complete current implementation tree passed the PostgreSQL-backed race suite,
+command/container gates, real Grouper preview/apply persistence, sanitized-error
+focus behavior, read-only authorization, relationship graph, desktop
+accessibility, and exact 320-pixel browser protocol on 2026-08-13. Exact results,
+artifact paths, and the still-pending pull-request/CI state are recorded in
+[the aggregate phase-one release record](phase-one-release.md).

@@ -22,8 +22,11 @@ private transport and operator data are absent.
 
 This is a feature-slice review, not a claim that every dependency, deployment,
 reverse proxy, object-store policy, or unrelated repository path was audited.
-The integrated release gates passed race tests, `govulncheck`, `npm audit`,
-OpenAPI/protobuf validation, and a real authenticated browser journey.
+The Exchange slice passed its recorded race, dependency, API-contract, and real
+browser checks when this review was prepared. The combined implementation tree
+also passed the fresh local race, dependency, contract, container, ownership,
+and real-browser rerun on 2026-08-13; pull-request CI remains pending. Exact
+results are tracked in [the phase-one release record](phase-one-release.md).
 
 ## Method and threat boundary
 

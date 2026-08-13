@@ -767,7 +767,8 @@
         ],
         "schema": [
           ".env.example",
-          "internal/repository/postgres/migrations/0033_reach_messaging.sql"
+          "internal/repository/postgres/migrations/0033_reach_messaging.sql",
+          "internal/repository/postgres/migrations/0036_reach_delivery_claims.sql"
         ],
         "tests": [
           "internal/httpapi/server_test.go",

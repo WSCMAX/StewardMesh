@@ -42,7 +42,17 @@ The example file `deploy/reach-endpoints.example.json` contains no credentials. 
 - `messaging.read` lists redacted endpoints, providers, templates, groups, provider tests, messages, and attempts.
 - `messaging.write` configures providers/templates/groups and performs confirmed tests, rotations, sends, retries, and Signals processing.
 
-Migration `0033_reach_messaging.sql` creates organization-scoped provider, template, group, message, attempt, and provider-test tables. It adds the two permissions only to existing built-in Administrator bundles; custom roles do not gain access automatically. Every route is authenticated, permission checked, organization scoped, and non-cacheable. Browser writes require the synchronized CSRF token and configured origin. Request bodies, text, recipients, records, history, and outbound responses are bounded.
+Migration `0033_reach_messaging.sql` creates organization-scoped provider,
+template, group, message, attempt, and provider-test tables. Migration
+`0036_reach_delivery_claims.sql` adds the durable claim token and claimed-at
+fields used to exclude concurrent sends and to derive the bounded abandoned-claim
+window. The later migration does not add or broaden a Guard permission. Migration
+`0033` adds `messaging.read` and `messaging.write` only to existing built-in
+Administrator bundles; custom roles do not gain access automatically. Every
+route is authenticated, permission checked, organization scoped, and
+non-cacheable. Browser writes require the synchronized CSRF token and configured
+origin. Request bodies, text, recipients, records, history, and outbound
+responses are bounded.
 
 Audit events are `reach.provider.created`, `reach.provider.updated`, `reach.provider.secret_rotated`, `reach.provider.tested`, `reach.template.created`, `reach.template.updated`, `reach.group.created`, `reach.group.updated`, `reach.message.queued`, `reach.message.retry_requested`, `reach.message.attempted`, and `reach.signals.processed`. They identify `REQ-REACH-001` and `messaging.delivery` plus stable IDs and sanitized state. They exclude secret references/values, message subject/body, recipients, routes, provider payloads/responses, tokens, cookies, and CSRF values.
 
@@ -74,4 +84,10 @@ The Go and React implementation was reviewed against the repository's secure-bac
 
 Coverage includes endpoint and secret-reference validation/redaction, exact Teams destination enforcement at configuration and dispatch, each provider request contract, webhook signature and replay rejection, SMTP TLS/message behavior, plain-text template/token validation, recipient compatibility, authoritative Signals target discovery, disabled-target behavior, idempotency, concurrent pre-send claim exclusion, abandoned-claim fail-closed recovery, retry boundaries, Signals success/retry/terminal handoff, memory/PostgreSQL contract and organization isolation, authentication/permission/CSRF/no-store HTTP behavior, REST/protobuf parity, runtime response validation, read-only behavior, automated accessibility checks, and responsive browser journeys. Release validation runs race-enabled Go tests with isolated PostgreSQL, vet, vulnerability scanning, OpenAPI lint, protobuf compilation, traceability, Node typecheck/tests/build, container checks, and authenticated desktop plus 320-pixel provider/template/group/send/retry/history workflows.
 
-The authenticated browser journey configured a redacted deployment endpoint and external secret reference, created a plain-text template and subscriber group, passed a signed webhook connection test, observed a sanitized retryable `503`, explicitly retried, and verified delivery plus both immutable attempts. A fresh saved-auth session finished with zero console errors or warnings. At an exact 320-pixel viewport, viewport, document, and body widths all remained 320 pixels with no horizontal overflow. Visual evidence is retained under `output/playwright/phase-one/issue-12/`.
+The final integrated authenticated browser journey repeated provider
+configuration, template and group creation, a retryable fixture response,
+explicit retry, successful delivery, immutable attempt history, desktop
+accessibility, and exact 320-pixel containment after the durable delivery-claim
+migration and target-enforcement changes. The authoritative command results,
+current artifact paths, and publication state are recorded in
+[the phase-one release record](../validation/phase-one-release.md).

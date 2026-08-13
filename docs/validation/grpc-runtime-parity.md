@@ -3,6 +3,8 @@
 - **Canonical ID:** `integrations.protocols`
 - **Requirements:** `REQ-API-001`, `REQ-ATLAS-CODES-001`, `REQ-SIGNALS-001`, `SEC-GUARD-001`
 - **Roadmap issues:** [#14](https://github.com/WSCMAX/StewardMesh/issues/14), [#60](https://github.com/WSCMAX/StewardMesh/issues/60)
+- **Adapter status:** Implemented and covered by the validation contracts below
+- **Production activation:** Not activated; explicit deployment approval remains required
 
 ## Runtime boundary
 
@@ -11,9 +13,11 @@
 is not inferred from request data: `internal/grpcapi/routes.go` is a complete,
 fixed method/path/converter allowlist. Server construction fails if one declared
 RPC has no route or if the allowlist names an undeclared RPC. Production wiring
-in `cmd/stewardmesh-grpc` is intentionally not part of this change: the existing
-Bridge-only command remains the reachable surface until the broader listeners
-and sensitive Guard/Vault exposure receive explicit deployment approval.
+for the all-domain adapter in `cmd/stewardmesh-grpc` is intentionally not active:
+the existing Bridge-only command remains the reachable surface until the broader
+listeners and sensitive Guard/Vault exposure receive explicit deployment
+approval. Passing adapter tests does not grant that approval and must not be
+reported as production activation.
 Activation must keep the three public Guard methods on a 64 KiB receive-envelope
 listener and the authenticated domain methods on a separate 34 MiB listener. A
 codec-only limit is not an allocation boundary because grpc-go decompresses a
@@ -96,3 +100,10 @@ their existing smaller limits.
 - OpenAPI lint, protobuf descriptor generation, `go test -race ./...`, `go vet
   ./...`, traceability, and the repository's PostgreSQL provider tests are the
   release gates.
+
+The combined implementation tree passed those local gates after its last code
+change on 2026-08-13. Production activation was not approved and remains
+unchanged; pull-request CI is still pending. Exact integrated results and the
+activation decision belong in the
+[phase-one release record](phase-one-release.md); this document defines the gRPC
+contract and does not turn adapter coverage into deployment activation.

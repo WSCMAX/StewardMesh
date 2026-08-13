@@ -156,6 +156,64 @@ func TestServiceMaintainsModelsAndAssetCounts(t *testing.T) {
 	}
 }
 
+func TestServiceResolvesModelsAndAtomicallyCreatesBulkInstances(t *testing.T) {
+	now := time.Date(2026, time.August, 12, 16, 0, 0, 0, time.UTC)
+	auditor := &recordingAuditor{}
+	service, err := atlas.NewService(repository.NewMemoryAtlasStore(), testReferenceValidator{}, auditor, atlas.ServiceConfig{
+		OrganizationID: "example-org", Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model, err := service.CreateModel(context.Background(), atlas.CreateModelInput{
+		ID: "model-bulk", Manufacturer: "Framework", Name: "Laptop 13", ModelNumber: "FW13", Kind: "laptop",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := service.ResolveModel(context.Background(), atlas.ModelIdentity{
+		Manufacturer: " framework ", Name: " LAPTOP 13 ", ModelNumber: " fw13 ",
+	})
+	if err != nil || resolved.ID != model.ID {
+		t.Fatalf("unexpected resolved model %#v err=%v", resolved, err)
+	}
+	result, err := service.CreateAssetsFromModel(context.Background(), atlas.BulkCreateAssetsInput{
+		ModelID: model.ID,
+		Items: []atlas.CreateAssetInput{
+			{ID: "bulk-asset-one", Name: "Engineering laptop one", AssetTag: "BULK-001", SerialNumber: "SERIAL-BULK-001", Status: "active"},
+			{ID: "bulk-asset-two", Name: "Engineering laptop two", AssetTag: "BULK-002", SerialNumber: "SERIAL-BULK-002"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Items) != 2 || result.Items[0].ModelID != model.ID || result.Items[0].Kind != "laptop" || result.Items[1].Status != "draft" {
+		t.Fatalf("unexpected bulk result %#v", result)
+	}
+	loadedModel, err := service.GetModel(context.Background(), model.ID)
+	if err != nil || loadedModel.InstanceCount != 2 {
+		t.Fatalf("unexpected model count %#v err=%v", loadedModel, err)
+	}
+	for _, event := range auditor.events[1:] {
+		if event.Action != "atlas.asset.created" || event.Metadata["creationMode"] != "model_bulk" ||
+			event.Metadata["modelRequirementId"] != atlas.ModelRequirementID {
+			t.Fatalf("unexpected bulk audit event %#v", event)
+		}
+	}
+	if _, err := service.CreateAssetsFromModel(context.Background(), atlas.BulkCreateAssetsInput{
+		ModelID: model.ID,
+		Items: []atlas.CreateAssetInput{
+			{ID: "bulk-asset-three", Name: "Should roll back", AssetTag: "BULK-003"},
+			{ID: "bulk-asset-four", Name: "Existing identity", AssetTag: "bulk-001"},
+		},
+	}); !errors.Is(err, atlas.ErrConflict) {
+		t.Fatalf("expected atomic conflict, got %v", err)
+	}
+	if _, err := service.GetAsset(context.Background(), "bulk-asset-three"); !errors.Is(err, atlas.ErrNotFound) {
+		t.Fatalf("expected failed batch to leave no partial asset, got %v", err)
+	}
+}
+
 func TestServiceRejectsInvalidInputsAndMissingReferences(t *testing.T) {
 	service, err := atlas.NewService(repository.NewMemoryAtlasStore(), testReferenceValidator{reject: true}, foundation.NopAuditor{}, atlas.ServiceConfig{
 		OrganizationID: "example-org",

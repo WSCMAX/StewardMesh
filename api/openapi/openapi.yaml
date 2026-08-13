@@ -537,6 +537,27 @@ paths:
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/asset-models/resolve:
+    get:
+      summary: Resolve an asset model by deterministic import identity
+      operationId: resolveAssetModel
+      tags: [Atlas]
+      x-requirement: REQ-ATLAS-MODELS-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - {in: query, name: manufacturer, required: true, schema: {type: string, minLength: 1, maxLength: 120}}
+        - {in: query, name: name, required: true, schema: {type: string, minLength: 1, maxLength: 160}}
+        - {in: query, name: modelNumber, schema: {type: string, maxLength: 120}}
+      responses:
+        '200':
+          description: Exact organization-scoped asset model match
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AssetModel'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
   /api/v1/asset-models/{modelId}:
     parameters:
       - $ref: '#/components/parameters/AssetModelID'
@@ -597,6 +618,34 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/AssetModel'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/asset-models/{modelId}/assets/bulk:
+    parameters:
+      - $ref: '#/components/parameters/AssetModelID'
+    post:
+      summary: Create a bounded batch of asset instances from a model
+      operationId: createAssetsFromModel
+      tags: [Atlas]
+      x-requirement: REQ-ATLAS-MODELS-001
+      description: Validates every instance before atomically creating the batch with model association, lifecycle history, and Atlas audit behavior.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/BulkCreateAssetsFromModelRequest'}
+      responses:
+        '201':
+          description: Asset instances created
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/BulkCreateAssetsResponse'}
         '400': {$ref: '#/components/responses/InvalidRequest'}
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
@@ -2389,6 +2438,7 @@ components:
         assetTag: {type: string, maxLength: 128}
         serialNumber: {type: string, maxLength: 255}
         hostname: {type: string, maxLength: 253}
+        deploymentNotes: {type: string, maxLength: 2000}
         siteId: {$ref: '#/components/schemas/DirectoryReferenceID'}
         buildingId: {$ref: '#/components/schemas/DirectoryReferenceID'}
         roomId: {$ref: '#/components/schemas/DirectoryReferenceID'}
@@ -2498,7 +2548,7 @@ components:
         changed: {type: boolean}
     CreateAssetRequest:
       type: object
-      required: [name, kind]
+      required: [name]
       properties:
         id: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
         modelId: {$ref: '#/components/schemas/AssetModelID'}
@@ -2507,6 +2557,7 @@ components:
         assetTag: {type: string, maxLength: 128}
         serialNumber: {type: string, maxLength: 255}
         hostname: {type: string, maxLength: 253}
+        deploymentNotes: {type: string, maxLength: 2000}
         siteId: {$ref: '#/components/schemas/DirectoryReferenceID'}
         buildingId: {$ref: '#/components/schemas/DirectoryReferenceID'}
         roomId: {$ref: '#/components/schemas/DirectoryReferenceID'}
@@ -2514,6 +2565,32 @@ components:
         userId: {$ref: '#/components/schemas/DirectoryReferenceID'}
         status: {$ref: '#/components/schemas/AssetStatus'}
         purchaseDate: {type: string, format: date-time}
+    BulkCreateAssetFromModelItem:
+      allOf:
+        - $ref: '#/components/schemas/CreateAssetRequest'
+        - type: object
+          description: The modelId and kind may be omitted because the selected model supplies them. A provided modelId must match the path model.
+          required: [name]
+    BulkCreateAssetsFromModelRequest:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items: {$ref: '#/components/schemas/BulkCreateAssetFromModelItem'}
+    BulkCreateAssetsResponse:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items: {$ref: '#/components/schemas/Asset'}
     UpdateAssetRequest:
       allOf:
         - $ref: '#/components/schemas/CreateAssetRequest'

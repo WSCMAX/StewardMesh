@@ -211,6 +211,44 @@ func TestLabelBatchesAreBoundedCancellableAndIdempotentWithoutAssociationWrites(
 	}
 }
 
+func TestReplacedCode128IdentifierCanGenerateSVGTestPrint(t *testing.T) {
+	labels, identifiers := newLabelTestService(t)
+	assets := labels.assets.(labelTestAssets)
+	asset := assets.items["asset-one"]
+	asset.Name = "Phase One Workstation 001"
+	asset.AssetTag = "P1-ASSET-001"
+	assets.items[asset.ID] = asset
+
+	ctx := foundation.WithScope(context.Background(), foundation.Scope{
+		OrganizationID: "org-one",
+		ActorID:        "operator-one",
+		CorrelationID:  "replacement-label-correlation",
+	})
+	replacement, changed, err := identifiers.ReplaceIdentifier(ctx, ReplaceIdentifierInput{
+		AssetID:              asset.ID,
+		IdentifierID:         "identifier-code",
+		ReplacementID:        "identifier-code-replacement",
+		ReplacementSymbology: SymbologyCode128,
+		ReplacementValue:     "P1-CODE128-001-R2",
+		DisplayValue:         "P1 Asset 001 replacement",
+		Source:               SourceUserEntered,
+		Revision:             1,
+	})
+	if err != nil || !changed || replacement.Status != StatusActive || replacement.SupersedesID != "identifier-code" {
+		t.Fatalf("replace Code 128 identifier: replacement=%#v changed=%t err=%v", replacement, changed, err)
+	}
+
+	batch, created, err := labels.CreateBatch(ctx, LabelBatchInput{
+		IdempotencyKey: "replacement-svg-test-print", TemplateID: "builtin-atlas-label-code128", TemplateVersion: 1,
+		IdentifierIDs: []string{replacement.ID}, Output: LabelOutputSVG, TestPrint: true,
+	})
+	if err != nil || !created || batch.ItemCount != 1 || !batch.TestPrint ||
+		!bytes.Contains(batch.Contents, []byte("P1 Asset 001 replacement")) ||
+		!bytes.Contains(batch.Contents, []byte("Phase One Workstation 001 / P1-ASSET-001")) {
+		t.Fatalf("render replacement SVG test print: created=%t batch=%#v err=%v", created, batch, err)
+	}
+}
+
 func TestVectorOutputsUseSafeQRPointersAndRemainPrintable(t *testing.T) {
 	labels, identifiers := newLabelTestService(t)
 	for _, output := range []LabelOutput{LabelOutputSVG, LabelOutputPDF, LabelOutputZPL} {

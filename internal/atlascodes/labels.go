@@ -552,15 +552,29 @@ func validateRecordFits(template LabelTemplate, record LabelRecord) error {
 		}
 		textWidth = template.WidthMM - template.MarginMM - size - 2 - template.MarginMM
 	}
-	for _, value := range []string{record.HumanReadable, record.AssetName, record.AssetTag, record.Branding} {
-		if utf8.RuneCountInString(value) > int(math.Max(1, textWidth/1.65)) {
+	if template.Symbology == SymbologyCode128 {
+		if !labelTextFits(record.Branding, textWidth, 2.12) ||
+			!labelTextFits(record.HumanReadable, textWidth, 3.2) ||
+			!labelTextFits(assetSummary(record), textWidth, 2.5) {
 			return ErrInvalidInput
 		}
+		return nil
 	}
-	if template.Symbology == SymbologyCode128 && utf8.RuneCountInString(assetSummary(record)) > int(math.Max(1, textWidth/1.65)) {
+	if !labelTextFits(record.Branding, textWidth, 2.12) ||
+		!labelTextFits(record.HumanReadable, textWidth, 3.18) ||
+		!labelTextFits(record.AssetName, textWidth, 2.5) ||
+		!labelTextFits(record.AssetTag, textWidth, 2.3) {
 		return ErrInvalidInput
 	}
 	return nil
+}
+
+func labelTextFits(value string, availableWidthMM, fontSizeMM float64) bool {
+	// All renderers use the same physical font hierarchy. Bounding the average
+	// printable-ASCII advance at 0.52 em keeps the overflow check proportional
+	// to the actual line's font instead of applying the larger identifier font
+	// to smaller branding and asset-summary lines.
+	return float64(utf8.RuneCountInString(value))*fontSizeMM*0.52 <= math.Max(availableWidthMM, fontSizeMM*0.52)
 }
 
 func validLabelText(value string) bool {

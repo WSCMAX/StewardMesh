@@ -1218,7 +1218,7 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
               </form>
             )}
 
-            <div aria-busy={assignmentsLoading} aria-labelledby="assignment-history-heading" className="mt-4">
+            <div aria-busy={assignmentsLoading} aria-labelledby="assignment-history-heading" className="mt-4" role="region">
               {assignmentsLoading ? <p className="text-sm text-steward-mist-muted">Loading assignment history…</p> : assignments.length === 0 ? <p className="rounded-xl border border-dashed border-steward-ink-800 p-5 text-sm text-steward-mist-muted">No assignments recorded for this asset.</p> : (
                 <ol className="space-y-3">
                   {assignments.map((assignment) => (

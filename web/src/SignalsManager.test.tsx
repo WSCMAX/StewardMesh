@@ -15,6 +15,10 @@ const alert = {
   dueAt: '2026-09-12T12:00:00Z', thresholdDays: 30, firstDetectedAt: '2026-08-13T12:00:00Z', lastObservedAt: '2026-08-13T12:00:00Z', revision: 1,
 }
 const subscription = { id: 'subscription-one', targetKind: 'group', targetId: 'finance-owners', enabled: true, createdAt: '2026-08-13T12:00:00Z' }
+const subscriptionTargets = [
+  { targetKind: 'group', targetId: 'finance-owners', label: 'Finance owners' },
+  { targetKind: 'webhook', targetId: 'operations-hook', label: 'Operations webhook' },
+]
 
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
@@ -25,6 +29,7 @@ function reads(input: RequestInfo | URL) {
   if (path === '/api/v1/signals/rules') return jsonResponse({ items: [rule] })
   if (path.startsWith('/api/v1/signals/alerts?')) return jsonResponse({ items: [alert] })
   if (path === '/api/v1/signals/subscriptions') return jsonResponse({ items: [subscription] })
+  if (path === '/api/v1/signals/subscription-targets') return jsonResponse({ items: subscriptionTargets })
   throw new Error(`unexpected request: ${path}`)
 }
 
@@ -64,6 +69,7 @@ test('creates a bounded rule and evaluates with CSRF', async () => {
     if (path === '/api/v1/signals/rules') return jsonResponse({ items: currentRules })
     if (path.startsWith('/api/v1/signals/alerts?')) return jsonResponse({ items: [alert] })
     if (path === '/api/v1/signals/subscriptions') return jsonResponse({ items: [subscription] })
+    if (path === '/api/v1/signals/subscription-targets') return jsonResponse({ items: subscriptionTargets })
     throw new Error(`unexpected request: ${path}`)
   })
   vi.stubGlobal('fetch', fetchMock)
@@ -136,15 +142,14 @@ test('creates and removes configured subscriber references without accepting URL
     if (path === '/api/v1/signals/rules') return jsonResponse({ items: [rule] })
     if (path.startsWith('/api/v1/signals/alerts?')) return jsonResponse({ items: [alert] })
     if (path === '/api/v1/signals/subscriptions') return jsonResponse({ items: currentSubscriptions })
+    if (path === '/api/v1/signals/subscription-targets') return jsonResponse({ items: subscriptionTargets })
     throw new Error(`unexpected request: ${path}`)
   })
   vi.stubGlobal('fetch', fetchMock)
   render(<SignalsManager csrfToken="csrf-token" permissions={['signals.read', 'signals.write']} />)
-  await screen.findByText('Group subscriber')
+  await screen.findByText('Finance owners')
 
-  const targetInputs = screen.getAllByLabelText('Configured target ID')
-  fireEvent.change(screen.getByLabelText('Subscriber type'), { target: { value: 'webhook' } })
-  fireEvent.change(targetInputs.at(-1) as HTMLElement, { target: { value: 'operations-hook' } })
+  fireEvent.change(screen.getByLabelText('Delivery target'), { target: { value: 'webhook|operations-hook' } })
   fireEvent.click(screen.getByRole('button', { name: 'Create subscription' }))
   expect(await screen.findByText('Subscription created.')).toBeInTheDocument()
   const createCall = fetchMock.mock.calls.find(([path, init]) => path === '/api/v1/signals/subscriptions' && init?.method === 'POST')
@@ -163,4 +168,17 @@ test('fails closed on malformed server records', async () => {
   }))
   render(<SignalsManager csrfToken="csrf" permissions={['signals.read']} />)
   expect(await screen.findByRole('alert')).toHaveTextContent('Signals could not be loaded.')
+})
+
+test('marks a disabled Reach target unavailable and prevents new subscriptions', async () => {
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    const path = String(input)
+    if (path === '/api/v1/signals/subscription-targets') return jsonResponse({ items: [] })
+    return reads(input)
+  }))
+  render(<SignalsManager csrfToken="csrf" permissions={['signals.read', 'signals.write']} />)
+  expect(await screen.findByText('Group target unavailable')).toBeInTheDocument()
+  expect(screen.getByText(/New deliveries fail closed/)).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Create subscription' })).toBeDisabled()
+  expect(screen.getByText(/Configure and enable a valid Reach group or webhook/)).toBeInTheDocument()
 })

@@ -188,13 +188,90 @@ func TestEndpointCatalogRejectsArbitraryOrInsecureDestinations(t *testing.T) {
 	}
 }
 
+func TestTeamsGroupsUseExactlyTheConfiguredDestinationKey(t *testing.T) {
+	now := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)
+	store := repository.NewMemoryReachStore()
+	endpoints, err := reach.NewEndpointCatalog([]reach.Endpoint{{
+		ID: "operations-teams", Label: "Operations Teams", Kind: reach.ProviderTeams, DestinationKey: "operations-channel",
+		URL: "https://graph.microsoft.com/v1.0/teams/team/channels/channel/messages",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport := &testTransport{}
+	transports, err := reach.NewTransportRegistry(map[reach.ProviderKind]reach.Transport{reach.ProviderTeams: transport})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := reach.NewService(store, endpoints, transports, testSecrets{values: map[string][]byte{
+		"external:operations-teams": []byte("oauth-token-01234567890123456789"),
+	}}, nil, foundation.NopAuditor{}, reach.ServiceConfig{OrganizationID: "organization-one", Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider, err := service.CreateProvider(context.Background(), reach.CreateProviderInput{ID: "teams-provider", Name: "Teams provider", Kind: reach.ProviderTeams, EndpointID: "operations-teams", SecretRef: "external:operations-teams"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	template, err := service.CreateTemplate(context.Background(), reach.CreateTemplateInput{ID: "teams-template", Name: "Teams template", Subject: "{{title}}", Body: "{{summary}}"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, recipients := range map[string][]reach.Recipient{
+		"arbitrary channel": {{Kind: reach.RecipientChannel, Address: "ignored-channel"}},
+		"multiple channels": {{Kind: reach.RecipientChannel, Address: "operations-channel"}, {Kind: reach.RecipientChannel, Address: "another-channel"}},
+		"email address":     {{Kind: reach.RecipientEmail, Address: "owner@example.test"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := service.CreateGroup(context.Background(), reach.CreateGroupInput{Name: name, ProviderID: provider.ID, TemplateID: template.ID, Recipients: recipients}); !errors.Is(err, reach.ErrInvalidInput) {
+				t.Fatalf("expected exact Teams destination validation, got %v", err)
+			}
+		})
+	}
+	group, err := service.CreateGroup(context.Background(), reach.CreateGroupInput{ID: "operations-group", Name: "Operations", ProviderID: provider.ID, TemplateID: template.ID,
+		Recipients: []reach.Recipient{{Kind: reach.RecipientChannel, Address: "operations-channel"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.UpdateGroup(context.Background(), group.ID, reach.UpdateGroupInput{Name: group.Name, ProviderID: provider.ID, TemplateID: template.ID,
+		Recipients: []reach.Recipient{{Kind: reach.RecipientChannel, Address: "ignored-channel"}}, Revision: group.Revision}); !errors.Is(err, reach.ErrInvalidInput) {
+		t.Fatalf("expected Teams destination validation on update, got %v", err)
+	}
+	group, err = service.UpdateGroup(context.Background(), group.ID, reach.UpdateGroupInput{Name: "Operations updated", ProviderID: provider.ID, TemplateID: template.ID,
+		Recipients: []reach.Recipient{{Kind: reach.RecipientChannel, Address: "operations-channel"}}, Revision: group.Revision})
+	if err != nil || group.Revision != 2 {
+		t.Fatalf("valid Teams group update %#v: %v", group, err)
+	}
+	message, err := service.Send(context.Background(), reach.SendInput{GroupID: group.ID, Confirm: true, Variables: map[string]string{"title": "Alert", "summary": "Summary"}})
+	if err != nil || message.Status != "delivered" || len(transport.sent) != 1 || transport.sent[0].Recipients[0].Address != "operations-channel" {
+		t.Fatalf("Teams send did not retain the exact configured destination %#v sends=%#v: %v", message, transport.sent, err)
+	}
+	stale := reach.SubscriberGroup{ID: "legacy-ignored-destination", OrganizationID: "organization-one", Name: "Legacy", ProviderID: provider.ID, TemplateID: template.ID,
+		Recipients: []reach.Recipient{{Kind: reach.RecipientChannel, Address: "ignored-channel"}}, Revision: 1, CreatedBy: "system", UpdatedBy: "system", CreatedAt: now, UpdatedAt: now}
+	if _, err := store.CreateGroup(context.Background(), stale); err != nil {
+		t.Fatal(err)
+	}
+	targetCatalog, err := reach.NewSubscriptionTargetCatalog(store, endpoints)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targets, err := targetCatalog.ListSubscriptionTargets(context.Background(), "organization-one")
+	if err != nil || len(targets) != 1 || targets[0].TargetKind != "group" || targets[0].TargetID != group.ID {
+		t.Fatalf("invalid Teams group entered subscription catalog %#v: %v", targets, err)
+	}
+	failed, err := service.Send(context.Background(), reach.SendInput{GroupID: stale.ID, Confirm: true, Variables: map[string]string{"title": "Alert", "summary": "Summary"}})
+	if err != nil || failed.Status != "failed" || failed.LastErrorCode != "recipient_invalid" || len(transport.sent) != 1 {
+		t.Fatalf("legacy arbitrary destination did not fail closed %#v sends=%d: %v", failed, len(transport.sent), err)
+	}
+}
+
 func TestServiceConfiguresAndTestsEveryProviderKind(t *testing.T) {
 	endpoints := []reach.Endpoint{
 		{ID: "smtp", Label: "SMTP", Kind: reach.ProviderSMTP, Address: "smtp.example.test:587", ServerName: "smtp.example.test", RequireTLS: true},
 		{ID: "ses", Label: "SES", Kind: reach.ProviderSES, URL: "https://email.us-east-1.amazonaws.com/v2/email/outbound-emails", Region: "us-east-1"},
 		{ID: "gmail", Label: "Gmail", Kind: reach.ProviderGmail, URL: "https://gmail.googleapis.com/gmail/v1/users/me/messages/send", TestURL: "https://gmail.googleapis.com/gmail/v1/users/me/profile"},
 		{ID: "outlook", Label: "Outlook", Kind: reach.ProviderOutlook, URL: "https://graph.microsoft.com/v1.0/me/sendMail", TestURL: "https://graph.microsoft.com/v1.0/me"},
-		{ID: "teams", Label: "Teams", Kind: reach.ProviderTeams, URL: "https://graph.microsoft.com/v1.0/teams/team/channels/channel/messages"},
+		{ID: "teams", Label: "Teams", Kind: reach.ProviderTeams, DestinationKey: "operations-channel", URL: "https://graph.microsoft.com/v1.0/teams/team/channels/channel/messages"},
 		{ID: "webhook", Label: "Webhook", Kind: reach.ProviderWebhook, URL: "https://hooks.example.test/reach"},
 	}
 	catalog, err := reach.NewEndpointCatalog(endpoints)

@@ -61,6 +61,7 @@ type Endpoint struct {
 	ID             string       `json:"id"`
 	Label          string       `json:"label"`
 	Kind           ProviderKind `json:"kind"`
+	DestinationKey string       `json:"destinationKey,omitempty"`
 	URL            string       `json:"-"`
 	TestURL        string       `json:"-"`
 	Address        string       `json:"-"`

@@ -3098,6 +3098,18 @@ paths:
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/signals/subscription-targets:
+    get:
+      summary: List enabled Reach targets available for new Signals subscriptions
+      description: Returns same-organization groups and webhooks whose Reach provider, endpoint, template, and recipient configuration is currently valid. Network routes and credentials are omitted.
+      operationId: listSignalSubscriptionTargets
+      tags: [Signals]
+      x-requirement: REQ-SIGNALS-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200': {description: 'Safe, currently available subscription targets', headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/SignalSubscriptionTargetCollection'}}}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
   /api/v1/signals/subscriptions:
     get:
       summary: List configured Signals subscriber references
@@ -3111,7 +3123,7 @@ paths:
         '403': {$ref: '#/components/responses/Forbidden'}
     post:
       summary: Subscribe a configured group or webhook target
-      description: Target IDs resolve through deployment configuration; raw URLs and provider credentials are not accepted.
+      description: The target must exactly match an enabled target currently returned by /api/v1/signals/subscription-targets. Raw URLs, disabled targets, wrong-kind IDs, and provider credentials are not accepted.
       operationId: createSignalSubscription
       tags: [Signals]
       x-requirement: REQ-SIGNALS-001
@@ -6158,6 +6170,20 @@ components:
       required: [items]
       properties:
         items: {type: array, maxItems: 100, items: {$ref: '#/components/schemas/SignalSubscription'}}
+    SignalSubscriptionTarget:
+      type: object
+      additionalProperties: false
+      required: [targetKind, targetId, label]
+      properties:
+        targetKind: {type: string, enum: [group, webhook]}
+        targetId: {$ref: '#/components/schemas/SignalID'}
+        label: {type: string, minLength: 1, maxLength: 160, description: Safe human label without route or credential data.}
+    SignalSubscriptionTargetCollection:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items: {type: array, maxItems: 150, items: {$ref: '#/components/schemas/SignalSubscriptionTarget'}}
     CreateSignalSubscriptionRequest:
       type: object
       additionalProperties: false
@@ -6337,6 +6363,9 @@ components:
         id: {$ref: '#/components/schemas/ReachID'}
         label: {type: string, minLength: 1, maxLength: 160}
         kind: {$ref: '#/components/schemas/ReachProviderKind'}
+        destinationKey:
+          allOf: [{$ref: '#/components/schemas/ReachID'}]
+          description: Stable non-secret destination key required only for Teams. It maps one-to-one to the fixed deployment-owned channel route and is the only valid channel recipient for that endpoint.
     ReachEndpointCollection:
       type: object
       additionalProperties: false

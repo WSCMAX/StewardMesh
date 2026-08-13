@@ -57,6 +57,9 @@ func (t *HTTPTransport) Test(ctx context.Context, endpoint Endpoint, provider Pr
 }
 
 func (t *HTTPTransport) Send(ctx context.Context, endpoint Endpoint, provider Provider, message Message, secret []byte) DeliveryResult {
+	if !compatibleRecipientsForMessage(provider.Kind, endpoint, message.Recipients) {
+		return permanent("recipient_invalid")
+	}
 	body, contentType, err := encodeProviderMessage(provider, message)
 	if err != nil {
 		return permanent("message_invalid")

@@ -264,7 +264,11 @@ func (s *Service) CreateGroup(ctx context.Context, input CreateGroupInput) (Subs
 	if _, err := s.store.GetTemplate(ctx, s.organizationID, input.TemplateID); err != nil {
 		return SubscriberGroup{}, err
 	}
-	if !compatibleRecipients(provider.Kind, recipients) {
+	endpoint, err := s.endpoints.Get(provider.EndpointID, provider.Kind)
+	if err != nil {
+		return SubscriberGroup{}, err
+	}
+	if !compatibleRecipients(provider.Kind, endpoint, recipients) {
 		return SubscriberGroup{}, ErrInvalidInput
 	}
 	id, err := idOrNew(input.ID)
@@ -297,9 +301,13 @@ func (s *Service) UpdateGroup(ctx context.Context, id string, input UpdateGroupI
 	if err != nil {
 		return SubscriberGroup{}, err
 	}
-	if _, err := s.store.GetTemplate(ctx, s.organizationID, input.TemplateID); err != nil || !compatibleRecipients(provider.Kind, recipients) {
+	endpoint, endpointErr := s.endpoints.Get(provider.EndpointID, provider.Kind)
+	if _, err := s.store.GetTemplate(ctx, s.organizationID, input.TemplateID); err != nil || endpointErr != nil || !compatibleRecipients(provider.Kind, endpoint, recipients) {
 		if err != nil {
 			return SubscriberGroup{}, err
+		}
+		if endpointErr != nil {
+			return SubscriberGroup{}, endpointErr
 		}
 		return SubscriberGroup{}, ErrInvalidInput
 	}
@@ -444,6 +452,8 @@ func (s *Service) dispatch(ctx context.Context, message Message) (Message, error
 		transport, transportErr := s.transports.Get(provider.Kind)
 		if endpointErr != nil || transportErr != nil {
 			result = permanent("endpoint_unavailable")
+		} else if !compatibleRecipientsForMessage(provider.Kind, endpoint, message.Recipients) {
+			result = permanent("recipient_invalid")
 		} else {
 			secret, secretErr := s.secrets.Resolve(ctx, provider.SecretRef)
 			if secretErr != nil {
@@ -733,15 +743,14 @@ func normalizeRecipients(input []Recipient) ([]Recipient, error) {
 	return result, nil
 }
 
-func compatibleRecipients(kind ProviderKind, recipients []Recipient) bool {
+func compatibleRecipients(kind ProviderKind, endpoint Endpoint, recipients []Recipient) bool {
+	if kind == ProviderTeams {
+		return len(recipients) == 1 && recipients[0].Kind == RecipientChannel && recipients[0].Address == endpoint.DestinationKey
+	}
 	for _, recipient := range recipients {
 		switch kind {
 		case ProviderSMTP, ProviderSES, ProviderGmail, ProviderOutlook:
 			if recipient.Kind != RecipientEmail {
-				return false
-			}
-		case ProviderTeams:
-			if recipient.Kind != RecipientChannel {
 				return false
 			}
 		case ProviderWebhook:
@@ -750,6 +759,15 @@ func compatibleRecipients(kind ProviderKind, recipients []Recipient) bool {
 		}
 	}
 	return len(recipients) > 0
+}
+
+func compatibleRecipientsForMessage(kind ProviderKind, endpoint Endpoint, recipients []Recipient) bool {
+	// Direct webhook deliveries from Signals intentionally have no recipient
+	// envelope; the configured endpoint is the complete destination.
+	if kind == ProviderWebhook && len(recipients) == 0 {
+		return true
+	}
+	return compatibleRecipients(kind, endpoint, recipients)
 }
 
 func validSender(kind ProviderKind, sender string) bool {

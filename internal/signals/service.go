@@ -30,13 +30,15 @@ var (
 )
 
 type ServiceConfig struct {
-	OrganizationID string
-	Now            func() time.Time
+	OrganizationID      string
+	SubscriptionTargets SubscriptionTargetCatalog
+	Now                 func() time.Time
 }
 
 type Service struct {
 	store          Store
 	evaluator      Evaluator
+	targets        SubscriptionTargetCatalog
 	auditor        foundation.Auditor
 	organizationID string
 	now            func() time.Time
@@ -44,13 +46,13 @@ type Service struct {
 
 func NewService(store Store, evaluator Evaluator, auditor foundation.Auditor, configuration ServiceConfig) (*Service, error) {
 	configuration.OrganizationID = strings.TrimSpace(configuration.OrganizationID)
-	if store == nil || evaluator == nil || auditor == nil || configuration.OrganizationID == "" {
-		return nil, errors.New("Signals store, evaluator, auditor, and organization id are required")
+	if store == nil || evaluator == nil || configuration.SubscriptionTargets == nil || auditor == nil || configuration.OrganizationID == "" {
+		return nil, errors.New("Signals store, evaluator, subscription targets, auditor, and organization id are required")
 	}
 	if configuration.Now == nil {
 		configuration.Now = func() time.Time { return time.Now().UTC() }
 	}
-	return &Service{store: store, evaluator: evaluator, auditor: auditor, organizationID: configuration.OrganizationID, now: configuration.Now}, nil
+	return &Service{store: store, evaluator: evaluator, targets: configuration.SubscriptionTargets, auditor: auditor, organizationID: configuration.OrganizationID, now: configuration.Now}, nil
 }
 
 func (s *Service) ListRules(ctx context.Context) ([]Rule, error) {
@@ -273,6 +275,37 @@ func (s *Service) ListSubscriptions(ctx context.Context) ([]Subscription, error)
 	return s.store.ListSubscriptions(ctx, s.organizationID)
 }
 
+func (s *Service) ListSubscriptionTargets(ctx context.Context) ([]SubscriptionTarget, error) {
+	items, err := s.targets.ListSubscriptionTargets(ctx, s.organizationID)
+	if err != nil {
+		return nil, err
+	}
+	if len(items) > MaximumSubscriptionTargets {
+		return nil, ErrConflict
+	}
+	result, seen := make([]SubscriptionTarget, 0, len(items)), map[string]bool{}
+	for _, item := range items {
+		item.TargetKind = strings.ToLower(strings.TrimSpace(item.TargetKind))
+		item.TargetID, item.Label = strings.TrimSpace(item.TargetID), strings.TrimSpace(item.Label)
+		if (item.TargetKind != "group" && item.TargetKind != "webhook") || !stableIDPattern.MatchString(item.TargetID) || !validText(item.Label, 1, 160) {
+			return nil, ErrConflict
+		}
+		key := item.TargetKind + "\x00" + item.TargetID
+		if seen[key] {
+			return nil, ErrConflict
+		}
+		seen[key] = true
+		result = append(result, item)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].TargetKind == result[j].TargetKind {
+			return result[i].TargetID < result[j].TargetID
+		}
+		return result[i].TargetKind < result[j].TargetKind
+	})
+	return result, nil
+}
+
 func (s *Service) CreateSubscription(ctx context.Context, input CreateSubscriptionInput) (Subscription, error) {
 	input.ID, input.RuleID, input.TargetKind, input.TargetID = strings.TrimSpace(input.ID), strings.TrimSpace(input.RuleID), strings.ToLower(strings.TrimSpace(input.TargetKind)), strings.TrimSpace(input.TargetID)
 	if !optionalID(input.ID) || !optionalID(input.RuleID) || (input.TargetKind != "group" && input.TargetKind != "webhook") || !stableIDPattern.MatchString(input.TargetID) {
@@ -283,8 +316,21 @@ func (s *Service) CreateSubscription(ctx context.Context, input CreateSubscripti
 			return Subscription{}, err
 		}
 	}
+	targets, err := s.ListSubscriptionTargets(ctx)
+	if err != nil {
+		return Subscription{}, err
+	}
+	targetAvailable := false
+	for _, target := range targets {
+		if target.TargetKind == input.TargetKind && target.TargetID == input.TargetID {
+			targetAvailable = true
+			break
+		}
+	}
+	if !targetAvailable {
+		return Subscription{}, ErrInvalidInput
+	}
 	id := input.ID
-	var err error
 	if id == "" {
 		id, err = foundation.NewCorrelationID()
 		if err != nil {

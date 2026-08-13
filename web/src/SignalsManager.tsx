@@ -51,6 +51,12 @@ type SignalSubscription = {
   createdAt: string
 }
 
+type SubscriptionTarget = {
+  targetKind: 'group' | 'webhook'
+  targetId: string
+  label: string
+}
+
 type EvaluationResult = { asOf: string; rules: number; created: number; refreshed: number; resolved: number }
 
 const conditions: readonly Condition[] = ['over_budget', 'forecast_over_budget', 'unpaid', 'overdue', 'expiration', 'renewal', 'unused_commitment', 'reconciliation']
@@ -100,6 +106,12 @@ function isSignalSubscription(value: unknown): value is SignalSubscription {
     && typeof value.enabled === 'boolean' && isDateTime(value.createdAt)
 }
 
+function isSubscriptionTarget(value: unknown): value is SubscriptionTarget {
+  return isRecord(value) && (value.targetKind === 'group' || value.targetKind === 'webhook')
+    && typeof value.targetId === 'string' && value.targetId.length > 0 && value.targetId.length <= 128
+    && typeof value.label === 'string' && value.label.length > 0 && value.label.length <= 160
+}
+
 function readItems<T>(value: unknown, validator: (item: unknown) => item is T, label: string): T[] {
   if (!isRecord(value) || !Array.isArray(value.items) || !value.items.every(validator)) throw new Error(`invalid ${label} response`)
   return value.items
@@ -132,6 +144,7 @@ export default function SignalsManager({ csrfToken, onOpenHelp, permissions }: {
   const [rules, setRules] = useState<SignalRule[]>([])
   const [alerts, setAlerts] = useState<SignalAlert[]>([])
   const [subscriptions, setSubscriptions] = useState<SignalSubscription[]>([])
+  const [subscriptionTargets, setSubscriptionTargets] = useState<SubscriptionTarget[]>([])
   const [statusFilter, setStatusFilter] = useState<AlertStatus | ''>('')
   const [loading, setLoading] = useState(canRead)
   const [busy, setBusy] = useState('')
@@ -144,14 +157,16 @@ export default function SignalsManager({ csrfToken, onOpenHelp, permissions }: {
   const load = useCallback(async (signal?: AbortSignal) => {
     if (!canRead) return
     const query = statusFilter ? `?status=${encodeURIComponent(statusFilter)}&limit=500` : '?limit=500'
-    const [ruleValue, alertValue, subscriptionValue] = await Promise.all([
+    const [ruleValue, alertValue, subscriptionValue, targetValue] = await Promise.all([
       requestJSON('/api/v1/signals/rules', { signal }),
       requestJSON(`/api/v1/signals/alerts${query}`, { signal }),
       requestJSON('/api/v1/signals/subscriptions', { signal }),
+      requestJSON('/api/v1/signals/subscription-targets', { signal }),
     ])
     setRules(readItems(ruleValue, isSignalRule, 'Signals rules'))
     setAlerts(readItems(alertValue, isSignalAlert, 'Signals alerts'))
     setSubscriptions(readItems(subscriptionValue, isSignalSubscription, 'Signals subscriptions'))
+    setSubscriptionTargets(readItems(targetValue, isSubscriptionTarget, 'Signals subscription targets'))
   }, [canRead, statusFilter])
 
   useEffect(() => {
@@ -247,10 +262,18 @@ export default function SignalsManager({ csrfToken, onOpenHelp, permissions }: {
     event.preventDefault()
     const form = event.currentTarget
     const values = new FormData(form)
+    const encodedTarget = String(values.get('target') ?? '')
+    const separator = encodedTarget.indexOf('|')
+    const targetKind = separator < 0 ? '' : encodedTarget.slice(0, separator)
+    const targetId = separator < 0 ? '' : encodedTarget.slice(separator + 1)
+    if (!subscriptionTargets.some((target) => target.targetKind === targetKind && target.targetId === targetId)) {
+      setError('Choose an available Reach delivery target.')
+      return
+    }
     await mutate('create-subscription', async () => {
       const response = await requestJSON('/api/v1/signals/subscriptions', {
         method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
-        body: JSON.stringify({ ruleId: String(values.get('ruleId') ?? ''), targetKind: String(values.get('targetKind') ?? ''), targetId: String(values.get('targetId') ?? '').trim() }),
+        body: JSON.stringify({ ruleId: String(values.get('ruleId') ?? ''), targetKind, targetId }),
       })
       if (!isSignalSubscription(response)) throw new Error('invalid created Signals subscription')
       form.reset()
@@ -295,10 +318,10 @@ export default function SignalsManager({ csrfToken, onOpenHelp, permissions }: {
         {canWrite && <details className={`${subpanelClass} mt-5 p-4`}><summary className="cursor-pointer font-semibold">Create an alert rule</summary><form className="mt-4 grid gap-4 sm:grid-cols-2" onSubmit={createRule}><div className="sm:col-span-2"><label className={labelClass} htmlFor="signalRuleName">Rule name</label><input className={inputClass} id="signalRuleName" maxLength={160} name="name" required /></div><div><label className={labelClass} htmlFor="signalCondition">Condition</label><select className={inputClass} id="signalCondition" name="condition">{conditions.map((condition) => <option key={condition} value={condition}>{words(condition)}</option>)}</select></div><div><label className={labelClass} htmlFor="signalSeverity">Severity</label><select className={inputClass} id="signalSeverity" name="severity">{severities.map((severity) => <option key={severity} value={severity}>{words(severity)}</option>)}</select></div><div><label className={labelClass} htmlFor="signalThresholds">Threshold days <span className="font-normal">(optional)</span></label><input className={inputClass} id="signalThresholds" maxLength={64} name="thresholdDays" placeholder="180, 90, 60, 30" /></div><div><label className={labelClass} htmlFor="signalFiscalPeriod">Fiscal period <span className="font-normal">(optional)</span></label><input className={inputClass} id="signalFiscalPeriod" maxLength={32} name="fiscalPeriod" placeholder="FY2027" /></div><div><label className={labelClass} htmlFor="signalScenario">Scenario <span className="font-normal">(optional)</span></label><input className={inputClass} id="signalScenario" maxLength={64} name="scenario" placeholder="baseline" /></div><div className="sm:self-end"><button className={buttonClass} disabled={busy !== ''} type="submit">{busy === 'create-rule' ? 'Creating…' : 'Create rule'}</button></div></form></details>}
       </div>
 
-      <div className={`${panelClass} p-5 sm:p-7`}><h3 className="text-xl font-semibold">Reach subscriptions</h3><p className="mt-1 text-sm leading-6 text-steward-mist-muted">Choose only preconfigured group or webhook IDs. URLs, provider credentials, and delivery response bodies are never accepted here.</p>
-        <ul className="mt-4 grid gap-3">{subscriptions.map((subscription) => <li className={`${subpanelClass} flex flex-wrap items-center justify-between gap-3 p-4`} key={subscription.id}><div><p className="font-semibold">{words(subscription.targetKind)} subscriber</p><p className="mt-1 break-all font-mono text-xs text-steward-mist-muted">{subscription.targetId}{subscription.ruleId ? ` · rule ${subscription.ruleId}` : ' · all rules'}</p></div>{canWrite && <button className={dangerButtonClass} disabled={busy !== ''} onClick={() => deleteSubscription(subscription)} type="button">{busy === `delete-${subscription.id}` ? 'Removing…' : 'Remove'}</button>}</li>)}</ul>
+      <div className={`${panelClass} p-5 sm:p-7`}><h3 className="text-xl font-semibold">Reach subscriptions</h3><p className="mt-1 text-sm leading-6 text-steward-mist-muted">Choose an enabled, fully configured Reach group or webhook. URLs, provider credentials, and delivery response bodies are never accepted here.</p>
+        <ul className="mt-4 grid gap-3">{subscriptions.map((subscription) => { const target = subscriptionTargets.find((candidate) => candidate.targetKind === subscription.targetKind && candidate.targetId === subscription.targetId); return <li className={`${subpanelClass} flex flex-wrap items-center justify-between gap-3 p-4`} key={subscription.id}><div><p className="font-semibold">{target?.label ?? `${words(subscription.targetKind)} target unavailable`}</p><p className="mt-1 break-all font-mono text-xs text-steward-mist-muted">{subscription.targetId}{subscription.ruleId ? ` · rule ${subscription.ruleId}` : ' · all rules'}</p>{!target && <p className="mt-1 text-xs text-[#ffd08a]">New deliveries fail closed while this Reach target is disabled or invalid.</p>}</div>{canWrite && <button className={dangerButtonClass} disabled={busy !== ''} onClick={() => deleteSubscription(subscription)} type="button">{busy === `delete-${subscription.id}` ? 'Removing…' : 'Remove'}</button>}</li> })}</ul>
         {subscriptions.length === 0 && !loading && <p className="mt-4 text-sm text-steward-mist-muted">No delivery subscriptions have been configured.</p>}
-        {canWrite && <form className={`${subpanelClass} mt-5 grid gap-4 p-4 sm:grid-cols-2`} onSubmit={createSubscription}><div><label className={labelClass} htmlFor="signalSubscriptionKind">Subscriber type</label><select className={inputClass} id="signalSubscriptionKind" name="targetKind"><option value="group">Group</option><option value="webhook">Webhook</option></select></div><div><label className={labelClass} htmlFor="signalSubscriptionTarget">Configured target ID</label><input className={inputClass} id="signalSubscriptionTarget" maxLength={128} name="targetId" pattern="[A-Za-z0-9][A-Za-z0-9._:\-]{0,127}" required /></div><div className="sm:col-span-2"><label className={labelClass} htmlFor="signalSubscriptionRule">Rule <span className="font-normal">(optional)</span></label><select className={inputClass} id="signalSubscriptionRule" name="ruleId"><option value="">All rules</option>{rules.map((rule) => <option key={rule.id} value={rule.id}>{rule.name}</option>)}</select></div><div className="sm:col-span-2"><button className={buttonClass} disabled={busy !== ''} type="submit">{busy === 'create-subscription' ? 'Creating…' : 'Create subscription'}</button></div></form>}
+        {canWrite && <form className={`${subpanelClass} mt-5 grid gap-4 p-4 sm:grid-cols-2`} onSubmit={createSubscription}><div className="sm:col-span-2"><label className={labelClass} htmlFor="signalSubscriptionTarget">Delivery target</label><select className={inputClass} id="signalSubscriptionTarget" name="target" required><option value="">Select an enabled Reach target</option>{subscriptionTargets.map((target) => <option key={`${target.targetKind}:${target.targetId}`} value={`${target.targetKind}|${target.targetId}`}>{words(target.targetKind)} · {target.label} · {target.targetId}</option>)}</select>{subscriptionTargets.length === 0 && <p className="mt-1 text-xs font-normal text-[#ffd08a]">Configure and enable a valid Reach group or webhook before subscribing.</p>}</div><div className="sm:col-span-2"><label className={labelClass} htmlFor="signalSubscriptionRule">Rule <span className="font-normal">(optional)</span></label><select className={inputClass} id="signalSubscriptionRule" name="ruleId"><option value="">All rules</option>{rules.map((rule) => <option key={rule.id} value={rule.id}>{rule.name}</option>)}</select></div><div className="sm:col-span-2"><button className={buttonClass} disabled={busy !== '' || subscriptionTargets.length === 0} type="submit">{busy === 'create-subscription' ? 'Creating…' : 'Create subscription'}</button></div></form>}
       </div>
     </div>
   </section>

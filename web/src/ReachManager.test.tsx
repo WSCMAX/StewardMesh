@@ -6,7 +6,9 @@ import ReachManager from './ReachManager'
 // Requirement: REQ-REACH-001. Feature: messaging.delivery. GitHub: #12.
 
 const endpoint = { id: 'hook-primary', label: 'Operations webhook', kind: 'webhook' }
+const teamsEndpoint = { id: 'teams-primary', label: 'Operations Teams', kind: 'teams', destinationKey: 'operations-channel' }
 const provider = { id: 'operations-hook', name: 'Operations webhook', kind: 'webhook', endpointId: endpoint.id, secretConfigured: true, enabled: true, revision: 1 }
+const teamsProvider = { id: 'operations-teams', name: 'Operations Teams', kind: 'teams', endpointId: teamsEndpoint.id, secretConfigured: true, enabled: true, revision: 1 }
 const template = { id: 'signal-template', name: 'Signal alert', subject: '{{severity}}: {{title}}', body: '{{summary}}\nRecord {{record_id}}', revision: 1 }
 const group = { id: 'finance-owners', name: 'Finance owners', providerId: provider.id, templateId: template.id, recipients: [{ kind: 'email', address: 'owner@example.test' }], revision: 1 }
 const message = { id: 'message-one', groupId: group.id, providerId: provider.id, sourceKind: 'manual', subject: 'Warning: Renewal', body: 'Renewal due', recipients: group.recipients, status: 'retrying', attempts: 1, nextAttemptAt: '2026-08-13T12:05:00Z', lastErrorCode: 'provider_unavailable', createdAt: '2026-08-13T12:00:00Z', updatedAt: '2026-08-13T12:00:00Z' }
@@ -15,9 +17,10 @@ const attempt = { id: 'attempt-one', messageId: message.id, attempt: 1, outcome:
 function response(body: unknown, status = 200) { return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } }) }
 function reads(input: RequestInfo | URL) {
   const path = String(input)
-  if (path === '/api/v1/reach/endpoints') return response({ items: [endpoint] })
-  if (path === '/api/v1/reach/providers') return response({ items: [provider] })
+  if (path === '/api/v1/reach/endpoints') return response({ items: [endpoint, teamsEndpoint] })
+  if (path === '/api/v1/reach/providers') return response({ items: [provider, teamsProvider] })
   if (path === '/api/v1/reach/providers/operations-hook/tests') return response({ items: [] })
+  if (path === '/api/v1/reach/providers/operations-teams/tests') return response({ items: [] })
   if (path === '/api/v1/reach/templates') return response({ items: [template] })
   if (path === '/api/v1/reach/groups') return response({ items: [group] })
   if (path === '/api/v1/reach/messages?limit=100') return response({ items: [message] })
@@ -97,4 +100,35 @@ test('rejects raw credentials before the provider API is invoked and fails close
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => String(input) === '/api/v1/reach/endpoints' ? response({ items: [{ ...endpoint, url: 'https://forbidden.example' }] }) : reads(input)))
   render(<ReachManager csrfToken="csrf" permissions={['messaging.read']} />)
   expect((await screen.findAllByRole('alert')).at(-1)).toHaveTextContent('Reach could not be loaded.')
+})
+
+test('derives the exact Teams recipient from safe endpoint metadata', async () => {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input)
+    if (path === '/api/v1/reach/groups' && init?.method === 'POST') {
+      const body = JSON.parse(String(init.body)) as Record<string, unknown>
+      return response({ id: 'operations-team-group', name: body.name, providerId: teamsProvider.id, templateId: template.id, recipients: body.recipients, revision: 1 }, 201)
+    }
+    return reads(input)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  render(<ReachManager csrfToken="csrf-token" permissions={['messaging.read', 'messaging.write']} />)
+  await screen.findByText('Warning: Renewal')
+
+  const groupForm = screen.getByRole('button', { name: 'Create group' }).closest('form')
+  if (!groupForm) throw new Error('group form missing')
+  fireEvent.change(within(groupForm).getByLabelText('Group name'), { target: { value: 'Operations team' } })
+  fireEvent.change(within(groupForm).getByLabelText('Provider'), { target: { value: teamsProvider.id } })
+  fireEvent.change(within(groupForm).getByLabelText('Template'), { target: { value: template.id } })
+  const destination = within(groupForm).getByLabelText('Configured Teams destination') as HTMLInputElement
+  expect(destination).toHaveValue(teamsEndpoint.destinationKey)
+  expect(destination).toHaveAttribute('readonly')
+  expect(within(groupForm).queryByLabelText('Recipient address')).not.toBeInTheDocument()
+  fireEvent.click(within(groupForm).getByRole('button', { name: 'Create group' }))
+  expect(await screen.findByText('Subscriber group created.')).toBeInTheDocument()
+  const createCall = fetchMock.mock.calls.find(([path, init]) => path === '/api/v1/reach/groups' && init?.method === 'POST')
+  expect(JSON.parse(String(createCall?.[1]?.body))).toMatchObject({
+    providerId: teamsProvider.id,
+    recipients: [{ kind: 'channel', address: teamsEndpoint.destinationKey }],
+  })
 })

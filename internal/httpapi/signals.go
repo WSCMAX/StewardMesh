@@ -154,6 +154,17 @@ func (s *Server) listSignalSubscriptions(w http.ResponseWriter, r *http.Request,
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
+func (s *Server) listSignalSubscriptionTargets(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if !s.requireSignals(w, r) {
+		return
+	}
+	items, err := s.signals.ListSubscriptionTargets(r.Context())
+	if err != nil {
+		writeSignalsError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
 func (s *Server) createSignalSubscription(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
 	if !s.requireSignals(w, r) {
 		return

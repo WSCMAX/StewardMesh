@@ -285,10 +285,6 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 	if err != nil {
 		return fail(fmt.Errorf("initialize Horizon: %w", err))
 	}
-	signalsService, err := signals.NewService(runtime.signalsStore, signalsEvaluator{ledger: ledgerService, stack: stackService, horizon: horizonService}, runtime.auditor, signals.ServiceConfig{OrganizationID: cfg.OrganizationID})
-	if err != nil {
-		return fail(fmt.Errorf("initialize Signals: %w", err))
-	}
 	reachEndpoints := append([]reach.Endpoint(nil), options.ReachEndpoints...)
 	if options.ReachEndpoints == nil {
 		reachEndpoints, err = reach.LoadEndpointsFile(cfg.ReachEndpointsFile)
@@ -299,6 +295,17 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 	reachEndpointCatalog, err := reach.NewEndpointCatalog(reachEndpoints)
 	if err != nil {
 		return fail(fmt.Errorf("initialize Reach endpoint catalog: %w", err))
+	}
+	signalTargets, err := reach.NewSubscriptionTargetCatalog(runtime.reachStore, reachEndpointCatalog)
+	if err != nil {
+		return fail(fmt.Errorf("initialize Reach subscription target catalog: %w", err))
+	}
+	signalsService, err := signals.NewService(runtime.signalsStore, signalsEvaluator{ledger: ledgerService, stack: stackService, horizon: horizonService}, runtime.auditor, signals.ServiceConfig{
+		OrganizationID:      cfg.OrganizationID,
+		SubscriptionTargets: signalTargets,
+	})
+	if err != nil {
+		return fail(fmt.Errorf("initialize Signals: %w", err))
 	}
 	reachSecrets := options.ReachSecrets
 	if reachSecrets == nil {

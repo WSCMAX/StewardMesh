@@ -20,10 +20,16 @@ func (e *evaluator) Evaluate(context.Context, signals.Rule, time.Time) ([]signal
 	return append([]signals.Candidate(nil), e.candidates...), nil
 }
 
+type targetCatalog []signals.SubscriptionTarget
+
+func (c targetCatalog) ListSubscriptionTargets(context.Context, string) ([]signals.SubscriptionTarget, error) {
+	return append([]signals.SubscriptionTarget(nil), c...), nil
+}
+
 func TestRulesDefaultRenewalThresholdsAndDeduplicateEvaluation(t *testing.T) {
 	now := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)
 	source := &evaluator{candidates: []signals.Candidate{{TargetType: "contract", TargetID: "contract-1", Title: "Renewal approaching", Summary: "Contract renews soon."}}}
-	service, err := signals.NewService(repository.NewMemorySignalsStore(), source, foundation.NopAuditor{}, signals.ServiceConfig{OrganizationID: "organization-1", Now: func() time.Time { return now }})
+	service, err := signals.NewService(repository.NewMemorySignalsStore(), source, foundation.NopAuditor{}, signals.ServiceConfig{OrganizationID: "organization-1", SubscriptionTargets: targetCatalog{}, Now: func() time.Time { return now }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +58,7 @@ func TestRulesDefaultRenewalThresholdsAndDeduplicateEvaluation(t *testing.T) {
 func TestAcknowledgmentAssignmentResolutionHistoryAndCSVProtection(t *testing.T) {
 	now := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)
 	source := &evaluator{candidates: []signals.Candidate{{TargetType: "cost", TargetID: "cost-1", Title: "=unsafe title", Summary: "Cost needs reconciliation."}}}
-	service, _ := signals.NewService(repository.NewMemorySignalsStore(), source, foundation.NopAuditor{}, signals.ServiceConfig{OrganizationID: "organization-1", Now: func() time.Time { return now }})
+	service, _ := signals.NewService(repository.NewMemorySignalsStore(), source, foundation.NopAuditor{}, signals.ServiceConfig{OrganizationID: "organization-1", SubscriptionTargets: targetCatalog{}, Now: func() time.Time { return now }})
 	ctx := foundation.WithScope(context.Background(), foundation.Scope{OrganizationID: "organization-1", ActorID: "account-1", CorrelationID: "correlation-1"})
 	_, _ = service.CreateRule(ctx, signals.CreateRuleInput{ID: "rule-1", Name: "Reconciliation", Condition: signals.ConditionReconciliation, Severity: signals.SeverityCritical})
 	_, _ = service.Evaluate(ctx, now)
@@ -85,7 +91,7 @@ func TestSubscriptionsCreateReachHandoffAndBoundRetries(t *testing.T) {
 	now := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)
 	source := &evaluator{candidates: []signals.Candidate{{TargetType: "budget", TargetID: "budget-1", Title: "Budget exceeded", Summary: "Recognized costs exceed allocation."}}}
 	store := repository.NewMemorySignalsStore()
-	service, _ := signals.NewService(store, source, foundation.NopAuditor{}, signals.ServiceConfig{OrganizationID: "organization-1", Now: func() time.Time { return now }})
+	service, _ := signals.NewService(store, source, foundation.NopAuditor{}, signals.ServiceConfig{OrganizationID: "organization-1", SubscriptionTargets: targetCatalog{{TargetKind: "webhook", TargetID: "finance-webhook", Label: "Finance webhook"}}, Now: func() time.Time { return now }})
 	ctx := context.Background()
 	_, _ = service.CreateRule(ctx, signals.CreateRuleInput{ID: "rule-1", Name: "Budget", Condition: signals.ConditionOverBudget, Severity: signals.SeverityCritical})
 	_, err := service.CreateSubscription(ctx, signals.CreateSubscriptionInput{ID: "subscription-1", RuleID: "rule-1", TargetKind: "webhook", TargetID: "finance-webhook"})
@@ -121,14 +127,49 @@ func TestSubscriptionsCreateReachHandoffAndBoundRetries(t *testing.T) {
 	}
 }
 
+func TestSubscriptionCreationRequiresAnExactCatalogTarget(t *testing.T) {
+	catalog := targetCatalog{
+		{TargetKind: "webhook", TargetID: "operations-hook", Label: "Operations webhook"},
+		{TargetKind: "group", TargetID: "finance-owners", Label: "Finance owners"},
+	}
+	service, err := signals.NewService(repository.NewMemorySignalsStore(), &evaluator{}, foundation.NopAuditor{}, signals.ServiceConfig{
+		OrganizationID: "organization-1", SubscriptionTargets: catalog,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	targets, err := service.ListSubscriptionTargets(context.Background())
+	if err != nil || len(targets) != 2 || targets[0].TargetKind != "group" || targets[1].TargetKind != "webhook" {
+		t.Fatalf("unexpected normalized subscription targets %#v: %v", targets, err)
+	}
+	for name, input := range map[string]signals.CreateSubscriptionInput{
+		"missing":    {TargetKind: "group", TargetID: "missing-group"},
+		"wrong kind": {TargetKind: "webhook", TargetID: "finance-owners"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := service.CreateSubscription(context.Background(), input); !errors.Is(err, signals.ErrInvalidInput) {
+				t.Fatalf("expected authoritative target rejection, got %v", err)
+			}
+		})
+	}
+	created, err := service.CreateSubscription(context.Background(), signals.CreateSubscriptionInput{TargetKind: "group", TargetID: "finance-owners"})
+	if err != nil || created.TargetID != "finance-owners" {
+		t.Fatalf("create exact target subscription %#v: %v", created, err)
+	}
+	items, err := service.ListSubscriptions(context.Background())
+	if err != nil || len(items) != 1 {
+		t.Fatalf("invalid target validation partially wrote subscriptions %#v: %v", items, err)
+	}
+}
+
 func TestInvalidRulesAndDuplicateCandidatesFailClosed(t *testing.T) {
-	service, _ := signals.NewService(repository.NewMemorySignalsStore(), &evaluator{}, foundation.NopAuditor{}, signals.ServiceConfig{OrganizationID: "organization-1"})
+	service, _ := signals.NewService(repository.NewMemorySignalsStore(), &evaluator{}, foundation.NopAuditor{}, signals.ServiceConfig{OrganizationID: "organization-1", SubscriptionTargets: targetCatalog{}})
 	if _, err := service.CreateRule(context.Background(), signals.CreateRuleInput{Name: "Bad", Condition: "shell", Severity: signals.SeverityWarning}); !errors.Is(err, signals.ErrInvalidInput) {
 		t.Fatalf("expected invalid condition, got %v", err)
 	}
 	duplicate := signals.Candidate{TargetType: "contract", TargetID: "contract-1", Title: "A", Summary: "B"}
 	source := &evaluator{candidates: []signals.Candidate{duplicate, duplicate}}
-	service, _ = signals.NewService(repository.NewMemorySignalsStore(), source, foundation.NopAuditor{}, signals.ServiceConfig{OrganizationID: "organization-1"})
+	service, _ = signals.NewService(repository.NewMemorySignalsStore(), source, foundation.NopAuditor{}, signals.ServiceConfig{OrganizationID: "organization-1", SubscriptionTargets: targetCatalog{}})
 	_, _ = service.CreateRule(context.Background(), signals.CreateRuleInput{ID: "rule-1", Name: "Renew", Condition: signals.ConditionRenewal, Severity: signals.SeverityWarning})
 	if _, err := service.Evaluate(context.Background(), time.Now().UTC()); !errors.Is(err, signals.ErrConflict) {
 		t.Fatalf("expected duplicate conflict, got %v", err)
@@ -139,7 +180,7 @@ func TestInvalidRulesAndDuplicateCandidatesFailClosed(t *testing.T) {
 }
 
 func TestRuleThresholdAndFilterValidationFailsClosed(t *testing.T) {
-	service, _ := signals.NewService(repository.NewMemorySignalsStore(), &evaluator{}, foundation.NopAuditor{}, signals.ServiceConfig{OrganizationID: "organization-1"})
+	service, _ := signals.NewService(repository.NewMemorySignalsStore(), &evaluator{}, foundation.NopAuditor{}, signals.ServiceConfig{OrganizationID: "organization-1", SubscriptionTargets: targetCatalog{}})
 	for _, input := range []signals.CreateRuleInput{
 		{Name: "Negative", Condition: signals.ConditionRenewal, Severity: signals.SeverityWarning, ThresholdDays: []int{-1, 30}},
 		{Name: "Too large", Condition: signals.ConditionExpiration, Severity: signals.SeverityWarning, ThresholdDays: []int{3661}},

@@ -231,6 +231,7 @@ service SignalsService {
   rpc AcknowledgeAlert(AcknowledgeSignalAlertRequest) returns (SignalAlert);
   rpc AssignAlert(AssignSignalAlertRequest) returns (SignalAlert);
   rpc ListSubscriptions(ListSignalSubscriptionsRequest) returns (ListSignalSubscriptionsResponse);
+  rpc ListSubscriptionTargets(ListSignalSubscriptionTargetsRequest) returns (ListSignalSubscriptionTargetsResponse);
   rpc CreateSubscription(CreateSignalSubscriptionRequest) returns (SignalSubscription);
   rpc DeleteSubscription(DeleteSignalSubscriptionRequest) returns (DeleteSignalSubscriptionResponse);
   rpc ListPendingDeliveries(ListPendingSignalDeliveriesRequest) returns (ListPendingSignalDeliveriesResponse);
@@ -2403,6 +2404,20 @@ message ListSignalSubscriptionsResponse {
   repeated SignalSubscription items = 1;
 }
 
+message ListSignalSubscriptionTargetsRequest {}
+
+message ListSignalSubscriptionTargetsResponse {
+  repeated SignalSubscriptionTarget items = 1;
+}
+
+message SignalSubscriptionTarget {
+  // One of group or webhook.
+  string target_kind = 1;
+  string target_id = 2;
+  // Safe human label. Routes, credentials, and provider responses are omitted.
+  string label = 3;
+}
+
 message SignalSubscription {
   string id = 1;
   string organization_id = 2;
@@ -2658,6 +2673,9 @@ message ReachEndpoint {
   string label = 2;
   // smtp, ses, gmail_oauth, outlook_oauth, teams, or webhook.
   string kind = 3;
+  // Stable non-secret Teams destination key. Required only for teams and maps
+  // one-to-one to the endpoint's fixed deployment-owned channel route.
+  string destination_key = 4;
 }
 
 message ListReachProvidersRequest {}

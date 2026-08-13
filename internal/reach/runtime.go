@@ -28,6 +28,7 @@ func NewEndpointCatalog(endpoints []Endpoint) (*EndpointCatalog, error) {
 	catalog := &EndpointCatalog{items: make(map[string]Endpoint, len(endpoints))}
 	for _, endpoint := range endpoints {
 		endpoint.ID, endpoint.Label = strings.TrimSpace(endpoint.ID), strings.TrimSpace(endpoint.Label)
+		endpoint.DestinationKey = strings.TrimSpace(endpoint.DestinationKey)
 		endpoint.URL, endpoint.TestURL = strings.TrimSpace(endpoint.URL), strings.TrimSpace(endpoint.TestURL)
 		endpoint.Address, endpoint.ServerName, endpoint.Region = strings.TrimSpace(endpoint.Address), strings.TrimSpace(endpoint.ServerName), strings.TrimSpace(endpoint.Region)
 		if !stableIDPattern.MatchString(endpoint.ID) || !validText(endpoint.Label, 1, 160) || !validProviderKind(endpoint.Kind) {
@@ -35,6 +36,13 @@ func NewEndpointCatalog(endpoints []Endpoint) (*EndpointCatalog, error) {
 		}
 		if _, exists := catalog.items[endpoint.ID]; exists {
 			return nil, fmt.Errorf("duplicate Reach endpoint id %q", endpoint.ID)
+		}
+		if endpoint.Kind == ProviderTeams {
+			if !stableIDPattern.MatchString(endpoint.DestinationKey) {
+				return nil, fmt.Errorf("Reach Teams endpoint %q requires a stable destination key", endpoint.ID)
+			}
+		} else if endpoint.DestinationKey != "" {
+			return nil, fmt.Errorf("Reach endpoint %q may only declare a destination key for Teams", endpoint.ID)
 		}
 		if endpoint.Kind == ProviderSMTP {
 			if err := validateSMTPEndpoint(endpoint); err != nil {
@@ -103,6 +111,7 @@ func LoadEndpointsFile(path string) ([]Endpoint, error) {
 		ID             string       `json:"id"`
 		Label          string       `json:"label"`
 		Kind           ProviderKind `json:"kind"`
+		DestinationKey string       `json:"destinationKey,omitempty"`
 		URL            string       `json:"url,omitempty"`
 		TestURL        string       `json:"testUrl,omitempty"`
 		Address        string       `json:"address,omitempty"`
@@ -124,7 +133,7 @@ func LoadEndpointsFile(path string) ([]Endpoint, error) {
 	endpoints := make([]Endpoint, 0, len(records))
 	for _, record := range records {
 		endpoints = append(endpoints, Endpoint{
-			ID: record.ID, Label: record.Label, Kind: record.Kind, URL: record.URL, TestURL: record.TestURL,
+			ID: record.ID, Label: record.Label, Kind: record.Kind, DestinationKey: record.DestinationKey, URL: record.URL, TestURL: record.TestURL,
 			Address: record.Address, ServerName: record.ServerName, Region: record.Region,
 			RequireTLS: record.RequireTLS, AllowLocalHTTP: record.AllowLocalHTTP,
 		})

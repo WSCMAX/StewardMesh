@@ -159,16 +159,17 @@ purchased entitlements and assignments, and calculates explicit expiration,
 over-assignment, under-use, and missing-license conditions. Signals
 (`REQ-SIGNALS-001`, `alerts.rules`) evaluates those conditions alongside Ledger
 and Horizon state as durable, deduplicated
-alerts with acknowledgment, assignment, formula-safe reports, and a
-credential-free delivery handoff to Reach. See [Stack](docs/features/stack.md)
+alerts with acknowledgment, assignment, formula-safe reports, and an
+authoritative credential-free catalog of enabled Reach targets. See [Stack](docs/features/stack.md)
 and [Signals](docs/features/signals.md) for their ownership boundaries,
 permissions, APIs, security reviews, and validation coverage.
 
 Reach (`REQ-REACH-001`, `messaging.delivery`) turns those configured handoffs
 into explicitly confirmed email, Teams, or webhook delivery. Deployment-owned
 endpoints and external secret references keep routes and credentials out of the
-browser and database responses; bounded retries and sanitized history make each
-attempt reviewable. See [Reach](docs/features/reach.md) for adapter behavior,
+browser and database responses. Teams maps one safe destination key to each
+fixed channel endpoint; bounded retries and sanitized history make each attempt
+reviewable. See [Reach](docs/features/reach.md) for adapter behavior,
 deployment configuration, permissions, security boundaries, and validation.
 
 People now provides sites, departments, person/shared/public/lab identities,

@@ -5425,20 +5425,21 @@ var StackService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	SignalsService_ListRules_FullMethodName             = "/stewardmesh.v1.SignalsService/ListRules"
-	SignalsService_CreateRule_FullMethodName            = "/stewardmesh.v1.SignalsService/CreateRule"
-	SignalsService_UpdateRule_FullMethodName            = "/stewardmesh.v1.SignalsService/UpdateRule"
-	SignalsService_ListAlerts_FullMethodName            = "/stewardmesh.v1.SignalsService/ListAlerts"
-	SignalsService_ListAlertHistory_FullMethodName      = "/stewardmesh.v1.SignalsService/ListAlertHistory"
-	SignalsService_Evaluate_FullMethodName              = "/stewardmesh.v1.SignalsService/Evaluate"
-	SignalsService_AcknowledgeAlert_FullMethodName      = "/stewardmesh.v1.SignalsService/AcknowledgeAlert"
-	SignalsService_AssignAlert_FullMethodName           = "/stewardmesh.v1.SignalsService/AssignAlert"
-	SignalsService_ListSubscriptions_FullMethodName     = "/stewardmesh.v1.SignalsService/ListSubscriptions"
-	SignalsService_CreateSubscription_FullMethodName    = "/stewardmesh.v1.SignalsService/CreateSubscription"
-	SignalsService_DeleteSubscription_FullMethodName    = "/stewardmesh.v1.SignalsService/DeleteSubscription"
-	SignalsService_ListPendingDeliveries_FullMethodName = "/stewardmesh.v1.SignalsService/ListPendingDeliveries"
-	SignalsService_RecordDeliveryAttempt_FullMethodName = "/stewardmesh.v1.SignalsService/RecordDeliveryAttempt"
-	SignalsService_ExportCSV_FullMethodName             = "/stewardmesh.v1.SignalsService/ExportCSV"
+	SignalsService_ListRules_FullMethodName               = "/stewardmesh.v1.SignalsService/ListRules"
+	SignalsService_CreateRule_FullMethodName              = "/stewardmesh.v1.SignalsService/CreateRule"
+	SignalsService_UpdateRule_FullMethodName              = "/stewardmesh.v1.SignalsService/UpdateRule"
+	SignalsService_ListAlerts_FullMethodName              = "/stewardmesh.v1.SignalsService/ListAlerts"
+	SignalsService_ListAlertHistory_FullMethodName        = "/stewardmesh.v1.SignalsService/ListAlertHistory"
+	SignalsService_Evaluate_FullMethodName                = "/stewardmesh.v1.SignalsService/Evaluate"
+	SignalsService_AcknowledgeAlert_FullMethodName        = "/stewardmesh.v1.SignalsService/AcknowledgeAlert"
+	SignalsService_AssignAlert_FullMethodName             = "/stewardmesh.v1.SignalsService/AssignAlert"
+	SignalsService_ListSubscriptions_FullMethodName       = "/stewardmesh.v1.SignalsService/ListSubscriptions"
+	SignalsService_ListSubscriptionTargets_FullMethodName = "/stewardmesh.v1.SignalsService/ListSubscriptionTargets"
+	SignalsService_CreateSubscription_FullMethodName      = "/stewardmesh.v1.SignalsService/CreateSubscription"
+	SignalsService_DeleteSubscription_FullMethodName      = "/stewardmesh.v1.SignalsService/DeleteSubscription"
+	SignalsService_ListPendingDeliveries_FullMethodName   = "/stewardmesh.v1.SignalsService/ListPendingDeliveries"
+	SignalsService_RecordDeliveryAttempt_FullMethodName   = "/stewardmesh.v1.SignalsService/RecordDeliveryAttempt"
+	SignalsService_ExportCSV_FullMethodName               = "/stewardmesh.v1.SignalsService/ExportCSV"
 )
 
 // SignalsServiceClient is the client API for SignalsService service.
@@ -5460,6 +5461,7 @@ type SignalsServiceClient interface {
 	AcknowledgeAlert(ctx context.Context, in *AcknowledgeSignalAlertRequest, opts ...grpc.CallOption) (*SignalAlert, error)
 	AssignAlert(ctx context.Context, in *AssignSignalAlertRequest, opts ...grpc.CallOption) (*SignalAlert, error)
 	ListSubscriptions(ctx context.Context, in *ListSignalSubscriptionsRequest, opts ...grpc.CallOption) (*ListSignalSubscriptionsResponse, error)
+	ListSubscriptionTargets(ctx context.Context, in *ListSignalSubscriptionTargetsRequest, opts ...grpc.CallOption) (*ListSignalSubscriptionTargetsResponse, error)
 	CreateSubscription(ctx context.Context, in *CreateSignalSubscriptionRequest, opts ...grpc.CallOption) (*SignalSubscription, error)
 	DeleteSubscription(ctx context.Context, in *DeleteSignalSubscriptionRequest, opts ...grpc.CallOption) (*DeleteSignalSubscriptionResponse, error)
 	ListPendingDeliveries(ctx context.Context, in *ListPendingSignalDeliveriesRequest, opts ...grpc.CallOption) (*ListPendingSignalDeliveriesResponse, error)
@@ -5565,6 +5567,16 @@ func (c *signalsServiceClient) ListSubscriptions(ctx context.Context, in *ListSi
 	return out, nil
 }
 
+func (c *signalsServiceClient) ListSubscriptionTargets(ctx context.Context, in *ListSignalSubscriptionTargetsRequest, opts ...grpc.CallOption) (*ListSignalSubscriptionTargetsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListSignalSubscriptionTargetsResponse)
+	err := c.cc.Invoke(ctx, SignalsService_ListSubscriptionTargets_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *signalsServiceClient) CreateSubscription(ctx context.Context, in *CreateSignalSubscriptionRequest, opts ...grpc.CallOption) (*SignalSubscription, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(SignalSubscription)
@@ -5634,6 +5646,7 @@ type SignalsServiceServer interface {
 	AcknowledgeAlert(context.Context, *AcknowledgeSignalAlertRequest) (*SignalAlert, error)
 	AssignAlert(context.Context, *AssignSignalAlertRequest) (*SignalAlert, error)
 	ListSubscriptions(context.Context, *ListSignalSubscriptionsRequest) (*ListSignalSubscriptionsResponse, error)
+	ListSubscriptionTargets(context.Context, *ListSignalSubscriptionTargetsRequest) (*ListSignalSubscriptionTargetsResponse, error)
 	CreateSubscription(context.Context, *CreateSignalSubscriptionRequest) (*SignalSubscription, error)
 	DeleteSubscription(context.Context, *DeleteSignalSubscriptionRequest) (*DeleteSignalSubscriptionResponse, error)
 	ListPendingDeliveries(context.Context, *ListPendingSignalDeliveriesRequest) (*ListPendingSignalDeliveriesResponse, error)
@@ -5675,6 +5688,9 @@ func (UnimplementedSignalsServiceServer) AssignAlert(context.Context, *AssignSig
 }
 func (UnimplementedSignalsServiceServer) ListSubscriptions(context.Context, *ListSignalSubscriptionsRequest) (*ListSignalSubscriptionsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListSubscriptions not implemented")
+}
+func (UnimplementedSignalsServiceServer) ListSubscriptionTargets(context.Context, *ListSignalSubscriptionTargetsRequest) (*ListSignalSubscriptionTargetsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListSubscriptionTargets not implemented")
 }
 func (UnimplementedSignalsServiceServer) CreateSubscription(context.Context, *CreateSignalSubscriptionRequest) (*SignalSubscription, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateSubscription not implemented")
@@ -5874,6 +5890,24 @@ func _SignalsService_ListSubscriptions_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SignalsService_ListSubscriptionTargets_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListSignalSubscriptionTargetsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SignalsServiceServer).ListSubscriptionTargets(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SignalsService_ListSubscriptionTargets_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SignalsServiceServer).ListSubscriptionTargets(ctx, req.(*ListSignalSubscriptionTargetsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _SignalsService_CreateSubscription_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(CreateSignalSubscriptionRequest)
 	if err := dec(in); err != nil {
@@ -6006,6 +6040,10 @@ var SignalsService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListSubscriptions",
 			Handler:    _SignalsService_ListSubscriptions_Handler,
+		},
+		{
+			MethodName: "ListSubscriptionTargets",
+			Handler:    _SignalsService_ListSubscriptionTargets_Handler,
 		},
 		{
 			MethodName: "CreateSubscription",

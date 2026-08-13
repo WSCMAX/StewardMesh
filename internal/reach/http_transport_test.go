@@ -75,13 +75,32 @@ func TestHTTPProviderAdaptersProduceBoundedProviderSpecificRequests(t *testing.T
 				return response(http.StatusAccepted, ""), nil
 			})}
 			transport := &HTTPTransport{client: client, now: func() time.Time { return time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC) }}
-			message := Message{ID: "message-one", SourceKind: "manual", Subject: "Alert", Body: "Safe plain text", CreatedAt: time.Now(),
-				Recipients: []Recipient{{Kind: RecipientEmail, Address: "owner@example.test"}, {Kind: RecipientChannel, Address: "operations"}}}
-			result := transport.Send(context.Background(), Endpoint{URL: "https://provider.example.test/send", Region: test.region}, Provider{Kind: test.kind, Sender: "sender@example.test"}, message, test.secret)
+			recipients := []Recipient{{Kind: RecipientEmail, Address: "owner@example.test"}}
+			endpoint := Endpoint{URL: "https://provider.example.test/send", Region: test.region}
+			if test.kind == ProviderTeams {
+				endpoint.DestinationKey = "operations"
+				recipients = []Recipient{{Kind: RecipientChannel, Address: endpoint.DestinationKey}}
+			}
+			message := Message{ID: "message-one", SourceKind: "manual", Subject: "Alert", Body: "Safe plain text", CreatedAt: time.Now(), Recipients: recipients}
+			result := transport.Send(context.Background(), endpoint, Provider{Kind: test.kind, Sender: "sender@example.test"}, message, test.secret)
 			if !result.Succeeded || !strings.Contains(capturedBody, test.wantBody) || !strings.Contains(authorization, test.wantAuth) {
 				t.Fatalf("adapter request result=%#v auth=%q body=%s", result, authorization, capturedBody)
 			}
 		})
+	}
+}
+
+func TestTeamsTransportRejectsAnIgnoredOrMismatchedChannelBeforeNetworkIO(t *testing.T) {
+	called := false
+	transport := &HTTPTransport{client: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		called = true
+		return response(http.StatusAccepted, ""), nil
+	})}}
+	result := transport.Send(context.Background(), Endpoint{URL: "https://graph.microsoft.com/send", DestinationKey: "configured-channel"}, Provider{Kind: ProviderTeams}, Message{
+		ID: "message-one", Subject: "Alert", Body: "Summary", Recipients: []Recipient{{Kind: RecipientChannel, Address: "ignored-channel"}},
+	}, []byte("oauth-token-0123456789"))
+	if result.Succeeded || result.ErrorCode != "recipient_invalid" || called {
+		t.Fatalf("mismatched Teams recipient was not rejected before transport %#v called=%t", result, called)
 	}
 }
 

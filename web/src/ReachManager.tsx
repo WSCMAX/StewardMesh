@@ -5,7 +5,7 @@ import { buttonClass, inputClass, labelClass, panelClass, secondaryButtonClass, 
 // Requirement: REQ-REACH-001. Feature: messaging.delivery. GitHub: #12.
 
 type ProviderKind = 'smtp' | 'ses' | 'gmail_oauth' | 'outlook_oauth' | 'teams' | 'webhook'
-type Endpoint = { id: string; label: string; kind: ProviderKind }
+type Endpoint = { id: string; label: string; kind: ProviderKind; destinationKey?: string }
 type Provider = { id: string; name: string; kind: ProviderKind; endpointId: string; sender?: string; secretConfigured: boolean; enabled: boolean; revision: number }
 type Template = { id: string; name: string; subject: string; body: string; revision: number }
 type Recipient = { kind: 'email' | 'channel'; address: string }
@@ -25,6 +25,7 @@ function isID(value: unknown): value is string { return typeof value === 'string
 function isDateTime(value: unknown) { return typeof value === 'string' && value.length <= 64 && !Number.isNaN(Date.parse(value)) }
 function isEndpoint(value: unknown): value is Endpoint {
   return isRecord(value) && isID(value.id) && typeof value.label === 'string' && value.label.length > 0 && value.label.length <= 160 && providerKinds.includes(value.kind as ProviderKind)
+    && (value.kind === 'teams' ? isID(value.destinationKey) : value.destinationKey === undefined)
     && !('url' in value) && !('address' in value) && !('serverName' in value)
 }
 function isProvider(value: unknown): value is Provider {
@@ -84,6 +85,7 @@ export default function ReachManager({ csrfToken, onOpenHelp, permissions }: { c
   const [attempts, setAttempts] = useState<Attempt[]>([])
   const [selectedMessage, setSelectedMessage] = useState('')
   const [providerKind, setProviderKind] = useState<ProviderKind>('webhook')
+  const [groupProviderId, setGroupProviderId] = useState('')
   const [loading, setLoading] = useState(canRead)
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
@@ -146,12 +148,18 @@ export default function ReachManager({ csrfToken, onOpenHelp, permissions }: { c
   }
   async function createGroup(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); const form = event.currentTarget; const values = new FormData(form)
+    const provider = providers.find((candidate) => candidate.id === groupProviderId)
+    const endpoint = endpoints.find((candidate) => candidate.id === provider?.endpointId && candidate.kind === provider.kind)
+    if (!provider || !endpoint) { setError('Choose an available configured provider.'); return }
+    const recipient = provider.kind === 'teams'
+      ? { kind: 'channel', address: endpoint.destinationKey ?? '' }
+      : { kind: String(values.get('recipientKind') ?? ''), address: String(values.get('address') ?? '').trim() }
+    if (provider.kind === 'teams' && !isID(recipient.address)) { setError('The selected Teams endpoint has no configured destination.'); return }
     await mutate('group', async () => {
       const value = await requestJSON('/api/v1/reach/groups', { method: 'POST', headers: writeHeaders, body: JSON.stringify({
-        name: String(values.get('name') ?? '').trim(), providerId: String(values.get('providerId') ?? ''), templateId: String(values.get('templateId') ?? ''),
-        recipients: [{ kind: String(values.get('recipientKind') ?? ''), address: String(values.get('address') ?? '').trim() }],
+        name: String(values.get('name') ?? '').trim(), providerId: provider.id, templateId: String(values.get('templateId') ?? ''), recipients: [recipient],
       }) })
-      if (!isGroup(value)) throw new Error('invalid created Reach group'); form.reset()
+      if (!isGroup(value)) throw new Error('invalid created Reach group'); form.reset(); setGroupProviderId('')
     }, 'Subscriber group created.')
   }
   async function rotateSecret(event: FormEvent<HTMLFormElement>, provider: Provider) {
@@ -224,12 +232,11 @@ export default function ReachManager({ csrfToken, onOpenHelp, permissions }: { c
         <label className={`${labelClass} mt-4`}>Body<textarea className={inputClass} maxLength={4000} name="body" placeholder={'{{summary}}\nRecord {{record_id}}'} required rows={4} /></label>
         <button className={`${buttonClass} mt-4 w-full`} disabled={busy !== ''} type="submit">Create template</button>
       </form>
-      <form className={`${panelClass} p-5`} onSubmit={createGroup}><h4 className="text-lg font-semibold text-white">Create subscriber group</h4><p className="mt-1 text-sm text-steward-mist-muted">Add one validated recipient now; the API supports up to 100.</p>
+      <form className={`${panelClass} p-5`} onSubmit={createGroup}><h4 className="text-lg font-semibold text-white">Create subscriber group</h4><p className="mt-1 text-sm text-steward-mist-muted">Add one validated recipient now. Teams destinations are fixed by the selected deployment endpoint.</p>
         <label className={`${labelClass} mt-4`}>Group name<input className={inputClass} maxLength={160} name="name" required /></label>
-        <label className={`${labelClass} mt-4`}>Provider<select className={inputClass} name="providerId" required><option value="">Select a provider</option>{providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}</select></label>
+        <label className={`${labelClass} mt-4`}>Provider<select className={inputClass} name="providerId" onChange={(event) => setGroupProviderId(event.target.value)} required value={groupProviderId}><option value="">Select a provider</option>{providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}</select></label>
         <label className={`${labelClass} mt-4`}>Template<select className={inputClass} name="templateId" required><option value="">Select a template</option>{templates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}</select></label>
-        <label className={`${labelClass} mt-4`}>Recipient type<select className={inputClass} name="recipientKind"><option value="email">Email</option><option value="channel">Channel</option></select></label>
-        <label className={`${labelClass} mt-4`}>Recipient address<input className={inputClass} maxLength={320} name="address" required /></label>
+        {providers.find((provider) => provider.id === groupProviderId)?.kind === 'teams' ? <div className="mt-4"><label className={labelClass} htmlFor="reachTeamsDestination">Configured Teams destination</label><input aria-describedby="reachTeamsDestinationHelp" className={inputClass} id="reachTeamsDestination" readOnly value={endpoints.find((endpoint) => endpoint.id === providers.find((provider) => provider.id === groupProviderId)?.endpointId)?.destinationKey ?? ''} /><span className="mt-1 block text-xs text-steward-mist-muted" id="reachTeamsDestinationHelp">This stable key maps to the endpoint’s fixed Teams channel and cannot be changed here.</span></div> : <><label className={`${labelClass} mt-4`}>Recipient type<select className={inputClass} name="recipientKind"><option value="email">Email</option><option value="channel">Channel</option></select></label><label className={`${labelClass} mt-4`}>Recipient address<input className={inputClass} maxLength={320} name="address" required /></label></>}
         <button className={`${buttonClass} mt-4 w-full`} disabled={busy !== '' || providers.length === 0 || templates.length === 0} type="submit">Create group</button>
       </form>
     </div>}

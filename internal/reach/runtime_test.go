@@ -53,6 +53,31 @@ func TestLoadEndpointsFileRejectsUnknownFieldsAndUnsafeDestinations(t *testing.T
 	}
 }
 
+func TestTeamsEndpointRequiresOneSafeExposedDestinationKey(t *testing.T) {
+	for name, endpoint := range map[string]reach.Endpoint{
+		"missing Teams destination": {ID: "teams", Label: "Teams", Kind: reach.ProviderTeams, URL: "https://graph.microsoft.com/v1.0/teams/team/channels/channel/messages"},
+		"invalid Teams destination": {ID: "teams", Label: "Teams", Kind: reach.ProviderTeams, DestinationKey: "https://graph.microsoft.com/channel", URL: "https://graph.microsoft.com/v1.0/teams/team/channels/channel/messages"},
+		"destination on webhook":    {ID: "hook", Label: "Hook", Kind: reach.ProviderWebhook, DestinationKey: "operations", URL: "https://hooks.example.test/reach"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := reach.NewEndpointCatalog([]reach.Endpoint{endpoint}); err == nil {
+				t.Fatal("expected destination metadata rejection")
+			}
+		})
+	}
+	catalog, err := reach.NewEndpointCatalog([]reach.Endpoint{{
+		ID: "teams", Label: "Operations Teams", Kind: reach.ProviderTeams, DestinationKey: "operations-channel",
+		URL: "https://graph.microsoft.com/v1.0/teams/team/channels/channel/messages",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	serialized, err := json.Marshal(catalog.List())
+	if err != nil || !strings.Contains(string(serialized), `"destinationKey":"operations-channel"`) || strings.Contains(string(serialized), "graph.microsoft.com") {
+		t.Fatalf("unsafe Teams endpoint response %s: %v", serialized, err)
+	}
+}
+
 func TestEnvironmentSecretResolverRequiresExplicitReferenceScheme(t *testing.T) {
 	resolver, err := reach.NewEnvironmentSecretResolver("STEWARDMESH_REACH_SECRET_")
 	if err != nil {

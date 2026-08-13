@@ -12,10 +12,11 @@ const (
 	RequirementID = "REQ-SIGNALS-001"
 	FeatureID     = "alerts.rules"
 
-	MaximumRules         = 100
-	MaximumAlerts        = 500
-	MaximumSubscriptions = 100
-	MaximumDeliveryTries = 8
+	MaximumRules               = 100
+	MaximumAlerts              = 500
+	MaximumSubscriptions       = 100
+	MaximumSubscriptionTargets = 150
+	MaximumDeliveryTries       = 8
 )
 
 var (
@@ -171,6 +172,23 @@ type CreateSubscriptionInput struct {
 	RuleID     string `json:"ruleId,omitempty"`
 	TargetKind string `json:"targetKind"`
 	TargetID   string `json:"targetId"`
+}
+
+// SubscriptionTarget is safe, provider-neutral destination metadata exposed
+// to Signals. It contains only an organization-scoped stable reference and a
+// human label; network routes, credentials, and provider responses remain in
+// Reach.
+type SubscriptionTarget struct {
+	TargetKind string `json:"targetKind"`
+	TargetID   string `json:"targetId"`
+	Label      string `json:"label"`
+}
+
+// SubscriptionTargetCatalog is the authority for targets that can currently
+// receive new Signals subscriptions. Implementations must scope every lookup
+// to organizationID and return only enabled, fully configured targets.
+type SubscriptionTargetCatalog interface {
+	ListSubscriptionTargets(context.Context, string) ([]SubscriptionTarget, error)
 }
 
 // Delivery is the durable, provider-neutral Reach handoff. Signals stores only

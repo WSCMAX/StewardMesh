@@ -133,6 +133,12 @@ func (emptySignalsEvaluator) Evaluate(context.Context, signals.Rule, time.Time) 
 	return nil, nil
 }
 
+type emptySignalTargets struct{}
+
+func (emptySignalTargets) ListSubscriptionTargets(context.Context, string) ([]signals.SubscriptionTarget, error) {
+	return []signals.SubscriptionTarget{}, nil
+}
+
 type bridgeHarness struct {
 	service     *bridge.Service
 	atlas       *atlas.Service
@@ -166,7 +172,7 @@ func newBridgeHarness(t *testing.T) *bridgeHarness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	signalsService, err := signals.NewService(repository.NewMemorySignalsStore(), emptySignalsEvaluator{}, auditor, signals.ServiceConfig{OrganizationID: organizationID, Now: clock.Now})
+	signalsService, err := signals.NewService(repository.NewMemorySignalsStore(), emptySignalsEvaluator{}, auditor, signals.ServiceConfig{OrganizationID: organizationID, SubscriptionTargets: emptySignalTargets{}, Now: clock.Now})
 	if err != nil {
 		t.Fatal(err)
 	}

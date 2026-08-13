@@ -40,6 +40,7 @@
     "id": "operations-teams",
     "label": "Operations Teams channel",
     "kind": "teams",
+    "destinationKey": "operations-teams-channel",
     "url": "https://graph.microsoft.com/v1.0/teams/replace-team-id/channels/replace-channel-id/messages",
     "testUrl": "https://graph.microsoft.com/v1.0/me"
   }

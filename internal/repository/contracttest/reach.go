@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/maxlemke/stewardmesh/internal/reach"
+	"github.com/maxlemke/stewardmesh/internal/signals"
 )
 
 func ReachStore(t *testing.T, store reach.Store, organizationID, suffix string) {
@@ -64,6 +65,18 @@ func ReachStore(t *testing.T, store reach.Store, organizationID, suffix string) 
 	if _, err := store.UpdateGroup(ctx, group, 1); err != nil {
 		t.Fatal(err)
 	}
+	endpointCatalog, err := reach.NewEndpointCatalog([]reach.Endpoint{{ID: "hook-primary", Label: "Operations webhook", Kind: reach.ProviderWebhook, URL: "https://hooks.example.test/reach"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetCatalog, err := reach.NewSubscriptionTargetCatalog(store, endpointCatalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targets, err := targetCatalog.ListSubscriptionTargets(ctx, organizationID)
+	if err != nil || len(targets) != 2 || !hasReachTarget(targets, "group", group.ID) || !hasReachTarget(targets, "webhook", provider.ID) {
+		t.Fatalf("Reach subscription target catalog %#v: %v", targets, err)
+	}
 
 	message := reach.Message{ID: "reach-message-" + suffix, OrganizationID: organizationID, GroupID: group.ID, ProviderID: provider.ID, TemplateID: template.ID,
 		SourceKind: "manual", Subject: "Budget alert", Body: "A budget is over plan.", Recipients: group.Recipients,
@@ -109,6 +122,13 @@ func ReachStore(t *testing.T, store reach.Store, organizationID, suffix string) 
 	if tests, err := store.ListProviderTests(ctx, organizationID, provider.ID); err != nil || len(tests) != 1 {
 		t.Fatalf("list Reach provider tests %#v: %v", tests, err)
 	}
+	provider.Enabled, provider.Revision, provider.UpdatedAt = false, 3, now.Add(3*time.Minute)
+	if _, err := store.UpdateProvider(ctx, provider, 2); err != nil {
+		t.Fatal(err)
+	}
+	if targets, err := targetCatalog.ListSubscriptionTargets(ctx, organizationID); err != nil || len(targets) != 0 {
+		t.Fatalf("disabled Reach targets remained subscribable %#v: %v", targets, err)
+	}
 
 	other := organizationID + "-other"
 	if items, err := store.ListProviders(ctx, other); err != nil || len(items) != 0 {
@@ -117,4 +137,13 @@ func ReachStore(t *testing.T, store reach.Store, organizationID, suffix string) 
 	if _, err := store.GetMessage(ctx, other, message.ID); !errors.Is(err, reach.ErrNotFound) {
 		t.Fatalf("message organization isolation failed: %v", err)
 	}
+}
+
+func hasReachTarget(items []signals.SubscriptionTarget, kind, id string) bool {
+	for _, item := range items {
+		if item.TargetKind == kind && item.TargetID == id {
+			return true
+		}
+	}
+	return false
 }

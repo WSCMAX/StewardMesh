@@ -554,6 +554,22 @@ func TestHorizonLifecyclePlanForecastHistoryAndExport(t *testing.T) {
 func TestSignalsRuleEvaluationActionHistoryDeliveryAndProtection(t *testing.T) {
 	handler := newGuardServer(t)
 	session := bootstrapAdministrator(t, handler)
+	provider := createPeopleRecord[reach.Provider](t, handler, session, "/api/v1/reach/providers", map[string]any{
+		"id": "signals-hook", "name": "Signals webhook", "kind": "webhook", "endpointId": "hook-primary", "secretRef": "external:hook-secret-v1",
+	})
+	template := createPeopleRecord[reach.Template](t, handler, session, "/api/v1/reach/templates", map[string]any{
+		"id": "signals-template", "name": "Signals template", "subject": "{{title}}", "body": "{{summary}}",
+	})
+	createPeopleRecord[reach.SubscriberGroup](t, handler, session, "/api/v1/reach/groups", map[string]any{
+		"id": "finance-owners", "name": "Finance owners", "providerId": provider.ID, "templateId": template.ID,
+		"recipients": []map[string]string{{"kind": "email", "address": "finance@example.test"}},
+	})
+	targets := httptest.NewRecorder()
+	handler.ServeHTTP(targets, authenticatedRequest(http.MethodGet, "/api/v1/signals/subscription-targets", nil, session))
+	if targets.Code != http.StatusOK || !strings.Contains(targets.Body.String(), `"targetKind":"group","targetId":"finance-owners","label":"Finance owners"`) ||
+		!strings.Contains(targets.Body.String(), `"targetKind":"webhook","targetId":"signals-hook","label":"Signals webhook"`) {
+		t.Fatalf("unexpected Signals subscription targets %d: %s", targets.Code, targets.Body.String())
+	}
 	rule := createPeopleRecord[signals.Rule](t, handler, session, "/api/v1/signals/rules", map[string]any{
 		"id": "renewals", "name": "Contract renewals", "condition": "renewal", "severity": "warning",
 	})
@@ -623,6 +639,27 @@ func TestSignalsRuleEvaluationActionHistoryDeliveryAndProtection(t *testing.T) {
 	handler.ServeHTTP(unsafeSubscriber, authenticatedRequest(http.MethodPost, "/api/v1/signals/subscriptions", unsafePayload, session))
 	if unsafeSubscriber.Code != http.StatusBadRequest || !strings.Contains(unsafeSubscriber.Body.String(), "validation_failed") {
 		t.Fatalf("expected Signals to reject webhook URLs, got %d: %s", unsafeSubscriber.Code, unsafeSubscriber.Body.String())
+	}
+	for name, payload := range map[string]string{
+		"missing target":    `{"targetKind":"group","targetId":"missing-group"}`,
+		"wrong target kind": `{"targetKind":"webhook","targetId":"finance-owners"}`,
+	} {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, authenticatedRequest(http.MethodPost, "/api/v1/signals/subscriptions", bytes.NewBufferString(payload), session))
+		if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "validation_failed") {
+			t.Fatalf("expected Signals to reject %s, got %d: %s", name, response.Code, response.Body.String())
+		}
+	}
+	disableBody, _ := json.Marshal(map[string]any{"name": provider.Name, "sender": "", "enabled": false, "revision": provider.Revision})
+	disabled := httptest.NewRecorder()
+	handler.ServeHTTP(disabled, authenticatedRequest(http.MethodPut, "/api/v1/reach/providers/"+provider.ID, bytes.NewReader(disableBody), session))
+	if disabled.Code != http.StatusOK {
+		t.Fatalf("disable Reach target %d: %s", disabled.Code, disabled.Body.String())
+	}
+	disabledTarget := httptest.NewRecorder()
+	handler.ServeHTTP(disabledTarget, authenticatedRequest(http.MethodPost, "/api/v1/signals/subscriptions", bytes.NewBufferString(`{"id":"disabled-target","targetKind":"webhook","targetId":"signals-hook"}`), session))
+	if disabledTarget.Code != http.StatusBadRequest || !strings.Contains(disabledTarget.Body.String(), "validation_failed") {
+		t.Fatalf("expected Signals to reject a disabled target, got %d: %s", disabledTarget.Code, disabledTarget.Body.String())
 	}
 }
 
@@ -2669,14 +2706,20 @@ func newGuardServerWithDirectory(t *testing.T, limiter guard.AttemptLimiter, oid
 	if err != nil {
 		t.Fatal(err)
 	}
-	signalsService, err := signals.NewService(repository.NewMemorySignalsStore(), httpSignalsEvaluator{}, foundation.NopAuditor{}, signals.ServiceConfig{
-		OrganizationID: organization.ID,
-		Now:            func() time.Time { return time.Date(2026, time.August, 13, 12, 0, 0, 0, time.UTC) },
-	})
+	reachEndpoints, err := reach.NewEndpointCatalog([]reach.Endpoint{{ID: "hook-primary", Label: "Operations hook", Kind: reach.ProviderWebhook, URL: "https://hooks.example.test/reach"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	reachEndpoints, err := reach.NewEndpointCatalog([]reach.Endpoint{{ID: "hook-primary", Label: "Operations hook", Kind: reach.ProviderWebhook, URL: "https://hooks.example.test/reach"}})
+	reachStore := repository.NewMemoryReachStore()
+	signalTargets, err := reach.NewSubscriptionTargetCatalog(reachStore, reachEndpoints)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signalsService, err := signals.NewService(repository.NewMemorySignalsStore(), httpSignalsEvaluator{}, foundation.NopAuditor{}, signals.ServiceConfig{
+		OrganizationID:      organization.ID,
+		SubscriptionTargets: signalTargets,
+		Now:                 func() time.Time { return time.Date(2026, time.August, 13, 12, 0, 0, 0, time.UTC) },
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2684,7 +2727,7 @@ func newGuardServerWithDirectory(t *testing.T, limiter guard.AttemptLimiter, oid
 	if err != nil {
 		t.Fatal(err)
 	}
-	reachService, err := reach.NewService(repository.NewMemoryReachStore(), reachEndpoints, reachTransports, httpReachSecrets{}, signalsService, foundation.NopAuditor{}, reach.ServiceConfig{
+	reachService, err := reach.NewService(reachStore, reachEndpoints, reachTransports, httpReachSecrets{}, signalsService, foundation.NopAuditor{}, reach.ServiceConfig{
 		OrganizationID: organization.ID,
 		Now:            func() time.Time { return time.Date(2026, time.August, 13, 12, 0, 0, 0, time.UTC) },
 	})

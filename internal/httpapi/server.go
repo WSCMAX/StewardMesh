@@ -355,6 +355,7 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 	mux.Handle("POST /api/v1/signals/alerts/{alertID}/acknowledge", server.protected(guard.PermissionSignalsWrite, true, server.acknowledgeSignalAlert))
 	mux.Handle("PUT /api/v1/signals/alerts/{alertID}/assignment", server.protected(guard.PermissionSignalsWrite, true, server.assignSignalAlert))
 	mux.Handle("GET /api/v1/signals/subscriptions", server.protected(guard.PermissionSignalsRead, false, server.listSignalSubscriptions))
+	mux.Handle("GET /api/v1/signals/subscription-targets", server.protected(guard.PermissionSignalsRead, false, server.listSignalSubscriptionTargets))
 	mux.Handle("POST /api/v1/signals/subscriptions", server.protected(guard.PermissionSignalsWrite, true, server.createSignalSubscription))
 	mux.Handle("DELETE /api/v1/signals/subscriptions/{subscriptionID}", server.protected(guard.PermissionSignalsWrite, true, server.deleteSignalSubscription))
 	mux.Handle("GET /api/v1/signals/report.csv", server.protected(guard.PermissionSignalsRead, false, server.exportSignalsCSV))

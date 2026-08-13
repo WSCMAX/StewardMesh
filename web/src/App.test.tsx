@@ -206,6 +206,7 @@ test('renders an accessible one-time administrator setup and submits without bro
   render(<App />)
 
   expect(await screen.findByRole('heading', { name: 'Create the first administrator' })).toBeInTheDocument()
+  expect(screen.getByRole('link', { name: 'Read setup documentation' })).toHaveAttribute('href', '#docs/guard')
   expect(screen.getByLabelText('Username')).toHaveAttribute('pattern', '[A-Za-z0-9][A-Za-z0-9._\\-]{2,63}')
   fireEvent.change(screen.getByLabelText('Display name'), { target: { value: 'Example Administrator' } })
   fireEvent.change(screen.getByLabelText('Email address'), { target: { value: 'administrator@example.test' } })

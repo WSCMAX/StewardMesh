@@ -1,6 +1,7 @@
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Asset } from './AtlasInventory'
 import { ApiRequestError, requestJSON } from './api'
+import { documentationHref } from './documentation'
 import { buttonClass, inputClass, labelClass, panelClass, plainButtonClass, secondaryButtonClass, subpanelClass } from './ui'
 
 // Requirements: REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, REQ-WORKSPACE-001, A11Y-001, DOC-001, DOC-002.
@@ -128,7 +129,7 @@ type PeopleDirectoryProps = {
   onReportIssue?: () => void
 }
 
-const peopleHelpUrl = 'https://github.com/WSCMAX/StewardMesh/blob/main/docs/features/people.md'
+const peopleHelpUrl = documentationHref('people')
 const emptyFilters: Filters = { search: '', kind: '', status: '', departmentId: '', siteId: '' }
 const emptyGuidedPerson: GuidedPersonDraft = { displayName: '', email: '', departmentId: '' }
 

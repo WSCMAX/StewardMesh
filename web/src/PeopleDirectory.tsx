@@ -939,7 +939,7 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
         </div>
       </form>
 
-      <div aria-busy={loading} aria-labelledby="people-results-heading">
+      <div aria-busy={loading} aria-labelledby="people-results-heading" role="region">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
             <h3 id="people-results-heading" className="text-lg font-semibold">Directory results</h3>

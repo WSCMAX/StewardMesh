@@ -112,6 +112,7 @@ test('renders a scoped People directory and guided help without automated WCAG v
   }
   const results = await axe.run(container)
   expect(results.violations).toEqual([])
+  expect(screen.getByRole('region', { name: 'Directory results' })).toBeInTheDocument()
 })
 
 test('guides a person through an existing room without losing their draft', async () => {

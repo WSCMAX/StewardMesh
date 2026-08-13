@@ -35,7 +35,7 @@ func (s *DirectoryImportStore) GetManagedGroup(ctx context.Context, organization
 }
 
 func (s *DirectoryImportStore) CreateManagedGroup(ctx context.Context, group directoryexpansion.ManagedGroup) (directoryexpansion.ManagedGroup, error) {
-	metadata, err := json.Marshal(group.Metadata)
+	metadata, err := marshalDirectoryMetadata(group.Metadata)
 	if err != nil {
 		return directoryexpansion.ManagedGroup{}, fmt.Errorf("encode managed group metadata: %w", err)
 	}
@@ -50,7 +50,7 @@ func (s *DirectoryImportStore) CreateManagedGroup(ctx context.Context, group dir
 }
 
 func (s *DirectoryImportStore) ReconcileManagedGroup(ctx context.Context, group directoryexpansion.ManagedGroup, expectedRevision uint64) (directoryexpansion.ManagedGroup, error) {
-	metadata, err := json.Marshal(group.Metadata)
+	metadata, err := marshalDirectoryMetadata(group.Metadata)
 	if err != nil {
 		return directoryexpansion.ManagedGroup{}, fmt.Errorf("encode managed group metadata: %w", err)
 	}
@@ -83,7 +83,7 @@ func (s *DirectoryImportStore) GetManagedMembership(ctx context.Context, organiz
 }
 
 func (s *DirectoryImportStore) CreateManagedMembership(ctx context.Context, membership directoryexpansion.ManagedMembership) (directoryexpansion.ManagedMembership, error) {
-	metadata, err := json.Marshal(membership.Metadata)
+	metadata, err := marshalDirectoryMetadata(membership.Metadata)
 	if err != nil {
 		return directoryexpansion.ManagedMembership{}, fmt.Errorf("encode managed membership metadata: %w", err)
 	}
@@ -100,7 +100,7 @@ func (s *DirectoryImportStore) CreateManagedMembership(ctx context.Context, memb
 }
 
 func (s *DirectoryImportStore) ReconcileManagedMembership(ctx context.Context, membership directoryexpansion.ManagedMembership, expectedRevision uint64) (directoryexpansion.ManagedMembership, error) {
-	metadata, err := json.Marshal(membership.Metadata)
+	metadata, err := marshalDirectoryMetadata(membership.Metadata)
 	if err != nil {
 		return directoryexpansion.ManagedMembership{}, fmt.Errorf("encode managed membership metadata: %w", err)
 	}
@@ -117,6 +117,13 @@ func (s *DirectoryImportStore) ReconcileManagedMembership(ctx context.Context, m
 		return directoryexpansion.ManagedMembership{}, directoryexpansion.ErrConflict
 	}
 	return membership, nil
+}
+
+func marshalDirectoryMetadata(metadata map[string]string) ([]byte, error) {
+	if metadata == nil {
+		return []byte("{}"), nil
+	}
+	return json.Marshal(metadata)
 }
 
 func (s *DirectoryImportStore) DeleteManagedMembership(ctx context.Context, organizationID, id string, expectedRevision uint64) error {

@@ -101,9 +101,13 @@ func DirectoryGroupTargetStore(t *testing.T, store directoryexpansion.GroupTarge
 	}
 	cascade := membership
 	cascade.ID, cascade.SourceRecordID, cascade.Revision = contractDirectoryID("cascade", unique), "cascade-source-"+unique, 1
+	cascade.Metadata = nil
 	// Recreate the group and attach a membership solely to verify the repository
 	// contract's parent-delete behavior matches PostgreSQL ON DELETE CASCADE.
+	// Nil metadata must persist as an empty JSON object because PostgreSQL
+	// deliberately rejects JSON null for these extensible records.
 	group.Revision = 1
+	group.Metadata = nil
 	if _, err := store.CreateManagedGroup(ctx, group); err != nil {
 		t.Fatalf("recreate managed group for cascade: %v", err)
 	}

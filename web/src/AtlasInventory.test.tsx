@@ -41,6 +41,39 @@ test('filters assets, loads lifecycle details, and has no automated accessibilit
   expect(results.violations).toEqual([])
 })
 
+test('shows immutable model defaults, provenance, effective dates, and instance overrides', async () => {
+  const linked: Asset = {
+    ...asset, kind: 'desktop', modelId: 'model-1', modelContext: {
+      manufacturer: 'Framework', name: 'Laptop 13', modelNumber: 'FW13', kind: 'laptop',
+      specifications: { CPU: 'Ryzen', Memory: '32 GB' }, warrantyMonths: 36, usefulLifeMonths: 48,
+      sourceSystemId: 'model-import', sourceRecordId: 'framework-fw13-v1', modelRevision: 1,
+      defaultsEffectiveAt: '2026-08-12T12:00:00Z', appliedAt: '2026-08-12T13:00:00Z', overrides: ['kind'],
+    },
+  }
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    const path = String(input)
+    if (path === '/api/v1/asset-models?limit=100') return jsonResponse({ items: [{
+      id: 'model-1', organizationId: 'example-org', manufacturer: 'Framework', name: 'Laptop 13 updated',
+      kind: 'computer', status: 'active', instanceCount: 1, revision: 2,
+      createdAt: '2026-08-12T12:00:00Z', updatedAt: '2026-08-12T14:00:00Z',
+    }] })
+    if (path === '/api/v1/assets/asset-1/lifecycle') return jsonResponse({ items: [] })
+    if (path === '/api/v1/assets/asset-1/identifiers') return jsonResponse({ items: [] })
+    throw new Error(`unexpected request: ${path}`)
+  }))
+  const { container } = render(<AtlasInventory assets={[linked]} csrfToken="csrf-token" onAssetsChange={() => undefined} permissions={['assets.read']} />)
+  fireEvent.click(screen.getByRole('button', { name: /Lab server/ }))
+  const defaults = await screen.findByRole('heading', { name: 'Model defaults when linked' })
+  const section = defaults.closest('section') as HTMLElement
+  expect(within(section).getByText('Framework Laptop 13 FW13')).toBeInTheDocument()
+  expect(within(section).getByText('desktop (overrides laptop)')).toBeInTheDocument()
+  expect(within(section).getByText('framework-fw13-v1')).toBeInTheDocument()
+  expect(within(section).getByText('Overrides: Kind')).toBeInTheDocument()
+  expect(within(section).getByText('Ryzen')).toBeInTheDocument()
+  expect(within(section).queryByText(/updated/)).not.toBeInTheDocument()
+  expect((await axe.run(container)).violations).toEqual([])
+})
+
 test('creates an asset with CSRF protection and server-managed identity fields', async () => {
   const created = { ...asset, id: 'asset-2', name: 'New laptop', kind: 'laptop', assetTag: 'LAP-002' }
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {

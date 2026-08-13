@@ -33,6 +33,14 @@ func AtlasStore(t testing.TB, subject atlas.Store, organizationID, suffix string
 	if createdModel.Revision != 1 || createdModel.InstanceCount != 0 {
 		t.Fatalf("unexpected created Atlas model %#v", createdModel)
 	}
+	emptyModel := model
+	emptyModel.ID = "model-empty-" + suffix
+	emptyModel.ModelNumber = "EMPTY-" + suffix
+	emptyModel.Specifications = nil
+	createdEmptyModel, err := subject.CreateModel(ctx, emptyModel)
+	if err != nil || len(createdEmptyModel.Specifications) != 0 {
+		t.Fatalf("expected empty specifications to persist as an object, model=%#v err=%v", createdEmptyModel, err)
+	}
 	if _, err := subject.CreateModel(ctx, model); !errors.Is(err, atlas.ErrConflict) {
 		t.Fatalf("expected duplicate Atlas model conflict, got %v", err)
 	}
@@ -43,7 +51,8 @@ func AtlasStore(t testing.TB, subject atlas.Store, organizationID, suffix string
 		t.Fatalf("unexpected resolved Atlas model %#v err=%v", resolvedModel, err)
 	}
 	asset := domain.Asset{
-		ID: assetID, OrganizationID: organizationID, ModelID: model.ID, Name: "Contract Server", Kind: "server",
+		ID: assetID, OrganizationID: organizationID, ModelID: model.ID, ModelContext: contractModelContext(model, "server", now),
+		Name: "Contract Server", Kind: "server",
 		AssetTag: "TAG-" + suffix, SerialNumber: "SERIAL-" + suffix, Hostname: "contract.example.test",
 		Status: "draft", Revision: 1, CreatedAt: now, UpdatedAt: now,
 	}
@@ -63,8 +72,8 @@ func AtlasStore(t testing.TB, subject atlas.Store, organizationID, suffix string
 		t.Fatalf("unexpected Atlas model count %#v err=%v", loadedModel, err)
 	}
 	bulkAssets := []domain.Asset{
-		{ID: "bulk-a-" + suffix, OrganizationID: organizationID, ModelID: model.ID, Name: "Bulk node A", Kind: "server", AssetTag: "BULK-A-" + suffix, DeploymentNotes: "Rack staging", Status: "draft", Revision: 1, CreatedAt: now, UpdatedAt: now},
-		{ID: "bulk-b-" + suffix, OrganizationID: organizationID, ModelID: model.ID, Name: "Bulk node B", Kind: "server", AssetTag: "BULK-B-" + suffix, Status: "draft", Revision: 1, CreatedAt: now, UpdatedAt: now},
+		{ID: "bulk-a-" + suffix, OrganizationID: organizationID, ModelID: model.ID, ModelContext: contractModelContext(model, "server", now), Name: "Bulk node A", Kind: "server", AssetTag: "BULK-A-" + suffix, DeploymentNotes: "Rack staging", Status: "draft", Revision: 1, CreatedAt: now, UpdatedAt: now},
+		{ID: "bulk-b-" + suffix, OrganizationID: organizationID, ModelID: model.ID, ModelContext: contractModelContext(model, "server", now), Name: "Bulk node B", Kind: "server", AssetTag: "BULK-B-" + suffix, Status: "draft", Revision: 1, CreatedAt: now, UpdatedAt: now},
 	}
 	bulkEvents := []domain.AssetLifecycleEvent{
 		{ID: lifecycleID(suffix, '3'), OrganizationID: organizationID, AssetID: bulkAssets[0].ID, ToStatus: "draft", Revision: 1, ActorID: "contract-user", OccurredAt: now},
@@ -75,8 +84,8 @@ func AtlasStore(t testing.TB, subject atlas.Store, organizationID, suffix string
 		t.Fatalf("unexpected bulk Atlas create %#v err=%v", createdBulk, err)
 	}
 	failedBatch := []domain.Asset{
-		{ID: "bulk-c-" + suffix, OrganizationID: organizationID, ModelID: model.ID, Name: "Bulk node C", Kind: "server", AssetTag: "BULK-C-" + suffix, Status: "draft", Revision: 1, CreatedAt: now, UpdatedAt: now},
-		{ID: "bulk-d-" + suffix, OrganizationID: organizationID, ModelID: model.ID, Name: "Bulk duplicate", Kind: "server", AssetTag: asset.AssetTag, Status: "draft", Revision: 1, CreatedAt: now, UpdatedAt: now},
+		{ID: "bulk-c-" + suffix, OrganizationID: organizationID, ModelID: model.ID, ModelContext: contractModelContext(model, "server", now), Name: "Bulk node C", Kind: "server", AssetTag: "BULK-C-" + suffix, Status: "draft", Revision: 1, CreatedAt: now, UpdatedAt: now},
+		{ID: "bulk-d-" + suffix, OrganizationID: organizationID, ModelID: model.ID, ModelContext: contractModelContext(model, "server", now), Name: "Bulk duplicate", Kind: "server", AssetTag: asset.AssetTag, Status: "draft", Revision: 1, CreatedAt: now, UpdatedAt: now},
 	}
 	failedEvents := []domain.AssetLifecycleEvent{
 		{ID: lifecycleID(suffix, '5'), OrganizationID: organizationID, AssetID: failedBatch[0].ID, ToStatus: "draft", Revision: 1, ActorID: "contract-user", OccurredAt: now},
@@ -98,6 +107,10 @@ func AtlasStore(t testing.TB, subject atlas.Store, organizationID, suffix string
 	models, err := subject.ListModels(ctx, organizationID, atlas.ModelQuery{Search: "updated", Status: "active", Limit: 10})
 	if err != nil || len(models) != 1 || models[0].InstanceCount != 3 {
 		t.Fatalf("unexpected Atlas model search %#v err=%v", models, err)
+	}
+	preserved, err := subject.GetAsset(ctx, organizationID, asset.ID)
+	if err != nil || preserved.ModelContext == nil || preserved.ModelContext.ModelRevision != 1 || preserved.ModelContext.Name != "Server" {
+		t.Fatalf("model update rewrote persisted asset context %#v err=%v", preserved.ModelContext, err)
 	}
 	if _, err := subject.CreateAsset(ctx, asset, initial); !errors.Is(err, atlas.ErrConflict) {
 		t.Fatalf("expected duplicate Atlas conflict, got %v", err)
@@ -132,6 +145,19 @@ func AtlasStore(t testing.TB, subject atlas.Store, organizationID, suffix string
 	retiredModel, err := subject.RetireModel(ctx, organizationID, model.ID, updatedModel.Revision, now.Add(2*time.Hour))
 	if err != nil || retiredModel.Status != "retired" || retiredModel.InstanceCount != 3 {
 		t.Fatalf("unexpected retired Atlas model %#v err=%v", retiredModel, err)
+	}
+}
+
+func contractModelContext(model domain.AssetModel, kind string, appliedAt time.Time) *domain.AssetModelContext {
+	overrides := []string{}
+	if kind != model.Kind {
+		overrides = []string{"kind"}
+	}
+	return &domain.AssetModelContext{
+		Manufacturer: model.Manufacturer, Name: model.Name, ModelNumber: model.ModelNumber, Kind: model.Kind,
+		Specifications: map[string]string{"CPU": "test"}, WarrantyMonths: model.WarrantyMonths,
+		UsefulLifeMonths: model.UsefulLifeMonths, ModelRevision: model.Revision,
+		DefaultsEffectiveAt: model.UpdatedAt, AppliedAt: appliedAt, Overrides: overrides,
 	}
 }
 

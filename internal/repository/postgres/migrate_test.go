@@ -14,8 +14,8 @@ func TestEmbeddedMigrationsAreOrderedAndChecksummed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(migrations) != 25 {
-		t.Fatalf("expected 25 platform migrations, got %d", len(migrations))
+	if len(migrations) != 26 {
+		t.Fatalf("expected 26 platform migrations, got %d", len(migrations))
 	}
 	for index, migration := range migrations {
 		expectedVersion := int64(index + 1)
@@ -24,6 +24,24 @@ func TestEmbeddedMigrationsAreOrderedAndChecksummed(t *testing.T) {
 		}
 		if len(migration.checksum) != 64 {
 			t.Fatalf("expected SHA-256 checksum for migration %d", migration.version)
+		}
+	}
+}
+
+func TestAtlasModelDefaultProvenanceMigrationSnapshotsExistingLinks(t *testing.T) {
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents := migrations[25].contents
+	for _, expected := range []string{
+		"REQ-ATLAS-MODELS-001", "inventory.models", "GitHub: #74",
+		"ADD COLUMN model_context JSONB", "modelRevision", "defaultsEffectiveAt",
+		"sourceSystemId", "sourceRecordId", "CURRENT_TIMESTAMP", "asset.kind = model.kind",
+		"model_context_consistency_check",
+	} {
+		if !strings.Contains(contents, expected) {
+			t.Fatalf("Atlas model provenance migration is missing %q", expected)
 		}
 	}
 }

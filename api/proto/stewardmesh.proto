@@ -101,7 +101,7 @@ service PeopleService {
 }
 
 // Durable provider-neutral preview, apply, reconciliation, and retry.
-// Requirements: REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003.
+// Requirements: REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-005.
 // Features: integrations.protocols, identity.directory.
 // Every RPC is organization-scoped. List/Get require integrations.read;
 // Preview/Apply/Retry require integrations.write. Transport adapters map the
@@ -1076,7 +1076,7 @@ message DirectoryImportCounts {
 
 message DirectoryImportRecord {
   string source_record_id = 1;
-  // Currently identity; open for later provider-neutral record families.
+  // identity, group, or membership.
   string kind = 2;
   string identity_kind = 3;
   string display_name = 4;
@@ -1088,6 +1088,14 @@ message DirectoryImportRecord {
   map<string, string> directory_attributes = 8;
   // Stable direct group source references, sorted and bounded by the server.
   repeated string group_source_ids = 9;
+  string group_name = 10;
+  string description = 11;
+  string group_source_id = 12;
+  string member_source_id = 13;
+  // subject or group when kind is membership.
+  string member_kind = 14;
+  // Allowlisted normalized string metadata, never raw provider extensions.
+  map<string, string> metadata = 15;
 }
 
 message DirectoryImportItem {

@@ -1,4 +1,4 @@
-# Requirements: REQ-ATLAS-001, REQ-ATLAS-MODELS-001, REQ-ATLAS-CODES-001, REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-HORIZON-001, REQ-LEDGER-001, REQ-STACK-001, REQ-SIGNALS-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
+# Requirements: REQ-ATLAS-001, REQ-ATLAS-MODELS-001, REQ-ATLAS-CODES-001, REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-005, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-HORIZON-001, REQ-LEDGER-001, REQ-STACK-001, REQ-SIGNALS-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
 openapi: 3.1.0
 info:
   title: StewardMesh API
@@ -4157,18 +4157,31 @@ components:
     DirectoryImportRecord:
       type: object
       additionalProperties: false
-      description: Bounded normalized record safe for reconciliation detail. It contains only an allowlisted directory attribute projection and group source references, never raw provider payloads, endpoints, credentials, or internal mapping digests.
+      description: Bounded normalized identity, group, or membership record safe for reconciliation detail. It contains only allowlisted directory attributes, metadata, and source references, never raw provider payloads, arbitrary provider properties, endpoints, credentials, or internal mapping digests.
       required: [sourceRecordId, kind, displayName, status]
       properties:
         sourceRecordId: {type: string, minLength: 1, maxLength: 255}
         kind:
           type: string
-          enum: [identity]
+          enum: [identity, group, membership]
         identityKind:
           type: string
           enum: [person, shared, public, lab]
         displayName: {type: string, minLength: 1, maxLength: 200}
         email: {type: string, format: email, maxLength: 320}
+        groupName: {type: string, minLength: 1, maxLength: 512}
+        description: {type: string, maxLength: 2000}
+        groupSourceId: {type: string, minLength: 1, maxLength: 255}
+        memberSourceId: {type: string, minLength: 1, maxLength: 255}
+        memberKind:
+          type: string
+          enum: [subject, group]
+        metadata:
+          type: object
+          maxProperties: 16
+          propertyNames: {pattern: '^[a-z0-9][a-z0-9._-]{0,63}$', maxLength: 64}
+          additionalProperties: {type: string, maxLength: 500}
+          description: Allowlisted normalized string metadata; raw provider extension objects are never exposed.
         status:
           type: string
           enum: [active, inactive]

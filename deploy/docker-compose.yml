@@ -1,4 +1,4 @@
-# REQ-PLATFORM-VALKEY-001 / platform.runtime
+# REQ-PLATFORM-VALKEY-001 / platform.runtime; REQ-DIRECTORY-EXPANSION-005 / integrations.protocols
 services:
   postgres:
     image: postgres:18.4-alpine
@@ -41,11 +41,20 @@ services:
     stop_grace_period: 10s
   grouper:
     profiles: ["integrations", "demo"]
-    image: i2incommon/grouper:latest
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      target: grouper-fixture
+    image: stewardmesh-grouper-fixture:local
     environment:
-      GROUPER_RUN_APIS_GROUPERWS: "true"
+      GROUPER_FIXTURE_TOKEN: stewardmesh-local-fixture-token
     ports:
-      - "8081:8080"
+      - "127.0.0.1:8081:8080"
+    healthcheck:
+      test: ["CMD", "/grouper-fixture", "healthcheck"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
 volumes:
   stewardmesh-postgres:

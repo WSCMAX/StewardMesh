@@ -1,6 +1,6 @@
 package config
 
-// Requirements: REQ-DIRECTORY-EXPANSION-003, REQ-STORAGE-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
+// Requirements: REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-005, REQ-STORAGE-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
 
 import (
 	"strings"
@@ -19,6 +19,64 @@ func TestLoadSupportsMemoryDevelopmentMode(t *testing.T) {
 	}
 	if configuration.RepositoryDriver != RepositoryDriverMemory {
 		t.Fatalf("expected memory driver, got %q", configuration.RepositoryDriver)
+	}
+}
+
+func TestLoadSupportsOptionalGrouperConnector(t *testing.T) {
+	t.Setenv("STEWARDMESH_REPOSITORY_DRIVER", "memory")
+	t.Setenv("STEWARDMESH_GROUPER_URL", "https://grouper.example.test/grouper-ws/scim/v2")
+	t.Setenv("STEWARDMESH_GROUPER_SOURCE_SYSTEM_ID", "campus-grouper")
+	t.Setenv("STEWARDMESH_GROUPER_BEARER_TOKEN", "secret-manager-token")
+	t.Setenv("STEWARDMESH_GROUPER_CONFIG_REVISION", "mapping-v4")
+	t.Setenv("STEWARDMESH_GROUPER_PAGE_SIZE", "50")
+	t.Setenv("STEWARDMESH_GROUPER_MAXIMUM_RESPONSE_BYTES", "4096")
+	t.Setenv("STEWARDMESH_GROUPER_TIMEOUT", "10s")
+	configuration, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !configuration.GrouperEnabled() || configuration.GrouperSourceSystemID != "campus-grouper" ||
+		configuration.GrouperConfigRevision != "mapping-v4" || configuration.GrouperPageSize != 50 ||
+		configuration.GrouperMaximumResponseBytes != 4096 || configuration.GrouperTimeout != 10*time.Second {
+		t.Fatalf("unexpected Grouper configuration %#v", configuration)
+	}
+}
+
+func TestValidateRejectsUnsafeGrouperConfigurationWithoutLeakingSecrets(t *testing.T) {
+	valid := FromEnv()
+	valid.RepositoryDriver = RepositoryDriverMemory
+	valid.GrouperURL = "https://grouper.example.test/grouper-ws/scim/v2"
+	valid.GrouperSourceSystemID = "campus-grouper"
+	valid.GrouperConfigRevision = "v1"
+	valid.GrouperBearerToken = "super-secret-grouper-token"
+	valid.GrouperPageSize = 100
+	valid.GrouperMaximumResponseBytes = 2 << 20
+	valid.GrouperTimeout = 15 * time.Second
+	tests := []struct {
+		name   string
+		mutate func(*Config)
+	}{
+		{name: "ignored token", mutate: func(c *Config) { c.GrouperURL = "" }},
+		{name: "credentialed URL", mutate: func(c *Config) { c.GrouperURL = "https://user:super-secret@grouper.example.test/grouper-ws/scim/v2" }},
+		{name: "wrong path", mutate: func(c *Config) { c.GrouperURL = "https://grouper.example.test/arbitrary" }},
+		{name: "plaintext remote", mutate: func(c *Config) { c.GrouperURL = "http://grouper.example.test/grouper-ws/scim/v2" }},
+		{name: "mixed credentials", mutate: func(c *Config) { c.GrouperUsername, c.GrouperPassword = "reader", "super-secret-password" }},
+		{name: "unbounded page", mutate: func(c *Config) { c.GrouperPageSize = 1000 }},
+		{name: "unbounded response", mutate: func(c *Config) { c.GrouperMaximumResponseBytes = 1 << 30 }},
+		{name: "unbounded timeout", mutate: func(c *Config) { c.GrouperTimeout = time.Minute }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			configuration := valid
+			test.mutate(&configuration)
+			err := configuration.Validate()
+			if err == nil {
+				t.Fatal("expected invalid Grouper configuration")
+			}
+			if strings.Contains(err.Error(), "super-secret") {
+				t.Fatalf("Grouper configuration error leaked a credential: %v", err)
+			}
+		})
 	}
 }
 

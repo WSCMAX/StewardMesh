@@ -1,6 +1,6 @@
 // Package directoryexpansion implements provider-neutral directory preview,
 // reconciliation, apply, and retry contracts.
-// Requirements: REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003.
+// Requirements: REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-005.
 // Features: integrations.protocols, identity.directory.
 package directoryexpansion
 
@@ -13,8 +13,9 @@ import (
 )
 
 const (
-	RequirementID = "REQ-DIRECTORY-EXPANSION-002"
-	FeatureID     = "integrations.protocols"
+	RequirementID        = "REQ-DIRECTORY-EXPANSION-002"
+	GrouperRequirementID = "REQ-DIRECTORY-EXPANSION-005"
+	FeatureID            = "integrations.protocols"
 
 	DefaultListLimit  = 50
 	MaximumListLimit  = 100
@@ -74,7 +75,18 @@ type SourceSystem struct {
 
 type RecordKind string
 
-const RecordIdentity RecordKind = "identity"
+const (
+	RecordIdentity   RecordKind = "identity"
+	RecordGroup      RecordKind = "group"
+	RecordMembership RecordKind = "membership"
+)
+
+type MemberKind string
+
+const (
+	MemberSubject MemberKind = "subject"
+	MemberGroup   MemberKind = "group"
+)
 
 // Record is the bounded normalized payload shared by every provider adapter.
 // Raw provider responses and credentials never cross this contract or persist.
@@ -88,6 +100,47 @@ type Record struct {
 	Department          string            `json:"department,omitempty"`
 	DirectoryAttributes map[string]string `json:"directoryAttributes,omitempty"`
 	GroupSourceIDs      []string          `json:"groupSourceIds,omitempty"`
+	GroupName           string            `json:"groupName,omitempty"`
+	Description         string            `json:"description,omitempty"`
+	GroupSourceID       string            `json:"groupSourceId,omitempty"`
+	MemberSourceID      string            `json:"memberSourceId,omitempty"`
+	MemberKind          MemberKind        `json:"memberKind,omitempty"`
+	NormalizedMetadata  map[string]string `json:"metadata,omitempty"`
+}
+
+// ManagedGroup and ManagedMembership are the provider-neutral authoritative
+// targets for group-oriented directory sources. They retain only the bounded,
+// normalized fields above; credentials and raw provider payloads never enter
+// this store.
+type ManagedGroup struct {
+	ID, OrganizationID, SourceSystemID, SourceRecordID string
+	Name, DisplayName, Description, Status             string
+	Metadata                                           map[string]string
+	Revision                                           uint64
+	CreatedAt, UpdatedAt                               time.Time
+}
+
+type ManagedMembership struct {
+	ID, OrganizationID, SourceSystemID, SourceRecordID string
+	GroupID, GroupSourceID, MemberID, MemberSourceID   string
+	MemberKind                                         MemberKind
+	MemberDisplayName, Status                          string
+	Metadata                                           map[string]string
+	Revision                                           uint64
+	CreatedAt, UpdatedAt                               time.Time
+}
+
+type GroupTargetStore interface {
+	GetManagedGroup(context.Context, string, string) (ManagedGroup, error)
+	CreateManagedGroup(context.Context, ManagedGroup) (ManagedGroup, error)
+	ReconcileManagedGroup(context.Context, ManagedGroup, uint64) (ManagedGroup, error)
+	DeleteManagedGroup(context.Context, string, string, uint64) error
+	GetManagedMembership(context.Context, string, string) (ManagedMembership, error)
+	CreateManagedMembership(context.Context, ManagedMembership) (ManagedMembership, error)
+	ReconcileManagedMembership(context.Context, ManagedMembership, uint64) (ManagedMembership, error)
+	DeleteManagedMembership(context.Context, string, string, uint64) error
+	ListManagedGroups(context.Context, string) ([]ManagedGroup, error)
+	ListManagedMemberships(context.Context, string) ([]ManagedMembership, error)
 }
 
 type Page struct {

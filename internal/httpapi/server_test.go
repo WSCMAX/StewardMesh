@@ -1,7 +1,7 @@
 package httpapi
 
 // Requirements: REQ-FOUNDATION-001, REQ-WORKSPACE-001, REQ-ATLAS-001, REQ-ATLAS-MODELS-001, REQ-ATLAS-CODES-001, REQ-PEOPLE-001,
-// REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-STACK-001, REQ-HORIZON-001, REQ-SIGNALS-001, REQ-PLATFORM-VALKEY-001,
+// REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-005, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-STACK-001, REQ-HORIZON-001, REQ-SIGNALS-001, REQ-PLATFORM-VALKEY-001,
 // SEC-GUARD-001, SEC-HTTP-001. Features include experience.workspace.
 
 import (
@@ -110,11 +110,15 @@ type fakeHTTPSAMLAuthenticator struct {
 }
 
 type httpDirectoryConnector struct {
-	page  directoryexpansion.Page
-	calls int
+	system directoryexpansion.SourceSystem
+	page   directoryexpansion.Page
+	calls  int
 }
 
 func (c *httpDirectoryConnector) SourceSystem() directoryexpansion.SourceSystem {
+	if c.system.ID != "" {
+		return c.system
+	}
 	return directoryexpansion.SourceSystem{ID: "hr-primary", Provider: "example", ConfigRevision: "v1"}
 }
 
@@ -2078,6 +2082,42 @@ func TestDirectoryImportHTTPRejectsSessionWithoutIntegrationPermission(t *testin
 	}
 }
 
+func TestGrouperDirectoryImportHTTPUsesSharedAuthorizationPreviewAndApply(t *testing.T) {
+	connector := &httpDirectoryConnector{system: directoryexpansion.SourceSystem{ID: "grouper-primary", Provider: directoryexpansion.GrouperProvider, ConfigRevision: "v1"},
+		page: directoryexpansion.Page{CompleteSnapshot: true, Records: []directoryexpansion.Record{{
+			SourceRecordID: "group-1", Kind: directoryexpansion.RecordGroup, GroupName: "app:researchers",
+			DisplayName: "Researchers", Status: "active",
+		}}}}
+	handler, _, connector := newGuardServerWithDirectory(t, nil, nil, nil, connector)
+	session := bootstrapAdministrator(t, handler)
+
+	missingCSRF := authenticatedRequest(http.MethodPost, "/api/v1/directory-imports/preview", strings.NewReader(`{"sourceSystemId":"grouper-primary"}`), session)
+	missingCSRF.Header.Del(csrfHeader)
+	missingCSRF.Header.Set(idempotencyHeader, "grouper-http-preview")
+	missingCSRFResponse := httptest.NewRecorder()
+	handler.ServeHTTP(missingCSRFResponse, missingCSRF)
+	if missingCSRFResponse.Code != http.StatusForbidden || connector.calls != 0 {
+		t.Fatalf("unauthorized Grouper preview reached source: %d calls=%d", missingCSRFResponse.Code, connector.calls)
+	}
+
+	previewRequest := authenticatedRequest(http.MethodPost, "/api/v1/directory-imports/preview", strings.NewReader(`{"sourceSystemId":"grouper-primary"}`), session)
+	previewRequest.Header.Set(idempotencyHeader, "grouper-http-preview")
+	previewResponse := httptest.NewRecorder()
+	handler.ServeHTTP(previewResponse, previewRequest)
+	var preview directoryexpansion.OperationResult
+	if previewResponse.Code != http.StatusCreated || json.Unmarshal(previewResponse.Body.Bytes(), &preview) != nil ||
+		preview.Batch.Provider != directoryexpansion.GrouperProvider || preview.Batch.Counts.Created != 1 {
+		t.Fatalf("unexpected Grouper preview %d %s", previewResponse.Code, previewResponse.Body.String())
+	}
+	applyRequest := authenticatedRequest(http.MethodPost, "/api/v1/directory-imports/"+preview.Batch.ID+"/apply", nil, session)
+	applyRequest.Header.Set(idempotencyHeader, "grouper-http-apply-1")
+	applyResponse := httptest.NewRecorder()
+	handler.ServeHTTP(applyResponse, applyRequest)
+	if applyResponse.Code != http.StatusOK || !strings.Contains(applyResponse.Body.String(), `"status":"applied"`) {
+		t.Fatalf("unexpected Grouper apply %d %s", applyResponse.Code, applyResponse.Body.String())
+	}
+}
+
 func newGuardServer(t *testing.T) http.Handler {
 	return newGuardServerWithLimiter(t, nil)
 }
@@ -2149,7 +2189,16 @@ func newGuardServerWithDirectory(t *testing.T, limiter guard.AttemptLimiter, oid
 	if err != nil {
 		t.Fatal(err)
 	}
-	directoryService, err := directoryexpansion.NewService(repository.NewMemoryDirectoryImportStore(), directoryTarget, foundation.NopAuditor{}, registry, directoryexpansion.ServiceConfig{OrganizationID: organization.ID})
+	directoryStore := repository.NewMemoryDirectoryImportStore()
+	groupTarget, err := directoryexpansion.NewGroupTarget(directoryStore, service, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	combinedTarget, err := directoryexpansion.NewDirectoryTarget(directoryTarget, groupTarget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directoryService, err := directoryexpansion.NewService(directoryStore, combinedTarget, foundation.NopAuditor{}, registry, directoryexpansion.ServiceConfig{OrganizationID: organization.ID})
 	if err != nil {
 		t.Fatal(err)
 	}

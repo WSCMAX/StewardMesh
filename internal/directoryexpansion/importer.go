@@ -1,6 +1,6 @@
 package directoryexpansion
 
-// Requirements: REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003.
+// Requirements: REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-005.
 // Features: integrations.protocols, identity.directory.
 
 import (
@@ -620,7 +620,7 @@ func (s *Service) planRecord(ctx context.Context, batch Batch, system SourceSyst
 			action = ActionUpdate
 		}
 	} else if plan.Found {
-		action, message = ActionConflict, "target identity already exists"
+		action, message = ActionConflict, "target record already exists"
 	}
 	itemID := digestStrings(batch.ID, record.SourceRecordID)[:32]
 	return Item{ID: itemID, OrganizationID: s.organizationID, BatchID: batch.ID, Ordinal: ordinal, Record: record,
@@ -670,11 +670,15 @@ func (s *Service) newAttempt(ctx context.Context, authentication guard.Authentic
 func (s *Service) audit(ctx context.Context, attempt Attempt, batch Batch, action, operationKey string) error {
 	actorID := attempt.ActorID
 	correlationID := attempt.CorrelationID
-	eventID := digestStrings(RequirementID, batch.ID, action, operationKey)[:32]
+	requirementID := RequirementID
+	if batch.Provider == GrouperProvider {
+		requirementID = GrouperRequirementID
+	}
+	eventID := digestStrings(requirementID, batch.ID, action, operationKey)[:32]
 	return s.auditor.Record(foundation.WithScope(ctx, foundation.Scope{OrganizationID: s.organizationID, ActorID: actorID, CorrelationID: correlationID}), foundation.AuditEvent{
 		ID: eventID, OrganizationID: s.organizationID, ActorID: actorID, CorrelationID: correlationID,
 		Action: action, ResourceType: "directory_import_batch", ResourceID: batch.ID, OccurredAt: batch.UpdatedAt,
-		Metadata: map[string]string{"requirementId": RequirementID, "provider": string(batch.Provider), "status": string(batch.Status)},
+		Metadata: map[string]string{"requirementId": requirementID, "provider": string(batch.Provider), "status": string(batch.Status)},
 	})
 }
 
@@ -685,76 +689,132 @@ func normalizeRecord(record Record) (Record, error) {
 	record.Status = strings.ToLower(strings.TrimSpace(record.Status))
 	record.IdentityKind = strings.ToLower(strings.TrimSpace(record.IdentityKind))
 	record.Department = strings.TrimSpace(record.Department)
+	record.GroupName = strings.TrimSpace(record.GroupName)
+	record.Description = strings.TrimSpace(record.Description)
+	record.GroupSourceID = strings.TrimSpace(record.GroupSourceID)
+	record.MemberSourceID = strings.TrimSpace(record.MemberSourceID)
+	record.MemberKind = MemberKind(strings.ToLower(strings.TrimSpace(string(record.MemberKind))))
 	if record.Kind == "" {
 		record.Kind = RecordIdentity
 	}
-	if record.IdentityKind == "" {
+	if record.Kind == RecordIdentity && record.IdentityKind == "" {
 		record.IdentityKind = "person"
 	}
 	if record.Status == "" {
 		record.Status = "active"
 	}
-	if record.Kind != RecordIdentity || !validSourceRecordID(record.SourceRecordID) ||
+	if !validSourceRecordID(record.SourceRecordID) ||
 		record.DisplayName == "" || !utf8.ValidString(record.DisplayName) || utf8.RuneCountInString(record.DisplayName) > 200 ||
-		(record.Status != "active" && record.Status != "inactive") ||
-		(record.IdentityKind != "person" && record.IdentityKind != "shared" && record.IdentityKind != "public" && record.IdentityKind != "lab") {
+		(record.Status != "active" && record.Status != "inactive") {
 		return Record{}, fmt.Errorf("%w: normalized record is invalid", ErrInvalidInput)
 	}
-	if record.Email != "" {
-		address, err := mail.ParseAddress(record.Email)
-		if err != nil || address.Address != record.Email || len(record.Email) > 320 {
-			return Record{}, fmt.Errorf("%w: normalized email is invalid", ErrInvalidInput)
+	switch record.Kind {
+	case RecordIdentity:
+		if record.IdentityKind != "person" && record.IdentityKind != "shared" && record.IdentityKind != "public" && record.IdentityKind != "lab" ||
+			record.GroupName != "" || record.Description != "" || record.GroupSourceID != "" || record.MemberSourceID != "" ||
+			record.MemberKind != "" || len(record.NormalizedMetadata) != 0 {
+			return Record{}, fmt.Errorf("%w: normalized identity is invalid", ErrInvalidInput)
 		}
-	}
-	if record.IdentityKind == "person" && record.Email == "" {
-		return Record{}, fmt.Errorf("%w: person email is required", ErrInvalidInput)
-	}
-	if !validBoundedText(record.Department, 200) {
-		return Record{}, fmt.Errorf("%w: normalized department is invalid", ErrInvalidInput)
-	}
-	if len(record.DirectoryAttributes) > MaximumAttributes {
-		return Record{}, fmt.Errorf("%w: normalized attributes exceed limit", ErrInvalidInput)
-	}
-	normalizedAttributes := make(map[string]string, len(record.DirectoryAttributes))
-	for key, value := range record.DirectoryAttributes {
-		key = strings.TrimSpace(key)
-		value = strings.TrimSpace(value)
-		if !providerNamePattern.MatchString(key) || !validBoundedText(value, 500) || value == "" {
-			return Record{}, fmt.Errorf("%w: normalized directory attribute is invalid", ErrInvalidInput)
+		if record.Email != "" {
+			address, err := mail.ParseAddress(record.Email)
+			if err != nil || address.Address != record.Email || len(record.Email) > 320 {
+				return Record{}, fmt.Errorf("%w: normalized email is invalid", ErrInvalidInput)
+			}
 		}
-		if _, duplicate := normalizedAttributes[key]; duplicate {
-			return Record{}, fmt.Errorf("%w: normalized directory attribute is duplicated", ErrInvalidInput)
+		if record.IdentityKind == "person" && record.Email == "" {
+			return Record{}, fmt.Errorf("%w: person email is required", ErrInvalidInput)
 		}
-		normalizedAttributes[key] = value
-	}
-	if len(normalizedAttributes) == 0 {
-		record.DirectoryAttributes = nil
-	} else {
-		record.DirectoryAttributes = normalizedAttributes
-	}
-	if len(record.GroupSourceIDs) > MaximumGroupLinks {
-		return Record{}, fmt.Errorf("%w: normalized group memberships exceed limit", ErrInvalidInput)
-	}
-	groups := make([]string, 0, len(record.GroupSourceIDs))
-	seenGroups := make(map[string]struct{}, len(record.GroupSourceIDs))
-	for _, groupID := range record.GroupSourceIDs {
-		groupID = strings.TrimSpace(groupID)
-		if !validSourceRecordID(groupID) {
-			return Record{}, fmt.Errorf("%w: normalized group membership is invalid", ErrInvalidInput)
+		if !validBoundedText(record.Department, 200) {
+			return Record{}, fmt.Errorf("%w: normalized department is invalid", ErrInvalidInput)
 		}
-		if _, duplicate := seenGroups[groupID]; duplicate {
-			return Record{}, fmt.Errorf("%w: normalized group membership is duplicated", ErrConflict)
+		if len(record.DirectoryAttributes) > MaximumAttributes {
+			return Record{}, fmt.Errorf("%w: normalized attributes exceed limit", ErrInvalidInput)
 		}
-		seenGroups[groupID] = struct{}{}
-		groups = append(groups, groupID)
+		normalizedAttributes := make(map[string]string, len(record.DirectoryAttributes))
+		for key, value := range record.DirectoryAttributes {
+			key = strings.TrimSpace(key)
+			value = strings.TrimSpace(value)
+			if !providerNamePattern.MatchString(key) || value == "" || !validBoundedText(value, 500) {
+				return Record{}, fmt.Errorf("%w: normalized directory attribute is invalid", ErrInvalidInput)
+			}
+			if _, duplicate := normalizedAttributes[key]; duplicate {
+				return Record{}, fmt.Errorf("%w: normalized directory attribute is duplicated", ErrInvalidInput)
+			}
+			normalizedAttributes[key] = value
+		}
+		if len(normalizedAttributes) == 0 {
+			record.DirectoryAttributes = nil
+		} else {
+			record.DirectoryAttributes = normalizedAttributes
+		}
+		if len(record.GroupSourceIDs) > MaximumGroupLinks {
+			return Record{}, fmt.Errorf("%w: normalized group memberships exceed limit", ErrInvalidInput)
+		}
+		groups := make([]string, 0, len(record.GroupSourceIDs))
+		seenGroups := make(map[string]struct{}, len(record.GroupSourceIDs))
+		for _, groupID := range record.GroupSourceIDs {
+			groupID = strings.TrimSpace(groupID)
+			if !validSourceRecordID(groupID) {
+				return Record{}, fmt.Errorf("%w: normalized group membership is invalid", ErrInvalidInput)
+			}
+			if _, duplicate := seenGroups[groupID]; duplicate {
+				return Record{}, fmt.Errorf("%w: normalized group membership is duplicated", ErrConflict)
+			}
+			seenGroups[groupID] = struct{}{}
+			groups = append(groups, groupID)
+		}
+		sort.Strings(groups)
+		if len(groups) == 0 {
+			record.GroupSourceIDs = nil
+		} else {
+			record.GroupSourceIDs = groups
+		}
+	case RecordGroup:
+		if record.IdentityKind != "" || record.Email != "" || record.Department != "" ||
+			len(record.DirectoryAttributes) != 0 || len(record.GroupSourceIDs) != 0 ||
+			!validRequiredGrouperText(record.GroupName, 512) || !validOptionalGrouperText(record.Description, 2000) ||
+			record.GroupSourceID != "" || record.MemberSourceID != "" || record.MemberKind != "" {
+			return Record{}, fmt.Errorf("%w: normalized group is invalid", ErrInvalidInput)
+		}
+	case RecordMembership:
+		if record.IdentityKind != "" || record.Email != "" || record.Department != "" ||
+			len(record.DirectoryAttributes) != 0 || len(record.GroupSourceIDs) != 0 ||
+			record.GroupName != "" || record.Description != "" ||
+			!validSourceRecordID(record.GroupSourceID) || !validSourceRecordID(record.MemberSourceID) ||
+			(record.MemberKind != MemberSubject && record.MemberKind != MemberGroup) {
+			return Record{}, fmt.Errorf("%w: normalized membership is invalid", ErrInvalidInput)
+		}
+	default:
+		return Record{}, fmt.Errorf("%w: normalized record kind is invalid", ErrInvalidInput)
 	}
-	sort.Strings(groups)
-	if len(groups) == 0 {
-		record.GroupSourceIDs = nil
-	} else {
-		record.GroupSourceIDs = groups
+	metadata, err := normalizeMetadata(record.NormalizedMetadata)
+	if err != nil {
+		return Record{}, err
 	}
+	record.NormalizedMetadata = metadata
 	return record, nil
+}
+
+func normalizeMetadata(values map[string]string) (map[string]string, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+	if len(values) > 16 {
+		return nil, fmt.Errorf("%w: normalized metadata exceeds field limit", ErrInvalidInput)
+	}
+	normalized := make(map[string]string, len(values))
+	for key, value := range values {
+		key = strings.ToLower(strings.TrimSpace(key))
+		value = strings.TrimSpace(value)
+		if !providerNamePattern.MatchString(key) || !validOptionalGrouperText(value, 500) {
+			return nil, fmt.Errorf("%w: normalized metadata is invalid", ErrInvalidInput)
+		}
+		if _, duplicate := normalized[key]; duplicate {
+			return nil, fmt.Errorf("%w: normalized metadata contains a duplicate key", ErrConflict)
+		}
+		normalized[key] = value
+	}
+	return normalized, nil
 }
 
 func validBoundedText(value string, maximum int) bool {
@@ -763,6 +823,22 @@ func validBoundedText(value string, maximum int) bool {
 	}
 	for _, character := range value {
 		if unicode.IsControl(character) {
+			return false
+		}
+	}
+	return true
+}
+
+func validRequiredGrouperText(value string, maximum int) bool {
+	return value != "" && validOptionalGrouperText(value, maximum)
+}
+
+func validOptionalGrouperText(value string, maximum int) bool {
+	if !utf8.ValidString(value) || utf8.RuneCountInString(value) > maximum {
+		return false
+	}
+	for _, character := range value {
+		if unicode.IsControl(character) && character != '\t' {
 			return false
 		}
 	}

@@ -1,5 +1,5 @@
 // Package config loads and validates provider-neutral StewardMesh settings.
-// Requirements: REQ-FOUNDATION-001, REQ-DIRECTORY-EXPANSION-003, REQ-STORAGE-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
+// Requirements: REQ-FOUNDATION-001, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-005, REQ-STORAGE-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
 package config
 
 import (
@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/maxlemke/stewardmesh/internal/cache"
+	"github.com/maxlemke/stewardmesh/internal/directoryexpansion"
 	"github.com/maxlemke/stewardmesh/internal/directoryexpansion/entra"
 	"github.com/maxlemke/stewardmesh/internal/storage"
 )
@@ -40,55 +41,65 @@ const (
 )
 
 type Config struct {
-	Addr                       string
-	DataDir                    string
-	BlobDir                    string
-	StorageDriver              StorageDriver
-	BlobMaximumBytes           int64
-	BlobDownloadTTL            time.Duration
-	S3Bucket                   string
-	S3Region                   string
-	S3EndpointURL              string
-	S3ForcePathStyle           bool
-	S3AccessKeyID              string
-	S3SecretAccessKey          string
-	S3SessionToken             string
-	S3RoleARN                  string
-	S3Encryption               string
-	S3KMSKeyID                 string
-	DatabaseURL                string
-	RepositoryDriver           RepositoryDriver
-	CacheDriver                CacheDriver
-	CacheURL                   string
-	CacheKeySecret             string
-	OIDCIssuerURL              string
-	OIDCClientID               string
-	OIDCClientSecret           string
-	OIDCRedirectURL            string
-	OIDCTransactionSecret      string
-	OIDCAdministratorClaim     string
-	OIDCAdministratorValues    []string
-	OIDCRequireVerifiedEmail   bool
-	SAMLIDPMetadataURL         string
-	SAMLEntityID               string
-	SAMLSPCertificateFile      string
-	SAMLSPPrivateKeyFile       string
-	SAMLEmailAttribute         string
-	SAMLDisplayNameAttribute   string
-	SAMLAdministratorAttribute string
-	SAMLAdministratorValues    []string
-	EntraSourceSystemID        string
-	EntraTenantID              string
-	EntraClientID              string
-	EntraClientSecret          string
-	AllowedOrigin              string
-	OrganizationID             string
-	OrganizationName           string
-	BootstrapToken             string
-	SessionCookieSecure        bool
-	SessionTTL                 time.Duration
-	SeedSynthetic              bool
-	validationError            error
+	Addr                        string
+	DataDir                     string
+	BlobDir                     string
+	StorageDriver               StorageDriver
+	BlobMaximumBytes            int64
+	BlobDownloadTTL             time.Duration
+	S3Bucket                    string
+	S3Region                    string
+	S3EndpointURL               string
+	S3ForcePathStyle            bool
+	S3AccessKeyID               string
+	S3SecretAccessKey           string
+	S3SessionToken              string
+	S3RoleARN                   string
+	S3Encryption                string
+	S3KMSKeyID                  string
+	DatabaseURL                 string
+	RepositoryDriver            RepositoryDriver
+	CacheDriver                 CacheDriver
+	CacheURL                    string
+	CacheKeySecret              string
+	OIDCIssuerURL               string
+	OIDCClientID                string
+	OIDCClientSecret            string
+	OIDCRedirectURL             string
+	OIDCTransactionSecret       string
+	OIDCAdministratorClaim      string
+	OIDCAdministratorValues     []string
+	OIDCRequireVerifiedEmail    bool
+	SAMLIDPMetadataURL          string
+	SAMLEntityID                string
+	SAMLSPCertificateFile       string
+	SAMLSPPrivateKeyFile        string
+	SAMLEmailAttribute          string
+	SAMLDisplayNameAttribute    string
+	SAMLAdministratorAttribute  string
+	SAMLAdministratorValues     []string
+	EntraSourceSystemID         string
+	EntraTenantID               string
+	EntraClientID               string
+	EntraClientSecret           string
+	AllowedOrigin               string
+	OrganizationID              string
+	OrganizationName            string
+	BootstrapToken              string
+	SessionCookieSecure         bool
+	SessionTTL                  time.Duration
+	SeedSynthetic               bool
+	GrouperURL                  string
+	GrouperSourceSystemID       string
+	GrouperUsername             string
+	GrouperPassword             string
+	GrouperBearerToken          string
+	GrouperConfigRevision       string
+	GrouperPageSize             int
+	GrouperMaximumResponseBytes int64
+	GrouperTimeout              time.Duration
+	GrouperAllowPrivateNetwork  bool
+	validationError             error
 }
 
 func Load() (Config, error) {
@@ -111,60 +122,85 @@ func FromEnv() Config {
 	blobMaximumBytes, blobSizeErr := envInt64("STEWARDMESH_BLOB_MAXIMUM_BYTES", 25<<20)
 	s3ForcePathStyle, s3PathStyleErr := envBool("STEWARDMESH_S3_FORCE_PATH_STYLE", false)
 	oidcRequireVerifiedEmail, oidcVerifiedEmailErr := envBool("STEWARDMESH_OIDC_REQUIRE_VERIFIED_EMAIL", true)
+	grouperAllowPrivate, grouperPrivateErr := envBool("STEWARDMESH_GROUPER_ALLOW_PRIVATE_NETWORK", false)
+	grouperTimeout, grouperTimeoutErr := envDuration("STEWARDMESH_GROUPER_TIMEOUT", directoryexpansion.DefaultGrouperTimeout)
+	grouperPageSize, grouperPageErr := envInt64("STEWARDMESH_GROUPER_PAGE_SIZE", directoryexpansion.DefaultGrouperPageSize)
+	grouperResponseBytes, grouperResponseErr := envInt64("STEWARDMESH_GROUPER_MAXIMUM_RESPONSE_BYTES", directoryexpansion.DefaultGrouperResponseBytes)
+	grouperURL := strings.TrimSpace(os.Getenv("STEWARDMESH_GROUPER_URL"))
+	grouperSourceSystemID := strings.TrimSpace(os.Getenv("STEWARDMESH_GROUPER_SOURCE_SYSTEM_ID"))
+	grouperRevision := strings.TrimSpace(os.Getenv("STEWARDMESH_GROUPER_CONFIG_REVISION"))
+	if grouperURL != "" {
+		if grouperSourceSystemID == "" {
+			grouperSourceSystemID = "grouper-primary"
+		}
+		if grouperRevision == "" {
+			grouperRevision = "v1"
+		}
+	}
 	s3Encryption := os.Getenv("STEWARDMESH_S3_ENCRYPTION")
 	if storageDriver == StorageDriverS3 && s3Encryption == "" {
 		s3Encryption = "AES256"
 	}
 	return Config{
-		Addr:                       envOr("STEWARDMESH_ADDR", "127.0.0.1:8080"),
-		DataDir:                    envOr("STEWARDMESH_DATA_DIR", "./data"),
-		BlobDir:                    envOr("STEWARDMESH_BLOB_DIR", "./storage"),
-		StorageDriver:              storageDriver,
-		BlobMaximumBytes:           blobMaximumBytes,
-		BlobDownloadTTL:            blobDownloadTTL,
-		S3Bucket:                   os.Getenv("STEWARDMESH_S3_BUCKET"),
-		S3Region:                   os.Getenv("STEWARDMESH_S3_REGION"),
-		S3EndpointURL:              os.Getenv("STEWARDMESH_S3_ENDPOINT_URL"),
-		S3ForcePathStyle:           s3ForcePathStyle,
-		S3AccessKeyID:              os.Getenv("STEWARDMESH_S3_ACCESS_KEY_ID"),
-		S3SecretAccessKey:          os.Getenv("STEWARDMESH_S3_SECRET_ACCESS_KEY"),
-		S3SessionToken:             os.Getenv("STEWARDMESH_S3_SESSION_TOKEN"),
-		S3RoleARN:                  os.Getenv("STEWARDMESH_S3_ROLE_ARN"),
-		S3Encryption:               s3Encryption,
-		S3KMSKeyID:                 os.Getenv("STEWARDMESH_S3_KMS_KEY_ID"),
-		DatabaseURL:                envOr("STEWARDMESH_DATABASE_URL", ""),
-		RepositoryDriver:           RepositoryDriver(envOr("STEWARDMESH_REPOSITORY_DRIVER", string(RepositoryDriverPostgres))),
-		CacheDriver:                CacheDriver(envOr("STEWARDMESH_CACHE_DRIVER", string(CacheDriverNone))),
-		CacheURL:                   os.Getenv("STEWARDMESH_CACHE_URL"),
-		CacheKeySecret:             os.Getenv("STEWARDMESH_CACHE_KEY_SECRET"),
-		OIDCIssuerURL:              os.Getenv("STEWARDMESH_OIDC_ISSUER_URL"),
-		OIDCClientID:               os.Getenv("STEWARDMESH_OIDC_CLIENT_ID"),
-		OIDCClientSecret:           os.Getenv("STEWARDMESH_OIDC_CLIENT_SECRET"),
-		OIDCRedirectURL:            os.Getenv("STEWARDMESH_OIDC_REDIRECT_URL"),
-		OIDCTransactionSecret:      os.Getenv("STEWARDMESH_OIDC_TRANSACTION_SECRET"),
-		OIDCAdministratorClaim:     os.Getenv("STEWARDMESH_OIDC_ADMINISTRATOR_CLAIM"),
-		OIDCAdministratorValues:    envCSV("STEWARDMESH_OIDC_ADMINISTRATOR_VALUES"),
-		OIDCRequireVerifiedEmail:   oidcRequireVerifiedEmail,
-		SAMLIDPMetadataURL:         os.Getenv("STEWARDMESH_SAML_IDP_METADATA_URL"),
-		SAMLEntityID:               os.Getenv("STEWARDMESH_SAML_ENTITY_ID"),
-		SAMLSPCertificateFile:      os.Getenv("STEWARDMESH_SAML_SP_CERTIFICATE_FILE"),
-		SAMLSPPrivateKeyFile:       os.Getenv("STEWARDMESH_SAML_SP_PRIVATE_KEY_FILE"),
-		SAMLEmailAttribute:         os.Getenv("STEWARDMESH_SAML_EMAIL_ATTRIBUTE"),
-		SAMLDisplayNameAttribute:   os.Getenv("STEWARDMESH_SAML_DISPLAY_NAME_ATTRIBUTE"),
-		SAMLAdministratorAttribute: os.Getenv("STEWARDMESH_SAML_ADMINISTRATOR_ATTRIBUTE"),
-		SAMLAdministratorValues:    envCSV("STEWARDMESH_SAML_ADMINISTRATOR_VALUES"),
-		EntraSourceSystemID:        envOr("STEWARDMESH_ENTRA_SOURCE_SYSTEM_ID", "entra"),
-		EntraTenantID:              os.Getenv("STEWARDMESH_ENTRA_TENANT_ID"),
-		EntraClientID:              os.Getenv("STEWARDMESH_ENTRA_CLIENT_ID"),
-		EntraClientSecret:          os.Getenv("STEWARDMESH_ENTRA_CLIENT_SECRET"),
-		AllowedOrigin:              allowedOrigin,
-		OrganizationID:             envOr("STEWARDMESH_ORGANIZATION_ID", "local-organization"),
-		OrganizationName:           envOr("STEWARDMESH_ORGANIZATION_NAME", "StewardMesh Local Organization"),
-		BootstrapToken:             os.Getenv("STEWARDMESH_BOOTSTRAP_TOKEN"),
-		SessionCookieSecure:        sessionCookieSecure,
-		SessionTTL:                 sessionTTL,
-		SeedSynthetic:              envBoolDefault("STEWARDMESH_SEED_SYNTHETIC"),
-		validationError:            errors.Join(secureErr, ttlErr, blobTTLErr, blobSizeErr, s3PathStyleErr, oidcVerifiedEmailErr),
+		Addr:                        envOr("STEWARDMESH_ADDR", "127.0.0.1:8080"),
+		DataDir:                     envOr("STEWARDMESH_DATA_DIR", "./data"),
+		BlobDir:                     envOr("STEWARDMESH_BLOB_DIR", "./storage"),
+		StorageDriver:               storageDriver,
+		BlobMaximumBytes:            blobMaximumBytes,
+		BlobDownloadTTL:             blobDownloadTTL,
+		S3Bucket:                    os.Getenv("STEWARDMESH_S3_BUCKET"),
+		S3Region:                    os.Getenv("STEWARDMESH_S3_REGION"),
+		S3EndpointURL:               os.Getenv("STEWARDMESH_S3_ENDPOINT_URL"),
+		S3ForcePathStyle:            s3ForcePathStyle,
+		S3AccessKeyID:               os.Getenv("STEWARDMESH_S3_ACCESS_KEY_ID"),
+		S3SecretAccessKey:           os.Getenv("STEWARDMESH_S3_SECRET_ACCESS_KEY"),
+		S3SessionToken:              os.Getenv("STEWARDMESH_S3_SESSION_TOKEN"),
+		S3RoleARN:                   os.Getenv("STEWARDMESH_S3_ROLE_ARN"),
+		S3Encryption:                s3Encryption,
+		S3KMSKeyID:                  os.Getenv("STEWARDMESH_S3_KMS_KEY_ID"),
+		DatabaseURL:                 envOr("STEWARDMESH_DATABASE_URL", ""),
+		RepositoryDriver:            RepositoryDriver(envOr("STEWARDMESH_REPOSITORY_DRIVER", string(RepositoryDriverPostgres))),
+		CacheDriver:                 CacheDriver(envOr("STEWARDMESH_CACHE_DRIVER", string(CacheDriverNone))),
+		CacheURL:                    os.Getenv("STEWARDMESH_CACHE_URL"),
+		CacheKeySecret:              os.Getenv("STEWARDMESH_CACHE_KEY_SECRET"),
+		OIDCIssuerURL:               os.Getenv("STEWARDMESH_OIDC_ISSUER_URL"),
+		OIDCClientID:                os.Getenv("STEWARDMESH_OIDC_CLIENT_ID"),
+		OIDCClientSecret:            os.Getenv("STEWARDMESH_OIDC_CLIENT_SECRET"),
+		OIDCRedirectURL:             os.Getenv("STEWARDMESH_OIDC_REDIRECT_URL"),
+		OIDCTransactionSecret:       os.Getenv("STEWARDMESH_OIDC_TRANSACTION_SECRET"),
+		OIDCAdministratorClaim:      os.Getenv("STEWARDMESH_OIDC_ADMINISTRATOR_CLAIM"),
+		OIDCAdministratorValues:     envCSV("STEWARDMESH_OIDC_ADMINISTRATOR_VALUES"),
+		OIDCRequireVerifiedEmail:    oidcRequireVerifiedEmail,
+		SAMLIDPMetadataURL:          os.Getenv("STEWARDMESH_SAML_IDP_METADATA_URL"),
+		SAMLEntityID:                os.Getenv("STEWARDMESH_SAML_ENTITY_ID"),
+		SAMLSPCertificateFile:       os.Getenv("STEWARDMESH_SAML_SP_CERTIFICATE_FILE"),
+		SAMLSPPrivateKeyFile:        os.Getenv("STEWARDMESH_SAML_SP_PRIVATE_KEY_FILE"),
+		SAMLEmailAttribute:          os.Getenv("STEWARDMESH_SAML_EMAIL_ATTRIBUTE"),
+		SAMLDisplayNameAttribute:    os.Getenv("STEWARDMESH_SAML_DISPLAY_NAME_ATTRIBUTE"),
+		SAMLAdministratorAttribute:  os.Getenv("STEWARDMESH_SAML_ADMINISTRATOR_ATTRIBUTE"),
+		SAMLAdministratorValues:     envCSV("STEWARDMESH_SAML_ADMINISTRATOR_VALUES"),
+		EntraSourceSystemID:         envOr("STEWARDMESH_ENTRA_SOURCE_SYSTEM_ID", "entra"),
+		EntraTenantID:               os.Getenv("STEWARDMESH_ENTRA_TENANT_ID"),
+		EntraClientID:               os.Getenv("STEWARDMESH_ENTRA_CLIENT_ID"),
+		EntraClientSecret:           os.Getenv("STEWARDMESH_ENTRA_CLIENT_SECRET"),
+		AllowedOrigin:               allowedOrigin,
+		OrganizationID:              envOr("STEWARDMESH_ORGANIZATION_ID", "local-organization"),
+		OrganizationName:            envOr("STEWARDMESH_ORGANIZATION_NAME", "StewardMesh Local Organization"),
+		BootstrapToken:              os.Getenv("STEWARDMESH_BOOTSTRAP_TOKEN"),
+		SessionCookieSecure:         sessionCookieSecure,
+		SessionTTL:                  sessionTTL,
+		SeedSynthetic:               envBoolDefault("STEWARDMESH_SEED_SYNTHETIC"),
+		GrouperURL:                  grouperURL,
+		GrouperSourceSystemID:       grouperSourceSystemID,
+		GrouperUsername:             os.Getenv("STEWARDMESH_GROUPER_USERNAME"),
+		GrouperPassword:             os.Getenv("STEWARDMESH_GROUPER_PASSWORD"),
+		GrouperBearerToken:          os.Getenv("STEWARDMESH_GROUPER_BEARER_TOKEN"),
+		GrouperConfigRevision:       grouperRevision,
+		GrouperPageSize:             int(grouperPageSize),
+		GrouperMaximumResponseBytes: grouperResponseBytes,
+		GrouperTimeout:              grouperTimeout,
+		GrouperAllowPrivateNetwork:  grouperAllowPrivate,
+		validationError:             errors.Join(secureErr, ttlErr, blobTTLErr, blobSizeErr, s3PathStyleErr, oidcVerifiedEmailErr, grouperPrivateErr, grouperTimeoutErr, grouperPageErr, grouperResponseErr),
 	}
 }
 
@@ -262,6 +298,9 @@ func (c Config) Validate() error {
 	if err := c.validateEntra(); err != nil {
 		return err
 	}
+	if err := c.validateGrouper(); err != nil {
+		return err
+	}
 	if c.SessionTTL < 15*time.Minute || c.SessionTTL > 24*time.Hour {
 		return errors.New("STEWARDMESH_SESSION_TTL must be between 15m and 24h")
 	}
@@ -278,6 +317,30 @@ func (c Config) Validate() error {
 		if len(c.BootstrapToken) < 32 {
 			return errors.New("a shared listener requires a 32-byte STEWARDMESH_BOOTSTRAP_TOKEN")
 		}
+	}
+	return nil
+}
+
+func (c Config) GrouperEnabled() bool { return strings.TrimSpace(c.GrouperURL) != "" }
+
+func (c Config) GrouperConnectorConfig() directoryexpansion.GrouperConnectorConfig {
+	return directoryexpansion.GrouperConnectorConfig{SourceSystemID: c.GrouperSourceSystemID, BaseURL: c.GrouperURL,
+		Username: c.GrouperUsername, Password: c.GrouperPassword, BearerToken: c.GrouperBearerToken,
+		ConfigRevision: c.GrouperConfigRevision, PageSize: c.GrouperPageSize,
+		MaximumResponseBytes: c.GrouperMaximumResponseBytes, Timeout: c.GrouperTimeout,
+		AllowPrivateNetwork: c.GrouperAllowPrivateNetwork}
+}
+
+func (c Config) validateGrouper() error {
+	if !c.GrouperEnabled() {
+		if c.GrouperSourceSystemID != "" || c.GrouperUsername != "" || c.GrouperPassword != "" || c.GrouperBearerToken != "" ||
+			c.GrouperConfigRevision != "" || c.GrouperAllowPrivateNetwork {
+			return errors.New("STEWARDMESH_GROUPER_URL is required when Grouper settings are configured")
+		}
+		return nil
+	}
+	if _, err := directoryexpansion.NewGrouperConnector(c.GrouperConnectorConfig()); err != nil {
+		return errors.New("Grouper connector settings are invalid")
 	}
 	return nil
 }

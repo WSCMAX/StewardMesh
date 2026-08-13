@@ -1,6 +1,6 @@
 package repository
 
-// Requirements: REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003.
+// Requirements: REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-005.
 // Features: integrations.protocols, identity.directory.
 
 import (
@@ -19,16 +19,153 @@ type MemoryDirectoryImportStore struct {
 	attempts map[string][]directoryexpansion.Attempt
 	idem     map[string]directoryexpansion.Attempt
 	mappings map[string]directoryexpansion.Mapping
+	groups   map[string]directoryexpansion.ManagedGroup
+	members  map[string]directoryexpansion.ManagedMembership
 }
 
 var _ directoryexpansion.Store = (*MemoryDirectoryImportStore)(nil)
+var _ directoryexpansion.GroupTargetStore = (*MemoryDirectoryImportStore)(nil)
 
 func NewMemoryDirectoryImportStore() *MemoryDirectoryImportStore {
 	return &MemoryDirectoryImportStore{
 		batches: make(map[string]directoryexpansion.Batch), items: make(map[string][]directoryexpansion.Item),
 		attempts: make(map[string][]directoryexpansion.Attempt), idem: make(map[string]directoryexpansion.Attempt),
-		mappings: make(map[string]directoryexpansion.Mapping),
+		mappings: make(map[string]directoryexpansion.Mapping), groups: make(map[string]directoryexpansion.ManagedGroup),
+		members: make(map[string]directoryexpansion.ManagedMembership),
 	}
+}
+
+func (s *MemoryDirectoryImportStore) GetManagedGroup(_ context.Context, organizationID, id string) (directoryexpansion.ManagedGroup, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	group, ok := s.groups[id]
+	if !ok || group.OrganizationID != organizationID {
+		return directoryexpansion.ManagedGroup{}, directoryexpansion.ErrNotFound
+	}
+	return cloneManagedGroup(group), nil
+}
+
+func (s *MemoryDirectoryImportStore) CreateManagedGroup(_ context.Context, group directoryexpansion.ManagedGroup) (directoryexpansion.ManagedGroup, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.groups[group.ID]; exists || managedGroupSourceExists(s.groups, group) {
+		return directoryexpansion.ManagedGroup{}, directoryexpansion.ErrConflict
+	}
+	s.groups[group.ID] = cloneManagedGroup(group)
+	return cloneManagedGroup(group), nil
+}
+
+func (s *MemoryDirectoryImportStore) ReconcileManagedGroup(_ context.Context, group directoryexpansion.ManagedGroup, expectedRevision uint64) (directoryexpansion.ManagedGroup, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	existing, ok := s.groups[group.ID]
+	if !ok || existing.OrganizationID != group.OrganizationID {
+		return directoryexpansion.ManagedGroup{}, directoryexpansion.ErrNotFound
+	}
+	if existing.Revision != expectedRevision || group.Revision != expectedRevision+1 ||
+		existing.SourceSystemID != group.SourceSystemID || existing.SourceRecordID != group.SourceRecordID {
+		return directoryexpansion.ManagedGroup{}, directoryexpansion.ErrConflict
+	}
+	s.groups[group.ID] = cloneManagedGroup(group)
+	return cloneManagedGroup(group), nil
+}
+
+func (s *MemoryDirectoryImportStore) DeleteManagedGroup(_ context.Context, organizationID, id string, expectedRevision uint64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	existing, ok := s.groups[id]
+	if !ok || existing.OrganizationID != organizationID {
+		return directoryexpansion.ErrNotFound
+	}
+	if existing.Revision != expectedRevision {
+		return directoryexpansion.ErrConflict
+	}
+	delete(s.groups, id)
+	for membershipID, membership := range s.members {
+		if membership.OrganizationID == organizationID && membership.GroupID == id {
+			delete(s.members, membershipID)
+		}
+	}
+	return nil
+}
+
+func (s *MemoryDirectoryImportStore) GetManagedMembership(_ context.Context, organizationID, id string) (directoryexpansion.ManagedMembership, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	membership, ok := s.members[id]
+	if !ok || membership.OrganizationID != organizationID {
+		return directoryexpansion.ManagedMembership{}, directoryexpansion.ErrNotFound
+	}
+	return cloneManagedMembership(membership), nil
+}
+
+func (s *MemoryDirectoryImportStore) CreateManagedMembership(_ context.Context, membership directoryexpansion.ManagedMembership) (directoryexpansion.ManagedMembership, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.members[membership.ID]; exists || managedMembershipSourceExists(s.members, membership) {
+		return directoryexpansion.ManagedMembership{}, directoryexpansion.ErrConflict
+	}
+	parent, exists := s.groups[membership.GroupID]
+	if !exists || parent.OrganizationID != membership.OrganizationID {
+		return directoryexpansion.ManagedMembership{}, directoryexpansion.ErrConflict
+	}
+	s.members[membership.ID] = cloneManagedMembership(membership)
+	return cloneManagedMembership(membership), nil
+}
+
+func (s *MemoryDirectoryImportStore) ReconcileManagedMembership(_ context.Context, membership directoryexpansion.ManagedMembership, expectedRevision uint64) (directoryexpansion.ManagedMembership, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	existing, ok := s.members[membership.ID]
+	if !ok || existing.OrganizationID != membership.OrganizationID {
+		return directoryexpansion.ManagedMembership{}, directoryexpansion.ErrNotFound
+	}
+	if existing.Revision != expectedRevision || membership.Revision != expectedRevision+1 ||
+		existing.SourceSystemID != membership.SourceSystemID || existing.SourceRecordID != membership.SourceRecordID {
+		return directoryexpansion.ManagedMembership{}, directoryexpansion.ErrConflict
+	}
+	s.members[membership.ID] = cloneManagedMembership(membership)
+	return cloneManagedMembership(membership), nil
+}
+
+func (s *MemoryDirectoryImportStore) DeleteManagedMembership(_ context.Context, organizationID, id string, expectedRevision uint64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	existing, ok := s.members[id]
+	if !ok || existing.OrganizationID != organizationID {
+		return directoryexpansion.ErrNotFound
+	}
+	if existing.Revision != expectedRevision {
+		return directoryexpansion.ErrConflict
+	}
+	delete(s.members, id)
+	return nil
+}
+
+func (s *MemoryDirectoryImportStore) ListManagedGroups(_ context.Context, organizationID string) ([]directoryexpansion.ManagedGroup, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	groups := make([]directoryexpansion.ManagedGroup, 0)
+	for _, group := range s.groups {
+		if group.OrganizationID == organizationID {
+			groups = append(groups, cloneManagedGroup(group))
+		}
+	}
+	sort.Slice(groups, func(i, j int) bool { return groups[i].ID < groups[j].ID })
+	return groups, nil
+}
+
+func (s *MemoryDirectoryImportStore) ListManagedMemberships(_ context.Context, organizationID string) ([]directoryexpansion.ManagedMembership, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	memberships := make([]directoryexpansion.ManagedMembership, 0)
+	for _, membership := range s.members {
+		if membership.OrganizationID == organizationID {
+			memberships = append(memberships, cloneManagedMembership(membership))
+		}
+	}
+	sort.Slice(memberships, func(i, j int) bool { return memberships[i].ID < memberships[j].ID })
+	return memberships, nil
 }
 
 func (s *MemoryDirectoryImportStore) FindAttempt(_ context.Context, organizationID string, operation directoryexpansion.Operation, hash string) (directoryexpansion.Attempt, error) {
@@ -269,6 +406,7 @@ func cloneRecord(record directoryexpansion.Record) directoryexpansion.Record {
 	if record.GroupSourceIDs != nil {
 		record.GroupSourceIDs = append([]string(nil), record.GroupSourceIDs...)
 	}
+	record.NormalizedMetadata = cloneDirectoryMetadata(record.NormalizedMetadata)
 	return record
 }
 func cloneAttempts(attempts []directoryexpansion.Attempt) []directoryexpansion.Attempt {
@@ -299,4 +437,45 @@ func cloneBatch(batch directoryexpansion.Batch) directoryexpansion.Batch {
 		batch.CompletedAt = &completedAt
 	}
 	return batch
+}
+
+func managedGroupSourceExists(groups map[string]directoryexpansion.ManagedGroup, candidate directoryexpansion.ManagedGroup) bool {
+	for _, group := range groups {
+		if group.OrganizationID == candidate.OrganizationID && group.SourceSystemID == candidate.SourceSystemID &&
+			group.SourceRecordID == candidate.SourceRecordID {
+			return true
+		}
+	}
+	return false
+}
+
+func managedMembershipSourceExists(memberships map[string]directoryexpansion.ManagedMembership, candidate directoryexpansion.ManagedMembership) bool {
+	for _, membership := range memberships {
+		if membership.OrganizationID == candidate.OrganizationID && membership.SourceSystemID == candidate.SourceSystemID &&
+			membership.SourceRecordID == candidate.SourceRecordID {
+			return true
+		}
+	}
+	return false
+}
+
+func cloneManagedGroup(group directoryexpansion.ManagedGroup) directoryexpansion.ManagedGroup {
+	group.Metadata = cloneDirectoryMetadata(group.Metadata)
+	return group
+}
+
+func cloneManagedMembership(membership directoryexpansion.ManagedMembership) directoryexpansion.ManagedMembership {
+	membership.Metadata = cloneDirectoryMetadata(membership.Metadata)
+	return membership
+}
+
+func cloneDirectoryMetadata(values map[string]string) map[string]string {
+	if len(values) == 0 {
+		return nil
+	}
+	result := make(map[string]string, len(values))
+	for key, value := range values {
+		result[key] = value
+	}
+	return result
 }

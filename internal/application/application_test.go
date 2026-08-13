@@ -1,13 +1,15 @@
 package application
 
-// Requirements: REQ-FOUNDATION-001, REQ-DIRECTORY-EXPANSION-003, REQ-PATTERNS-001, REQ-STORAGE-001, REQ-HORIZON-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001.
+// Requirements: REQ-FOUNDATION-001, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-005, REQ-PATTERNS-001, REQ-STORAGE-001, REQ-HORIZON-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001.
 // Features: lifecycle.planning, templates.schemas.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -16,6 +18,8 @@ import (
 	"time"
 
 	"github.com/maxlemke/stewardmesh/internal/config"
+	"github.com/maxlemke/stewardmesh/internal/directoryexpansion"
+	"github.com/maxlemke/stewardmesh/internal/grouperfixture"
 )
 
 func TestNewBuildsReusableMemoryApplication(t *testing.T) {
@@ -66,6 +70,93 @@ func TestNewRegistersOptionalMicrosoftEntraConnectorWithoutStartupNetworkWrites(
 	}
 	if err := app.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestNewWiresConfiguredGrouperThroughPreviewApplyAndGraph(t *testing.T) {
+	const token = "application-fixture-token"
+	fixture, err := grouperfixture.New(token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	create := httptest.NewRequest(http.MethodPost, "/fixture/groups", bytes.NewBufferString(`{"id":"researchers","name":"app:researchers","displayName":"Researchers","active":true}`))
+	create.Header.Set("Authorization", "Bearer "+token)
+	create.Header.Set("Content-Type", "application/json")
+	created := httptest.NewRecorder()
+	fixture.Handler().ServeHTTP(created, create)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create fixture group: %d %s", created.Code, created.Body.String())
+	}
+	provider := httptest.NewServer(fixture.Handler())
+	defer provider.Close()
+
+	cfg := memoryConfiguration(t)
+	cfg.GrouperURL = provider.URL + "/grouper-ws/scim/v2"
+	cfg.GrouperSourceSystemID = "application-grouper"
+	cfg.GrouperBearerToken = token
+	cfg.GrouperConfigRevision = "test-v1"
+	cfg.GrouperAllowPrivateNetwork = true
+	app, err := New(context.Background(), cfg, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := app.Close(); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	bootstrapPayload := bytes.NewBufferString(`{"username":"administrator","email":"administrator@example.test","displayName":"Administrator","password":"correct horse battery staple"}`)
+	bootstrapRequest := httptest.NewRequest(http.MethodPost, "/api/v1/auth/bootstrap", bootstrapPayload)
+	bootstrapRequest.Header.Set("Content-Type", "application/json")
+	bootstrapRequest.Header.Set("Origin", cfg.AllowedOrigin)
+	bootstrapResponse := httptest.NewRecorder()
+	app.Handler().ServeHTTP(bootstrapResponse, bootstrapRequest)
+	var credentials struct {
+		CSRFToken string `json:"csrfToken"`
+	}
+	if bootstrapResponse.Code != http.StatusCreated || json.Unmarshal(bootstrapResponse.Body.Bytes(), &credentials) != nil ||
+		credentials.CSRFToken == "" || len(bootstrapResponse.Result().Cookies()) != 1 {
+		t.Fatalf("bootstrap application administrator: %d %s", bootstrapResponse.Code, bootstrapResponse.Body.String())
+	}
+	cookie := bootstrapResponse.Result().Cookies()[0]
+	authenticated := func(method, path string, body *bytes.Buffer, idempotencyKey string) *http.Request {
+		var requestBody io.Reader
+		if body != nil {
+			requestBody = body
+		}
+		request := httptest.NewRequest(method, path, requestBody)
+		request.AddCookie(cookie)
+		if method != http.MethodGet {
+			request.Header.Set("Content-Type", "application/json")
+			request.Header.Set("Origin", cfg.AllowedOrigin)
+			request.Header.Set("X-CSRF-Token", credentials.CSRFToken)
+		}
+		if idempotencyKey != "" {
+			request.Header.Set("Idempotency-Key", idempotencyKey)
+		}
+		return request
+	}
+
+	previewResponse := httptest.NewRecorder()
+	app.Handler().ServeHTTP(previewResponse, authenticated(http.MethodPost, "/api/v1/directory-imports/preview",
+		bytes.NewBufferString(`{"sourceSystemId":"application-grouper"}`), "application-grouper-preview"))
+	var preview directoryexpansion.OperationResult
+	if previewResponse.Code != http.StatusCreated || json.Unmarshal(previewResponse.Body.Bytes(), &preview) != nil ||
+		preview.Batch.Provider != directoryexpansion.GrouperProvider || preview.Batch.Counts.Created != 1 {
+		t.Fatalf("preview configured Grouper: %d %s", previewResponse.Code, previewResponse.Body.String())
+	}
+	applyResponse := httptest.NewRecorder()
+	app.Handler().ServeHTTP(applyResponse, authenticated(http.MethodPost, "/api/v1/directory-imports/"+preview.Batch.ID+"/apply", nil, "application-grouper-apply"))
+	if applyResponse.Code != http.StatusOK {
+		t.Fatalf("apply configured Grouper: %d %s", applyResponse.Code, applyResponse.Body.String())
+	}
+	graphResponse := httptest.NewRecorder()
+	app.Handler().ServeHTTP(graphResponse, authenticated(http.MethodGet, "/api/v1/graph", nil, ""))
+	var graph directoryexpansion.Graph
+	if graphResponse.Code != http.StatusOK || json.Unmarshal(graphResponse.Body.Bytes(), &graph) != nil ||
+		len(graph.Nodes) != 1 || graph.Nodes[0].Kind != "group" || graph.Nodes[0].Label != "Researchers" {
+		t.Fatalf("read configured Grouper graph: %d %s", graphResponse.Code, graphResponse.Body.String())
 	}
 }
 
@@ -213,5 +304,15 @@ func memoryConfiguration(t *testing.T) config.Config {
 	cfg.SessionTTL = time.Hour
 	cfg.OrganizationID = "application-test"
 	cfg.OrganizationName = "Application Test"
+	cfg.GrouperURL = ""
+	cfg.GrouperSourceSystemID = ""
+	cfg.GrouperUsername = ""
+	cfg.GrouperPassword = ""
+	cfg.GrouperBearerToken = ""
+	cfg.GrouperConfigRevision = ""
+	cfg.GrouperPageSize = directoryexpansion.DefaultGrouperPageSize
+	cfg.GrouperMaximumResponseBytes = directoryexpansion.DefaultGrouperResponseBytes
+	cfg.GrouperTimeout = directoryexpansion.DefaultGrouperTimeout
+	cfg.GrouperAllowPrivateNetwork = false
 	return cfg
 }

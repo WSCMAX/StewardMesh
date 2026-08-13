@@ -1,6 +1,6 @@
 // Package application constructs StewardMesh's transport-neutral HTTP
 // application and owns the lifecycle of its shared runtime dependencies.
-// Requirements: REQ-FOUNDATION-001, REQ-ATLAS-001, REQ-ATLAS-CODES-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-STACK-001, REQ-HORIZON-001, REQ-SIGNALS-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001.
+// Requirements: REQ-FOUNDATION-001, REQ-ATLAS-001, REQ-ATLAS-CODES-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-005, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-STACK-001, REQ-HORIZON-001, REQ-SIGNALS-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001.
 package application
 
 import (
@@ -194,6 +194,14 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 		}
 		directoryConnectors = append(directoryConnectors, entraConnector)
 	}
+	if cfg.GrouperEnabled() {
+		grouperConnector, connectorErr := directoryexpansion.NewGrouperConnector(cfg.GrouperConnectorConfig())
+		cfg.GrouperPassword, cfg.GrouperBearerToken = "", ""
+		if connectorErr != nil {
+			return fail(fmt.Errorf("initialize Grouper connector: %w", connectorErr))
+		}
+		directoryConnectors = append(directoryConnectors, grouperConnector)
+	}
 	directoryRegistry, err := directoryexpansion.NewRegistry(directoryConnectors...)
 	if err != nil {
 		return fail(fmt.Errorf("initialize directory connector registry: %w", err))
@@ -202,11 +210,23 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 	if err != nil {
 		return fail(fmt.Errorf("initialize directory People target: %w", err))
 	}
-	directoryService, err := directoryexpansion.NewService(runtime.directoryImportStore, directoryTarget, runtime.auditor, directoryRegistry, directoryexpansion.ServiceConfig{
+	groupTarget, err := directoryexpansion.NewGroupTarget(runtime.directoryImportStore, guardService, nil)
+	if err != nil {
+		return fail(fmt.Errorf("initialize directory group target: %w", err))
+	}
+	combinedDirectoryTarget, err := directoryexpansion.NewDirectoryTarget(directoryTarget, groupTarget)
+	if err != nil {
+		return fail(fmt.Errorf("initialize directory target: %w", err))
+	}
+	directoryService, err := directoryexpansion.NewService(runtime.directoryImportStore, combinedDirectoryTarget, runtime.auditor, directoryRegistry, directoryexpansion.ServiceConfig{
 		OrganizationID: cfg.OrganizationID,
 	})
 	if err != nil {
 		return fail(fmt.Errorf("initialize directory imports: %w", err))
+	}
+	directoryGraph, err := directoryexpansion.NewManagedGraphStore(runtime.directoryImportStore, cfg.OrganizationID)
+	if err != nil {
+		return fail(fmt.Errorf("initialize directory graph: %w", err))
 	}
 	ledgerService, err := ledger.NewService(runtime.ledgerStore, ledgerReferenceValidator{
 		atlas: atlasService, vault: vaultService, people: runtime.peopleStore, organizationID: cfg.OrganizationID,
@@ -244,6 +264,7 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 		AtlasLabels:         atlasLabelsService,
 		People:              peopleService,
 		DirectoryImports:    directoryService,
+		Graph:               directoryGraph,
 		Threads:             threadsService,
 		Vault:               vaultService,
 		Ledger:              ledgerService,
@@ -307,9 +328,14 @@ type foundationRuntime struct {
 	patternsStore        patterns.Store
 	guardStore           guard.Store
 	peopleStore          people.Store
-	directoryImportStore directoryexpansion.Store
+	directoryImportStore directoryStore
 	auditor              foundation.Auditor
 	close                func() error
+}
+
+type directoryStore interface {
+	directoryexpansion.Store
+	directoryexpansion.GroupTargetStore
 }
 
 func initializeAttemptLimiter(ctx context.Context, cfg config.Config) (guard.AttemptLimiter, func() error, error) {
@@ -376,7 +402,7 @@ func initializeFoundation(ctx context.Context, cfg config.Config, runMigrations 
 		patternsStore        patterns.Store
 		guardStore           guard.Store
 		peopleStore          people.Store
-		directoryImportStore directoryexpansion.Store
+		directoryImportStore directoryStore
 		auditor              foundation.Auditor = foundation.NopAuditor{}
 		closeRuntime                            = func() error { return nil }
 	)

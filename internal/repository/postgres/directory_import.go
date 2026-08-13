@@ -1,6 +1,6 @@
 package postgres
 
-// Requirement: REQ-DIRECTORY-EXPANSION-002. Feature: integrations.protocols.
+// Requirements: REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-005. Feature: integrations.protocols.
 
 import (
 	"context"
@@ -17,12 +17,156 @@ import (
 type DirectoryImportStore struct{ database *sql.DB }
 
 var _ directoryexpansion.Store = (*DirectoryImportStore)(nil)
+var _ directoryexpansion.GroupTargetStore = (*DirectoryImportStore)(nil)
 
 func NewDirectoryImportStore(database *sql.DB) (*DirectoryImportStore, error) {
 	if database == nil {
 		return nil, errors.New("database is required")
 	}
 	return &DirectoryImportStore{database: database}, nil
+}
+
+const managedGroupColumns = `id,organization_id,source_system_id,source_record_id,name,display_name,description,status,metadata,revision,created_at,updated_at`
+const managedMembershipColumns = `id,organization_id,source_system_id,source_record_id,group_id,group_source_id,member_id,member_source_id,member_kind,member_display_name,status,metadata,revision,created_at,updated_at`
+
+func (s *DirectoryImportStore) GetManagedGroup(ctx context.Context, organizationID, id string) (directoryexpansion.ManagedGroup, error) {
+	return scanManagedGroup(s.database.QueryRowContext(ctx, `SELECT `+managedGroupColumns+` FROM directory_managed_groups WHERE organization_id=$1 AND id=$2`, organizationID, id))
+}
+
+func (s *DirectoryImportStore) CreateManagedGroup(ctx context.Context, group directoryexpansion.ManagedGroup) (directoryexpansion.ManagedGroup, error) {
+	metadata, err := json.Marshal(group.Metadata)
+	if err != nil {
+		return directoryexpansion.ManagedGroup{}, fmt.Errorf("encode managed group metadata: %w", err)
+	}
+	_, err = s.database.ExecContext(ctx, `INSERT INTO directory_managed_groups
+		(id,organization_id,source_system_id,source_record_id,name,display_name,description,status,metadata,revision,created_at,updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`, group.ID, group.OrganizationID, group.SourceSystemID,
+		group.SourceRecordID, group.Name, group.DisplayName, group.Description, group.Status, metadata, group.Revision, group.CreatedAt, group.UpdatedAt)
+	if err != nil {
+		return directoryexpansion.ManagedGroup{}, translateDirectoryWrite("create managed group", err)
+	}
+	return group, nil
+}
+
+func (s *DirectoryImportStore) ReconcileManagedGroup(ctx context.Context, group directoryexpansion.ManagedGroup, expectedRevision uint64) (directoryexpansion.ManagedGroup, error) {
+	metadata, err := json.Marshal(group.Metadata)
+	if err != nil {
+		return directoryexpansion.ManagedGroup{}, fmt.Errorf("encode managed group metadata: %w", err)
+	}
+	result, err := s.database.ExecContext(ctx, `UPDATE directory_managed_groups SET name=$6,display_name=$7,description=$8,status=$9,
+		metadata=$10,revision=$11,updated_at=$12 WHERE organization_id=$1 AND id=$2 AND source_system_id=$3 AND source_record_id=$4 AND revision=$5`,
+		group.OrganizationID, group.ID, group.SourceSystemID, group.SourceRecordID, expectedRevision, group.Name, group.DisplayName,
+		group.Description, group.Status, metadata, group.Revision, group.UpdatedAt)
+	if err != nil {
+		return directoryexpansion.ManagedGroup{}, translateDirectoryWrite("reconcile managed group", err)
+	}
+	if rows, _ := result.RowsAffected(); rows != 1 {
+		return directoryexpansion.ManagedGroup{}, directoryexpansion.ErrConflict
+	}
+	return group, nil
+}
+
+func (s *DirectoryImportStore) DeleteManagedGroup(ctx context.Context, organizationID, id string, expectedRevision uint64) error {
+	result, err := s.database.ExecContext(ctx, `DELETE FROM directory_managed_groups WHERE organization_id=$1 AND id=$2 AND revision=$3`, organizationID, id, expectedRevision)
+	if err != nil {
+		return translateDirectoryWrite("delete managed group", err)
+	}
+	if rows, _ := result.RowsAffected(); rows != 1 {
+		return directoryexpansion.ErrConflict
+	}
+	return nil
+}
+
+func (s *DirectoryImportStore) GetManagedMembership(ctx context.Context, organizationID, id string) (directoryexpansion.ManagedMembership, error) {
+	return scanManagedMembership(s.database.QueryRowContext(ctx, `SELECT `+managedMembershipColumns+` FROM directory_managed_memberships WHERE organization_id=$1 AND id=$2`, organizationID, id))
+}
+
+func (s *DirectoryImportStore) CreateManagedMembership(ctx context.Context, membership directoryexpansion.ManagedMembership) (directoryexpansion.ManagedMembership, error) {
+	metadata, err := json.Marshal(membership.Metadata)
+	if err != nil {
+		return directoryexpansion.ManagedMembership{}, fmt.Errorf("encode managed membership metadata: %w", err)
+	}
+	_, err = s.database.ExecContext(ctx, `INSERT INTO directory_managed_memberships
+		(id,organization_id,source_system_id,source_record_id,group_id,group_source_id,member_id,member_source_id,member_kind,member_display_name,status,metadata,revision,created_at,updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`, membership.ID, membership.OrganizationID,
+		membership.SourceSystemID, membership.SourceRecordID, membership.GroupID, membership.GroupSourceID, membership.MemberID,
+		membership.MemberSourceID, membership.MemberKind, membership.MemberDisplayName, membership.Status, metadata,
+		membership.Revision, membership.CreatedAt, membership.UpdatedAt)
+	if err != nil {
+		return directoryexpansion.ManagedMembership{}, translateDirectoryWrite("create managed membership", err)
+	}
+	return membership, nil
+}
+
+func (s *DirectoryImportStore) ReconcileManagedMembership(ctx context.Context, membership directoryexpansion.ManagedMembership, expectedRevision uint64) (directoryexpansion.ManagedMembership, error) {
+	metadata, err := json.Marshal(membership.Metadata)
+	if err != nil {
+		return directoryexpansion.ManagedMembership{}, fmt.Errorf("encode managed membership metadata: %w", err)
+	}
+	result, err := s.database.ExecContext(ctx, `UPDATE directory_managed_memberships SET group_id=$6,group_source_id=$7,member_id=$8,
+		member_source_id=$9,member_kind=$10,member_display_name=$11,status=$12,metadata=$13,revision=$14,updated_at=$15
+		WHERE organization_id=$1 AND id=$2 AND source_system_id=$3 AND source_record_id=$4 AND revision=$5`, membership.OrganizationID,
+		membership.ID, membership.SourceSystemID, membership.SourceRecordID, expectedRevision, membership.GroupID,
+		membership.GroupSourceID, membership.MemberID, membership.MemberSourceID, membership.MemberKind,
+		membership.MemberDisplayName, membership.Status, metadata, membership.Revision, membership.UpdatedAt)
+	if err != nil {
+		return directoryexpansion.ManagedMembership{}, translateDirectoryWrite("reconcile managed membership", err)
+	}
+	if rows, _ := result.RowsAffected(); rows != 1 {
+		return directoryexpansion.ManagedMembership{}, directoryexpansion.ErrConflict
+	}
+	return membership, nil
+}
+
+func (s *DirectoryImportStore) DeleteManagedMembership(ctx context.Context, organizationID, id string, expectedRevision uint64) error {
+	result, err := s.database.ExecContext(ctx, `DELETE FROM directory_managed_memberships WHERE organization_id=$1 AND id=$2 AND revision=$3`, organizationID, id, expectedRevision)
+	if err != nil {
+		return translateDirectoryWrite("delete managed membership", err)
+	}
+	if rows, _ := result.RowsAffected(); rows != 1 {
+		return directoryexpansion.ErrConflict
+	}
+	return nil
+}
+
+func (s *DirectoryImportStore) ListManagedGroups(ctx context.Context, organizationID string) ([]directoryexpansion.ManagedGroup, error) {
+	rows, err := s.database.QueryContext(ctx, `SELECT `+managedGroupColumns+` FROM directory_managed_groups WHERE organization_id=$1 ORDER BY id`, organizationID)
+	if err != nil {
+		return nil, fmt.Errorf("list managed groups: %w", err)
+	}
+	defer rows.Close()
+	groups := make([]directoryexpansion.ManagedGroup, 0)
+	for rows.Next() {
+		group, scanErr := scanManagedGroup(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		groups = append(groups, group)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate managed groups: %w", err)
+	}
+	return groups, nil
+}
+
+func (s *DirectoryImportStore) ListManagedMemberships(ctx context.Context, organizationID string) ([]directoryexpansion.ManagedMembership, error) {
+	rows, err := s.database.QueryContext(ctx, `SELECT `+managedMembershipColumns+` FROM directory_managed_memberships WHERE organization_id=$1 ORDER BY id`, organizationID)
+	if err != nil {
+		return nil, fmt.Errorf("list managed memberships: %w", err)
+	}
+	defer rows.Close()
+	memberships := make([]directoryexpansion.ManagedMembership, 0)
+	for rows.Next() {
+		membership, scanErr := scanManagedMembership(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		memberships = append(memberships, membership)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate managed memberships: %w", err)
+	}
+	return memberships, nil
 }
 
 const directoryBatchColumns = `id, organization_id, source_system_id, provider, config_revision, status,
@@ -411,6 +555,46 @@ func (s *DirectoryImportStore) listAttempts(ctx context.Context, organizationID,
 }
 
 type directoryScanner interface{ Scan(...any) error }
+
+func scanManagedGroup(row directoryScanner) (directoryexpansion.ManagedGroup, error) {
+	var group directoryexpansion.ManagedGroup
+	var metadata []byte
+	err := row.Scan(&group.ID, &group.OrganizationID, &group.SourceSystemID, &group.SourceRecordID, &group.Name,
+		&group.DisplayName, &group.Description, &group.Status, &metadata, &group.Revision, &group.CreatedAt, &group.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return directoryexpansion.ManagedGroup{}, directoryexpansion.ErrNotFound
+	}
+	if err != nil {
+		return directoryexpansion.ManagedGroup{}, fmt.Errorf("scan managed group: %w", err)
+	}
+	if len(metadata) > 0 && string(metadata) != "null" {
+		if err := json.Unmarshal(metadata, &group.Metadata); err != nil {
+			return directoryexpansion.ManagedGroup{}, fmt.Errorf("decode managed group metadata: %w", err)
+		}
+	}
+	return group, nil
+}
+
+func scanManagedMembership(row directoryScanner) (directoryexpansion.ManagedMembership, error) {
+	var membership directoryexpansion.ManagedMembership
+	var metadata []byte
+	err := row.Scan(&membership.ID, &membership.OrganizationID, &membership.SourceSystemID, &membership.SourceRecordID,
+		&membership.GroupID, &membership.GroupSourceID, &membership.MemberID, &membership.MemberSourceID,
+		&membership.MemberKind, &membership.MemberDisplayName, &membership.Status, &metadata, &membership.Revision,
+		&membership.CreatedAt, &membership.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return directoryexpansion.ManagedMembership{}, directoryexpansion.ErrNotFound
+	}
+	if err != nil {
+		return directoryexpansion.ManagedMembership{}, fmt.Errorf("scan managed membership: %w", err)
+	}
+	if len(metadata) > 0 && string(metadata) != "null" {
+		if err := json.Unmarshal(metadata, &membership.Metadata); err != nil {
+			return directoryexpansion.ManagedMembership{}, fmt.Errorf("decode managed membership metadata: %w", err)
+		}
+	}
+	return membership, nil
+}
 
 func scanDirectoryBatch(row directoryScanner) (directoryexpansion.Batch, error) {
 	var batch directoryexpansion.Batch

@@ -3,10 +3,11 @@
 - **Canonical IDs:** `identity.directory` for locations and
   `integrations.protocols` for directory imports
 - **Current requirements:** `REQ-DIRECTORY-EXPANSION-001` through
-  `REQ-DIRECTORY-EXPANSION-003`
+  `REQ-DIRECTORY-EXPANSION-003`, plus `REQ-DIRECTORY-EXPANSION-005`
 - **Roadmap issues:** [#24](https://github.com/WSCMAX/StewardMesh/issues/24),
-  [#25](https://github.com/WSCMAX/StewardMesh/issues/25), and
-  [#26](https://github.com/WSCMAX/StewardMesh/issues/26)
+  [#25](https://github.com/WSCMAX/StewardMesh/issues/25),
+  [#26](https://github.com/WSCMAX/StewardMesh/issues/26), and
+  [#28](https://github.com/WSCMAX/StewardMesh/issues/28)
 
 Directory Expansion extends People with hierarchical locations, optional
 read-only institutional provider connectors, synthetic demo data, and a
@@ -197,9 +198,9 @@ and browser checks complete the release gate.
 ## Planned provider slices
 
 Remaining provider connectors are deliberately read-only and plug into the
-delivered source-system contract. SailPoint provides identity records;
-Internet2 Grouper provides groups and memberships; PeopleSoft Campus Solutions
-provides configurable organization and location records. Each
+delivered source-system contract. SailPoint provides identity records, while
+PeopleSoft Campus Solutions provides configurable organization and location
+records. Each
 provider-specific mapper must retain source IDs, use an explicit configuration
 revision, produce the bounded complete snapshot, and report conflicts instead
 of silently overwriting records.
@@ -211,3 +212,63 @@ through an explicit Docker Compose profile.
 The graph API uses typed nodes and edges and must apply the caller's directory
 visibility scope. Any graph UI must provide a keyboard-accessible text or
 table representation in addition to visual exploration.
+
+## Grouper REST synchronization
+
+The delivered Internet2 Grouper adapter reads the provider's SCIM v2 `Groups`
+collection with `GET` only. Each normalized group retains its stable source ID,
+name, display name, optional description, active state, and at most 16 bounded
+string metadata fields. Direct subject and nested-group members become typed
+`member_of` edges. No raw Grouper response, provider session, password, bearer
+token, arbitrary schema extension, or source value is written to audit history.
+
+The connector uses one fixed server-configured URL whose path must be exactly
+`/grouper-ws/scim/v2`; callers cannot submit or override it through REST. HTTPS
+is required. Plain HTTP is accepted only for an explicitly enabled loopback
+development fixture; the same private-network opt-in permits trusted private
+HTTPS endpoints. The default network transport does not inherit proxy
+variables, refuses redirects, re-checks resolved addresses before dialing, and
+blocks loopback and private addresses unless that explicit private-network
+setting is enabled. Link-local, multicast, and unspecified addresses remain
+blocked even with the opt-in. Responses default to 2 MiB, pages to 100 groups,
+requests to 15 seconds, and transient retries to three. The shared engine adds
+its 100-page and 5,000-record limits, rejects pagination loops and duplicate
+normalized IDs, and only deactivates missing groups or memberships after the
+connector confirms a complete snapshot.
+
+Migration `0030_grouper_directory_graph.sql` widens the existing mapping kind
+constraint and stores normalized group and membership targets with
+organization/source uniqueness, optimistic revisions, typed member checks,
+parent-group integrity, and graph indexes.
+
+Configuration is opt-in. Leave `STEWARDMESH_GROUPER_URL` empty for the default
+runtime. In a shared environment, inject either a bearer token or a Basic
+username/password from a secret manager and configure:
+
+```sh
+export STEWARDMESH_GROUPER_URL=https://grouper.example.edu/grouper-ws/scim/v2
+export STEWARDMESH_GROUPER_SOURCE_SYSTEM_ID=grouper-primary
+export STEWARDMESH_GROUPER_BEARER_TOKEN="from-secret-manager"
+export STEWARDMESH_GROUPER_CONFIG_REVISION=v1
+```
+
+For an isolated local fixture only, start the explicit profile and enable its
+loopback endpoint. The committed fixture token is intentionally development
+only and must never be reused outside this loopback container:
+
+```sh
+docker compose -f deploy/docker-compose.yml --profile integrations up -d --wait postgres grouper
+export STEWARDMESH_GROUPER_URL=http://127.0.0.1:8081/grouper-ws/scim/v2
+export STEWARDMESH_GROUPER_SOURCE_SYSTEM_ID=grouper-fixture
+export STEWARDMESH_GROUPER_BEARER_TOKEN=stewardmesh-local-fixture-token
+export STEWARDMESH_GROUPER_ALLOW_PRIVATE_NETWORK=true
+```
+
+Create fake fixture groups and memberships with authenticated development-only
+`POST /fixture/groups` and `POST /fixture/memberships`; remove them with the
+matching `DELETE /fixture/.../{id}` routes. The adapter itself never invokes
+those routes. Preview and apply through the standard directory-import API, then
+use the permission-scoped relationship graph to inspect semantic group and
+subject nodes plus nested edges. Replaying an idempotency key returns the
+original result; removing a fixture membership and completing a new preview
+produces an explicit deactivation instead of deleting history.

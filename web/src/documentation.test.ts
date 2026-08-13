@@ -1,7 +1,7 @@
 import { expect, test } from 'vitest'
 import { documentationByID, documentationHref, documentationPages, documentationTopicFromHash, searchDocumentation } from './documentation'
 
-// Requirements: A11Y-001, DOC-001. Feature: experience.help.
+// Requirements: A11Y-001, DOC-001, REQ-DIRECTORY-EXPANSION-005. Features: experience.help, integrations.protocols.
 
 test('creates fixed same-host documentation deep links', () => {
   expect(documentationHref('atlas')).toBe('#docs/atlas')
@@ -18,6 +18,12 @@ test('keeps every local documentation page complete and connected', () => {
     expect(page.appHref).toMatch(/^#workspace-/)
     expect(page.related.every((related) => Boolean(documentationByID[related]))).toBe(true)
   }
+})
+
+test('documents the optional read-only Grouper workflow', () => {
+  const results = searchDocumentation('grouper')
+  expect(results.map((page) => page.id)).toContain('people')
+  expect(documentationByID.people.sections.some((section) => section.id === 'grouper-sync')).toBe(true)
 })
 
 test('searches titles, summaries, and product vocabulary', () => {

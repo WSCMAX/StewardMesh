@@ -1,3 +1,4 @@
+<!-- REQ-DIRECTORY-EXPANSION-005 / integrations.protocols -->
 # StewardMesh
 
 **StewardMesh by Binary Cornfield** is an open-source inventory and lifecycle management platform for everything an organization owns, funds, and operates.
@@ -156,6 +157,14 @@ See [People](docs/features/people.md) and
 [Directory Expansion](docs/features/directory-expansion.md) for permissions,
 privacy boundaries, provider contracts, location behavior, assignments, and
 the guided accessible workflow.
+
+Bridge can optionally reconcile Internet2 Grouper groups, nested groups, and
+memberships through its read-only SCIM v2 adapter. The default runtime does not
+connect to or start Grouper. Operators configure a fixed HTTPS endpoint and
+secret-manager-injected bearer token or Basic credential; a bounded loopback
+fixture is available only under the Compose `integrations` profile. See
+[Directory Expansion](docs/features/directory-expansion.md#grouper-rest-synchronization)
+for the secure setup and fixture walkthrough.
 
 Guide provides contextual module help and examples, dismissible and replayable
 permission-aware walkthroughs, a WCAG 2.2 AA branding-color gate with safe

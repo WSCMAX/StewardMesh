@@ -1,4 +1,4 @@
-// Requirements: REQ-SIGNALS-001, DOC-001. Features: alerts.rules, experience.help.
+// Requirements: REQ-DIRECTORY-EXPANSION-005, REQ-SIGNALS-001, DOC-001. Features: integrations.protocols, alerts.rules, experience.help.
 
 export type DocumentationTopicID = 'overview' | 'workspace' | 'atlas' | 'horizon' | 'ledger' | 'stack' | 'signals' | 'threads' | 'vault' | 'people' | 'guard' | 'guide'
 
@@ -352,7 +352,7 @@ export const documentationPages: readonly DocumentationPage[] = [
     summary: 'Organize places, departments, identities, and effective-dated asset assignments without mixing directory ownership into Atlas.',
     appHref: '#workspace-people',
     appLabel: 'Open People',
-    searchTerms: ['person', 'identity', 'site', 'building', 'room', 'department', 'assignment', 'location'],
+    searchTerms: ['person', 'identity', 'site', 'building', 'room', 'department', 'assignment', 'location', 'grouper', 'nested group', 'directory import'],
     sections: [
       {
         id: 'directory',
@@ -372,6 +372,13 @@ export const documentationPages: readonly DocumentationPage[] = [
         id: 'assignments',
         title: 'Preserve assignment history',
         paragraphs: ['Asset assignments are effective-dated and support primary user, additional user, and responsible department roles. Ending an assignment preserves the prior stewardship record.'],
+      },
+      {
+        id: 'grouper-sync',
+        title: 'Review optional Grouper synchronization',
+        paragraphs: ['Administrators can preview a configured, read-only Internet2 Grouper source before applying its normalized groups, nested groups, and memberships. The default local setup does not start or require Grouper.'],
+        bullets: ['Use preview counts and item actions to review creates, updates, deactivations, and conflicts before apply.', 'Nested groups and direct subjects appear as semantic member-of relationships in the permission-scoped graph.', 'Provider credentials, endpoints, and raw responses stay server-side and never appear in browser forms or import detail.'],
+        callout: { title: 'Source reads remain read-only', body: 'StewardMesh uses GET-only source reads. Fixture create and delete routes exist only in the explicit local integrations profile.', tone: 'info' },
       },
     ],
     related: ['atlas', 'workspace', 'guard'],

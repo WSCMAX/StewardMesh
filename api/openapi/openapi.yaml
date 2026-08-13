@@ -1,4 +1,4 @@
-# Requirements: REQ-ATLAS-001, REQ-ATLAS-CODES-001, REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-HORIZON-001, REQ-LEDGER-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
+# Requirements: REQ-ATLAS-001, REQ-ATLAS-MODELS-001, REQ-ATLAS-CODES-001, REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-HORIZON-001, REQ-LEDGER-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
 openapi: 3.1.0
 info:
   title: StewardMesh API
@@ -3324,12 +3324,9 @@ components:
         revision: {type: integer, format: int64, minimum: 1}
         createdAt: {type: string, format: date-time}
         updatedAt: {type: string, format: date-time}
-    CreateAssetModelRequest:
+    AssetModelWriteFields:
       type: object
-      additionalProperties: false
-      required: [manufacturer, name, kind]
       properties:
-        id: {$ref: '#/components/schemas/AssetModelID'}
         manufacturer: {type: string, minLength: 1, maxLength: 120}
         name: {type: string, minLength: 1, maxLength: 160}
         modelNumber: {type: string, maxLength: 120}
@@ -3344,11 +3341,22 @@ components:
         usefulLifeMonths: {type: integer, minimum: 0, maximum: 1200}
         sourceSystemId: {type: string, maxLength: 120}
         sourceRecordId: {type: string, maxLength: 160}
-    UpdateAssetModelRequest:
+    CreateAssetModelRequest:
+      type: object
+      unevaluatedProperties: false
+      required: [manufacturer, name, kind]
       allOf:
-        - $ref: '#/components/schemas/CreateAssetModelRequest'
+        - $ref: '#/components/schemas/AssetModelWriteFields'
         - type: object
-          required: [revision]
+          properties:
+            id: {$ref: '#/components/schemas/AssetModelID'}
+    UpdateAssetModelRequest:
+      type: object
+      unevaluatedProperties: false
+      required: [manufacturer, name, kind, revision]
+      allOf:
+        - $ref: '#/components/schemas/AssetModelWriteFields'
+        - type: object
           properties:
             revision: {type: integer, format: int64, minimum: 1}
     AssetModelCollection:

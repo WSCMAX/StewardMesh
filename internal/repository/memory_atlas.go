@@ -293,7 +293,7 @@ func (s *MemoryAtlasStore) UpdateAsset(_ context.Context, asset domain.Asset, ex
 	}
 	if asset.ModelID != "" {
 		model, exists := s.models[atlasMemoryKey(asset.OrganizationID, asset.ModelID)]
-		if !exists || model.Status != "active" {
+		if !exists || (model.Status != "active" && asset.ModelID != existing.ModelID) {
 			return domain.Asset{}, atlas.ErrReferenceMissing
 		}
 	}

@@ -863,6 +863,19 @@ func TestCreateAndListAssetRequiresPermissionAndCSRF(t *testing.T) {
 	if modelListRes.Code != http.StatusOK || !strings.Contains(modelListRes.Body.String(), `"instanceCount":1`) {
 		t.Fatalf("expected model list with instance count, got %d: %s", modelListRes.Code, modelListRes.Body.String())
 	}
+	modelUpdatePayload, _ := json.Marshal(map[string]any{
+		"manufacturer": model.Manufacturer, "name": "Laptop 13 v2", "modelNumber": model.ModelNumber,
+		"kind": model.Kind, "warrantyMonths": 48, "usefulLifeMonths": model.UsefulLifeMonths,
+		"specifications": map[string]string{"CPU": "Ryzen AI", "Memory": "32 GB"},
+		"sourceSystemId": "model-import", "sourceRecordId": "framework-fw13-v2", "revision": model.Revision,
+	})
+	modelUpdateReq := authenticatedRequest(http.MethodPut, "/api/v1/asset-models/model-1", bytes.NewReader(modelUpdatePayload), session)
+	modelUpdateRes := httptest.NewRecorder()
+	handler.ServeHTTP(modelUpdateRes, modelUpdateReq)
+	if modelUpdateRes.Code != http.StatusOK || !strings.Contains(modelUpdateRes.Body.String(), `"revision":2`) ||
+		!strings.Contains(modelUpdateRes.Body.String(), `"sourceRecordId":"framework-fw13-v2"`) {
+		t.Fatalf("expected complete model update, got %d: %s", modelUpdateRes.Code, modelUpdateRes.Body.String())
+	}
 	listReq := authenticatedRequest(http.MethodGet, "/api/v1/assets?q=lab-001&kind=server&status=active&modelId=model-1", nil, session)
 	listRes := httptest.NewRecorder()
 	handler.ServeHTTP(listRes, listReq)
@@ -915,11 +928,23 @@ func TestCreateAndListAssetRequiresPermissionAndCSRF(t *testing.T) {
 	if staleRes.Code != http.StatusConflict {
 		t.Fatalf("expected stale revision conflict, got %d: %s", staleRes.Code, staleRes.Body.String())
 	}
-	retireReq := authenticatedRequest(http.MethodPost, "/api/v1/asset-models/model-1/retire?revision=1", nil, session)
+	retireReq := authenticatedRequest(http.MethodPost, "/api/v1/asset-models/model-1/retire?revision=2", nil, session)
 	retireRes := httptest.NewRecorder()
 	handler.ServeHTTP(retireRes, retireReq)
 	if retireRes.Code != http.StatusOK || !strings.Contains(retireRes.Body.String(), `"status":"retired"`) {
 		t.Fatalf("expected model retirement, got %d: %s", retireRes.Code, retireRes.Body.String())
+	}
+	postRetirementPayload, _ := json.Marshal(map[string]any{
+		"modelId": created.ModelID, "name": "Lab server maintained", "kind": created.Kind,
+		"assetTag": created.AssetTag, "serialNumber": created.SerialNumber, "hostname": created.Hostname,
+		"status": "retired", "revision": 2,
+	})
+	postRetirementReq := authenticatedRequest(http.MethodPut, "/api/v1/assets/asset-1", bytes.NewReader(postRetirementPayload), session)
+	postRetirementRes := httptest.NewRecorder()
+	handler.ServeHTTP(postRetirementRes, postRetirementReq)
+	if postRetirementRes.Code != http.StatusOK || !strings.Contains(postRetirementRes.Body.String(), `"revision":3`) ||
+		!strings.Contains(postRetirementRes.Body.String(), `"modelRevision":1`) {
+		t.Fatalf("expected linked asset maintenance after model retirement, got %d: %s", postRetirementRes.Code, postRetirementRes.Body.String())
 	}
 	missingCSRF := authenticatedRequest(http.MethodPost, "/api/v1/assets", bytes.NewReader(payload), session)
 	missingCSRF.Header.Del(csrfHeader)

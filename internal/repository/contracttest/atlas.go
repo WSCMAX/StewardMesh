@@ -160,6 +160,13 @@ func AtlasStore(t testing.TB, subject atlas.Store, organizationID, suffix string
 	if err != nil || retiredModel.Status != "retired" || retiredModel.InstanceCount != 3 {
 		t.Fatalf("unexpected retired Atlas model %#v err=%v", retiredModel, err)
 	}
+	asset.Name = "Maintained after model retirement"
+	asset.Revision = 3
+	asset.UpdatedAt = now.Add(3 * time.Hour)
+	maintained, err := subject.UpdateAsset(ctx, asset, 2, nil)
+	if err != nil || maintained.Revision != 3 || maintained.ModelContext == nil || maintained.ModelContext.ModelRevision != 1 {
+		t.Fatalf("existing retired-model link prevented Atlas asset maintenance %#v err=%v", maintained, err)
+	}
 }
 
 func contractModelContext(model domain.AssetModel, kind string, appliedAt time.Time) *domain.AssetModelContext {

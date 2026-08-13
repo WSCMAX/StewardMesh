@@ -18,7 +18,7 @@ When a model is linked, Atlas stores an immutable `modelContext` snapshot contai
 
 ## Roles and permissions
 
-Model reads use `assets.read`. Model create, update, and retirement use `assets.write`, same-origin CSRF protection, organization scope, optimistic revisions, and the same Guard enforcement path as Atlas assets. Retired models remain readable for historical asset context but cannot be assigned to new or updated assets.
+Model reads use `assets.read`. Model create, update, and retirement use `assets.write`, same-origin CSRF protection, organization scope, optimistic revisions, and the same Guard enforcement path as Atlas assets. Retired models remain readable for historical asset context but cannot be newly assigned during asset creation or update. Assets that were linked while a model was active keep their immutable snapshot and remain maintainable after model retirement, including lifecycle changes and unlinking.
 
 ## Data rules
 
@@ -48,10 +48,18 @@ Migration `0023_atlas_models.sql` creates the durable model catalog, adds the nu
 
 ## Accessible workflow
 
-Atlas shows a compact Model catalog above the asset list. Every model links to **View inventory**, where readers can filter linked assets by lifecycle state, site, department, assigned user, and deployment context, optionally group the matches, and open any result in the existing Atlas asset detail. Exact matching and total counts remain visible even when only the first 100 asset cards are displayed. The filter and result grids collapse to a single column, long values wrap, controls retain 44-pixel targets, and all functions remain keyboard operable at a 320-pixel viewport.
+Atlas shows a compact Model catalog above the asset list. Readers can search by manufacturer, model name, model number, or vendor identifier and filter by model kind through the server-backed catalog query. Every model links to **View inventory**, where its complete shared defaults, specifications, provenance, status, revision, and update time remain visible alongside lifecycle, site, department, assigned-user, and deployment-context filters for linked assets. Readers can optionally group the matches and open any result in the existing Atlas asset detail. Exact matching and total counts remain visible even when only the first 100 asset cards are displayed. The search, detail, filter, and result grids collapse to a single column, long values wrap, controls retain 44-pixel targets, and all functions remain keyboard operable at a 320-pixel viewport.
 
-Users with write permission can add, edit, retire, choose **Use** for one repeated asset, or choose **Bulk add** for an atomic batch. The bulk form uses numbered fieldsets, supports adding and removing rows, exposes text status and validation failures, and keeps model-owned facts separate from each instance's identity, deployment, People references, and lifecycle status.
+Users with write permission can add, edit, retire, choose **Use** for one repeated asset, or choose **Bulk add** for an atomic batch. Add and edit expose every writable shared default, including up to 25 named specifications and optional source-system/source-record provenance; editing preserves those values unless the user explicitly changes or removes them. The bulk form uses numbered fieldsets, supports adding and removing rows, exposes text status and validation failures, and keeps model-owned facts separate from each instance's identity, deployment, People references, and lifecycle status.
 
 Asset detail separates the instance-specific record from **Model defaults when linked**. It shows the saved model label and revision, shared defaults and specifications, source provenance, effective/application dates, whether the instance kind uses the default or overrides it, and text explaining that the snapshot will not change with the model record. Empty source provenance is labeled as manual entry. The controls and detail layout remain keyboard operable and contained at a 320-pixel viewport.
 
 The implemented slices cover model CRUD, retirement, deterministic uniqueness and import resolution, single and bounded bulk asset creation, asset linking, immutable default provenance, explicit override visibility, exact filtered inventory totals and grouping, asset-detail links, API contracts, provider seams, audits, documentation, and focused UI tests.
+
+## Validation
+
+- Atlas service tests cover normalized identity and specification validation, immutable snapshots and overrides, model retirement, continued maintenance of already-linked assets, blocked new retired-model assignments, exact resolution, and atomic bulk intake.
+- Shared memory and PostgreSQL contract tests cover organization scope, uniqueness, exact resolution, instance counts, snapshot preservation, filtering/grouping, retirement, and rollback behavior.
+- HTTP tests cover authenticated reads, CSRF-protected writes, search, detail, resolver, optimistic update/retirement, bulk intake, and model-linked asset responses. OpenAPI lint and protobuf descriptor compilation verify transport contracts.
+- React tests cover server-backed model search, complete model detail, specification/provenance-preserving edits, model-to-asset and bulk workflows, immutable asset detail, inventory filtering/grouping, permission visibility, and automated accessibility checks.
+- Release validation runs race detection, vet, vulnerability analysis, traceability, API lint, protobuf compilation, frontend typecheck/tests/build, and authenticated desktop plus 320-pixel browser workflows with clean console output.

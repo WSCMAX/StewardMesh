@@ -164,6 +164,15 @@ func TestServiceMaintainsModelsAndAssetCounts(t *testing.T) {
 	if err != nil || retired.Status != "retired" || retired.InstanceCount != 1 {
 		t.Fatalf("unexpected retired model %#v err=%v", retired, err)
 	}
+	now = now.Add(time.Hour)
+	maintained, err := service.UpdateAsset(context.Background(), atlas.UpdateAssetInput{
+		ID: overridden.ID, ModelID: model.ID, Name: overridden.Name, Kind: overridden.Kind,
+		Status: "retired", Revision: overridden.Revision, LifecycleNote: "Asset retired after its model",
+	})
+	if err != nil || maintained.Status != "retired" || maintained.ModelContext == nil ||
+		maintained.ModelContext.ModelRevision != 1 || !maintained.ModelContext.AppliedAt.Equal(appliedAt) {
+		t.Fatalf("existing retired-model link prevented asset maintenance %#v err=%v", maintained, err)
+	}
 	if _, err := service.CreateAsset(context.Background(), atlas.CreateAssetInput{
 		ID: "asset-two", ModelID: model.ID, Name: "Blocked laptop", Kind: "laptop",
 	}); !errors.Is(err, atlas.ErrConflict) {
@@ -315,6 +324,12 @@ func TestServiceRejectsInvalidInputsAndMissingReferences(t *testing.T) {
 	}
 	if _, err := service.GetModelInventory(context.Background(), "model-one", atlas.ModelInventoryQuery{GroupBy: "building"}); !errors.Is(err, atlas.ErrInvalidInput) {
 		t.Fatalf("expected invalid model inventory grouping, got %v", err)
+	}
+	if _, err := service.CreateModel(context.Background(), atlas.CreateModelInput{
+		ID: "model-one", Manufacturer: "Example", Name: "Duplicate specification keys", Kind: "server",
+		Specifications: map[string]string{" CPU ": "first", "CPU": "second"},
+	}); !errors.Is(err, atlas.ErrInvalidInput) {
+		t.Fatalf("expected normalized duplicate specification keys to fail, got %v", err)
 	}
 }
 

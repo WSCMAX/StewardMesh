@@ -49,9 +49,8 @@ service GuardService {
 // Authenticated Guard RPCs carry the opaque session bearer in gRPC
 // authorization metadata. The bearer is never repeated in request bodies.
 
-// Requirements: REQ-ATLAS-001, REQ-ATLAS-CODES-001.
-// Features: inventory.assets, inventory.models, inventory.identifiers.
 // Requirements: REQ-ATLAS-001, REQ-ATLAS-MODELS-001, REQ-ATLAS-CODES-001.
+// Features: inventory.assets, inventory.models, inventory.identifiers.
 service AssetService {
   rpc ListAssetModels(ListAssetModelsRequest) returns (ListAssetModelsResponse);
   rpc GetAssetModel(GetAssetModelRequest) returns (AssetModel);

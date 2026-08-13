@@ -122,6 +122,12 @@ type BulkAssetRow = {
   key: number
 }
 
+type ModelSpecificationRow = {
+  key: number
+  name: string
+  value: string
+}
+
 type AtlasInventoryProps = {
   assets: readonly Asset[]
   csrfToken: string
@@ -169,6 +175,11 @@ function isAssetModel(value: unknown): value is AssetModel {
     && typeof item.kind === 'string' && typeof item.status === 'string'
     && typeof item.instanceCount === 'number' && typeof item.revision === 'number'
     && typeof item.createdAt === 'string' && typeof item.updatedAt === 'string'
+    && ['modelNumber', 'vendorIdentifier', 'supportUrl', 'sourceSystemId', 'sourceRecordId']
+      .every((key) => item[key] === undefined || typeof item[key] === 'string')
+    && ['warrantyMonths', 'usefulLifeMonths'].every((key) => item[key] === undefined || typeof item[key] === 'number')
+    && (item.specifications === undefined || (typeof item.specifications === 'object' && item.specifications !== null
+      && !Array.isArray(item.specifications) && Object.values(item.specifications).every((entry) => typeof entry === 'string')))
 }
 
 function isModelInventory(value: unknown): value is ModelInventory {
@@ -217,6 +228,9 @@ export default function AtlasInventory({ assets, csrfToken, permissions, onAsset
   const [selected, setSelected] = useState<Asset | null>(null)
   const [lifecycle, setLifecycle] = useState<LifecycleEvent[]>([])
   const [models, setModels] = useState<AssetModel[]>([])
+  const [modelSearch, setModelSearch] = useState('')
+  const [modelKind, setModelKind] = useState('')
+  const [modelSpecificationRows, setModelSpecificationRows] = useState<ModelSpecificationRow[]>([])
   const [inventoryModel, setInventoryModel] = useState<AssetModel | null>(null)
   const [modelInventory, setModelInventory] = useState<ModelInventory | null>(null)
   const [modelInventoryFilters, setModelInventoryFilters] = useState<ModelInventoryFilters>(emptyModelInventoryFilters)
@@ -228,15 +242,23 @@ export default function AtlasInventory({ assets, csrfToken, permissions, onAsset
   const [identifierRefreshVersion, setIdentifierRefreshVersion] = useState(0)
   const errorRef = useRef<HTMLDivElement>(null)
   const nextBulkRowKey = useRef(1)
+  const nextModelSpecificationKey = useRef(0)
+  const modelLoadVersion = useRef(0)
   const canWrite = permissions.includes('assets.write')
   const canReadDirectory = permissions.includes('directory.read')
 
-  const loadModels = useCallback(async () => {
+  const loadModels = useCallback(async (filters: { search?: string; kind?: string } = {}) => {
+    const version = modelLoadVersion.current + 1
+    modelLoadVersion.current = version
+    const query = new URLSearchParams({ limit: '100' })
+    const normalizedSearch = filters.search?.trim()
+    if (normalizedSearch) query.set('q', normalizedSearch)
+    if (filters.kind) query.set('kind', filters.kind)
     try {
-      const response = await requestJSON('/api/v1/asset-models?limit=100')
-      setModels(readItems(response).filter(isAssetModel))
+      const response = await requestJSON(`/api/v1/asset-models?${query.toString()}`)
+      if (modelLoadVersion.current === version) setModels(readItems(response).filter(isAssetModel))
     } catch {
-      setModels([])
+      if (modelLoadVersion.current === version) setModels([])
     }
   }, [])
 
@@ -325,6 +347,8 @@ export default function AtlasInventory({ assets, csrfToken, permissions, onAsset
 
   function openModelCreate() {
     setModelEditing(null)
+    setModelSpecificationRows([])
+    nextModelSpecificationKey.current = 0
     setModelFormOpen(true)
     setError('')
     setMessage('')
@@ -332,9 +356,40 @@ export default function AtlasInventory({ assets, csrfToken, permissions, onAsset
 
   function openModelEdit(model: AssetModel) {
     setModelEditing(model)
+    const rows = Object.entries(model.specifications ?? {})
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([name, value], key) => ({ key, name, value }))
+    setModelSpecificationRows(rows)
+    nextModelSpecificationKey.current = rows.length
     setModelFormOpen(true)
     setError('')
     setMessage('')
+  }
+
+  function addModelSpecification() {
+    if (modelSpecificationRows.length >= 25) return
+    const key = nextModelSpecificationKey.current
+    nextModelSpecificationKey.current += 1
+    setModelSpecificationRows((current) => [...current, { key, name: '', value: '' }])
+  }
+
+  function updateModelSpecification(key: number, field: 'name' | 'value', value: string) {
+    setModelSpecificationRows((current) => current.map((row) => row.key === key ? { ...row, [field]: value } : row))
+  }
+
+  function removeModelSpecification(key: number) {
+    setModelSpecificationRows((current) => current.filter((row) => row.key !== key))
+  }
+
+  function handleModelSearch(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    void loadModels({ search: modelSearch, kind: modelKind })
+  }
+
+  function clearModelSearch() {
+    setModelSearch('')
+    setModelKind('')
+    void loadModels()
   }
 
   async function loadModelInventory(model: AssetModel, filters: ModelInventoryFilters) {
@@ -445,7 +500,7 @@ export default function AtlasInventory({ assets, csrfToken, permissions, onAsset
       setEditing(null)
       setFormOpen(false)
       setMessage(editing ? 'Asset updated.' : 'Asset created.')
-      void loadModels()
+      void loadModels({ search: modelSearch, kind: modelKind })
       void selectAsset(saved)
     } catch (requestError) {
       setError(requestError instanceof ApiRequestError ? requestError.message : 'The asset could not be saved.')
@@ -492,7 +547,7 @@ export default function AtlasInventory({ assets, csrfToken, permissions, onAsset
       onAssetsChange([...assets, ...created].sort((left, right) => left.name.localeCompare(right.name)))
       setBulkModel(null)
       setMessage(`${created.length} asset${created.length === 1 ? '' : 's'} created from ${modelLabel(bulkModel)}.`)
-      void loadModels()
+      void loadModels({ search: modelSearch, kind: modelKind })
     } catch (requestError) {
       setError(requestError instanceof ApiRequestError ? requestError.message : 'The asset batch could not be created.')
       queueMicrotask(() => errorRef.current?.focus())
@@ -506,15 +561,29 @@ export default function AtlasInventory({ assets, csrfToken, permissions, onAsset
     setError('')
     setMessage('')
     const values = new FormData(event.currentTarget)
+    const specifications: Record<string, string> = Object.create(null) as Record<string, string>
+    for (const row of modelSpecificationRows) {
+      const name = row.name.trim()
+      const value = row.value.trim()
+      if (!name || Object.prototype.hasOwnProperty.call(specifications, name)) {
+        setError(!name ? 'Every shared specification needs a name.' : `Shared specification names must be unique: ${name}.`)
+        queueMicrotask(() => errorRef.current?.focus())
+        return
+      }
+      specifications[name] = value
+    }
     const payload: Record<string, unknown> = {
       manufacturer: String(values.get('manufacturer') ?? ''),
       name: String(values.get('modelName') ?? ''),
       modelNumber: String(values.get('modelNumber') ?? ''),
       kind: String(values.get('modelKind') ?? ''),
       vendorIdentifier: String(values.get('vendorIdentifier') ?? ''),
+      specifications,
       supportUrl: String(values.get('supportUrl') ?? ''),
       warrantyMonths: Number(values.get('warrantyMonths') || 0),
       usefulLifeMonths: Number(values.get('usefulLifeMonths') || 0),
+      sourceSystemId: String(values.get('sourceSystemId') ?? ''),
+      sourceRecordId: String(values.get('sourceRecordId') ?? ''),
     }
     if (modelEditing) payload.revision = modelEditing.revision
     setBusy('save-model')
@@ -529,7 +598,9 @@ export default function AtlasInventory({ assets, csrfToken, permissions, onAsset
         const next = modelEditing ? current.map((model) => model.id === saved.id ? saved : model) : [...current, saved]
         return next.sort((left, right) => modelLabel(left).localeCompare(modelLabel(right)))
       })
+      setInventoryModel((current) => current?.id === saved.id ? saved : current)
       setModelEditing(null)
+      setModelSpecificationRows([])
       setModelFormOpen(false)
       setMessage(modelEditing ? 'Model updated.' : 'Model created.')
     } catch (requestError) {
@@ -551,6 +622,10 @@ export default function AtlasInventory({ assets, csrfToken, permissions, onAsset
       })
       if (!isAssetModel(retired)) throw new Error('invalid model response')
       setModels((current) => current.filter((item) => item.id !== retired.id))
+      if (inventoryModel?.id === retired.id) {
+        setInventoryModel(null)
+        setModelInventory(null)
+      }
       setMessage('Model retired.')
     } catch (requestError) {
       setError(requestError instanceof ApiRequestError ? requestError.message : 'The model could not be retired.')
@@ -584,16 +659,21 @@ export default function AtlasInventory({ assets, csrfToken, permissions, onAsset
         <div className="p-5 sm:p-6">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <div className="flex flex-wrap items-center gap-2"><h3 className="text-lg font-semibold" id="models-heading">Model catalog</h3><StatusBadge tone="info">{models.length} active</StatusBadge></div>
+            <div className="flex flex-wrap items-center gap-2"><h3 className="text-lg font-semibold" id="models-heading">Model catalog</h3><StatusBadge tone="info">{models.length} model{models.length === 1 ? '' : 's'} shown</StatusBadge></div>
             <p className="mt-1 text-sm text-steward-mist-muted">Shared manufacturer and model defaults for repeated assets.</p>
           </div>
           {canWrite && <button className={secondaryButtonClass} onClick={openModelCreate} type="button">Add model</button>}
         </div>
+        <form aria-label="Search models" className="mt-5 grid gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(10rem,0.45fr)_auto]" onSubmit={handleModelSearch} role="search">
+          <label className={labelClass}>Search models<input className={inputClass} maxLength={200} onChange={(event) => setModelSearch(event.target.value)} placeholder="Manufacturer, model, number, or vendor ID" type="search" value={modelSearch} /></label>
+          <label className={labelClass}>Model kind<select className={inputClass} onChange={(event) => setModelKind(event.target.value)} value={modelKind}><option value="">All kinds</option>{kinds.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
+          <div className="flex flex-wrap items-end gap-2"><button className={secondaryButtonClass} type="submit">Search</button><button className={plainButtonClass} onClick={clearModelSearch} type="button">Clear</button></div>
+        </form>
         {modelFormOpen && canWrite && (
-          <form aria-label={modelEditing ? 'Edit model' : 'Add model'} className={`${subpanelClass} mt-5 border-steward-blue/35 bg-steward-ink-900/75 p-5`} onSubmit={handleModelSubmit}>
+          <form aria-label={modelEditing ? 'Edit model' : 'Add model'} className={`${subpanelClass} mt-5 border-steward-blue/35 bg-steward-ink-900/75 p-5`} key={modelEditing?.id ?? 'new-model'} onSubmit={handleModelSubmit}>
             <div className="flex flex-wrap items-center justify-between gap-3">
               <h4 className="font-semibold">{modelEditing ? `Edit ${modelLabel(modelEditing)}` : 'Register a model'}</h4>
-              <button className={plainButtonClass} onClick={() => { setModelFormOpen(false); setModelEditing(null) }} type="button">Cancel</button>
+              <button className={plainButtonClass} onClick={() => { setModelFormOpen(false); setModelEditing(null); setModelSpecificationRows([]) }} type="button">Cancel</button>
             </div>
             <div className="mt-4 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
               <TextField defaultValue={modelEditing?.manufacturer ?? ''} label="Manufacturer" maxLength={120} name="manufacturer" required />
@@ -604,7 +684,20 @@ export default function AtlasInventory({ assets, csrfToken, permissions, onAsset
               <TextField defaultValue={modelEditing?.supportUrl ?? ''} label="Support URL" maxLength={500} name="supportUrl" />
               <NumberField defaultValue={modelEditing?.warrantyMonths ?? 0} label="Warranty months" max={1200} name="warrantyMonths" />
               <NumberField defaultValue={modelEditing?.usefulLifeMonths ?? 0} label="Useful life months" max={1200} name="usefulLifeMonths" />
+              <TextField defaultValue={modelEditing?.sourceSystemId ?? ''} help="Optional provider or import system identifier." label="Source system ID" maxLength={120} name="sourceSystemId" />
+              <TextField defaultValue={modelEditing?.sourceRecordId ?? ''} help="Optional upstream record identifier." label="Source record ID" maxLength={160} name="sourceRecordId" />
             </div>
+            <fieldset className={`${subpanelClass} mt-5 p-4`}>
+              <legend className="px-1 font-semibold">Shared specifications</legend>
+              <p className="mt-1 text-sm text-steward-mist-muted">Add up to 25 reusable key/value defaults. These are snapshotted when an asset is linked.</p>
+              {modelSpecificationRows.length === 0 ? <p className="mt-3 text-sm text-steward-mist-muted">No shared specifications.</p> : <div className="mt-4 space-y-3">{modelSpecificationRows.map((row, index) => <fieldset className="grid gap-3 rounded-lg border border-white/10 p-3 sm:grid-cols-[minmax(0,0.7fr)_minmax(0,1fr)_auto]" key={row.key}>
+                <legend className="sr-only">Specification {index + 1}</legend>
+                <label className={labelClass}>Specification {index + 1} name<input className={inputClass} maxLength={80} onChange={(event) => updateModelSpecification(row.key, 'name', event.target.value)} required value={row.name} /></label>
+                <label className={labelClass}>Specification {index + 1} value<input className={inputClass} maxLength={500} onChange={(event) => updateModelSpecification(row.key, 'value', event.target.value)} value={row.value} /></label>
+                <div className="flex items-end"><button className={plainButtonClass} onClick={() => removeModelSpecification(row.key)} type="button">Remove</button></div>
+              </fieldset>)}</div>}
+              <button className={`${secondaryButtonClass} mt-4`} disabled={modelSpecificationRows.length >= 25} onClick={addModelSpecification} type="button">Add specification</button>
+            </fieldset>
             <button className={`${buttonClass} mt-5`} disabled={busy === 'save-model'} type="submit">{busy === 'save-model' ? 'Saving…' : modelEditing ? 'Save model' : 'Create model'}</button>
           </form>
         )}
@@ -647,12 +740,12 @@ export default function AtlasInventory({ assets, csrfToken, permissions, onAsset
             </div>
           </form>
         )}
-        {models.length === 0 ? <p className={`${emptyStateClass} mt-4`}>No active models have been registered.</p> : (
+        {models.length === 0 ? <p className={`${emptyStateClass} mt-4`}>No active models match this search.</p> : (
           <ul className="mt-4 grid gap-3 lg:grid-cols-2">{models.map((model) => (
             <li className={`${subpanelClass} p-4 transition hover:border-white/15 hover:bg-white/[0.025]`} key={model.id}>
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <p className="font-semibold text-steward-mist">{modelLabel(model)}</p>
+                  <p className="break-words font-semibold text-steward-mist">{modelLabel(model)}</p>
                   <div className="mt-2 flex flex-wrap gap-2"><StatusBadge>{model.kind}</StatusBadge><StatusBadge tone={model.instanceCount > 0 ? 'success' : 'neutral'}>{model.instanceCount} asset{model.instanceCount === 1 ? '' : 's'}</StatusBadge>{Boolean(model.warrantyMonths) && <StatusBadge tone="info">{model.warrantyMonths} month warranty</StatusBadge>}</div>
                 </div>
                 <div className="flex flex-wrap gap-2">
@@ -677,6 +770,7 @@ export default function AtlasInventory({ assets, csrfToken, permissions, onAsset
             </div>
             <button className={plainButtonClass} onClick={() => { setInventoryModel(null); setModelInventory(null) }} type="button">Close</button>
           </div>
+          <ModelRecordDetails model={inventoryModel} />
           <form aria-label={`Filter inventory for ${modelLabel(inventoryModel)}`} className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-3" onSubmit={handleModelInventorySubmit}>
             <label className={labelClass}>Lifecycle state<select className={inputClass} onChange={(event) => setModelInventoryFilter('status', event.target.value)} value={modelInventoryFilters.status}><option value="">All states</option>{statuses.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
             <ModelInventoryReferenceFilter label="Site" onChange={(value) => setModelInventoryFilter('siteId', value)} options={references.sites} value={modelInventoryFilters.siteId} />
@@ -770,7 +864,7 @@ function ModelContextDetails({ context, instanceKind }: { context: AssetModelCon
   return <section aria-labelledby="asset-model-context-heading" className="mt-6 rounded-xl border border-steward-blue/25 bg-steward-blue/[0.06] p-4">
     <h4 className="font-semibold" id="asset-model-context-heading">Model defaults when linked</h4>
     <p className="mt-1 text-sm text-steward-mist-muted">This saved snapshot stays with the asset when the model record changes.</p>
-    <dl className="mt-3 grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2 text-sm">
+    <dl className="mt-3 grid grid-cols-[minmax(0,0.45fr)_minmax(0,1fr)] gap-x-4 gap-y-2 text-sm">
       <Detail label="Model" value={modelContextLabel(context)} />
       <Detail label="Model revision" value={String(context.modelRevision)} />
       <Detail label="Default kind" value={context.kind} />
@@ -786,9 +880,35 @@ function ModelContextDetails({ context, instanceKind }: { context: AssetModelCon
     </dl>
     {specifications.length > 0 && <>
       <h5 className="mt-4 text-sm font-semibold">Shared specifications</h5>
-      <dl className="mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2 text-sm">{specifications.map(([key, value]) => <Detail key={key} label={key} value={value} />)}</dl>
+      <dl className="mt-2 grid grid-cols-[minmax(0,0.45fr)_minmax(0,1fr)] gap-x-4 gap-y-2 text-sm">{specifications.map(([key, value]) => <Detail key={key} label={key} value={value} />)}</dl>
     </>}
     <p className="mt-4 text-sm font-semibold">{context.overrides.length === 0 ? 'No instance overrides.' : `Overrides: ${context.overrides.map((value) => value.charAt(0).toUpperCase() + value.slice(1)).join(', ')}`}</p>
+  </section>
+}
+
+function ModelRecordDetails({ model }: { model: AssetModel }) {
+  const specifications = Object.entries(model.specifications ?? {}).sort(([left], [right]) => left.localeCompare(right))
+  return <section aria-labelledby="model-record-details-heading" className="mt-5 rounded-xl border border-white/10 bg-white/[0.025] p-4">
+    <h5 className="font-semibold" id="model-record-details-heading">Shared model defaults</h5>
+    <dl className="mt-3 grid grid-cols-[minmax(0,0.45fr)_minmax(0,1fr)] gap-x-4 gap-y-2 text-sm">
+      <Detail label="Manufacturer" value={model.manufacturer} />
+      <Detail label="Model name" value={model.name} />
+      <Detail label="Model number" value={model.modelNumber} />
+      <Detail label="Kind" value={model.kind} />
+      <Detail label="Vendor ID" value={model.vendorIdentifier} />
+      <Detail label="Support URL" value={model.supportUrl} />
+      <Detail label="Warranty" value={model.warrantyMonths ? `${model.warrantyMonths} months` : undefined} />
+      <Detail label="Useful life" value={model.usefulLifeMonths ? `${model.usefulLifeMonths} months` : undefined} />
+      <Detail label="Source system" value={model.sourceSystemId || 'Manual entry'} />
+      <Detail label="Source record" value={model.sourceRecordId} />
+      <Detail label="Status" value={model.status} />
+      <Detail label="Revision" value={String(model.revision)} />
+      <Detail label="Last updated" value={formatTimestamp(model.updatedAt)} />
+    </dl>
+    {specifications.length > 0 ? <>
+      <h6 className="mt-4 text-sm font-semibold">Shared specifications</h6>
+      <dl className="mt-2 grid grid-cols-[minmax(0,0.45fr)_minmax(0,1fr)] gap-x-4 gap-y-2 text-sm">{specifications.map(([key, value]) => <Detail key={key} label={key} value={value} />)}</dl>
+    </> : <p className="mt-4 text-sm text-steward-mist-muted">No shared specifications.</p>}
   </section>
 }
 
@@ -831,5 +951,5 @@ function modelInventoryGroupLabel(groupBy: string, key: string, references: Refe
 }
 
 function Detail({ label, value }: { label: string; value: string | undefined }) {
-  return <><dt className="font-semibold text-steward-mist-muted">{label}</dt><dd className="min-w-0 break-words">{value || 'Not assigned'}</dd></>
+  return <><dt className="min-w-0 break-words font-semibold text-steward-mist-muted">{label}</dt><dd className="min-w-0 break-words">{value || 'Not assigned'}</dd></>
 }

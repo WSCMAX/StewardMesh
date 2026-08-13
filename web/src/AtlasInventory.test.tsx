@@ -144,6 +144,81 @@ test('creates a model and links a new asset to it', async () => {
   expect(onAssetsChange).toHaveBeenCalledWith([created])
 })
 
+test('searches and inspects complete shared model defaults', async () => {
+  const model = {
+    id: 'model-detail', organizationId: 'example-org', manufacturer: 'Framework', name: 'Laptop 13',
+    modelNumber: 'FW13', kind: 'laptop', vendorIdentifier: 'vendor-fw13',
+    specifications: { CPU: 'Ryzen', Memory: '32 GB' }, supportUrl: 'https://support.example.test/fw13',
+    warrantyMonths: 36, usefulLifeMonths: 48, status: 'active', sourceSystemId: 'model-import',
+    sourceRecordId: 'framework-fw13-v1', instanceCount: 0, revision: 2,
+    createdAt: '2026-08-12T12:00:00Z', updatedAt: '2026-08-12T14:00:00Z',
+  }
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const path = String(input)
+    if (path === '/api/v1/asset-models?limit=100' || path === '/api/v1/asset-models?limit=100&q=Framework&kind=laptop') return jsonResponse({ items: [model] })
+    if (path === '/api/v1/asset-models/model-detail/inventory?limit=100') return jsonResponse({
+      modelId: model.id, totalCount: 0, filteredCount: 0, groups: [], items: [],
+    })
+    throw new Error(`unexpected request: ${path}`)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  const { container } = render(<AtlasInventory assets={[]} csrfToken="csrf-token" onAssetsChange={() => undefined} permissions={['assets.read']} />)
+
+  const searchForm = within(screen.getByRole('search', { name: 'Search models' }))
+  fireEvent.change(searchForm.getByLabelText('Search models'), { target: { value: 'Framework' } })
+  fireEvent.change(searchForm.getByLabelText('Model kind'), { target: { value: 'laptop' } })
+  fireEvent.click(searchForm.getByRole('button', { name: 'Search' }))
+  await waitFor(() => expect(fetchMock.mock.calls.some(([path]) => path === '/api/v1/asset-models?limit=100&q=Framework&kind=laptop')).toBe(true))
+
+  fireEvent.click(await screen.findByRole('link', { name: 'View inventory' }))
+  const details = (await screen.findByRole('heading', { name: 'Shared model defaults' })).closest('section') as HTMLElement
+  expect(within(details).getByText('vendor-fw13')).toBeInTheDocument()
+  expect(within(details).getByText('https://support.example.test/fw13')).toBeInTheDocument()
+  expect(within(details).getByText('model-import')).toBeInTheDocument()
+  expect(within(details).getByText('framework-fw13-v1')).toBeInTheDocument()
+  expect(within(details).getByText('Ryzen')).toBeInTheDocument()
+  expect(within(details).getByText('32 GB')).toBeInTheDocument()
+  expect((await axe.run(container)).violations).toEqual([])
+})
+
+test('updates specifications and import provenance without erasing model defaults', async () => {
+  const model = {
+    id: 'model-edit', organizationId: 'example-org', manufacturer: 'Framework', name: 'Laptop 13',
+    modelNumber: 'FW13', kind: 'laptop', vendorIdentifier: 'vendor-fw13',
+    specifications: { CPU: 'Ryzen', Memory: '32 GB' }, supportUrl: 'https://support.example.test/fw13',
+    warrantyMonths: 36, usefulLifeMonths: 48, status: 'active', sourceSystemId: 'model-import',
+    sourceRecordId: 'framework-fw13-v1', instanceCount: 0, revision: 1,
+    createdAt: '2026-08-12T12:00:00Z', updatedAt: '2026-08-12T12:00:00Z',
+  }
+  const updated = { ...model, specifications: { CPU: 'Ryzen AI', Memory: '32 GB' }, revision: 2, updatedAt: '2026-08-12T13:00:00Z' }
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input)
+    if (path === '/api/v1/asset-models?limit=100') return jsonResponse({ items: [model] })
+    if (path === '/api/v1/asset-models/model-edit' && init?.method === 'PUT') return jsonResponse(updated)
+    throw new Error(`unexpected request: ${path}`)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  const { container } = render(<AtlasInventory assets={[]} csrfToken="csrf-token" onAssetsChange={() => undefined} permissions={['assets.read', 'assets.write']} />)
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Edit' }))
+  const editForm = within(screen.getByRole('form', { name: 'Edit model' }))
+  expect(editForm.getByLabelText(/^Source system ID/)).toHaveValue('model-import')
+  expect(editForm.getByLabelText(/^Source record ID/)).toHaveValue('framework-fw13-v1')
+  expect(editForm.getByLabelText('Specification 1 name')).toHaveValue('CPU')
+  expect(editForm.getByLabelText('Specification 2 name')).toHaveValue('Memory')
+  fireEvent.change(editForm.getByLabelText('Specification 1 value'), { target: { value: 'Ryzen AI' } })
+  fireEvent.click(editForm.getByRole('button', { name: 'Save model' }))
+
+  expect(await screen.findByText('Model updated.')).toBeInTheDocument()
+  const request = fetchMock.mock.calls.find(([path, init]) => path === '/api/v1/asset-models/model-edit' && init?.method === 'PUT')
+  expect(request?.[1]?.headers).toMatchObject({ 'X-CSRF-Token': 'csrf-token' })
+  expect(JSON.parse(String(request?.[1]?.body))).toMatchObject({
+    specifications: { CPU: 'Ryzen AI', Memory: '32 GB' }, sourceSystemId: 'model-import',
+    sourceRecordId: 'framework-fw13-v1', revision: 1,
+  })
+  expect((await axe.run(container)).violations).toEqual([])
+})
+
 test('opens model inventory with exact filters, grouped counts, and linked asset details', async () => {
   const model = {
     id: 'model-inventory', organizationId: 'example-org', manufacturer: 'Dell', name: 'PowerEdge R760',

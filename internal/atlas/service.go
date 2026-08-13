@@ -353,9 +353,17 @@ func (s *Service) UpdateAsset(ctx context.Context, input UpdateAssetInput) (doma
 	if err != nil {
 		return domain.Asset{}, err
 	}
-	model, err := s.validateModelReference(ctx, normalized.ModelID)
-	if err != nil {
-		return domain.Asset{}, err
+	var model domain.AssetModel
+	if normalized.ModelID != "" && normalized.ModelID == existing.ModelID && existing.ModelContext != nil {
+		// A retired model cannot be newly assigned, but an existing immutable
+		// model snapshot must not prevent ordinary lifecycle or identity updates
+		// to an asset that was linked while the model was active.
+		model.ID = existing.ModelID
+	} else {
+		model, err = s.validateModelReference(ctx, normalized.ModelID)
+		if err != nil {
+			return domain.Asset{}, err
+		}
 	}
 	if normalized.Kind == "" && model.ID != "" {
 		if existing.ModelID == normalized.ModelID && existing.ModelContext != nil {
@@ -507,6 +515,9 @@ func normalizeCreateModelInput(input CreateModelInput) (CreateModelInput, error)
 		key = strings.TrimSpace(key)
 		value = strings.TrimSpace(value)
 		if !validTextRange(key, 1, 80) || !validText(value, 500) {
+			return CreateModelInput{}, ErrInvalidInput
+		}
+		if _, exists := specs[key]; exists {
 			return CreateModelInput{}, ErrInvalidInput
 		}
 		specs[key] = value

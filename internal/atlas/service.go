@@ -1,12 +1,13 @@
 package atlas
 
-// Requirements: REQ-ATLAS-001, REQ-ATLAS-MODELS-001. Features: inventory.assets, inventory.models.
+// Requirements: REQ-ATLAS-001, REQ-ATLAS-MODELS-001, REQ-DIRECTORY-EXPANSION-008. Features: inventory.assets, inventory.models, threads.relationships.
 
 import (
 	"context"
 	"errors"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -74,17 +75,17 @@ func (s *Service) ListAssets(ctx context.Context, query Query) ([]domain.Asset, 
 	return s.store.ListAssets(ctx, s.organizationID, query)
 }
 
-// ListGraphAssets is the bounded internal read used by the relationship graph.
-// It preserves the public ListAssets maximum of 100 while allowing the graph
-// to honor its independently documented 500-node limit in one deterministic
-// repository query.
+// ListGraphAssets is the bounded label/reference read used only by the
+// relationship graph. Public Atlas search keeps its broader fields and
+// 100-record limit; graph search matches labels only and applies authenticated
+// visibility plus relationship selectors before its independent 500-node cap.
 // Requirement: REQ-DIRECTORY-EXPANSION-008.
-func (s *Service) ListGraphAssets(ctx context.Context, query Query) ([]domain.Asset, error) {
-	query, err := normalizeQueryWithMaximum(query, 500)
+func (s *Service) ListGraphAssets(ctx context.Context, query GraphAssetQuery) ([]domain.Asset, error) {
+	query, err := normalizeGraphAssetQuery(query)
 	if err != nil {
 		return nil, err
 	}
-	return s.store.ListAssets(ctx, s.organizationID, query)
+	return s.store.ListGraphAssets(ctx, s.organizationID, query)
 }
 
 func (s *Service) GetAsset(ctx context.Context, id string) (domain.Asset, error) {
@@ -551,10 +552,6 @@ func normalizeModelIdentity(identity ModelIdentity) (ModelIdentity, error) {
 }
 
 func normalizeQuery(query Query) (Query, error) {
-	return normalizeQueryWithMaximum(query, maximumListLimit)
-}
-
-func normalizeQueryWithMaximum(query Query, maximum int) (Query, error) {
 	query.Search = strings.ToLower(strings.TrimSpace(query.Search))
 	query.Kind = strings.ToLower(strings.TrimSpace(query.Kind))
 	query.Status = strings.ToLower(strings.TrimSpace(query.Status))
@@ -575,10 +572,64 @@ func normalizeQueryWithMaximum(query Query, maximum int) (Query, error) {
 	if query.Limit == 0 {
 		query.Limit = defaultListLimit
 	}
-	if query.Limit < 1 || query.Limit > maximum {
+	if query.Limit < 1 || query.Limit > maximumListLimit {
 		return Query{}, ErrInvalidInput
 	}
 	return query, nil
+}
+
+func normalizeGraphAssetQuery(query GraphAssetQuery) (GraphAssetQuery, error) {
+	query.LabelSearch = strings.ToLower(strings.TrimSpace(query.LabelSearch))
+	if !validText(query.LabelSearch, 200) || !query.Valid() {
+		return GraphAssetQuery{}, ErrInvalidInput
+	}
+	var err error
+	if query.Visibility.ResourceIDs, err = normalizedGraphIDs(query.Visibility.ResourceIDs, assetIDPattern); err != nil {
+		return GraphAssetQuery{}, err
+	}
+	if query.Visibility.SiteIDs, err = normalizedGraphIDs(query.Visibility.SiteIDs, referencePattern); err != nil {
+		return GraphAssetQuery{}, err
+	}
+	if query.Visibility.DepartmentIDs, err = normalizedGraphIDs(query.Visibility.DepartmentIDs, referencePattern); err != nil {
+		return GraphAssetQuery{}, err
+	}
+	if query.References.ResourceIDs, err = normalizedGraphIDs(query.References.ResourceIDs, assetIDPattern); err != nil {
+		return GraphAssetQuery{}, err
+	}
+	for values, target := range map[*[]string]*regexp.Regexp{
+		&query.References.SiteIDs: referencePattern, &query.References.BuildingIDs: referencePattern,
+		&query.References.RoomIDs: referencePattern, &query.References.DepartmentIDs: referencePattern,
+		&query.References.UserIDs: referencePattern,
+	} {
+		*values, err = normalizedGraphIDs(*values, target)
+		if err != nil {
+			return GraphAssetQuery{}, err
+		}
+	}
+	if len(query.Visibility.ResourceIDs)+len(query.Visibility.SiteIDs)+len(query.Visibility.DepartmentIDs) > MaximumGraphAssetLimit ||
+		len(query.References.ResourceIDs)+len(query.References.SiteIDs)+len(query.References.BuildingIDs)+
+			len(query.References.RoomIDs)+len(query.References.DepartmentIDs)+len(query.References.UserIDs) > MaximumGraphAssetLimit {
+		return GraphAssetQuery{}, ErrInvalidInput
+	}
+	return query, nil
+}
+
+func normalizedGraphIDs(values []string, pattern *regexp.Regexp) ([]string, error) {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if !pattern.MatchString(value) {
+			return nil, ErrInvalidInput
+		}
+		if _, present := seen[value]; present {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	sort.Strings(result)
+	return result, nil
 }
 
 func normalizeModelInventoryQuery(query ModelInventoryQuery) (ModelInventoryQuery, error) {

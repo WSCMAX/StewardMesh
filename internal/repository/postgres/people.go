@@ -461,7 +461,7 @@ func (s *PeopleStore) DeleteIdentity(ctx context.Context, organizationID, id str
 }
 
 func (s *PeopleStore) SearchIdentities(ctx context.Context, organizationID string, filter people.IdentityQuery, visibility people.Visibility) ([]people.Identity, error) {
-	if organizationID == "" || visibility.Empty() || filter.Limit < 1 || filter.Limit > people.MaximumStoreIdentitySearchLimit {
+	if organizationID == "" || visibility.Empty() || filter.Limit < 1 || filter.Limit > 100 {
 		return nil, people.ErrInvalidInput
 	}
 	query := strings.Builder{}
@@ -523,6 +523,73 @@ func (s *PeopleStore) SearchIdentities(ctx context.Context, organizationID strin
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate identities: %w", err)
+	}
+	return result, nil
+}
+
+func (s *PeopleStore) ListGraphIdentities(ctx context.Context, organizationID string, filter people.GraphIdentityQuery, visibility people.Visibility) ([]people.Identity, error) {
+	if organizationID == "" || visibility.Empty() || !filter.Valid() {
+		return nil, people.ErrInvalidInput
+	}
+	query := strings.Builder{}
+	query.WriteString(`
+		SELECT id, organization_id, kind, display_name, normalized_name, email, normalized_email,
+		       COALESCE(department_id, ''), COALESCE(site_id, ''), status, provider, provider_subject,
+		       revision, created_at, updated_at
+		FROM people_identities
+		WHERE organization_id = $1 AND status = 'active'`)
+	arguments := []any{organizationID}
+	if !visibility.All {
+		predicates := make([]string, 0, 2)
+		if len(visibility.DepartmentIDs) > 0 {
+			predicates = append(predicates, inPredicate("department_id", visibility.DepartmentIDs, &arguments))
+		}
+		if len(visibility.SiteIDs) > 0 {
+			predicates = append(predicates, inPredicate("site_id", visibility.SiteIDs, &arguments))
+		}
+		if len(predicates) == 0 {
+			return nil, people.ErrScopeRequired
+		}
+		query.WriteString(" AND (" + strings.Join(predicates, " OR ") + ")")
+	}
+	if filter.LabelSearch != "" {
+		arguments = append(arguments, strings.ToLower(filter.LabelSearch))
+		query.WriteString(fmt.Sprintf(" AND strpos(lower(display_name), $%d) > 0", len(arguments)))
+	}
+	if filter.Kind != "" {
+		arguments = append(arguments, filter.Kind)
+		query.WriteString(fmt.Sprintf(" AND kind = $%d", len(arguments)))
+	}
+	selectors := make([]string, 0, 3)
+	if len(filter.IdentityIDs) > 0 {
+		selectors = append(selectors, inPredicate("id", filter.IdentityIDs, &arguments))
+	}
+	if len(filter.DepartmentIDs) > 0 {
+		selectors = append(selectors, inPredicate("department_id", filter.DepartmentIDs, &arguments))
+	}
+	if len(filter.SiteIDs) > 0 {
+		selectors = append(selectors, inPredicate("site_id", filter.SiteIDs, &arguments))
+	}
+	if len(selectors) > 0 {
+		query.WriteString(" AND (" + strings.Join(selectors, " OR ") + ")")
+	}
+	arguments = append(arguments, filter.Limit)
+	query.WriteString(fmt.Sprintf(" ORDER BY lower(display_name), id LIMIT $%d", len(arguments)))
+	rows, err := s.database.QueryContext(ctx, query.String(), arguments...)
+	if err != nil {
+		return nil, fmt.Errorf("list graph identities: %w", err)
+	}
+	defer rows.Close()
+	result := make([]people.Identity, 0)
+	for rows.Next() {
+		identity, err := scanPeopleIdentity(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan graph identity: %w", err)
+		}
+		result = append(result, identity)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate graph identities: %w", err)
 	}
 	return result, nil
 }

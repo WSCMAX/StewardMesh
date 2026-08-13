@@ -1,6 +1,6 @@
 package contracttest
 
-// Provider-neutral Atlas adapter contract. Requirements: REQ-ATLAS-001, REQ-ATLAS-MODELS-001.
+// Provider-neutral Atlas adapter contract. Requirements: REQ-ATLAS-001, REQ-ATLAS-MODELS-001, REQ-DIRECTORY-EXPANSION-008. Features: inventory.assets, threads.relationships.
 
 import (
 	"context"
@@ -118,6 +118,20 @@ func AtlasStore(t testing.TB, subject atlas.Store, organizationID, suffix string
 	items, err := subject.ListAssets(ctx, organizationID, atlas.Query{Search: "CONTRACT", Kind: "server", Status: "draft", ModelID: model.ID, Limit: 10})
 	if err != nil || len(items) != 1 || items[0].ID != assetID {
 		t.Fatalf("unexpected Atlas search result %#v err=%v", items, err)
+	}
+	graphItems, err := subject.ListGraphAssets(ctx, organizationID, atlas.GraphAssetQuery{
+		LabelSearch: "contract server", Visibility: atlas.GraphAssetVisibility{All: true},
+		References: atlas.GraphAssetReferences{ResourceIDs: []string{asset.ID}}, Limit: 10,
+	})
+	if err != nil || len(graphItems) != 1 || graphItems[0].ID != asset.ID {
+		t.Fatalf("graph asset label/reference query failed: %#v err=%v", graphItems, err)
+	}
+	hiddenGraphItems, err := subject.ListGraphAssets(ctx, organizationID, atlas.GraphAssetQuery{
+		Visibility: atlas.GraphAssetVisibility{ResourceIDs: []string{bulkAssets[0].ID}},
+		References: atlas.GraphAssetReferences{ResourceIDs: []string{asset.ID}}, Limit: 10,
+	})
+	if err != nil || len(hiddenGraphItems) != 0 {
+		t.Fatalf("graph asset reference widened authenticated visibility: %#v err=%v", hiddenGraphItems, err)
 	}
 	deploymentItems, err := subject.ListAssets(ctx, organizationID, atlas.Query{ModelID: model.ID, DeploymentContext: "RACK", Limit: 10})
 	if err != nil || len(deploymentItems) != 1 || deploymentItems[0].ID != bulkAssets[0].ID {

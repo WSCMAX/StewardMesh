@@ -429,7 +429,7 @@ func (s *MemoryPeopleStore) DeleteIdentity(_ context.Context, organizationID, id
 }
 
 func (s *MemoryPeopleStore) SearchIdentities(_ context.Context, organizationID string, query people.IdentityQuery, visibility people.Visibility) ([]people.Identity, error) {
-	if organizationID == "" || visibility.Empty() || query.Limit < 1 || query.Limit > people.MaximumStoreIdentitySearchLimit {
+	if organizationID == "" || visibility.Empty() || query.Limit < 1 || query.Limit > 100 {
 		return nil, people.ErrInvalidInput
 	}
 	s.mu.RLock()
@@ -463,6 +463,57 @@ func (s *MemoryPeopleStore) SearchIdentities(_ context.Context, organizationID s
 			return result[i].ID < result[j].ID
 		}
 		return result[i].NormalizedName < result[j].NormalizedName
+	})
+	if len(result) > query.Limit {
+		result = result[:query.Limit]
+	}
+	return result, nil
+}
+
+func (s *MemoryPeopleStore) ListGraphIdentities(_ context.Context, organizationID string, query people.GraphIdentityQuery, visibility people.Visibility) ([]people.Identity, error) {
+	if organizationID == "" || visibility.Empty() || !query.Valid() {
+		return nil, people.ErrInvalidInput
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	directoryDepartments := stringSet(visibility.DepartmentIDs)
+	directorySites := stringSet(visibility.SiteIDs)
+	identityIDs := stringSet(query.IdentityIDs)
+	departmentIDs := stringSet(query.DepartmentIDs)
+	siteIDs := stringSet(query.SiteIDs)
+	hasSelector := len(identityIDs)+len(departmentIDs)+len(siteIDs) > 0
+	search := strings.ToLower(query.LabelSearch)
+	result := make([]people.Identity, 0, query.Limit)
+	for _, identity := range s.identities {
+		if identity.OrganizationID != organizationID || identity.Status != people.StatusActive {
+			continue
+		}
+		if !visibility.All {
+			_, departmentAllowed := directoryDepartments[identity.DepartmentID]
+			_, siteAllowed := directorySites[identity.SiteID]
+			if !departmentAllowed && !siteAllowed {
+				continue
+			}
+		}
+		if query.Kind != "" && identity.Kind != query.Kind || search != "" && !strings.Contains(strings.ToLower(identity.DisplayName), search) {
+			continue
+		}
+		if hasSelector {
+			_, identityMatch := identityIDs[identity.ID]
+			_, departmentMatch := departmentIDs[identity.DepartmentID]
+			_, siteMatch := siteIDs[identity.SiteID]
+			if !identityMatch && !departmentMatch && !siteMatch {
+				continue
+			}
+		}
+		result = append(result, identity)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		left, right := strings.ToLower(result[i].DisplayName), strings.ToLower(result[j].DisplayName)
+		if left == right {
+			return result[i].ID < result[j].ID
+		}
+		return left < right
 	})
 	if len(result) > query.Limit {
 		result = result[:query.Limit]

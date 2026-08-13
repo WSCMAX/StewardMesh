@@ -20,8 +20,7 @@ import (
 // Authorization remains caller-owned and is intersected with directory scope
 // before any asset is added to a response.
 type AssetGraphReader interface {
-	ListGraphAssets(context.Context, atlas.Query) ([]domain.Asset, error)
-	GetAsset(context.Context, string) (domain.Asset, error)
+	ListGraphAssets(context.Context, atlas.GraphAssetQuery) ([]domain.Asset, error)
 }
 
 // ManagedGraphStore preserves the provider-only projection used by connector
@@ -80,18 +79,10 @@ func (s *RelationshipGraphStore) Graph(ctx context.Context, query GraphQuery) (G
 		return Graph{}, err
 	}
 	builder := newGraphBuilder()
-	sourceQuery := query
-	if query.Relationship != "" {
-		// Relationship queries need both endpoints. Filtering source reads by an
-		// anchor label/type would remove the contextual endpoint before the edge
-		// can be constructed, so those queries filter after the bounded projection.
-		sourceQuery.Search = ""
-		sourceQuery.Kind = ""
-	}
 	organizationNodeID := typedNodeID(NodeOrganization, s.organization.ID)
 	builder.addNode(Node{ID: organizationNodeID, Kind: NodeOrganization, Label: s.organization.Name})
 
-	if err := s.projectPeople(ctx, builder, query.Scope.Directory, organizationNodeID, sourceQuery); err != nil {
+	if err := s.projectLocations(ctx, builder, query.Scope.Directory, organizationNodeID); err != nil {
 		return Graph{}, err
 	}
 	if query.Scope.Directory.All {
@@ -100,15 +91,163 @@ func (s *RelationshipGraphStore) Graph(ctx context.Context, query GraphQuery) (G
 			return Graph{}, err
 		}
 	}
-	if !query.Scope.Assets.Empty() && (sourceQuery.Kind == "" || sourceQuery.Kind == NodeAsset) {
-		if err := s.projectAssets(ctx, builder, query.Scope, organizationNodeID, sourceQuery); err != nil {
+
+	if identityQuery := graphAnchorIdentityQuery(query); identityQuery != nil {
+		_, err = s.projectIdentities(ctx, builder, query.Scope.Directory, organizationNodeID, *identityQuery)
+		if err != nil {
+			return Graph{}, err
+		}
+	}
+	var anchorAssets []domain.Asset
+	if !query.Scope.Assets.Empty() {
+		if assetQuery := graphAnchorAssetQuery(query); assetQuery != nil {
+			assetQuery.Visibility = graphAssetVisibility(query.Scope.Assets)
+			anchorAssets, err = s.projectAssets(ctx, builder, query.Scope, organizationNodeID, *assetQuery)
+			if err != nil {
+				return Graph{}, err
+			}
+		}
+	}
+	anchors := graphAnchorNodes(builder.graph().Nodes, query)
+	identityContext, assetContext := graphRelationshipContext(query, anchors, anchorAssets)
+	if identityContext != nil {
+		if _, err := s.projectIdentities(ctx, builder, query.Scope.Directory, organizationNodeID, *identityContext); err != nil {
+			return Graph{}, err
+		}
+		// Asset anchors are loaded before their assigned identity context is
+		// known. Project them once more so assigned_to edges are materialized;
+		// semantic edge deduplication keeps every other relationship stable.
+		s.projectAssetRecords(builder, query.Scope, organizationNodeID, anchorAssets)
+	}
+	if assetContext != nil && !query.Scope.Assets.Empty() {
+		assetContext.Visibility = graphAssetVisibility(query.Scope.Assets)
+		if _, err := s.projectAssets(ctx, builder, query.Scope, organizationNodeID, *assetContext); err != nil {
 			return Graph{}, err
 		}
 	}
 	return filterGraph(builder.graph(), query), nil
 }
 
-func (s *RelationshipGraphStore) projectPeople(ctx context.Context, builder *graphBuilder, visibility people.Visibility, organizationNodeID string, graphQuery GraphQuery) error {
+func graphAnchorIdentityQuery(query GraphQuery) *people.GraphIdentityQuery {
+	kind, identityKind := graphIdentityKind(query.Kind)
+	if query.Kind != "" && !identityKind {
+		return nil
+	}
+	result := &people.GraphIdentityQuery{LabelSearch: query.Search, Limit: MaximumGraphLimit}
+	if identityKind {
+		result.Kind = kind
+	}
+	return result
+}
+
+func graphAnchorAssetQuery(query GraphQuery) *atlas.GraphAssetQuery {
+	if query.Kind != "" && query.Kind != NodeAsset {
+		return nil
+	}
+	return &atlas.GraphAssetQuery{LabelSearch: query.Search, Limit: MaximumGraphLimit}
+}
+
+func graphAssetVisibility(visibility AssetVisibility) atlas.GraphAssetVisibility {
+	return atlas.GraphAssetVisibility{All: visibility.All, ResourceIDs: visibility.ResourceIDs, SiteIDs: visibility.SiteIDs, DepartmentIDs: visibility.DepartmentIDs}
+}
+
+func graphAnchorNodes(nodes []Node, query GraphQuery) []Node {
+	anchors := make([]Node, 0, len(nodes))
+	search := strings.ToLower(query.Search)
+	for _, node := range nodes {
+		if query.Kind != "" && node.Kind != query.Kind || search != "" && !strings.Contains(strings.ToLower(node.Label), search) {
+			continue
+		}
+		anchors = append(anchors, node)
+	}
+	return anchors
+}
+
+func graphRelationshipContext(query GraphQuery, anchors []Node, anchorAssets []domain.Asset) (*people.GraphIdentityQuery, *atlas.GraphAssetQuery) {
+	if query.Relationship == "" {
+		return nil, nil
+	}
+	identities := &people.GraphIdentityQuery{Limit: MaximumGraphLimit}
+	assets := &atlas.GraphAssetQuery{Limit: MaximumGraphLimit}
+	selectorCount := 0
+	appendSelector := func(values *[]string, value string) {
+		if value == "" || selectorCount == MaximumGraphLimit {
+			return
+		}
+		for _, existing := range *values {
+			if existing == value {
+				return
+			}
+		}
+		*values = append(*values, value)
+		selectorCount++
+	}
+	for _, node := range anchors {
+		_, rawID, _ := strings.Cut(node.ID, ":")
+		switch query.Relationship {
+		case RelationshipBelongsTo:
+			if node.Kind == NodeDepartment {
+				appendSelector(&identities.DepartmentIDs, rawID)
+				appendSelector(&assets.References.DepartmentIDs, rawID)
+			}
+		case RelationshipLocatedAt:
+			switch node.Kind {
+			case NodeSite:
+				appendSelector(&identities.SiteIDs, rawID)
+				appendSelector(&assets.References.SiteIDs, rawID)
+			case NodeBuilding:
+				appendSelector(&assets.References.BuildingIDs, rawID)
+			case NodeRoom:
+				appendSelector(&assets.References.RoomIDs, rawID)
+			}
+		case RelationshipAssignedTo:
+			if isIdentityNodeKind(node.Kind) {
+				appendSelector(&assets.References.UserIDs, rawID)
+			}
+		case RelationshipContains:
+			if node.Kind == NodeOrganization {
+				// Direct children without a location are discovered from the
+				// bounded authorized source sets and filtered by their edges.
+				identities = &people.GraphIdentityQuery{Limit: MaximumGraphLimit}
+				assets = &atlas.GraphAssetQuery{Limit: MaximumGraphLimit}
+			}
+		}
+	}
+	if query.Relationship == RelationshipAssignedTo {
+		for _, asset := range anchorAssets {
+			if asset.UserID != "" {
+				appendSelector(&identities.IdentityIDs, asset.UserID)
+			}
+		}
+	}
+	if !hasGraphIdentitySelectors(*identities) && !(query.Relationship == RelationshipContains && graphHasKind(anchors, NodeOrganization)) {
+		identities = nil
+	}
+	if assets.References.Empty() && !(query.Relationship == RelationshipContains && graphHasKind(anchors, NodeOrganization)) {
+		assets = nil
+	}
+	return identities, assets
+}
+
+func isIdentityNodeKind(kind NodeKind) bool {
+	_, ok := graphIdentityKind(kind)
+	return ok
+}
+
+func hasGraphIdentitySelectors(query people.GraphIdentityQuery) bool {
+	return len(query.IdentityIDs)+len(query.DepartmentIDs)+len(query.SiteIDs) > 0
+}
+
+func graphHasKind(nodes []Node, kind NodeKind) bool {
+	for _, node := range nodes {
+		if node.Kind == kind {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *RelationshipGraphStore) projectLocations(ctx context.Context, builder *graphBuilder, visibility people.Visibility, organizationNodeID string) error {
 	sites, err := s.people.ListSites(ctx, s.organization.ID, visibility)
 	if err != nil {
 		return err
@@ -125,15 +264,6 @@ func (s *RelationshipGraphStore) projectPeople(ctx context.Context, builder *gra
 	if err != nil {
 		return err
 	}
-	identityQuery := people.IdentityQuery{Search: graphQuery.Search, Status: people.StatusActive, Limit: MaximumGraphLimit}
-	if kind, ok := graphIdentityKind(graphQuery.Kind); ok {
-		identityQuery.Kind = kind
-	}
-	identities, err := s.people.SearchIdentities(ctx, s.organization.ID, identityQuery, visibility)
-	if err != nil {
-		return err
-	}
-
 	for _, site := range sites {
 		if site.Status != people.StatusActive {
 			continue
@@ -182,6 +312,14 @@ func (s *RelationshipGraphStore) projectPeople(ctx context.Context, builder *gra
 		}
 		builder.addEdge(RelationshipContains, parentID, id, nil)
 	}
+	return nil
+}
+
+func (s *RelationshipGraphStore) projectIdentities(ctx context.Context, builder *graphBuilder, visibility people.Visibility, organizationNodeID string, graphQuery people.GraphIdentityQuery) ([]people.Identity, error) {
+	identities, err := s.people.ListGraphIdentities(ctx, s.organization.ID, graphQuery, visibility)
+	if err != nil {
+		return nil, err
+	}
 	for _, identity := range identities {
 		if identity.Status != people.StatusActive {
 			continue
@@ -206,7 +344,7 @@ func (s *RelationshipGraphStore) projectPeople(ctx context.Context, builder *gra
 			builder.addEdge(RelationshipContains, organizationNodeID, id, nil)
 		}
 	}
-	return nil
+	return identities, nil
 }
 
 func (s *ManagedGraphStore) project(ctx context.Context, builder *graphBuilder, organizationNodeID string) error {
@@ -253,11 +391,16 @@ func (s *ManagedGraphStore) project(ctx context.Context, builder *graphBuilder, 
 	return nil
 }
 
-func (s *RelationshipGraphStore) projectAssets(ctx context.Context, builder *graphBuilder, scope GraphScope, organizationNodeID string, graphQuery GraphQuery) error {
-	assets, err := s.loadScopedAssets(ctx, scope.Assets, graphQuery.Search)
+func (s *RelationshipGraphStore) projectAssets(ctx context.Context, builder *graphBuilder, scope GraphScope, organizationNodeID string, graphQuery atlas.GraphAssetQuery) ([]domain.Asset, error) {
+	assets, err := s.assets.ListGraphAssets(ctx, graphQuery)
 	if err != nil {
-		return err
+		return nil, err
 	}
+	s.projectAssetRecords(builder, scope, organizationNodeID, assets)
+	return assets, nil
+}
+
+func (s *RelationshipGraphStore) projectAssetRecords(builder *graphBuilder, scope GraphScope, organizationNodeID string, assets []domain.Asset) {
 	for _, asset := range assets {
 		if asset.OrganizationID != s.organization.ID {
 			continue
@@ -290,6 +433,10 @@ func (s *RelationshipGraphStore) projectAssets(ctx context.Context, builder *gra
 			related = true
 		}
 		if asset.UserID != "" {
+			// A nonempty source reference means the asset is related even when
+			// the endpoint is not yet projected or is outside directory scope.
+			// This avoids inventing an organization containment edge.
+			related = true
 			for _, kind := range []NodeKind{NodePerson, NodeShared, NodePublic, NodeLab} {
 				target := typedNodeID(kind, asset.UserID)
 				if builder.hasNode(target) {
@@ -303,65 +450,6 @@ func (s *RelationshipGraphStore) projectAssets(ctx context.Context, builder *gra
 			builder.addEdge(RelationshipContains, organizationNodeID, id, nil)
 		}
 	}
-	return nil
-}
-
-func (s *RelationshipGraphStore) loadScopedAssets(ctx context.Context, visibility AssetVisibility, search string) ([]domain.Asset, error) {
-	assetsByID := make(map[string]domain.Asset)
-	add := func(items []domain.Asset) {
-		for _, asset := range items {
-			if len(assetsByID) == MaximumGraphLimit {
-				return
-			}
-			assetsByID[asset.ID] = asset
-		}
-	}
-	list := func(query atlas.Query) error {
-		query.Search = search
-		query.Limit = MaximumGraphLimit
-		items, err := s.assets.ListGraphAssets(ctx, query)
-		if err != nil {
-			return err
-		}
-		add(items)
-		return nil
-	}
-	if visibility.All {
-		if err := list(atlas.Query{}); err != nil {
-			return nil, err
-		}
-	} else {
-		for _, id := range visibility.ResourceIDs {
-			asset, err := s.assets.GetAsset(ctx, id)
-			if errors.Is(err, atlas.ErrNotFound) || errors.Is(err, atlas.ErrInvalidInput) {
-				continue
-			}
-			if err != nil {
-				return nil, err
-			}
-			add([]domain.Asset{asset})
-		}
-		for _, siteID := range visibility.SiteIDs {
-			if err := list(atlas.Query{SiteID: siteID}); errors.Is(err, atlas.ErrInvalidInput) {
-				continue
-			} else if err != nil {
-				return nil, err
-			}
-		}
-		for _, departmentID := range visibility.DepartmentIDs {
-			if err := list(atlas.Query{DepartmentID: departmentID}); errors.Is(err, atlas.ErrInvalidInput) {
-				continue
-			} else if err != nil {
-				return nil, err
-			}
-		}
-	}
-	assets := make([]domain.Asset, 0, len(assetsByID))
-	for _, asset := range assetsByID {
-		assets = append(assets, asset)
-	}
-	sort.Slice(assets, func(i, j int) bool { return assets[i].ID < assets[j].ID })
-	return assets, nil
 }
 
 func assetVisible(asset domain.Asset, scope GraphScope, builder *graphBuilder) bool {

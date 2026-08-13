@@ -1,11 +1,13 @@
 // Package atlas implements the organization-scoped asset registry.
-// Requirement: REQ-ATLAS-001. Feature: inventory.assets.
+// Requirements: REQ-ATLAS-001, REQ-DIRECTORY-EXPANSION-008. Features: inventory.assets, threads.relationships.
 package atlas
 
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/maxlemke/stewardmesh/internal/domain"
 )
@@ -34,6 +36,69 @@ type Query struct {
 	UserID            string
 	DeploymentContext string
 	Limit             int
+}
+
+// GraphAssetVisibility and GraphAssetReferences are separate predicates: a
+// graph asset must satisfy one authenticated visibility selector and, when
+// supplied, one relationship-context selector. Keeping the predicates separate
+// prevents a contextual site or user ID from widening an assets.read grant.
+// Requirement: REQ-DIRECTORY-EXPANSION-008. Feature: threads.relationships.
+type GraphAssetVisibility struct {
+	All           bool
+	ResourceIDs   []string
+	SiteIDs       []string
+	DepartmentIDs []string
+}
+
+func (v GraphAssetVisibility) Empty() bool {
+	return !v.All && len(v.ResourceIDs) == 0 && len(v.SiteIDs) == 0 && len(v.DepartmentIDs) == 0
+}
+
+func (v GraphAssetVisibility) Valid() bool {
+	return !v.Empty() && len(v.ResourceIDs)+len(v.SiteIDs)+len(v.DepartmentIDs) <= MaximumGraphAssetLimit &&
+		validGraphAssetIDs(v.ResourceIDs) && validGraphAssetIDs(v.SiteIDs) && validGraphAssetIDs(v.DepartmentIDs)
+}
+
+type GraphAssetReferences struct {
+	ResourceIDs   []string
+	SiteIDs       []string
+	BuildingIDs   []string
+	RoomIDs       []string
+	DepartmentIDs []string
+	UserIDs       []string
+}
+
+func (r GraphAssetReferences) Empty() bool {
+	return len(r.ResourceIDs)+len(r.SiteIDs)+len(r.BuildingIDs)+len(r.RoomIDs)+len(r.DepartmentIDs)+len(r.UserIDs) == 0
+}
+
+func (r GraphAssetReferences) Valid() bool {
+	return len(r.ResourceIDs)+len(r.SiteIDs)+len(r.BuildingIDs)+len(r.RoomIDs)+len(r.DepartmentIDs)+len(r.UserIDs) <= MaximumGraphAssetLimit &&
+		validGraphAssetIDs(r.ResourceIDs) && validGraphAssetIDs(r.SiteIDs) && validGraphAssetIDs(r.BuildingIDs) &&
+		validGraphAssetIDs(r.RoomIDs) && validGraphAssetIDs(r.DepartmentIDs) && validGraphAssetIDs(r.UserIDs)
+}
+
+type GraphAssetQuery struct {
+	LabelSearch string
+	Visibility  GraphAssetVisibility
+	References  GraphAssetReferences
+	Limit       int
+}
+
+const MaximumGraphAssetLimit = 500
+
+func (q GraphAssetQuery) Valid() bool {
+	return q.Limit >= 1 && q.Limit <= MaximumGraphAssetLimit && q.Visibility.Valid() && q.References.Valid() &&
+		utf8.ValidString(q.LabelSearch) && utf8.RuneCountInString(q.LabelSearch) <= 200
+}
+
+func validGraphAssetIDs(values []string) bool {
+	for _, value := range values {
+		if strings.TrimSpace(value) == "" {
+			return false
+		}
+	}
+	return true
 }
 
 type ModelQuery struct {
@@ -170,6 +235,7 @@ type Store interface {
 	RetireModel(ctx context.Context, organizationID, id string, expectedRevision int64, retiredAt time.Time) (domain.AssetModel, error)
 	GetModelInventory(ctx context.Context, organizationID, modelID string, query ModelInventoryQuery) (ModelInventory, error)
 	ListAssets(ctx context.Context, organizationID string, query Query) ([]domain.Asset, error)
+	ListGraphAssets(ctx context.Context, organizationID string, query GraphAssetQuery) ([]domain.Asset, error)
 	GetAsset(ctx context.Context, organizationID, id string) (domain.Asset, error)
 	CreateAsset(ctx context.Context, asset domain.Asset, initialEvent domain.AssetLifecycleEvent) (domain.Asset, error)
 	CreateAssets(ctx context.Context, assets []domain.Asset, initialEvents []domain.AssetLifecycleEvent) ([]domain.Asset, error)

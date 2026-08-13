@@ -1,6 +1,6 @@
 package repository
 
-// Requirements: REQ-ATLAS-001, REQ-ATLAS-MODELS-001. Features: inventory.assets, inventory.models.
+// Requirements: REQ-ATLAS-001, REQ-ATLAS-MODELS-001, REQ-DIRECTORY-EXPANSION-008. Features: inventory.assets, inventory.models, threads.relationships.
 
 import (
 	"context"
@@ -193,6 +193,52 @@ func (s *MemoryAtlasStore) ListAssets(_ context.Context, organizationID string, 
 		items = items[:query.Limit]
 	}
 	return items, nil
+}
+
+func (s *MemoryAtlasStore) ListGraphAssets(_ context.Context, organizationID string, query atlas.GraphAssetQuery) ([]domain.Asset, error) {
+	if organizationID == "" || !query.Valid() {
+		return nil, atlas.ErrInvalidInput
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	items := make([]domain.Asset, 0)
+	for _, asset := range s.assets {
+		if asset.OrganizationID != organizationID || !memoryGraphAssetVisible(asset, query.Visibility) ||
+			!memoryGraphAssetMatchesReferences(asset, query.References) ||
+			query.LabelSearch != "" && !strings.Contains(strings.ToLower(asset.Name), strings.ToLower(query.LabelSearch)) {
+			continue
+		}
+		items = append(items, cloneAsset(asset))
+	}
+	sortAssets(items)
+	if len(items) > query.Limit {
+		items = items[:query.Limit]
+	}
+	return items, nil
+}
+
+func memoryGraphAssetVisible(asset domain.Asset, visibility atlas.GraphAssetVisibility) bool {
+	return visibility.All || sliceContains(visibility.ResourceIDs, asset.ID) ||
+		(asset.SiteID != "" && sliceContains(visibility.SiteIDs, asset.SiteID)) ||
+		(asset.DepartmentID != "" && sliceContains(visibility.DepartmentIDs, asset.DepartmentID))
+}
+
+func memoryGraphAssetMatchesReferences(asset domain.Asset, references atlas.GraphAssetReferences) bool {
+	return references.Empty() || sliceContains(references.ResourceIDs, asset.ID) ||
+		(asset.SiteID != "" && sliceContains(references.SiteIDs, asset.SiteID)) ||
+		(asset.BuildingID != "" && sliceContains(references.BuildingIDs, asset.BuildingID)) ||
+		(asset.RoomID != "" && sliceContains(references.RoomIDs, asset.RoomID)) ||
+		(asset.DepartmentID != "" && sliceContains(references.DepartmentIDs, asset.DepartmentID)) ||
+		(asset.UserID != "" && sliceContains(references.UserIDs, asset.UserID))
+}
+
+func sliceContains(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func assetMatchesQuery(asset domain.Asset, query atlas.Query) bool {

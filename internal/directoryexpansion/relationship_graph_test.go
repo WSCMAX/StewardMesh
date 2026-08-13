@@ -31,13 +31,20 @@ func (r graphAssetReader) GetAsset(_ context.Context, id string) (domain.Asset, 
 	return domain.Asset{}, atlas.ErrNotFound
 }
 
-func (r graphAssetReader) ListGraphAssets(_ context.Context, query atlas.Query) ([]domain.Asset, error) {
+func (r graphAssetReader) ListGraphAssets(_ context.Context, query atlas.GraphAssetQuery) ([]domain.Asset, error) {
 	items := make([]domain.Asset, 0, len(r.items))
 	for _, item := range r.items {
-		if query.SiteID != "" && item.SiteID != query.SiteID || query.DepartmentID != "" && item.DepartmentID != query.DepartmentID {
+		if !query.Visibility.All && !containsTestValue(query.Visibility.ResourceIDs, item.ID) &&
+			!containsTestValue(query.Visibility.SiteIDs, item.SiteID) && !containsTestValue(query.Visibility.DepartmentIDs, item.DepartmentID) {
 			continue
 		}
-		if query.Search != "" && !strings.Contains(strings.ToLower(item.Name), strings.ToLower(query.Search)) {
+		if !query.References.Empty() && !containsTestValue(query.References.ResourceIDs, item.ID) &&
+			!containsTestValue(query.References.SiteIDs, item.SiteID) && !containsTestValue(query.References.BuildingIDs, item.BuildingID) &&
+			!containsTestValue(query.References.RoomIDs, item.RoomID) && !containsTestValue(query.References.DepartmentIDs, item.DepartmentID) &&
+			!containsTestValue(query.References.UserIDs, item.UserID) {
+			continue
+		}
+		if query.LabelSearch != "" && !strings.Contains(strings.ToLower(item.Name), strings.ToLower(query.LabelSearch)) {
 			continue
 		}
 		items = append(items, item)
@@ -47,6 +54,18 @@ func (r graphAssetReader) ListGraphAssets(_ context.Context, query atlas.Query) 
 		items = items[:query.Limit]
 	}
 	return items, nil
+}
+
+func containsTestValue(values []string, target string) bool {
+	if target == "" {
+		return false
+	}
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func TestRelationshipGraphProjectsTypedRecordsCyclesAndSemanticDeduplication(t *testing.T) {
@@ -179,6 +198,45 @@ func TestRelationshipGraphDelegatesSearchAndHonorsLimitsBeyondSourceDefaults(t *
 	})
 	if err != nil || len(allAssets.Nodes) != len(assets.items) {
 		t.Fatalf("500-node graph contract was silently capped by Atlas's public default: nodes=%d want=%d err=%v", len(allAssets.Nodes), len(assets.items), err)
+	}
+}
+
+func TestRelationshipGraphLoadsRelationshipContextBeyondFiveHundredSourceRecords(t *testing.T) {
+	store, peopleStore, assets := relationshipGraphFixture(t)
+	now := time.Date(2026, time.August, 13, 12, 0, 0, 0, time.UTC)
+	for index := 0; index < MaximumGraphLimit; index++ {
+		name := fmt.Sprintf("Alpha Context Identity %03d", index)
+		if _, err := peopleStore.CreateIdentity(context.Background(), people.Identity{
+			ID: fmt.Sprintf("context-person-%03d", index), OrganizationID: "example-org", Kind: people.IdentityPerson,
+			DisplayName: name, NormalizedName: strings.ToLower(name), SiteID: "site-a", DepartmentID: "department-a",
+			Status: people.StatusActive, Revision: 1, CreatedAt: now, UpdatedAt: now,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	target := people.Identity{ID: "zzzz-context-person", OrganizationID: "example-org", Kind: people.IdentityPerson,
+		DisplayName: "Zeta Context Person", NormalizedName: "zeta context person", SiteID: "site-a", DepartmentID: "department-a",
+		Status: people.StatusActive, Revision: 1, CreatedAt: now, UpdatedAt: now}
+	if _, err := peopleStore.CreateIdentity(context.Background(), target); err != nil {
+		t.Fatal(err)
+	}
+	assets.items = append(assets.items, domain.Asset{ID: "zeta-context-asset", OrganizationID: "example-org", Name: "Zeta Context Asset",
+		Kind: "computer", SiteID: "site-a", DepartmentID: "department-a", UserID: target.ID, Status: "active"})
+	graphStore, err := NewRelationshipGraphStore(store, peopleStore, assets, domain.Organization{ID: "example-org", Name: "Example Org"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	personResult, err := graphStore.Graph(context.Background(), GraphQuery{Search: target.DisplayName, Kind: NodePerson,
+		Relationship: RelationshipAssignedTo, Limit: 10, Scope: GraphScope{Directory: people.Visibility{All: true}, Assets: AssetVisibility{All: true}}})
+	if err != nil || !graphHasNode(personResult, "person:"+target.ID) || !graphHasNode(personResult, "asset:zeta-context-asset") ||
+		!graphHasEdge(personResult, "asset:zeta-context-asset", "person:"+target.ID, RelationshipAssignedTo) {
+		t.Fatalf("person relationship context was truncated before selection: graph=%#v err=%v", personResult, err)
+	}
+	assetResult, err := graphStore.Graph(context.Background(), GraphQuery{Search: "Zeta Context Asset", Kind: NodeAsset,
+		Relationship: RelationshipAssignedTo, Limit: 10, Scope: GraphScope{Directory: people.Visibility{All: true}, Assets: AssetVisibility{All: true}}})
+	if err != nil || !graphHasNode(assetResult, "person:"+target.ID) || !graphHasNode(assetResult, "asset:zeta-context-asset") ||
+		!graphHasEdge(assetResult, "asset:zeta-context-asset", "person:"+target.ID, RelationshipAssignedTo) {
+		t.Fatalf("asset relationship context was truncated before selection: graph=%#v err=%v", assetResult, err)
 	}
 }
 

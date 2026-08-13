@@ -1,6 +1,6 @@
 package postgres
 
-// Requirements: REQ-ATLAS-001, REQ-ATLAS-MODELS-001. Features: inventory.assets, inventory.models.
+// Requirements: REQ-ATLAS-001, REQ-ATLAS-MODELS-001, REQ-DIRECTORY-EXPANSION-008. Features: inventory.assets, inventory.models, threads.relationships.
 
 import (
 	"context"
@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -267,6 +268,80 @@ func (s *AtlasStore) GetModelInventory(ctx context.Context, organizationID, mode
 
 func (s *AtlasStore) ListAssets(ctx context.Context, organizationID string, query atlas.Query) ([]domain.Asset, error) {
 	return listAtlasAssets(ctx, s.database, organizationID, query)
+}
+
+func (s *AtlasStore) ListGraphAssets(ctx context.Context, organizationID string, filter atlas.GraphAssetQuery) ([]domain.Asset, error) {
+	if organizationID == "" || !filter.Valid() {
+		return nil, atlas.ErrInvalidInput
+	}
+	query := strings.Builder{}
+	query.WriteString("SELECT " + atlasAssetColumns + " FROM atlas_assets WHERE organization_id = $1")
+	arguments := []any{organizationID}
+	if filter.LabelSearch != "" {
+		arguments = append(arguments, strings.ToLower(filter.LabelSearch))
+		query.WriteString(fmt.Sprintf(" AND strpos(lower(name), $%d) > 0", len(arguments)))
+	}
+	if !filter.Visibility.All {
+		visibility := make([]string, 0, 3)
+		if len(filter.Visibility.ResourceIDs) > 0 {
+			visibility = append(visibility, atlasInPredicate("id", filter.Visibility.ResourceIDs, &arguments))
+		}
+		if len(filter.Visibility.SiteIDs) > 0 {
+			visibility = append(visibility, atlasInPredicate("site_id", filter.Visibility.SiteIDs, &arguments))
+		}
+		if len(filter.Visibility.DepartmentIDs) > 0 {
+			visibility = append(visibility, atlasInPredicate("department_id", filter.Visibility.DepartmentIDs, &arguments))
+		}
+		if len(visibility) == 0 {
+			return nil, atlas.ErrInvalidInput
+		}
+		query.WriteString(" AND (" + strings.Join(visibility, " OR ") + ")")
+	}
+	references := make([]string, 0, 6)
+	for _, reference := range []struct {
+		column string
+		values []string
+	}{
+		{"id", filter.References.ResourceIDs}, {"site_id", filter.References.SiteIDs},
+		{"building_id", filter.References.BuildingIDs}, {"room_id", filter.References.RoomIDs},
+		{"department_id", filter.References.DepartmentIDs}, {"user_id", filter.References.UserIDs},
+	} {
+		if len(reference.values) > 0 {
+			references = append(references, atlasInPredicate(reference.column, reference.values, &arguments))
+		}
+	}
+	if len(references) > 0 {
+		sort.Strings(references)
+		query.WriteString(" AND (" + strings.Join(references, " OR ") + ")")
+	}
+	arguments = append(arguments, filter.Limit)
+	query.WriteString(fmt.Sprintf(" ORDER BY lower(name), id LIMIT $%d", len(arguments)))
+	rows, err := s.database.QueryContext(ctx, query.String(), arguments...)
+	if err != nil {
+		return nil, fmt.Errorf("list graph assets: %w", err)
+	}
+	defer rows.Close()
+	items := make([]domain.Asset, 0)
+	for rows.Next() {
+		asset, err := scanAtlasAsset(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan graph asset: %w", err)
+		}
+		items = append(items, asset)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate graph assets: %w", err)
+	}
+	return items, nil
+}
+
+func atlasInPredicate(column string, values []string, arguments *[]any) string {
+	placeholders := make([]string, 0, len(values))
+	for _, value := range values {
+		*arguments = append(*arguments, value)
+		placeholders = append(placeholders, fmt.Sprintf("$%d", len(*arguments)))
+	}
+	return column + " IN (" + strings.Join(placeholders, ", ") + ")"
 }
 
 type atlasRowsQueryer interface {

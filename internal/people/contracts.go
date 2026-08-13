@@ -1,11 +1,13 @@
 // Package people implements the StewardMesh directory and asset assignment domain.
-// Requirements: REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-002. Features: identity.directory, integrations.protocols.
+// Requirements: REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-008. Features: identity.directory, integrations.protocols, threads.relationships.
 package people
 
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/maxlemke/stewardmesh/internal/domain"
 )
@@ -176,12 +178,44 @@ type IdentityQuery struct {
 	Limit        int
 }
 
-// MaximumStoreIdentitySearchLimit is the repository-level safety bound used by
-// internal projections. The public People service deliberately keeps its
-// smaller 100-record contract; the relationship graph can request up to its
-// documented 500-node response limit without silently truncating first.
-// Requirement: REQ-DIRECTORY-EXPANSION-008.
-const MaximumStoreIdentitySearchLimit = 500
+// GraphIdentityQuery is the private, label-only People projection used by the
+// relationship graph. Reference selectors are ORed together and applied before
+// the result limit; when no selector is present the query scans the authorized
+// active identity set. It deliberately excludes email and provider metadata
+// from search so hidden fields cannot crowd a matching graph label out of a
+// bounded result.
+// Requirement: REQ-DIRECTORY-EXPANSION-008. Feature: threads.relationships.
+type GraphIdentityQuery struct {
+	LabelSearch   string
+	Kind          IdentityKind
+	IdentityIDs   []string
+	DepartmentIDs []string
+	SiteIDs       []string
+	Limit         int
+}
+
+const MaximumGraphIdentityLimit = 500
+
+func (q GraphIdentityQuery) Valid() bool {
+	return q.Limit >= 1 && q.Limit <= MaximumGraphIdentityLimit &&
+		(q.Kind == "" || q.Kind == IdentityPerson || q.Kind == IdentityShared || q.Kind == IdentityPublic || q.Kind == IdentityLab) &&
+		validGraphQueryText(q.LabelSearch, 200) && validGraphQueryIDs(q.IdentityIDs) &&
+		validGraphQueryIDs(q.DepartmentIDs) && validGraphQueryIDs(q.SiteIDs) &&
+		len(q.IdentityIDs)+len(q.DepartmentIDs)+len(q.SiteIDs) <= MaximumGraphIdentityLimit
+}
+
+func validGraphQueryText(value string, maximum int) bool {
+	return utf8.ValidString(value) && utf8.RuneCountInString(value) <= maximum
+}
+
+func validGraphQueryIDs(values []string) bool {
+	for _, value := range values {
+		if strings.TrimSpace(value) == "" {
+			return false
+		}
+	}
+	return true
+}
 
 type CreateSiteInput struct {
 	Name    string
@@ -266,6 +300,7 @@ type Store interface {
 	ReconcileIdentity(ctx context.Context, identity Identity, expectedRevision uint64) (Identity, error)
 	DeleteIdentity(ctx context.Context, organizationID, id string, expectedRevision uint64) error
 	SearchIdentities(ctx context.Context, organizationID string, query IdentityQuery, visibility Visibility) ([]Identity, error)
+	ListGraphIdentities(ctx context.Context, organizationID string, query GraphIdentityQuery, visibility Visibility) ([]Identity, error)
 
 	CreateAssetAssignment(ctx context.Context, assignment AssetAssignment, replaceActiveRole bool) (AssetAssignment, error)
 	EndAssetAssignment(ctx context.Context, organizationID, assetID, assignmentID string, effectiveTo time.Time) (AssetAssignment, error)

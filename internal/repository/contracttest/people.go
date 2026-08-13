@@ -140,6 +140,22 @@ func PeopleStore(t *testing.T, store people.Store, organizationID string) {
 			t.Fatal(err)
 		}
 	}
+	graphTarget := contractIdentity(t, organizationID, "person", "Zeta Graph Label "+suffix, "", "", "", now)
+	if _, err := store.CreateIdentity(ctx, graphTarget); err != nil {
+		t.Fatal(err)
+	}
+	graphItems, err := store.ListGraphIdentities(ctx, organizationID, people.GraphIdentityQuery{
+		LabelSearch: "zeta graph label", IdentityIDs: []string{graphTarget.ID}, Limit: 10,
+	}, people.Visibility{All: true})
+	if err != nil || len(graphItems) != 1 || graphItems[0].ID != graphTarget.ID {
+		t.Fatalf("graph identity label/reference query failed: %#v err=%v", graphItems, err)
+	}
+	outsideGraphItems, err := store.ListGraphIdentities(ctx, organizationID, people.GraphIdentityQuery{
+		IdentityIDs: []string{graphTarget.ID}, Limit: 10,
+	}, people.Visibility{SiteIDs: []string{randomID(t)}})
+	if err != nil || len(outsideGraphItems) != 0 {
+		t.Fatalf("graph identity query escaped directory visibility: %#v err=%v", outsideGraphItems, err)
+	}
 	managed := contractIdentity(t, organizationID, "person", "Managed Person "+suffix, "managed."+suffix+"@example.test", "", "", now)
 	managed.Provider = "directory.example"
 	managed.ProviderSubject = "source-" + suffix

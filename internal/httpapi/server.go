@@ -261,10 +261,12 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 	mux.Handle("POST /api/v1/asset-identifiers/resolve", server.protected("", false, server.resolveAssetIdentifier))
 	mux.Handle("GET /api/v1/asset-label-templates", server.protected("", false, server.listAssetLabelTemplates))
 	mux.Handle("POST /api/v1/asset-label-batches", server.protected("", true, server.createAssetLabelBatch))
-	mux.Handle("GET /api/v1/assets/{assetID}/identifiers", server.protected(guard.PermissionAssetsRead, false, server.listAssetIdentifiers))
-	mux.Handle("POST /api/v1/assets/{assetID}/identifiers", server.protected(guard.PermissionAssetsWrite, true, server.createAssetIdentifier))
-	mux.Handle("POST /api/v1/assets/{assetID}/identifiers/{identifierID}/replace", server.protected(guard.PermissionAssetsWrite, true, server.replaceAssetIdentifier))
-	mux.Handle("POST /api/v1/assets/{assetID}/identifiers/{identifierID}/deactivate", server.protected(guard.PermissionAssetsWrite, true, server.deactivateAssetIdentifier))
+	// Identifier handlers authorize the loaded asset so organization-, site-,
+	// department-, and resource-scoped grants all preserve the same boundary.
+	mux.Handle("GET /api/v1/assets/{assetID}/identifiers", server.protected("", false, server.listAssetIdentifiers))
+	mux.Handle("POST /api/v1/assets/{assetID}/identifiers", server.protected("", true, server.createAssetIdentifier))
+	mux.Handle("POST /api/v1/assets/{assetID}/identifiers/{identifierID}/replace", server.protected("", true, server.replaceAssetIdentifier))
+	mux.Handle("POST /api/v1/assets/{assetID}/identifiers/{identifierID}/deactivate", server.protected("", true, server.deactivateAssetIdentifier))
 	mux.Handle("GET /api/v1/sites", server.protected("", false, server.listSites))
 	mux.Handle("POST /api/v1/sites", server.protected(guard.PermissionDirectoryWrite, true, server.createSite))
 	mux.Handle("GET /api/v1/buildings", server.protected("", false, server.listBuildings))
@@ -2920,12 +2922,16 @@ func (s *Server) hasAnyAssetGrant(authentication guard.Authentication, permissio
 	return false
 }
 
-func (s *Server) listAssetIdentifiers(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
-	if s.atlasCodes == nil {
+func (s *Server) listAssetIdentifiers(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
+	if s.atlasCodes == nil || s.atlas == nil {
 		writeError(w, r, http.StatusServiceUnavailable, "atlas_codes_unavailable", "Atlas Codes is unavailable")
 		return
 	}
-	items, err := s.atlasCodes.ListIdentifiers(r.Context(), r.PathValue("assetID"))
+	assetID := r.PathValue("assetID")
+	if !s.authorizeAtlasCodeAsset(w, r, authentication, assetID, guard.PermissionAssetsRead) {
+		return
+	}
+	items, err := s.atlasCodes.ListIdentifiers(r.Context(), assetID)
 	if err != nil {
 		writeAtlasCodesError(w, r, err)
 		return
@@ -2996,11 +3002,14 @@ func (s *Server) createAssetLabelBatch(w http.ResponseWriter, r *http.Request, a
 }
 
 func (s *Server) createAssetIdentifier(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
-	if s.atlasCodes == nil {
+	if s.atlasCodes == nil || s.atlas == nil {
 		writeError(w, r, http.StatusServiceUnavailable, "atlas_codes_unavailable", "Atlas Codes is unavailable")
 		return
 	}
 	assetID := r.PathValue("assetID")
+	if !s.authorizeAtlasCodeAsset(w, r, authentication, assetID, guard.PermissionAssetsWrite) {
+		return
+	}
 	if !s.requireResourceWrite(w, r, authentication, "asset", assetID) {
 		return
 	}
@@ -3023,11 +3032,14 @@ func (s *Server) createAssetIdentifier(w http.ResponseWriter, r *http.Request, a
 }
 
 func (s *Server) replaceAssetIdentifier(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
-	if s.atlasCodes == nil {
+	if s.atlasCodes == nil || s.atlas == nil {
 		writeError(w, r, http.StatusServiceUnavailable, "atlas_codes_unavailable", "Atlas Codes is unavailable")
 		return
 	}
 	assetID := r.PathValue("assetID")
+	if !s.authorizeAtlasCodeAsset(w, r, authentication, assetID, guard.PermissionAssetsWrite) {
+		return
+	}
 	if !s.requireResourceWrite(w, r, authentication, "asset", assetID) {
 		return
 	}
@@ -3047,11 +3059,14 @@ func (s *Server) replaceAssetIdentifier(w http.ResponseWriter, r *http.Request, 
 }
 
 func (s *Server) deactivateAssetIdentifier(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
-	if s.atlasCodes == nil {
+	if s.atlasCodes == nil || s.atlas == nil {
 		writeError(w, r, http.StatusServiceUnavailable, "atlas_codes_unavailable", "Atlas Codes is unavailable")
 		return
 	}
 	assetID := r.PathValue("assetID")
+	if !s.authorizeAtlasCodeAsset(w, r, authentication, assetID, guard.PermissionAssetsWrite) {
+		return
+	}
 	if !s.requireResourceWrite(w, r, authentication, "asset", assetID) {
 		return
 	}
@@ -3068,6 +3083,37 @@ func (s *Server) deactivateAssetIdentifier(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"identifier": identifier, "changed": changed})
+}
+
+func (s *Server) authorizeAtlasCodeAsset(w http.ResponseWriter, r *http.Request, authentication guard.Authentication, assetID string, permission guard.Permission) bool {
+	asset, err := s.atlas.GetAsset(r.Context(), assetID)
+	if err != nil {
+		if errors.Is(err, atlas.ErrInvalidInput) {
+			writeError(w, r, http.StatusBadRequest, "validation_failed", "asset identity is invalid")
+			return false
+		}
+		writeError(w, r, http.StatusNotFound, "not_found", "the requested asset identifier was not found")
+		return false
+	}
+	allowed := false
+	switch permission {
+	case guard.PermissionAssetsRead:
+		allowed = s.canReadAsset(r.Context(), authentication, asset)
+	case guard.PermissionAssetsWrite:
+		allowed = s.canWriteAsset(r.Context(), authentication, asset)
+	}
+	if allowed {
+		return true
+	}
+	if permission == guard.PermissionAssetsWrite && s.hasAssetGrant(authentication, guard.PermissionAssetsRead, asset) {
+		writeError(w, r, http.StatusForbidden, "permission_denied", "asset write permission is required for this operation")
+		return false
+	}
+	// Unknown assets and assets outside the caller's visible scope are
+	// intentionally indistinguishable so history and mutation paths cannot be
+	// used as discovery oracles.
+	writeError(w, r, http.StatusNotFound, "not_found", "the requested asset identifier was not found")
+	return false
 }
 
 func writeAtlasCodesError(w http.ResponseWriter, r *http.Request, err error) {

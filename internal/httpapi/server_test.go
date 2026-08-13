@@ -1769,6 +1769,162 @@ func TestAtlasCodesResolveHonorsScopedAssetReadWithoutDisclosingDeniedMatches(t 
 	}
 }
 
+func TestAtlasCodesIdentifierLifecycleHonorsTargetAssetScopes(t *testing.T) {
+	handler, guardService := newGuardServerWithIdentityAndGuard(t, nil, nil, nil)
+	administrator := bootstrapAdministrator(t, handler)
+	visibleSite := createPeopleRecord[people.Site](t, handler, administrator, "/api/v1/sites", map[string]any{
+		"name": "Identifier visible site",
+	})
+	hiddenSite := createPeopleRecord[people.Site](t, handler, administrator, "/api/v1/sites", map[string]any{
+		"name": "Identifier hidden site",
+	})
+	visibleDepartment := createPeopleRecord[people.Department](t, handler, administrator, "/api/v1/departments", map[string]any{
+		"name": "Identifier visible department", "siteId": visibleSite.ID,
+	})
+	hiddenDepartment := createPeopleRecord[people.Department](t, handler, administrator, "/api/v1/departments", map[string]any{
+		"name": "Identifier hidden department", "siteId": hiddenSite.ID,
+	})
+	for _, asset := range []map[string]any{
+		{
+			"id": "identifier-scope-visible", "name": "Visible scoped asset", "kind": "server", "status": "active",
+			"siteId": visibleSite.ID, "departmentId": visibleDepartment.ID,
+		},
+		{
+			"id": "identifier-scope-hidden", "name": "Private hidden asset", "kind": "server", "status": "active",
+			"siteId": hiddenSite.ID, "departmentId": hiddenDepartment.ID,
+		},
+	} {
+		createPeopleRecord[domain.Asset](t, handler, administrator, "/api/v1/assets", asset)
+	}
+	for _, association := range []struct {
+		assetID string
+		id      string
+		value   string
+	}{
+		{assetID: "identifier-scope-visible", id: "identifier-scope-visible-code", value: "VISIBLE-SCOPE-CODE"},
+		{assetID: "identifier-scope-hidden", id: "identifier-scope-hidden-code", value: "PRIVATE-HIDDEN-CODE"},
+	} {
+		payload, _ := json.Marshal(map[string]any{
+			"id": association.id, "symbology": "code128", "value": association.value, "displayValue": association.value,
+		})
+		request := authenticatedRequest(http.MethodPost, "/api/v1/assets/"+association.assetID+"/identifiers", bytes.NewReader(payload), administrator)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusCreated {
+			t.Fatalf("create identifier fixture %s: %d: %s", association.id, response.Code, response.Body.String())
+		}
+	}
+
+	administratorAuthentication, err := guardService.AuthenticateSession(context.Background(), administrator.cookie.Value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	createScopedSession := func(name string, permissions []guard.Permission, kind guard.ScopeKind, resourceID string) testSession {
+		t.Helper()
+		subject := strings.ReplaceAll(strings.ToLower(name), " ", "-")
+		credentials, err := guardService.LoginOIDC(context.Background(), identity.OIDCPrincipal{
+			Issuer: "https://identity.example.test/atlas-code-scopes", Subject: subject,
+			Email: subject + "@example.test", EmailVerified: true, DisplayName: name,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		role, err := guardService.CreateRole(context.Background(), administratorAuthentication, guard.CreateRoleInput{
+			Name: name, Permissions: permissions,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := guardService.AssignRole(context.Background(), administratorAuthentication, guard.RoleAssignmentInput{
+			AccountID: credentials.Authentication.Principal.Subject, RoleID: role.ID, ScopeKind: kind, ResourceID: resourceID,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return testSession{
+			cookie: &http.Cookie{Name: localSessionName, Value: credentials.Token}, csrfToken: credentials.CSRFToken,
+		}
+	}
+	request := func(session testSession, method, path string, payload []byte) *httptest.ResponseRecorder {
+		t.Helper()
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, authenticatedRequest(method, path, bytes.NewReader(payload), session))
+		return response
+	}
+
+	resourceReadWrite := createScopedSession(
+		"Identifier resource reader writer",
+		[]guard.Permission{guard.PermissionAssetsRead, guard.PermissionAssetsWrite},
+		guard.ScopeResource,
+		"identifier-scope-visible",
+	)
+	visibleList := request(resourceReadWrite, http.MethodGet, "/api/v1/assets/identifier-scope-visible/identifiers", nil)
+	if visibleList.Code != http.StatusOK || !strings.Contains(visibleList.Body.String(), "VISIBLE-SCOPE-CODE") {
+		t.Fatalf("expected resource-scoped identifier history, got %d: %s", visibleList.Code, visibleList.Body.String())
+	}
+	hiddenList := request(resourceReadWrite, http.MethodGet, "/api/v1/assets/identifier-scope-hidden/identifiers", nil)
+	if hiddenList.Code != http.StatusNotFound || strings.Contains(hiddenList.Body.String(), "PRIVATE") || strings.Contains(hiddenList.Body.String(), "identifier-scope-hidden") {
+		t.Fatalf("hidden identifier history was not uniformly redacted: %d: %s", hiddenList.Code, hiddenList.Body.String())
+	}
+
+	createPayload, _ := json.Marshal(map[string]any{
+		"id": "identifier-resource-created", "symbology": "code128", "value": "RESOURCE-CREATED-CODE",
+	})
+	created := request(resourceReadWrite, http.MethodPost, "/api/v1/assets/identifier-scope-visible/identifiers", createPayload)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("expected resource-scoped identifier creation, got %d: %s", created.Code, created.Body.String())
+	}
+	replacePayload, _ := json.Marshal(map[string]any{
+		"replacementId": "identifier-resource-replacement", "symbology": "qr", "value": "RESOURCE-REPLACEMENT-CODE", "revision": 1,
+	})
+	replaced := request(resourceReadWrite, http.MethodPost, "/api/v1/assets/identifier-scope-visible/identifiers/identifier-resource-created/replace", replacePayload)
+	if replaced.Code != http.StatusOK || !strings.Contains(replaced.Body.String(), `"changed":true`) {
+		t.Fatalf("expected resource-scoped replacement, got %d: %s", replaced.Code, replaced.Body.String())
+	}
+	deactivatePayload, _ := json.Marshal(map[string]int64{"revision": 1})
+	deactivated := request(resourceReadWrite, http.MethodPost, "/api/v1/assets/identifier-scope-visible/identifiers/identifier-resource-replacement/deactivate", deactivatePayload)
+	if deactivated.Code != http.StatusOK || !strings.Contains(deactivated.Body.String(), `"status":"deactivated"`) {
+		t.Fatalf("expected resource-scoped deactivation, got %d: %s", deactivated.Code, deactivated.Body.String())
+	}
+
+	hiddenCreatePayload, _ := json.Marshal(map[string]any{
+		"id": "identifier-hidden-attempt", "symbology": "code128", "value": "PRIVATE-HIDDEN-ATTEMPT",
+	})
+	hiddenCreate := request(resourceReadWrite, http.MethodPost, "/api/v1/assets/identifier-scope-hidden/identifiers", hiddenCreatePayload)
+	if hiddenCreate.Code != http.StatusNotFound || strings.Contains(hiddenCreate.Body.String(), "PRIVATE") || strings.Contains(hiddenCreate.Body.String(), "identifier-scope-hidden") {
+		t.Fatalf("hidden identifier mutation was not uniformly redacted: %d: %s", hiddenCreate.Code, hiddenCreate.Body.String())
+	}
+
+	readOnly := createScopedSession(
+		"Identifier resource reader",
+		[]guard.Permission{guard.PermissionAssetsRead},
+		guard.ScopeResource,
+		"identifier-scope-visible",
+	)
+	readOnlyCreate := request(readOnly, http.MethodPost, "/api/v1/assets/identifier-scope-visible/identifiers", createPayload)
+	if readOnlyCreate.Code != http.StatusForbidden || !strings.Contains(readOnlyCreate.Body.String(), `"code":"permission_denied"`) || strings.Contains(readOnlyCreate.Body.String(), "RESOURCE-CREATED-CODE") {
+		t.Fatalf("read-only mutation denial was not safe: %d: %s", readOnlyCreate.Code, readOnlyCreate.Body.String())
+	}
+
+	for _, scoped := range []struct {
+		name       string
+		kind       guard.ScopeKind
+		resourceID string
+		identifier string
+	}{
+		{name: "Identifier site reader writer", kind: guard.ScopeSite, resourceID: visibleSite.ID, identifier: "identifier-site-created"},
+		{name: "Identifier department reader writer", kind: guard.ScopeDepartment, resourceID: visibleDepartment.ID, identifier: "identifier-department-created"},
+	} {
+		session := createScopedSession(scoped.name, []guard.Permission{guard.PermissionAssetsRead, guard.PermissionAssetsWrite}, scoped.kind, scoped.resourceID)
+		payload, _ := json.Marshal(map[string]any{
+			"id": scoped.identifier, "symbology": "code128", "value": strings.ToUpper(scoped.identifier),
+		})
+		response := request(session, http.MethodPost, "/api/v1/assets/identifier-scope-visible/identifiers", payload)
+		if response.Code != http.StatusCreated {
+			t.Fatalf("expected %s-scoped identifier creation, got %d: %s", scoped.kind, response.Code, response.Body.String())
+		}
+	}
+}
+
 func TestPeopleAndThreadsCollectionsRequireDirectoryGrants(t *testing.T) {
 	handler := newGuardServer(t)
 	session := bootstrapAdministrator(t, handler)

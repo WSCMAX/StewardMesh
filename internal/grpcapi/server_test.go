@@ -14,7 +14,9 @@ import (
 	"time"
 
 	stewardmeshv1 "github.com/maxlemke/stewardmesh/api/proto"
+	"github.com/maxlemke/stewardmesh/internal/foundation"
 	"github.com/maxlemke/stewardmesh/internal/guard"
+	"github.com/maxlemke/stewardmesh/internal/storage"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -258,6 +260,92 @@ func TestTapHandleRejectsAuthenticationBeforeUnmarshalAndHandler(t *testing.T) {
 	if got := codec.unmarshals.Load(); got != 1 || handlerCalls != 1 || authenticator.calls != 1 {
 		t.Fatalf("authenticated call unmarshals=%d handlers=%d authentications=%d", got, handlerCalls, authenticator.calls)
 	}
+}
+
+func TestTransportCancellationTakesPrecedence(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		ctx  func() (context.Context, context.CancelFunc)
+		code codes.Code
+	}{
+		{name: "canceled", ctx: func() (context.Context, context.CancelFunc) {
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			return ctx, func() {}
+		}, code: codes.Canceled},
+		{name: "deadline", ctx: func() (context.Context, context.CancelFunc) {
+			return context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+		}, code: codes.DeadlineExceeded},
+	} {
+		t.Run("Guard "+test.name, func(t *testing.T) {
+			ctx, cancel := test.ctx()
+			defer cancel()
+			gateway := &Gateway{guard: &fakeAuthenticator{}}
+			_, _, err := gateway.authenticateTransport(ctx, "opaque-session")
+			if status.Code(err) != test.code {
+				t.Fatalf("code=%s err=%v", status.Code(err), err)
+			}
+		})
+	}
+
+	t.Run("handler canceled", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			cancel()
+			writeTestJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]any{"code": "handler_failed"}})
+		})
+		gateway, err := New(handler, Options{AllowedOrigin: "https://stewardmesh.example.test", Guard: &fakeAuthenticator{}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx = metadata.NewIncomingContext(ctx, metadata.Pairs("authorization", "Bearer opaque-session"))
+		method := stewardmeshv1.File_stewardmesh_proto.Services().ByName("GuardService").Methods().ByName("CreateRole")
+		_, err = gateway.invoke(ctx, "/stewardmesh.v1.GuardService/CreateRole", method.Output(), &stewardmeshv1.CreateRoleRequest{Name: "Operators"})
+		if status.Code(err) != codes.Canceled {
+			t.Fatalf("code=%s err=%v", status.Code(err), err)
+		}
+	})
+
+	t.Run("handler deadline", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+		defer cancel()
+		handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			<-r.Context().Done()
+			writeTestJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]any{"code": "handler_failed"}})
+		})
+		gateway, err := New(handler, Options{AllowedOrigin: "https://stewardmesh.example.test", Guard: &fakeAuthenticator{}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx = metadata.NewIncomingContext(ctx, metadata.Pairs("authorization", "Bearer opaque-session"))
+		method := stewardmeshv1.File_stewardmesh_proto.Services().ByName("GuardService").Methods().ByName("CreateRole")
+		_, err = gateway.invoke(ctx, "/stewardmesh.v1.GuardService/CreateRole", method.Output(), &stewardmeshv1.CreateRoleRequest{Name: "Operators"})
+		if status.Code(err) != codes.DeadlineExceeded {
+			t.Fatalf("code=%s err=%v", status.Code(err), err)
+		}
+	})
+
+	t.Run("Vault read canceled", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		blobID := "0123456789abcdef0123456789abcdef"
+		blob := storage.Blob{ID: blobID, OrganizationID: "example-org", Name: "file.txt", MediaType: "text/plain", SizeBytes: 1, SHA256: strings.Repeat("0", 64), Provider: "canceling", CreatedBy: "administrator", CreatedAt: time.Now().UTC()}
+		blob.SetObjectKey("private/object")
+		vault, err := storage.NewService(&grpcTestMetadataStore{blob: blob}, &grpcCancelingObjectStore{ctx: ctx, cancel: cancel}, foundation.NopAuditor{}, storage.ServiceConfig{OrganizationID: "example-org"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		gateway, err := New(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusCreated) }), Options{
+			AllowedOrigin: "https://stewardmesh.example.test", Guard: &fakeAuthenticator{}, Vault: vault,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		output := stewardmeshv1.File_stewardmesh_proto.Services().ByName("VaultService").Methods().ByName("DownloadBlob").Output()
+		_, err = gateway.downloadVault(ctx, output, preparedRequest{}, map[string]any{"blobId": blobID})
+		if status.Code(err) != codes.Canceled {
+			t.Fatalf("code=%s err=%v", status.Code(err), err)
+		}
+	})
 }
 
 type countingCodec struct {
@@ -717,6 +805,58 @@ func (f *fakeAuthenticator) AuthenticateSession(_ context.Context, token string)
 		Grants:    []guard.Grant{{Permission: guard.PermissionGuardManage, Scope: guard.Scope{Kind: guard.ScopeOrganization, OrganizationID: "example-org", ResourceID: "example-org"}}},
 	}, nil
 }
+
+type grpcTestMetadataStore struct{ blob storage.Blob }
+
+func (s *grpcTestMetadataStore) ListBlobs(context.Context, string) ([]storage.Blob, error) {
+	return []storage.Blob{s.blob}, nil
+}
+
+func (s *grpcTestMetadataStore) GetBlob(_ context.Context, organizationID, id string) (storage.Blob, error) {
+	if s.blob.OrganizationID == organizationID && s.blob.ID == id {
+		return s.blob, nil
+	}
+	return storage.Blob{}, storage.ErrNotFound
+}
+
+func (*grpcTestMetadataStore) CreateBlob(context.Context, storage.Blob) (storage.Blob, error) {
+	return storage.Blob{}, storage.ErrConflict
+}
+
+type grpcCancelingObjectStore struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+}
+
+func (*grpcCancelingObjectStore) Provider() string    { return "canceling" }
+func (*grpcCancelingObjectStore) MaximumBytes() int64 { return 1024 }
+func (*grpcCancelingObjectStore) Put(context.Context, string, string, io.Reader) (storage.StoredObject, error) {
+	return storage.StoredObject{}, storage.ErrInvalidInput
+}
+func (s *grpcCancelingObjectStore) Open(context.Context, string) (io.ReadCloser, error) {
+	return &grpcCancelingReader{ctx: s.ctx, cancel: s.cancel}, nil
+}
+func (*grpcCancelingObjectStore) Delete(context.Context, string) error {
+	return storage.ErrInvalidInput
+}
+func (*grpcCancelingObjectStore) AuthorizeDownload(context.Context, string, string, time.Duration) (storage.ObjectDownloadAuthorization, error) {
+	return storage.ObjectDownloadAuthorization{}, storage.ErrInvalidInput
+}
+func (*grpcCancelingObjectStore) ValidateDownload(context.Context, string, string) error {
+	return storage.ErrInvalidInput
+}
+
+type grpcCancelingReader struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+}
+
+func (r *grpcCancelingReader) Read([]byte) (int, error) {
+	r.cancel()
+	return 0, r.ctx.Err()
+}
+
+func (*grpcCancelingReader) Close() error { return nil }
 
 func writeTestJSON(w http.ResponseWriter, statusCode int, value any) {
 	w.Header().Set("Content-Type", "application/json")

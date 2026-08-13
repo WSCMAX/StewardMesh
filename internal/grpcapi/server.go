@@ -288,7 +288,13 @@ func (g *Gateway) invoke(ctx context.Context, fullMethod string, output protoref
 }
 
 func (g *Gateway) authenticateTransport(ctx context.Context, token string) (context.Context, guard.Authentication, error) {
+	if err := ctx.Err(); err != nil {
+		return ctx, guard.Authentication{}, contextStatus(err)
+	}
 	authenticatedContext, authentication, err := httpapi.AuthenticateTransportSession(ctx, g.guard, token)
+	if contextErr := ctx.Err(); contextErr != nil {
+		return ctx, guard.Authentication{}, contextStatus(contextErr)
+	}
 	if err == nil && (g.organizationID == "" ||
 		(authentication.Session.OrganizationID == g.organizationID && authentication.Principal.OrganizationID == g.organizationID)) {
 		return authenticatedContext, authentication, nil
@@ -591,11 +597,20 @@ func (g *Gateway) perform(prepared preparedRequest) (httpResult, error) {
 	if err := serveApplicationHTTP(g.handler, recorder, request); err != nil {
 		return httpResult{}, err
 	}
+	if err := prepared.ctx.Err(); err != nil {
+		return httpResult{}, contextStatus(err)
+	}
 	response := recorder.Result()
 	defer response.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(response.Body, maximumBodyBytes+1))
 	if err != nil {
+		if contextErr := prepared.ctx.Err(); contextErr != nil {
+			return httpResult{}, contextStatus(contextErr)
+		}
 		return httpResult{}, status.Error(codes.Internal, "REST response could not be read")
+	}
+	if err := prepared.ctx.Err(); err != nil {
+		return httpResult{}, contextStatus(err)
 	}
 	if len(body) > maximumBodyBytes {
 		return httpResult{}, status.Error(codes.ResourceExhausted, "response exceeds the gRPC transport limit")
@@ -967,12 +982,21 @@ func (g *Gateway) downloadVault(ctx context.Context, output protoreflect.Message
 	}
 	blob, content, err := g.vault.OpenBlob(ctx, blobID)
 	if err != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return nil, contextStatus(contextErr)
+		}
 		return nil, status.Error(codes.Internal, "vault_error: the Vault operation could not be completed")
 	}
 	defer content.Close()
 	contents, err := io.ReadAll(io.LimitReader(content, maximumBodyBytes+1))
 	if err != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return nil, contextStatus(contextErr)
+		}
 		return nil, status.Error(codes.Internal, "integrity_failed: Vault could not verify the stored file")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, contextStatus(err)
 	}
 	if len(contents) > maximumBodyBytes {
 		return nil, status.Error(codes.ResourceExhausted, "response exceeds the gRPC transport limit")

@@ -1,6 +1,7 @@
 import { type FormEvent, type ReactNode, useEffect, useId, useRef, useState } from 'react'
 import type { Asset } from './AtlasInventory'
 import { ApiRequestError, requestJSON } from './api'
+import { buttonClass, inputClass, panelClass, secondaryButtonClass, subpanelClass, tableWrapClass } from './ui'
 
 // Requirement: REQ-HORIZON-001. Feature: lifecycle.planning.
 
@@ -61,9 +62,6 @@ const maximumReplacementCost = '90071992547409.91'
 const initialYear = new Date().getFullYear()
 const initialAsOf = localDateTimeValue(new Date())
 
-const inputClass = 'mt-2 min-h-11 w-full rounded-lg border border-steward-ink-800 bg-steward-ink-950 px-3 py-2 text-steward-mist shadow-inner shadow-black/20'
-const buttonClass = 'min-h-11 rounded-lg bg-steward-teal px-4 py-2.5 font-semibold text-steward-ink-950 transition hover:bg-[#29cfb9] disabled:cursor-wait disabled:opacity-60'
-const secondaryButtonClass = 'min-h-11 rounded-lg border border-steward-teal px-4 py-2.5 font-semibold text-steward-teal transition hover:bg-steward-teal/10 disabled:cursor-wait disabled:opacity-60'
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
@@ -399,7 +397,7 @@ export default function HorizonPlanner({ csrfToken, permissions, assets, onOpenH
 
   if (!canRead) {
     return (
-      <section aria-labelledby="horizon-heading" className="rounded-xl border border-steward-ink-800 bg-steward-ink-900 p-6" data-feature="lifecycle.planning" data-requirement="REQ-HORIZON-001">
+      <section aria-labelledby="horizon-heading" className={`${panelClass} p-5 sm:p-6`} data-feature="lifecycle.planning" data-requirement="REQ-HORIZON-001">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div><h2 className="text-2xl font-semibold" id="horizon-heading">Horizon — Lifecycle planning</h2><p className="mt-2 text-steward-mist-muted">Your role does not include permission to view lifecycle plans and forecasts.</p></div>
           {onOpenHelp && <button className={secondaryButtonClass} onClick={onOpenHelp} type="button">Horizon help</button>}
@@ -413,7 +411,7 @@ export default function HorizonPlanner({ csrfToken, permissions, assets, onOpenH
   const nonAdditive = groupBy === 'tag' || groupBy === 'goal'
 
   return (
-    <section aria-labelledby="horizon-heading" className="min-w-0 rounded-xl border border-steward-ink-800 bg-steward-ink-900 p-4 sm:p-6" data-feature="lifecycle.planning" data-requirement="REQ-HORIZON-001">
+    <section aria-labelledby="horizon-heading" className={`${panelClass} min-w-0 p-4 sm:p-6`} data-feature="lifecycle.planning" data-requirement="REQ-HORIZON-001">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div><p className="text-sm font-semibold text-steward-teal">Horizon</p><h2 className="mt-2 text-2xl font-semibold" id="horizon-heading">Lifecycle planning and forecasting</h2><p className="mt-2 max-w-4xl leading-7 text-steward-mist-muted">Version useful-life and replacement assumptions, compare scenarios, and forecast needs by fiscal year or organization context.</p></div>
         <div className="flex flex-wrap gap-2">
@@ -427,7 +425,7 @@ export default function HorizonPlanner({ csrfToken, permissions, assets, onOpenH
 
       {canWrite && formOpen && <PlanEditor assets={assets} busy={busy === 'save'} editing={editing} onCancel={closeForm} onSubmit={savePlan} />}
 
-      <section aria-labelledby="horizon-forecast-controls-heading" className="mt-6 rounded-xl border border-steward-ink-800 bg-steward-ink-950/40 p-4">
+      <section aria-labelledby="horizon-forecast-controls-heading" className={`${subpanelClass} mt-6 p-4`}>
         <h3 className="text-lg font-semibold" id="horizon-forecast-controls-heading">Forecast controls</h3>
         <p className="mt-1 text-sm leading-6 text-steward-mist-muted">Use comma-separated scenarios. Years are inclusive; month 1 is January.</p>
         <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
@@ -454,7 +452,7 @@ export default function HorizonPlanner({ csrfToken, permissions, assets, onOpenH
           {costKinds.map((kind) => <Metric key={kind} label={label(kind)} value={money(forecast.totalsByKindMinor[kind] ?? 0, forecast.currency)} />)}
         </div>
 
-        <div className="mt-5 rounded-xl border border-steward-ink-800 bg-steward-ink-950/40 p-4">
+        <div className={`${subpanelClass} mt-5 p-4`}>
           <h4 className="font-semibold">Replacement need overview</h4>
           <p className="mt-1 text-sm leading-6 text-steward-mist-muted">Supplemental compact bars. Exact values and asset counts are in the authoritative table below.</p>
           <ul className="mt-4 grid gap-3">
@@ -464,7 +462,7 @@ export default function HorizonPlanner({ csrfToken, permissions, assets, onOpenH
         </div>
 
         {nonAdditive && <p className="mt-4 rounded-lg border border-steward-warning/60 bg-steward-warning/10 p-3 text-sm leading-6 text-[#ffd596]"><strong>Non-additive grouping:</strong> one asset can appear in multiple {groupBy} rows. Do not add these rows together as an organization total.</p>}
-        <div aria-labelledby="horizon-forecast-table-heading" className="mt-5 overflow-x-auto" role="region" tabIndex={0}>
+        <div aria-labelledby="horizon-forecast-table-heading" className={`${tableWrapClass} mt-5`} role="region" tabIndex={0}>
           <table className="w-full min-w-[1080px] border-collapse text-left text-sm">
             <caption className="pb-3 text-left text-sm text-steward-mist-muted" id="horizon-forecast-table-heading">Authoritative forecast values by {label(forecast.groupBy).toLowerCase()} and scenario.</caption>
             <thead><tr className="border-b border-steward-ink-800 text-steward-mist-muted"><Header>Group</Header><Header>Scenario</Header><Header>Assets</Header><Header>Replacement need</Header>{costKinds.map((kind) => <Header key={kind}>{label(kind)}</Header>)}</tr></thead>
@@ -476,7 +474,7 @@ export default function HorizonPlanner({ csrfToken, permissions, assets, onOpenH
       <section aria-labelledby="horizon-plans-heading" className="mt-8 min-w-0">
         <h3 className="text-lg font-semibold" id="horizon-plans-heading">Lifecycle plans</h3>
         <p className="mt-1 text-sm leading-6 text-steward-mist-muted">Plans shown for scenario {primaryScenario(scenarios)}. Earlier effective assumptions remain available in version history.</p>
-        <div aria-label="Scrollable lifecycle plans table" className="mt-3 overflow-x-auto" role="region" tabIndex={0}>
+        <div aria-label="Scrollable lifecycle plans table" className={`${tableWrapClass} mt-3`} role="region" tabIndex={0}>
           <table className="w-full min-w-[920px] border-collapse text-left text-sm">
             <thead><tr className="border-b border-steward-ink-800 text-steward-mist-muted"><Header>Asset</Header><Header>Scenario</Header><Header>Stage</Header><Header>Useful life</Header><Header>Replacement date</Header><Header>Replacement cost</Header><Header>Revision</Header><Header>Actions</Header></tr></thead>
             <tbody>{plans.map((plan) => <tr className="border-b border-steward-ink-800/70 align-top" key={plan.id}><Cell><strong>{assetName(assets, plan.assetId)}</strong><span className="mt-1 block text-xs text-steward-mist-muted">{plan.assetId}</span></Cell><Cell>{label(plan.scenario)}</Cell><Cell>{label(plan.lifecycleStage)}</Cell><Cell>{plan.expectedUsefulLifeMonths} months</Cell><Cell>{replacementDate(plan)}</Cell><Cell>{money(plan.replacementCostMinor, plan.currency)}</Cell><Cell>{plan.revision}</Cell><Cell><div className="flex min-w-56 flex-wrap gap-2">{canWrite && <button aria-label={`Edit plan for ${assetName(assets, plan.assetId)}`} className={secondaryButtonClass} onClick={() => openEdit(plan)} type="button">Edit plan</button>}<button aria-expanded={historyPlan?.id === plan.id} aria-label={`${busy === `history-${plan.id}` ? 'Loading history' : historyPlan?.id === plan.id ? 'Hide history' : 'View history'} for ${assetName(assets, plan.assetId)}`} className={secondaryButtonClass} disabled={busy !== ''} onClick={() => void toggleHistory(plan)} type="button">{busy === `history-${plan.id}` ? 'Loading…' : historyPlan?.id === plan.id ? 'Hide history' : 'View history'}</button></div></Cell></tr>)}{plans.length === 0 && <tr><td className="px-3 py-6 text-steward-mist-muted" colSpan={8}>No lifecycle plans match {primaryScenario(scenarios)}.</td></tr>}</tbody>
@@ -484,7 +482,7 @@ export default function HorizonPlanner({ csrfToken, permissions, assets, onOpenH
         </div>
       </section>
 
-      {historyPlan && <section aria-labelledby="horizon-history-heading" className="mt-6 min-w-0 rounded-xl border border-steward-ink-800 bg-steward-ink-950/40 p-4">
+      {historyPlan && <section aria-labelledby="horizon-history-heading" className={`${subpanelClass} mt-6 min-w-0 p-4`}>
         <h3 className="text-lg font-semibold" id="horizon-history-heading">Version history for {assetName(assets, historyPlan.assetId)}</h3>
         <p className="mt-1 text-sm text-steward-mist-muted">Immutable assumptions ordered by the service.</p>
         <div aria-label={`Scrollable version history for ${assetName(assets, historyPlan.assetId)}`} className="mt-3 overflow-x-auto" role="region" tabIndex={0}><table className="w-full min-w-[920px] border-collapse text-left text-sm"><thead><tr className="border-b border-steward-ink-800 text-steward-mist-muted"><Header>Revision</Header><Header>Effective from</Header><Header>Recorded</Header><Header>Stage</Header><Header>Useful life</Header><Header>Replacement date</Header><Header>Cost</Header><Header>Actor</Header></tr></thead><tbody>{history.map((version) => <tr className="border-b border-steward-ink-800/70" key={`${version.planId}-${version.revision}`}><Cell>{version.revision}</Cell><Cell>{displayDate(version.effectiveFrom)}</Cell><Cell>{displayDate(version.recordedAt, true)}</Cell><Cell>{label(version.lifecycleStage)}</Cell><Cell>{version.expectedUsefulLifeMonths} months</Cell><Cell>{version.replacementDate ? displayDate(version.replacementDate) : version.derivedReplacementDate ? `${displayDate(version.derivedReplacementDate)} (derived)` : 'Not dated'}</Cell><Cell>{money(version.replacementCostMinor, version.currency)}</Cell><Cell>{version.actorId}</Cell></tr>)}{history.length === 0 && <tr><td className="px-3 py-6 text-steward-mist-muted" colSpan={8}>No earlier plan versions are available.</td></tr>}</tbody></table></div>
@@ -504,7 +502,7 @@ function PlanEditor({ assets, busy, editing, onCancel, onSubmit }: { assets: rea
   const assetID = useId()
   const selectedAssetMissing = editing && !assets.some((asset) => asset.id === editing.assetId)
   return (
-    <section aria-labelledby="horizon-plan-editor-heading" className="mt-6 rounded-xl border border-steward-teal/60 bg-steward-ink-950/50 p-4 sm:p-5">
+    <section aria-labelledby="horizon-plan-editor-heading" className={`${subpanelClass} mt-6 border-steward-teal/40 p-4 sm:p-5`}>
       <div className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="text-lg font-semibold" id="horizon-plan-editor-heading">{editing ? `Edit lifecycle plan for ${assetName(assets, editing.assetId)}` : 'Add lifecycle plan'}</h3><p className="mt-1 text-sm leading-6 text-steward-mist-muted">A replacement date is optional when Atlas has a purchase date; Horizon derives it using whole useful-life months.</p></div><button className={secondaryButtonClass} onClick={onCancel} type="button">Cancel</button></div>
       <form className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-3" key={editing?.id ?? 'new-plan'} onSubmit={onSubmit}>
         <Field id={assetID} label="Atlas asset"><select className={inputClass} defaultValue={editing?.assetId ?? ''} disabled={Boolean(editing)} id={assetID} name="assetId" required><option value="">{assets.length === 0 ? 'No Atlas assets available' : 'Select an asset'}</option>{selectedAssetMissing && <option value={editing.assetId}>{editing.assetId}</option>}{assets.map((asset) => <option key={asset.id} value={asset.id}>{asset.name} · {label(asset.kind)}</option>)}</select>{editing && <input name="assetId" type="hidden" value={editing.assetId} />}</Field>

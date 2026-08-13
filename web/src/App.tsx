@@ -7,6 +7,7 @@ import HorizonPlanner from './HorizonPlanner'
 import LedgerManager from './LedgerManager'
 import PeopleDirectory from './PeopleDirectory'
 import ThreadsManager from './ThreadsManager'
+import { AreaIcon, ChevronRightIcon, StatusBadge, buttonClass, cx, inputClass, panelClass, plainButtonClass, secondaryButtonClass, sectionKickerClass, type AreaIconName } from './ui'
 import VaultManager from './VaultManager'
 import { brandingStyle, readWalkthroughStatus, resolveBranding, type WalkthroughStatus, writeWalkthroughStatus } from './guide'
 import WorkspaceShell, { workspaceAreaFromHash, workspaceHash, type WorkspaceArea, type WorkspaceAreaID } from './WorkspaceShell'
@@ -438,41 +439,41 @@ export default function App() {
   ]
 
   return (
-    <div className="min-h-screen bg-steward-ink-950 text-steward-mist" data-feature="authorization.security experience.help" data-requirement="SEC-GUARD-001 A11Y-001 DOC-001 DOC-002" style={brandingStyle(branding.appliedTheme) as CSSProperties}>
-      <a className="sr-only rounded-lg bg-steward-teal px-3 py-2 font-semibold text-steward-ink-950 focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-50" href="#main-content">Skip to main content</a>
-      <header className="border-b border-steward-ink-800/70 bg-steward-ink-900/90">
-        <div className="mx-auto flex max-w-[96rem] flex-wrap items-center justify-between gap-5 px-4 py-4 sm:px-6">
-          <div className="flex items-center gap-4">
-            <img alt="" aria-hidden="true" className="h-16 w-auto shrink-0" height="370" src="/brand/stewardmesh-s-mark.svg" width="294" />
-            <div>
-              <p className="text-xs font-semibold text-steward-mist-muted">By Binary Cornfield</p>
-              <h1 className="mt-0.5 text-3xl font-bold tracking-tight">StewardMesh</h1>
-              <p className="mt-0.5 text-sm text-steward-mist-muted" aria-live="polite" data-requirement="REQ-FOUNDATION-001">{organizationName}</p>
+    <div className="min-h-screen text-steward-mist" data-feature="authorization.security experience.help" data-requirement="SEC-GUARD-001 A11Y-001 DOC-001 DOC-002" style={brandingStyle(branding.appliedTheme) as CSSProperties}>
+      <a className="sr-only rounded-xl bg-steward-teal px-3 py-2 font-semibold text-steward-ink-950 focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[70]" href="#main-content">Skip to main content</a>
+      <header className="sticky top-0 z-30 border-b border-white/[0.07] bg-steward-ink-950/88 shadow-sm shadow-black/20 backdrop-blur-xl">
+        <div className="mx-auto flex max-w-[100rem] flex-wrap items-center justify-between gap-4 px-4 py-3 sm:px-6">
+          <div className="flex min-w-0 items-center gap-3">
+            <span className="grid size-11 shrink-0 place-items-center rounded-xl border border-white/10 bg-steward-ink-900 shadow-sm"><img alt="" aria-hidden="true" className="h-9 w-auto" height="370" src="/brand/stewardmesh-s-mark.svg" width="294" /></span>
+            <div className="min-w-0">
+              <div className="flex items-baseline gap-2">
+                <h1 className="truncate text-xl font-bold tracking-tight text-white">StewardMesh</h1>
+                <p className="hidden text-[0.6875rem] font-semibold uppercase tracking-[0.14em] text-steward-slate sm:block">By Binary Cornfield</p>
+              </div>
+              <p className="truncate text-xs text-steward-mist-muted sm:text-sm" aria-live="polite" data-requirement="REQ-FOUNDATION-001">{organizationName}</p>
             </div>
           </div>
-          <div className="flex flex-wrap items-center gap-3">
-            {principal && <p className="text-sm text-steward-mist-muted">Signed in as <strong className="text-steward-mist">{principal.displayName}</strong></p>}
-            <button className="min-h-11 rounded-lg border border-steward-teal px-4 py-2 text-sm font-semibold text-steward-teal transition hover:bg-steward-teal/10" onClick={() => openGuide({ view: 'help', topic: authPhase === 'authenticated' ? 'workspace' : 'guard' })} type="button">Open Guide</button>
-            {principal && <button className="min-h-11 rounded-lg border border-steward-ink-800 bg-steward-ink-900 px-4 py-2 text-sm font-semibold transition hover:border-steward-blue hover:bg-steward-ink-800 disabled:cursor-wait disabled:opacity-60" disabled={busy} onClick={handleLogout} type="button">Sign out</button>}
-            <p className={`inline-flex min-h-11 items-center gap-2 rounded-full border px-3 py-2 text-sm font-semibold ${health === 'connected' ? 'border-steward-success/50 bg-steward-success/15 text-[#67dd99]' : health === 'unavailable' ? 'border-steward-warning/60 bg-steward-warning/15 text-[#ffc46b]' : 'border-steward-blue/50 bg-steward-blue/15 text-[#8eb7ff]'}`} aria-live="polite">
-              <span aria-hidden="true" className={`size-2 rounded-full ${health === 'connected' ? 'bg-steward-green' : health === 'unavailable' ? 'bg-steward-warning' : 'bg-steward-blue'}`} />
-              {health === 'connected' ? 'Service connected' : health === 'unavailable' ? 'Start the Go service to connect' : 'Checking service…'}
-            </p>
+          <div className="flex flex-wrap items-center justify-end gap-2 sm:gap-3">
+            {principal && <div className="hidden items-center gap-2 xl:flex"><span aria-hidden="true" className="grid size-8 place-items-center rounded-full bg-steward-blue/15 text-xs font-bold text-[#a9c7ff] ring-1 ring-inset ring-steward-blue/30">{principal.displayName.split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase()}</span><p className="max-w-64 truncate text-sm text-steward-mist-muted">Signed in as <strong className="font-semibold text-steward-mist">{principal.displayName}</strong></p></div>}
+            <button className={cx(secondaryButtonClass, authPhase === 'authenticated' && 'max-sm:hidden')} onClick={() => openGuide({ view: 'help', topic: authPhase === 'authenticated' ? 'workspace' : 'guard' })} type="button">Open Guide</button>
+            {principal && <button className={`${plainButtonClass} text-steward-mist-muted`} disabled={busy} onClick={handleLogout} type="button">Sign out</button>}
+            <p aria-live="polite"><StatusBadge tone={health === 'connected' ? 'success' : health === 'unavailable' ? 'warning' : 'info'}><span aria-hidden="true" className={cx('size-1.5 rounded-full', health === 'connected' ? 'bg-steward-green' : health === 'unavailable' ? 'bg-steward-warning' : 'steward-pulse bg-steward-blue')} />{health === 'connected' ? 'Service connected' : health === 'unavailable' ? 'Service unavailable' : 'Checking service'}</StatusBadge></p>
           </div>
         </div>
       </header>
 
-      <main id="main-content" className="mx-auto max-w-[96rem] space-y-10 px-4 py-6 sm:px-6 lg:py-8" tabIndex={-1}>
+      <main id="main-content" className={cx('mx-auto max-w-[100rem] space-y-8 px-4 py-5 sm:px-6 lg:py-7', authPhase !== 'authenticated' && 'grid min-h-[calc(100svh-5.5rem)] place-items-center')} tabIndex={-1}>
         {authError && <div ref={errorRef} className="rounded-xl border border-steward-danger/50 bg-steward-danger/15 p-4 text-[#ffccd1]" role="alert" tabIndex={-1}>{authError}</div>}
 
-        {authPhase === 'loading' && <section aria-labelledby="auth-loading-heading" className="rounded-xl border border-steward-ink-800 bg-steward-ink-900 p-6"><h2 id="auth-loading-heading" className="text-xl font-semibold">Guard — Checking access</h2><p className="mt-2 text-steward-mist-muted" role="status">Checking administrator setup and your secure session.</p></section>}
+        {authPhase === 'loading' && <section aria-labelledby="auth-loading-heading" className={`${panelClass} w-full max-w-xl p-6`}><span aria-hidden="true" className="mb-4 block h-1 w-20 overflow-hidden rounded-full bg-steward-ink-800"><span className="steward-pulse block h-full w-1/2 rounded-full bg-steward-teal" /></span><h2 id="auth-loading-heading" className="text-xl font-semibold">Guard — Checking access</h2><p className="mt-2 text-steward-mist-muted" role="status">Checking administrator setup and your secure session.</p></section>}
 
-        {authPhase === 'unavailable' && <section aria-labelledby="auth-unavailable-heading" className="rounded-xl border border-steward-warning/40 bg-steward-warning/15 p-6"><h2 id="auth-unavailable-heading" className="text-xl font-semibold">Guard — Authentication unavailable</h2><p className="mt-2 text-steward-mist-muted">Confirm the Go service and database are running, then reload this page.</p><HelpLinks onHelp={() => openGuide({ view: 'help', topic: 'guard' })} onReport={() => openGuide({ view: 'report', topic: 'guard' })} /></section>}
+        {authPhase === 'unavailable' && <section aria-labelledby="auth-unavailable-heading" className={`${panelClass} w-full max-w-xl border-steward-warning/35 bg-steward-warning/10 p-6`}><h2 id="auth-unavailable-heading" className="text-xl font-semibold">Guard — Authentication unavailable</h2><p className="mt-2 text-steward-mist-muted">Confirm the Go service and database are running, then reload this page.</p><HelpLinks onHelp={() => openGuide({ view: 'help', topic: 'guard' })} onReport={() => openGuide({ view: 'report', topic: 'guard' })} /></section>}
 
         {authPhase === 'bootstrap' && (
-          <section aria-labelledby="bootstrap-heading" className="mx-auto max-w-2xl rounded-xl border border-steward-teal/30 bg-steward-ink-900 p-6 shadow-sm">
-            <p className="text-sm font-semibold text-steward-teal">Guard — Secure local authentication</p>
-            <h2 id="bootstrap-heading" className="mt-2 text-3xl font-semibold">Create the first administrator</h2>
+          <section aria-labelledby="bootstrap-heading" className={`${panelClass} relative mx-auto w-full max-w-2xl overflow-hidden p-6 sm:p-8`}>
+            <span aria-hidden="true" className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-steward-green via-steward-teal to-steward-blue" />
+            <p className={sectionKickerClass}>Guard / Secure local authentication</p>
+            <h2 id="bootstrap-heading" className="mt-3 text-3xl font-bold tracking-tight">Create the first administrator</h2>
             <p className="mt-3 leading-7 text-steward-mist-muted">This one-time account receives the organization-scoped Administrator role. Passwords are hashed before storage, and the browser receives only an HttpOnly session cookie.</p>
             <form className="mt-6 space-y-5" onSubmit={handleBootstrap}>
               <Field id="displayName" label="Display name" autoComplete="name" required />
@@ -481,16 +482,18 @@ export default function App() {
               <Field id="password" label="Password" autoComplete="new-password" type="password" minLength={minimumPasswordCharacters} help={`Use at least ${minimumPasswordCharacters} characters. StewardMesh does not require arbitrary symbol or capitalization rules.`} required />
               <Field id="confirmPassword" label="Confirm password" autoComplete="new-password" type="password" minLength={minimumPasswordCharacters} required />
               {tokenRequired && <Field id="bootstrapToken" label="Deployment bootstrap token" autoComplete="off" type="password" help="Enter the token configured by your server administrator. It is sent only to the local StewardMesh API." required />}
-              <button className="min-h-11 w-full rounded-lg bg-steward-teal px-4 py-3 font-semibold text-steward-ink-950 shadow-sm transition hover:bg-[#29cfb9] disabled:cursor-wait disabled:opacity-60" disabled={busy} type="submit">{busy ? 'Creating administrator…' : 'Create administrator'}</button>
+              <button className={`${buttonClass} w-full`} disabled={busy} type="submit">{busy ? 'Creating administrator…' : 'Create administrator'}</button>
             </form>
             <HelpLinks onHelp={() => openGuide({ view: 'help', topic: 'guard' })} onReport={() => openGuide({ view: 'report', topic: 'guard' })} />
           </section>
         )}
 
         {authPhase === 'login' && (
-          <section aria-labelledby="login-heading" className="mx-auto max-w-xl rounded-xl border border-steward-ink-800 bg-steward-ink-900 p-6 shadow-sm">
-            <p className="text-sm font-semibold text-steward-teal">Guard — Secure authentication</p>
-            <h2 id="login-heading" className="mt-2 text-3xl font-semibold">Sign in to StewardMesh</h2>
+          <section aria-labelledby="login-heading" className={`${panelClass} relative mx-auto w-full max-w-xl overflow-hidden p-6 sm:p-9`}>
+            <span aria-hidden="true" className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-steward-green via-steward-teal to-steward-blue" />
+            <div className="mb-6 grid size-12 place-items-center rounded-xl border border-steward-teal/25 bg-steward-teal/10 text-steward-teal"><AreaIcon area="guard" className="size-6" /></div>
+            <p className={sectionKickerClass}>Guard / Secure authentication</p>
+            <h2 id="login-heading" className="mt-3 text-3xl font-bold tracking-tight">Sign in to StewardMesh</h2>
             <p className="mt-3 text-steward-mist-muted">Use your local organization account{oidcEnabled || samlEnabled ? ' or an organization identity provider' : ''}.</p>
             {(oidcEnabled || samlEnabled) && <div className="mt-6 grid gap-3">
               {oidcEnabled && <a className="block min-h-11 w-full rounded-lg border border-steward-teal px-4 py-3 text-center font-semibold text-steward-teal transition hover:bg-steward-teal/10" href="/api/v1/auth/oidc/start">Continue with OpenID Connect</a>}
@@ -500,7 +503,7 @@ export default function App() {
             <form className="mt-6 space-y-5" onSubmit={handleLogin}>
               <Field id="username" label="Username" autoComplete="username" required />
               <Field id="password" label="Password" autoComplete="current-password" type="password" required />
-              <button className="min-h-11 w-full rounded-lg bg-steward-teal px-4 py-3 font-semibold text-steward-ink-950 shadow-sm transition hover:bg-[#29cfb9] disabled:cursor-wait disabled:opacity-60" disabled={busy} type="submit">{busy ? 'Signing in…' : 'Sign in'}</button>
+              <button className={`${buttonClass} w-full`} disabled={busy} type="submit">{busy ? 'Signing in…' : 'Sign in'}</button>
             </form>
             <HelpLinks onHelp={() => openGuide({ view: 'help', topic: 'guard' })} onReport={() => openGuide({ view: 'report', topic: 'guard' })} />
           </section>
@@ -529,9 +532,10 @@ function WorkspaceOverview({ assets, grants, guideOpen, health, modules, onNavig
 }) {
   const availableCount = modules.filter((module) => permissionAccess(grants, module.permission).level !== 'none').length
   return <div className="space-y-5">
-    <section aria-labelledby="workspace-overview-heading" className="overflow-hidden rounded-2xl border border-steward-ink-800 bg-steward-ink-900 p-5 sm:p-6">
-      <p className="text-sm font-semibold text-steward-teal">Connect what you steward. Plan what comes next.</p>
-      <h3 className="mt-2 max-w-4xl text-2xl font-bold tracking-tight sm:text-3xl" id="workspace-overview-heading">A clear starting point for inventory, people, evidence, goals, planning, and finance.</h3>
+    <section aria-labelledby="workspace-overview-heading" className={`${panelClass} relative overflow-hidden p-5 sm:p-7`}>
+      <div aria-hidden="true" className="absolute -right-20 -top-20 size-72 rounded-full bg-steward-blue/10 blur-3xl" />
+      <p className={sectionKickerClass}>Connect what you steward. Plan what comes next.</p>
+      <h3 className="relative mt-3 max-w-4xl text-2xl font-bold tracking-tight text-white sm:text-3xl" id="workspace-overview-heading">A clear starting point for inventory, people, evidence, goals, planning, and finance.</h3>
       <p className="mt-3 max-w-4xl leading-7 text-steward-mist-muted">Open one product area at a time from the navigation. StewardMesh keeps previously opened areas mounted, so filters, selected records, and incomplete form work remain in context while you move around.</p>
       <dl className="mt-5 grid gap-3 sm:grid-cols-3">
         <OverviewMetric label="Assets tracked" value={String(assets.length)} detail="Current Atlas records" />
@@ -542,10 +546,10 @@ function WorkspaceOverview({ assets, grants, guideOpen, health, modules, onNavig
 
     {!guideOpen && <GuideInvitation onNavigate={onOpenGuide} onWalkthroughStatus={onWalkthroughStatus} roles={principal?.roles ?? []} status={walkthroughStatus} />}
 
-    <section aria-labelledby="workspace-areas-heading" className="rounded-2xl border border-steward-ink-800 bg-steward-ink-900 p-5 sm:p-6">
+    <section aria-labelledby="workspace-areas-heading" className={`${panelClass} p-5 sm:p-7`}>
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div><p className="text-xs font-semibold uppercase tracking-[0.18em] text-steward-mist-muted">Product areas</p><h3 className="mt-1 text-xl font-semibold" id="workspace-areas-heading">Choose where to work</h3></div>
-        <button className="min-h-11 text-sm font-semibold text-steward-teal underline underline-offset-4" onClick={() => onOpenGuide({ view: 'help', topic: 'workspace' })} type="button">How Workspace works</button>
+        <button className={plainButtonClass} onClick={() => onOpenGuide({ view: 'help', topic: 'workspace' })} type="button">How Workspace works</button>
       </div>
       <ul className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
         {modules.map((module, index) => {
@@ -553,13 +557,13 @@ function WorkspaceOverview({ assets, grants, guideOpen, health, modules, onNavig
           const writeAccess = module.writePermission ? permissionAccess(grants, module.writePermission) : readAccess
           const available = readAccess.level !== 'none'
           const accessLabel = readAccess.level === 'none' ? 'Limited' : readAccess.level === 'scoped' ? 'Scoped' : writeAccess.level === 'organization' ? 'Read and change' : 'Read only'
-          return <li className="relative overflow-hidden rounded-xl border border-steward-ink-800 bg-steward-ink-950/35 p-4" key={module.id}>
-            <span aria-hidden="true" className={`absolute inset-y-0 left-0 w-1 ${index % 3 === 0 ? 'bg-steward-green' : index % 3 === 1 ? 'bg-steward-teal' : 'bg-steward-blue'}`} />
+          return <li className="group relative overflow-hidden rounded-xl border border-white/[0.08] bg-steward-ink-950/38 p-4 transition hover:-translate-y-0.5 hover:border-steward-teal/30 hover:bg-steward-ink-950/58" key={module.id}>
+            <span aria-hidden="true" className={`absolute inset-x-0 top-0 h-0.5 ${index % 3 === 0 ? 'bg-steward-green' : index % 3 === 1 ? 'bg-steward-teal' : 'bg-steward-blue'}`} />
             <div className="flex items-start justify-between gap-3">
-              <div><h4 className="font-semibold">{module.name} — {module.descriptor}</h4><p className="mt-2 text-sm leading-6 text-steward-mist-muted">{module.summary}</p></div>
-              <span className={`shrink-0 rounded-full border px-2 py-1 text-xs font-semibold ${available ? 'border-steward-success/55 bg-steward-success/15 text-[#aaf0c6]' : 'border-steward-warning/55 bg-steward-warning/15 text-[#ffc46b]'}`}>{accessLabel}</span>
+              <div className="min-w-0"><span aria-hidden="true" className="mb-4 grid size-10 place-items-center rounded-xl border border-white/[0.08] bg-white/[0.04] text-steward-teal transition group-hover:border-steward-teal/25 group-hover:bg-steward-teal/10"><AreaIcon area={module.id as AreaIconName} /></span><h4 className="font-semibold text-white">{module.name} — {module.descriptor}</h4><p className="mt-2 text-sm leading-6 text-steward-mist-muted">{module.summary}</p></div>
+              <StatusBadge tone={available ? 'success' : 'warning'}>{accessLabel}</StatusBadge>
             </div>
-            <button className="mt-4 min-h-11 rounded-lg border border-steward-teal px-3 py-2 text-sm font-semibold text-steward-teal transition hover:bg-steward-teal/10" onClick={() => onNavigate(module.id)} type="button">Open {module.name}</button>
+            <button className={`${plainButtonClass} mt-3 px-0 group-hover:px-2`} onClick={() => onNavigate(module.id)} type="button">Open {module.name}<ChevronRightIcon /></button>
           </li>
         })}
       </ul>
@@ -568,19 +572,19 @@ function WorkspaceOverview({ assets, grants, guideOpen, health, modules, onNavig
 }
 
 function OverviewMetric({ detail, label, value }: { detail: string; label: string; value: string }) {
-  return <div className="rounded-xl border border-steward-ink-800 bg-steward-ink-950/40 p-4"><dt className="text-xs font-semibold uppercase tracking-wide text-steward-mist-muted">{label}</dt><dd className="mt-1 text-2xl font-bold text-steward-mist">{value}</dd><dd className="mt-1 text-xs text-steward-mist-muted">{detail}</dd></div>
+  return <div className="rounded-xl border border-white/[0.08] bg-steward-ink-950/40 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.025)]"><dt className="text-[0.6875rem] font-semibold uppercase tracking-[0.12em] text-steward-slate">{label}</dt><dd className="mt-2 text-2xl font-bold tracking-tight text-white">{value}</dd><dd className="mt-1 text-xs text-steward-mist-muted">{detail}</dd></div>
 }
 
 function PermissionLimitedArea({ module, onOpenGuide, readAccess, writeAccess }: { module: WorkspaceModule; onOpenGuide: () => void; readAccess: PermissionAccess; writeAccess: PermissionAccess }) {
   const scoped = readAccess.level === 'scoped'
-  return <section aria-labelledby={`${module.id}-limited-heading`} className="rounded-2xl border border-steward-ink-800 bg-steward-ink-900 p-6">
+  return <section aria-labelledby={`${module.id}-limited-heading`} className={`${panelClass} p-6`}>
     <p className="text-sm font-semibold text-steward-warning">{scoped ? 'Scoped access' : 'Permission-limited area'}</p>
     <h3 className="mt-2 text-xl font-semibold" id={`${module.id}-limited-heading`}>{scoped ? `${module.name} access is limited to assigned records` : `${module.name} data is protected`}</h3>
     <p className="mt-3 max-w-3xl leading-7 text-steward-mist-muted">{scoped
       ? `Your ${module.permission} grant is limited to ${readAccess.scopeCount} assigned ${readAccess.scopeCount === 1 ? 'scope' : 'scopes'}. Organization-wide lists stay closed so Workspace cannot reveal records outside those boundaries.`
       : <>Your current access does not include <code className="rounded bg-steward-ink-950 px-1.5 py-0.5 text-steward-mist">{module.permission}</code>. Ask a StewardMesh administrator for the appropriate scoped role if this work is part of your responsibilities.</>}</p>
     {scoped && <p className="mt-3 max-w-3xl text-sm leading-6 text-steward-mist-muted">Direct record links still require a matching server-side grant. {writeAccess.level === 'none' ? `Changes require ${module.writePermission}.` : 'Any change remains limited to the matching server-authorized scope.'}</p>}
-    <button className="mt-4 min-h-11 rounded-lg border border-steward-teal px-4 py-2 text-sm font-semibold text-steward-teal" onClick={onOpenGuide} type="button">Learn about {module.name}</button>
+    <button className={`${secondaryButtonClass} mt-4`} onClick={onOpenGuide} type="button">Learn about {module.name}</button>
   </section>
 }
 
@@ -604,7 +608,7 @@ function Field({ id, label, type = 'text', autoComplete, help, minLength, patter
       <input
         aria-describedby={helpID}
         autoComplete={autoComplete}
-        className="mt-2 min-h-11 w-full rounded-lg border border-steward-ink-800 bg-steward-ink-950 px-4 py-3 text-steward-mist shadow-inner shadow-black/20 transition hover:border-steward-blue"
+        className={inputClass}
         id={id}
         minLength={minLength}
         name={id}

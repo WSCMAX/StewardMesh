@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { correlationEventName, getLastCorrelationId } from './api'
 import {
   buildIssueReportUrl,
@@ -9,6 +9,7 @@ import {
   type ResolvedBranding,
   type WalkthroughStatus,
 } from './guide'
+import { buttonClass as primaryButtonClass, inputClass, secondaryButtonClass, subpanelClass } from './ui'
 
 // Requirements: REQ-WORKSPACE-001, A11Y-001, DOC-001, DOC-002. Features: experience.workspace, experience.help.
 
@@ -38,7 +39,7 @@ type GuideInvitationProps = {
 export function GuideInvitation({ onNavigate, onWalkthroughStatus, roles, status }: GuideInvitationProps) {
   if (status !== 'new') return null
   return (
-    <section aria-labelledby="guide-invitation-heading" className="rounded-xl border border-steward-blue/40 bg-steward-blue/10 p-5" data-feature="experience.help" data-requirement="A11Y-001 DOC-001 DOC-002">
+    <section aria-labelledby="guide-invitation-heading" className="rounded-2xl border border-steward-blue/35 bg-steward-blue/10 p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.035)]" data-feature="experience.help" data-requirement="A11Y-001 DOC-001 DOC-002">
       <p className="text-sm font-semibold text-[#8eb7ff]">Guide — Role-aware walkthrough</p>
       <h2 className="mt-2 text-xl font-semibold" id="guide-invitation-heading">Take a quick tour of your workspace</h2>
       <p className="mt-2 max-w-3xl leading-7 text-steward-mist-muted">The tour adapts to {roles.length > 0 ? `your ${roles.join(', ')} role` : 'your current access'}, can be skipped at any time, and never prevents normal work.</p>
@@ -54,10 +55,16 @@ export default function GuideExperience({ branding, destination, issuesUrl, onCl
   const [activeStep, setActiveStep] = useState(0)
   const [walkthroughResult, setWalkthroughResult] = useState('')
   const closeButtonRef = useRef<HTMLButtonElement>(null)
+  const guidePanelRef = useRef<HTMLDivElement>(null)
   const openerRef = useRef<HTMLElement | null>(null)
   const wasOpen = useRef(false)
   const availableTopics = useMemo(() => guideTopics.filter((topic) => !topic.permission || permissions.includes(topic.permission)), [permissions])
   const walkthrough = useMemo(() => availableTopics.length > 0 ? availableTopics : guideTopics.filter((topic) => topic.id === 'workspace' || topic.id === 'guide'), [availableTopics])
+
+  const closeGuide = useCallback(() => {
+    onClose()
+    queueMicrotask(() => openerRef.current?.focus())
+  }, [onClose])
 
   useEffect(() => {
     if (open && !wasOpen.current) {
@@ -69,17 +76,32 @@ export default function GuideExperience({ branding, destination, issuesUrl, onCl
 
   useEffect(() => {
     if (!open) return
-    function closeOnEscape(event: KeyboardEvent) {
-      if (event.key === 'Escape') closeGuide()
+    const priorOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    function handleDialogKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        closeGuide()
+        return
+      }
+      if (event.key !== 'Tab') return
+      const focusable = Array.from(guidePanelRef.current?.querySelectorAll<HTMLElement>('a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])') ?? [])
+      if (focusable.length === 0) return
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first.focus()
+      }
     }
-    window.addEventListener('keydown', closeOnEscape)
-    return () => window.removeEventListener('keydown', closeOnEscape)
-  })
-
-  function closeGuide() {
-    onClose()
-    queueMicrotask(() => openerRef.current?.focus())
-  }
+    window.addEventListener('keydown', handleDialogKeyDown)
+    return () => {
+      document.body.style.overflow = priorOverflow
+      window.removeEventListener('keydown', handleDialogKeyDown)
+    }
+  }, [closeGuide, open])
 
   function followSection(anchor: string) {
     const followedTopic = guideTopics.find((candidate) => candidate.anchor === anchor)
@@ -116,8 +138,9 @@ export default function GuideExperience({ branding, destination, issuesUrl, onCl
   const topic = guideTopics.find((candidate) => candidate.id === destination.topic) ?? guideTopics[0]
   const currentStep = walkthrough[Math.min(activeStep, walkthrough.length - 1)] ?? guideTopics[0]
 
-  return (
-    <aside aria-label="Guide help and walkthroughs" className="fixed inset-y-0 right-0 z-40 w-full max-w-lg overflow-y-auto border-l border-steward-ink-800 bg-steward-ink-900 p-5 shadow-2xl shadow-black/40" data-feature="experience.help" data-requirement="A11Y-001 DOC-001 DOC-002">
+  return (<>
+    <button aria-label="Dismiss Guide backdrop" className="fixed inset-0 z-40 cursor-default bg-black/60 backdrop-blur-sm" onClick={closeGuide} type="button" />
+    <div aria-label="Guide help and walkthroughs" aria-modal="true" className="fixed inset-y-0 right-0 z-50 w-full max-w-lg overflow-y-auto border-l border-white/10 bg-steward-ink-900/98 p-5 shadow-2xl shadow-black/60 sm:p-6" data-feature="experience.help" data-requirement="A11Y-001 DOC-001 DOC-002" ref={guidePanelRef} role="dialog">
       <div className="flex items-start justify-between gap-4">
         <div>
           <p className="text-sm font-semibold text-steward-teal">Guide</p>
@@ -137,8 +160,8 @@ export default function GuideExperience({ branding, destination, issuesUrl, onCl
       {destination.view === 'walkthrough' && <Walkthrough activeStep={activeStep} currentStep={currentStep} onFollowSection={followSection} onMove={moveStep} onSkip={() => { onWalkthroughStatus('skipped'); setWalkthroughResult('Walkthrough skipped. You can replay it whenever you are ready.') }} onStart={startWalkthrough} result={walkthroughResult} roles={roles} total={walkthrough.length} />}
       {destination.view === 'accessibility' && <BrandingAudit branding={branding} />}
       {destination.view === 'report' && <IssueReporter issuesUrl={issuesUrl} topic={topic} version={version} />}
-    </aside>
-  )
+    </div>
+  </>)
 }
 
 function ContextHelp({ onFollowSection, onNavigate, topic, topics }: { onFollowSection: (anchor: string) => void; onNavigate: (destination: GuideDestination) => void; topic: (typeof guideTopics)[number]; topics: typeof guideTopics }) {
@@ -148,7 +171,7 @@ function ContextHelp({ onFollowSection, onNavigate, topic, topics }: { onFollowS
       <select className={inputClass} id="guide-topic" onChange={(event) => onNavigate({ view: 'help', topic: event.target.value as GuideTopicID })} value={topic.id}>
         {topics.map((item) => <option key={item.id} value={item.id}>{item.name} — {item.descriptor}</option>)}
       </select>
-      <div className="mt-5 rounded-xl border border-steward-ink-800 bg-steward-ink-950/40 p-5">
+      <div className={`${subpanelClass} mt-5 p-5`}>
         <p className="text-sm font-semibold text-steward-teal">{topic.name} — {topic.descriptor}</p>
         <h3 className="mt-2 text-xl font-semibold" id="guide-context-heading">What you can do here</h3>
         <p className="mt-3 leading-7 text-steward-mist-muted">{topic.summary}</p>
@@ -225,7 +248,7 @@ function IssueReporter({ issuesUrl, topic, version }: { issuesUrl: string; topic
       <select className={inputClass} id="guide-report-component" onChange={(event) => setComponent(event.target.value)} value={component}>
         {guideTopics.map((item) => <option key={item.id} value={item.name}>{item.name} — {item.descriptor}</option>)}
       </select>
-      <dl className="mt-5 grid gap-3 rounded-xl border border-steward-ink-800 bg-steward-ink-950/40 p-4 text-sm sm:grid-cols-2">
+      <dl className={`${subpanelClass} mt-5 grid gap-3 p-4 text-sm sm:grid-cols-2`}>
         {Object.entries(context).map(([key, value]) => <div className="min-w-0" key={key}><dt className="font-semibold text-steward-mist">{contextLabel(key)}</dt><dd className="mt-1 break-words text-steward-mist-muted">{value}</dd></div>)}
       </dl>
       <a className={`${primaryButtonClass} mt-5 inline-flex`} href={reportUrl} rel="noreferrer" target="_blank">Review issue before submitting</a>
@@ -239,7 +262,4 @@ function contextLabel(key: string) {
   return labels[key] ?? key
 }
 
-const inputClass = 'mt-2 min-h-11 w-full rounded-lg border border-steward-ink-800 bg-steward-ink-950 px-3 py-2 text-steward-mist'
-const primaryButtonClass = 'min-h-11 items-center justify-center rounded-lg bg-steward-teal px-4 py-2.5 text-center text-sm font-semibold text-steward-ink-950 transition hover:bg-[#29cfb9] disabled:cursor-not-allowed disabled:opacity-50'
-const secondaryButtonClass = 'min-h-11 items-center justify-center rounded-lg border border-steward-ink-800 bg-steward-ink-900 px-4 py-2.5 text-center text-sm font-semibold text-steward-mist transition hover:border-steward-blue hover:bg-steward-ink-800 disabled:cursor-not-allowed disabled:opacity-50'
-const smallTabClass = 'min-h-11 rounded-lg border border-steward-ink-800 px-2 py-2 text-sm font-semibold text-steward-mist transition hover:border-steward-blue'
+const smallTabClass = 'min-h-11 rounded-xl border border-white/10 bg-white/[0.03] px-2 py-2 text-sm font-semibold text-steward-mist transition hover:border-steward-teal/40 hover:bg-steward-teal/8'

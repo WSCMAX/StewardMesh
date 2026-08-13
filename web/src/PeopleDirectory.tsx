@@ -1,6 +1,7 @@
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Asset } from './AtlasInventory'
 import { ApiRequestError, requestJSON } from './api'
+import { buttonClass, inputClass, labelClass, panelClass, plainButtonClass, secondaryButtonClass, subpanelClass } from './ui'
 
 // Requirements: REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, REQ-WORKSPACE-001, A11Y-001, DOC-001, DOC-002.
 // Features: identity.directory, experience.workspace.
@@ -129,10 +130,6 @@ type PeopleDirectoryProps = {
 
 const peopleHelpUrl = 'https://github.com/WSCMAX/StewardMesh/blob/main/docs/features/people.md'
 const emptyFilters: Filters = { search: '', kind: '', status: '', departmentId: '', siteId: '' }
-const inputClass = 'mt-2 min-h-11 w-full rounded-lg border border-steward-ink-800 bg-steward-ink-950 px-3 py-2.5 text-steward-mist transition hover:border-steward-blue disabled:cursor-not-allowed disabled:opacity-60'
-const labelClass = 'block text-sm font-semibold text-steward-mist-muted'
-const buttonClass = 'min-h-11 rounded-lg bg-steward-teal px-4 py-2.5 font-semibold text-steward-ink-950 shadow-sm transition hover:bg-[#29cfb9] disabled:cursor-wait disabled:opacity-60'
-const secondaryButtonClass = 'min-h-11 rounded-lg border border-steward-ink-800 bg-steward-ink-900 px-4 py-2.5 font-semibold text-steward-mist transition hover:border-steward-blue hover:bg-steward-ink-800 disabled:cursor-wait disabled:opacity-60'
 const emptyGuidedPerson: GuidedPersonDraft = { displayName: '', email: '', departmentId: '' }
 
 const kindLabels: Record<IdentityKind, string> = {
@@ -463,7 +460,7 @@ function PersonLocationWorkflow({ buildings, canWrite, departments, rooms, sites
   }
 
   return (
-    <section aria-labelledby="person-location-workflow-heading" className="rounded-xl border border-steward-blue/40 bg-steward-ink-950/40 p-4 sm:p-5" data-feature="experience.workspace" data-requirement="REQ-WORKSPACE-001">
+    <section aria-labelledby="person-location-workflow-heading" className={`${subpanelClass} border-steward-blue/35 p-4 sm:p-5`} data-feature="experience.workspace" data-requirement="REQ-WORKSPACE-001">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="max-w-3xl">
           <p className="text-sm font-semibold text-steward-blue">Guided People task</p>
@@ -869,23 +866,23 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
   }
 
   return (
-    <section aria-labelledby="people-heading" className="space-y-6 rounded-xl border border-steward-ink-800 bg-steward-ink-900 p-6" data-feature="identity.directory experience.workspace" data-requirement="REQ-PEOPLE-001 REQ-DIRECTORY-EXPANSION-001 REQ-WORKSPACE-001">
+    <section aria-labelledby="people-heading" className={`${panelClass} space-y-6 p-5 sm:p-6`} data-feature="identity.directory experience.workspace" data-requirement="REQ-PEOPLE-001 REQ-DIRECTORY-EXPANSION-001 REQ-WORKSPACE-001">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="max-w-3xl">
           <p className="text-sm font-semibold text-steward-teal">People — Users, locations, departments, and assignments</p>
           <h2 id="people-heading" className="mt-2 text-2xl font-semibold">Know who uses and stewards each asset</h2>
           <p className="mt-2 leading-7 text-steward-mist-muted">Organize people and shared-use identities by department, site, building, and room. Assign one primary steward, multiple users, and a responsible department while retaining prior assignments.</p>
         </div>
-        <div className="flex gap-4 text-sm">
-          {onOpenHelp ? <button className="min-h-11 text-steward-teal underline underline-offset-4 hover:text-[#58d9c7]" onClick={onOpenHelp} type="button">People help</button> : <a className="text-steward-teal underline underline-offset-4 hover:text-[#58d9c7]" href={peopleHelpUrl}>People help</a>}
-          {onReportIssue ? <button className="min-h-11 text-steward-teal underline underline-offset-4 hover:text-[#58d9c7]" onClick={onReportIssue} type="button">Report a People issue</button> : <a className="text-steward-teal underline underline-offset-4 hover:text-[#58d9c7]" href={issuesUrl}>Report a People issue</a>}
+        <div className="flex flex-wrap gap-2">
+          {onOpenHelp ? <button className={secondaryButtonClass} onClick={onOpenHelp} type="button">People help</button> : <a className={secondaryButtonClass} href={peopleHelpUrl}>People help</a>}
+          {onReportIssue ? <button className={plainButtonClass} onClick={onReportIssue} type="button">Report a People issue</button> : <a className={plainButtonClass} href={issuesUrl}>Report a People issue</a>}
         </div>
       </div>
 
       {error && <div ref={errorRef} className="rounded-xl border border-steward-danger/50 bg-steward-danger/15 p-4 text-[#ffccd1]" role="alert" tabIndex={-1}>{error}</div>}
       <p className="sr-only" aria-live="polite" role="status">{status}</p>
 
-      <aside aria-labelledby="people-guide-heading" className="rounded-xl border border-steward-teal/20 bg-steward-ink-950/20 p-4">
+      <aside aria-labelledby="people-guide-heading" className={`${subpanelClass} border-steward-teal/20 p-4`}>
         <h3 id="people-guide-heading" className="font-semibold text-steward-mist">Quick guide</h3>
         <ol className="mt-2 list-decimal space-y-1 pl-5 text-sm leading-6 text-steward-mist-muted">
           <li>Use the guided task to add a person and resolve their location together.</li>
@@ -895,7 +892,7 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
         </ol>
       </aside>
 
-      <form aria-label="Filter People directory" className="rounded-xl border border-steward-ink-800 bg-steward-ink-950/40 p-4" onSubmit={handleSearch} role="search">
+      <form aria-label="Filter People directory" className={`${subpanelClass} p-4`} onSubmit={handleSearch} role="search">
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
           <div className="lg:col-span-2">
             <label className={labelClass} htmlFor="people-search">Search name or email</label>
@@ -942,7 +939,7 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
         ) : (
           <ul className="mt-4 grid gap-3 md:grid-cols-2" aria-label="People directory identities">
             {identities.map((identity) => (
-              <li className="rounded-xl border border-steward-ink-800 bg-steward-ink-950/50 p-4" key={identity.id}>
+              <li className={`${subpanelClass} p-4`} key={identity.id}>
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <div><p className="font-semibold text-steward-mist">{identity.displayName}</p><p className="mt-1 text-sm text-steward-mist-muted">{kindLabels[identity.kind]} · {identity.status === 'active' ? 'Active' : 'Inactive'}</p></div>
                   <span className="rounded-full border border-steward-ink-800 px-2 py-1 text-xs text-steward-mist-muted">Revision {identity.revision}</span>
@@ -974,7 +971,7 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
               const addressLines = formatSiteAddress(site.address)
               const siteBuildings = buildings.filter((building) => building.siteId === site.id)
               return (
-                <li className="min-w-0 rounded-xl border border-steward-ink-800 bg-steward-ink-950/40 p-4" key={site.id}>
+                <li className={`${subpanelClass} min-w-0 p-4`} key={site.id}>
                   <div className="flex flex-wrap items-start justify-between gap-2">
                     <div>
                       <h4 className="font-semibold text-steward-mist">{site.name}</h4>
@@ -1073,7 +1070,7 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
             <h3 className="text-lg font-semibold" id="create-locations-heading">Create location records</h3>
             <p className="mt-1 text-sm text-steward-mist-muted">Create each level in order so rooms always inherit the correct site from their building.</p>
             <div className="mt-4 grid gap-4 xl:grid-cols-3">
-              <details className="min-w-0 rounded-xl border border-steward-ink-800 bg-steward-ink-950/40 p-4">
+              <details className={`${subpanelClass} min-w-0 p-4`}>
                 <summary className="cursor-pointer font-semibold text-[#58d9c7]">Add a site</summary>
                 <form className="mt-4 space-y-4" onSubmit={handleCreateSite}>
                   <div>
@@ -1097,7 +1094,7 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
                 </form>
               </details>
 
-              <details className="min-w-0 rounded-xl border border-steward-ink-800 bg-steward-ink-950/40 p-4">
+              <details className={`${subpanelClass} min-w-0 p-4`}>
                 <summary className="cursor-pointer font-semibold text-[#58d9c7]">Add a building</summary>
                 <form className="mt-4 space-y-4" onSubmit={handleCreateBuilding}>
                   <div>
@@ -1112,7 +1109,7 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
                 </form>
               </details>
 
-              <details className="min-w-0 rounded-xl border border-steward-ink-800 bg-steward-ink-950/40 p-4">
+              <details className={`${subpanelClass} min-w-0 p-4`}>
                 <summary className="cursor-pointer font-semibold text-[#58d9c7]">Add a room</summary>
                 <form className="mt-4 space-y-4" onSubmit={handleCreateRoom}>
                   <div>
@@ -1133,7 +1130,7 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
           <section aria-labelledby="create-people-heading">
             <h3 className="text-lg font-semibold" id="create-people-heading">Create People records</h3>
             <div className="mt-4 grid gap-4 lg:grid-cols-2">
-              <details className="rounded-xl border border-steward-ink-800 bg-steward-ink-950/40 p-4">
+              <details className={`${subpanelClass} p-4`}>
                 <summary className="cursor-pointer font-semibold text-[#58d9c7]">Add a department</summary>
                 <form className="mt-4 space-y-4" onSubmit={handleCreateDepartment}>
                   <div><label className={labelClass} htmlFor="department-name">Department name</label><input className={inputClass} id="department-name" maxLength={200} name="departmentName" required /></div>
@@ -1145,7 +1142,7 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
                 </form>
               </details>
 
-              <details className="rounded-xl border border-steward-ink-800 bg-steward-ink-950/40 p-4">
+              <details className={`${subpanelClass} p-4`}>
                 <summary className="cursor-pointer font-semibold text-[#58d9c7]">Add a directory identity</summary>
                 <form className="mt-4 space-y-4" onSubmit={handleCreateIdentity}>
                   <div>
@@ -1184,7 +1181,7 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
             </div>
 
             {canAssignAssets && (
-              <form aria-label="Create asset assignment" className="mt-4 grid gap-4 rounded-xl border border-steward-ink-800 bg-steward-ink-950/40 p-4 md:grid-cols-2 lg:grid-cols-4" onSubmit={handleCreateAssignment}>
+              <form aria-label="Create asset assignment" className={`${subpanelClass} mt-4 grid gap-4 p-4 md:grid-cols-2 lg:grid-cols-4`} onSubmit={handleCreateAssignment}>
                 <div>
                   <label className={labelClass} htmlFor="assignment-kind">Assignee type</label>
                   <select className={inputClass} id="assignment-kind" onChange={(event) => { const value = event.target.value as AssigneeKind; setAssigneeKind(value); setAssignmentRole(value === 'department' ? 'department' : 'user') }} value={assigneeKind}><option value="identity">Directory identity</option><option value="department">Department</option></select>

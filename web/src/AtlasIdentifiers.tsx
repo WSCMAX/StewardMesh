@@ -1,5 +1,6 @@
 import { type FormEvent, useEffect, useRef, useState } from 'react'
 import { ApiRequestError, requestJSON } from './api'
+import { buttonClass, emptyStateClass, inputClass, secondaryButtonClass, subpanelClass } from './ui'
 
 // Requirement: REQ-ATLAS-CODES-001. Feature: inventory.identifiers.
 
@@ -35,9 +36,6 @@ type AtlasIdentifiersProps = {
   csrfToken: string
 }
 
-const inputClass = 'mt-2 min-h-11 w-full rounded-lg border border-steward-ink-800 bg-steward-ink-950 px-3 py-2 text-steward-mist shadow-inner shadow-black/20'
-const buttonClass = 'min-h-11 rounded-lg bg-steward-teal px-4 py-2 font-semibold text-steward-ink-950 transition hover:bg-[#29cfb9] disabled:cursor-wait disabled:opacity-60'
-const secondaryButtonClass = 'min-h-11 rounded-lg border border-steward-teal px-4 py-2 font-semibold text-steward-teal transition hover:bg-steward-teal/10 disabled:cursor-wait disabled:opacity-60'
 
 function isIdentifier(value: unknown): value is AssetIdentifier {
   if (typeof value !== 'object' || value === null) return false
@@ -228,10 +226,10 @@ export default function AtlasIdentifiers({ assetId, assetName, canWrite, csrfTok
       {createOpen && canWrite && <IdentifierForm busy={busy === 'create'} legend="Associate an identifier" onSubmit={createIdentifier} submitLabel="Associate identifier" />}
 
       {busy === 'loading' ? <p className="mt-3 text-sm text-steward-mist-muted" role="status">Loading identifiers…</p> : identifiers.length === 0 ? (
-        <p className="mt-3 rounded-lg border border-dashed border-steward-ink-800 p-3 text-sm text-steward-mist-muted">No identifiers are associated with this asset.</p>
+        <p className={`${emptyStateClass} mt-3 px-4 py-6`}>No identifiers are associated with this asset.</p>
       ) : (
         <ul className="mt-3 space-y-3">
-          {identifiers.map((identifier) => <li className="rounded-lg border border-steward-ink-800 p-3 text-sm" key={identifier.id}>
+          {identifiers.map((identifier) => <li className={`${subpanelClass} p-3 text-sm`} key={identifier.id}>
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div className="min-w-0">
                 <p className="break-all font-mono text-steward-mist">{identifier.displayValue || identifier.normalizedValue}</p>
@@ -268,7 +266,7 @@ function IdentifierForm({ busy, initialPrimary = false, initialSymbology = 'code
   showPrimary?: boolean
   submitLabel: string
 }) {
-  return <form aria-label={legend} className="mt-3 rounded-lg border border-steward-blue/40 bg-steward-ink-950/55 p-4" onSubmit={onSubmit}>
+  return <form aria-label={legend} className={`${subpanelClass} mt-3 border-steward-blue/35 p-4`} onSubmit={onSubmit}>
     <fieldset>
       <legend className="font-semibold">{legend}</legend>
       <div className="mt-3 grid gap-3">

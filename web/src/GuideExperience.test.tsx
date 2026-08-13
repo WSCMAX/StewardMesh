@@ -85,12 +85,27 @@ test('closes on Escape and restores focus to the opener', async () => {
   document.body.append(opener)
   opener.focus()
   const onClose = vi.fn()
-  renderGuide({ onClose })
+  const { unmount } = renderGuide({ onClose })
+  expect(screen.getByRole('dialog', { name: 'Guide help and walkthroughs' })).toHaveAttribute('aria-modal', 'true')
+  expect(document.body.style.overflow).toBe('hidden')
   await waitFor(() => expect(screen.getByRole('button', { name: 'Close Guide' })).toHaveFocus())
   fireEvent.keyDown(window, { key: 'Escape' })
   expect(onClose).toHaveBeenCalledOnce()
   await waitFor(() => expect(opener).toHaveFocus())
+  unmount()
+  expect(document.body.style.overflow).toBe('')
   opener.remove()
+})
+
+test('contains keyboard focus inside the Guide dialog', async () => {
+  renderGuide()
+  const close = screen.getByRole('button', { name: 'Close Guide' })
+  const lastControl = screen.getByRole('link', { name: 'Read Workspace documentation' })
+  await waitFor(() => expect(close).toHaveFocus())
+  fireEvent.keyDown(window, { key: 'Tab', shiftKey: true })
+  expect(lastControl).toHaveFocus()
+  fireEvent.keyDown(window, { key: 'Tab' })
+  expect(close).toHaveFocus()
 })
 
 test('closes contextual help and focuses the selected in-page section', async () => {

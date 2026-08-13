@@ -1,5 +1,6 @@
 import { type FormEvent, useEffect, useRef, useState } from 'react'
 import { ApiRequestError, requestJSON } from './api'
+import { buttonClass, inputClass, labelClass, panelClass, secondaryButtonClass, subpanelClass, tableWrapClass } from './ui'
 
 export type VaultBlob = {
   id: string
@@ -129,33 +130,33 @@ export default function VaultManager({ csrfToken, permissions, onOpenHelp }: Vau
   }
 
   if (!canRead) {
-    return <section aria-labelledby="vault-heading" className="rounded-xl border border-steward-ink-800 bg-steward-ink-900 p-6" data-feature="storage.blobs" data-requirement="REQ-STORAGE-001"><div className="flex flex-wrap items-start justify-between gap-4"><div><h2 id="vault-heading" className="text-2xl font-semibold">Vault — File storage</h2><p className="mt-2 text-steward-mist-muted">Your role does not include permission to view stored files.</p></div>{onOpenHelp && <button className="min-h-11 rounded-lg border border-steward-teal px-4 py-2 font-semibold text-steward-teal" onClick={onOpenHelp} type="button">Vault help</button>}</div></section>
+    return <section aria-labelledby="vault-heading" className={`${panelClass} p-5 sm:p-6`} data-feature="storage.blobs" data-requirement="REQ-STORAGE-001"><div className="flex flex-wrap items-start justify-between gap-4"><div><h2 id="vault-heading" className="text-2xl font-semibold">Vault — File storage</h2><p className="mt-2 text-steward-mist-muted">Your role does not include permission to view stored files.</p></div>{onOpenHelp && <button className={secondaryButtonClass} onClick={onOpenHelp} type="button">Vault help</button>}</div></section>
   }
 
   return (
-    <section aria-labelledby="vault-heading" className="rounded-xl border border-steward-ink-800 bg-steward-ink-900 p-6" data-feature="storage.blobs" data-requirement="REQ-STORAGE-001">
+    <section aria-labelledby="vault-heading" className={`${panelClass} p-5 sm:p-6`} data-feature="storage.blobs" data-requirement="REQ-STORAGE-001">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div><p className="text-sm font-semibold text-steward-teal">Vault</p><h2 id="vault-heading" className="mt-2 text-2xl font-semibold">Private file storage</h2><p className="mt-2 max-w-3xl leading-7 text-steward-mist-muted">Keep checksummed evidence and attachments with their ownership and provenance. Downloads are authorized only when requested and expire shortly afterward.</p></div>
-        {onOpenHelp && <button className="min-h-11 rounded-lg border border-steward-teal px-4 py-2 font-semibold text-steward-teal" onClick={onOpenHelp} type="button">Vault help</button>}
+        {onOpenHelp && <button className={secondaryButtonClass} onClick={onOpenHelp} type="button">Vault help</button>}
       </div>
       {error && <div ref={errorRef} className="mt-4 rounded-lg border border-steward-danger/50 bg-steward-danger/15 p-3 text-[#ffccd1]" role="alert" tabIndex={-1}>{error}</div>}
 
       {canWrite && (
-        <form className="mt-6 grid gap-4 rounded-xl border border-steward-ink-800 bg-steward-ink-950/50 p-4 md:grid-cols-2" onSubmit={uploadBlob}>
+        <form className={`${subpanelClass} mt-6 grid gap-4 p-4 md:grid-cols-2`} onSubmit={uploadBlob}>
           <div className="md:col-span-2">
-            <label className="block text-sm font-semibold text-steward-mist-muted" htmlFor="vault-file">File</label>
-            <input className="mt-2 min-h-11 w-full rounded-lg border border-steward-ink-800 bg-steward-ink-950 p-3 text-sm" id="vault-file" name="file" type="file" required />
+            <label className={labelClass} htmlFor="vault-file">File</label>
+            <input className={`${inputClass} file:mr-3 file:rounded-lg file:border-0 file:bg-steward-teal/12 file:px-3 file:py-1.5 file:font-semibold file:text-steward-teal`} id="vault-file" name="file" type="file" required />
             {maximumUploadBytes > 0 && <p className="mt-1 text-xs text-steward-mist-muted">Maximum {formatBytes(maximumUploadBytes)}.</p>}
           </div>
           <VaultField id="sourceSystemId" label="Source system ID" help="Optional. Enter with a source record ID." />
           <VaultField id="sourceRecordId" label="Source record ID" />
           <VaultField id="resourceType" label="Related resource type" help="Optional, for example asset." />
           <VaultField id="resourceId" label="Related resource ID" />
-          <button className="min-h-11 rounded-lg bg-steward-teal px-4 py-3 font-semibold text-steward-ink-950 transition hover:bg-[#29cfb9] disabled:cursor-wait disabled:opacity-60 md:col-span-2" disabled={busy} type="submit">{busy ? 'Working…' : 'Upload to Vault'}</button>
+          <button className={`${buttonClass} md:col-span-2`} disabled={busy} type="submit">{busy ? 'Working…' : 'Upload to Vault'}</button>
         </form>
       )}
 
-      <div className="mt-6 overflow-x-auto">
+      <div className={`${tableWrapClass} mt-6`}>
         <table className="w-full min-w-[720px] border-collapse text-left text-sm">
           <caption className="sr-only">Files stored in Vault</caption>
           <thead><tr className="border-b border-steward-ink-800 text-steward-mist-muted"><th className="px-3 py-3 font-semibold" scope="col">File</th><th className="px-3 py-3 font-semibold" scope="col">Size and type</th><th className="px-3 py-3 font-semibold" scope="col">Provenance</th><th className="px-3 py-3 font-semibold" scope="col">Integrity</th><th className="px-3 py-3 font-semibold" scope="col">Download</th></tr></thead>
@@ -168,8 +169,8 @@ export default function VaultManager({ csrfToken, permissions, onOpenHelp }: Vau
                 <td className="px-3 py-4"><code className="block max-w-52 break-all text-xs text-steward-mist-muted">SHA-256 {blob.sha256}</code></td>
                 <td className="px-3 py-4">
                   {download?.id === blob.id
-                    ? <a className="inline-flex min-h-11 items-center rounded-lg border border-steward-teal px-3 py-2 font-semibold text-steward-teal hover:bg-steward-teal/10" href={download.authorization.url}>Download ready</a>
-                    : <button className="min-h-11 rounded-lg border border-steward-ink-800 px-3 py-2 font-semibold hover:border-steward-blue disabled:opacity-60" disabled={busy} onClick={() => prepareDownload(blob.id)} type="button">Prepare download</button>}
+                    ? <a className={secondaryButtonClass} href={download.authorization.url}>Download ready</a>
+                    : <button className={secondaryButtonClass} disabled={busy} onClick={() => prepareDownload(blob.id)} type="button">Prepare download</button>}
                 </td>
               </tr>
             ))}
@@ -182,5 +183,5 @@ export default function VaultManager({ csrfToken, permissions, onOpenHelp }: Vau
 }
 
 function VaultField({ id, label, help }: { id: string; label: string; help?: string }) {
-  return <div><label className="block text-sm font-semibold text-steward-mist-muted" htmlFor={id}>{label}</label>{help && <p className="mt-1 text-xs text-steward-mist-muted" id={`${id}-help`}>{help}</p>}<input aria-describedby={help ? `${id}-help` : undefined} className="mt-2 min-h-11 w-full rounded-lg border border-steward-ink-800 bg-steward-ink-950 px-3 py-2" id={id} name={id} /></div>
+  return <div><label className={labelClass} htmlFor={id}>{label}</label>{help && <p className="mt-1 text-xs text-steward-mist-muted" id={`${id}-help`}>{help}</p>}<input aria-describedby={help ? `${id}-help` : undefined} className={inputClass} id={id} name={id} /></div>
 }

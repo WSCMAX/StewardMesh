@@ -1,5 +1,6 @@
-import type { ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import type { GuideTopicID } from './guide'
+import { AreaIcon, MenuIcon, cx, panelClass, plainButtonClass, secondaryButtonClass, type AreaIconName } from './ui'
 import { scopeSummary, type PermissionAccess } from './workspaceAccess'
 
 // Requirement: REQ-WORKSPACE-001. Feature: experience.workspace.
@@ -44,57 +45,84 @@ export function workspaceHash(area: WorkspaceAreaID) {
 export default function WorkspaceShell({ activeArea, areas, assetCount, healthLabel, onNavigate, onOpenHelp, onReportIssue, roles, visitedAreas }: WorkspaceShellProps) {
   const active = areas.find((area) => area.id === activeArea) ?? areas[0]
   const roleSummary = roles.length > 0 ? roles.join(', ') : 'No role assigned'
+  const [mobileNavOpen, setMobileNavOpen] = useState(false)
+  const mobileMenuButtonRef = useRef<HTMLButtonElement>(null)
+  const mobileCloseButtonRef = useRef<HTMLButtonElement>(null)
+  const mobilePanelRef = useRef<HTMLDivElement>(null)
+
+  const closeMobileNavigation = useCallback(() => {
+    setMobileNavOpen(false)
+    queueMicrotask(() => mobileMenuButtonRef.current?.focus())
+  }, [])
+
+  useEffect(() => {
+    if (!mobileNavOpen) return
+    function handleDialogKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        closeMobileNavigation()
+        return
+      }
+      if (event.key !== 'Tab') return
+      const focusable = Array.from(mobilePanelRef.current?.querySelectorAll<HTMLElement>('a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])') ?? [])
+      if (focusable.length === 0) return
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+    const priorOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    queueMicrotask(() => mobileCloseButtonRef.current?.focus())
+    window.addEventListener('keydown', handleDialogKeyDown)
+    return () => {
+      document.body.style.overflow = priorOverflow
+      window.removeEventListener('keydown', handleDialogKeyDown)
+    }
+  }, [closeMobileNavigation, mobileNavOpen])
+
+  function navigate(area: WorkspaceAreaID) {
+    setMobileNavOpen(false)
+    onNavigate(area)
+  }
+
+  const navigation = <WorkspaceNavigation active={active} areas={areas} onNavigate={navigate} onOpenHelp={onOpenHelp} onReportIssue={onReportIssue} />
 
   return (
-    <section className="lg:grid lg:grid-cols-[16rem_minmax(0,1fr)] lg:items-start lg:gap-6" data-feature="experience.workspace" data-requirement="REQ-WORKSPACE-001">
-      <aside className="mb-5 rounded-2xl border border-steward-ink-800/80 bg-steward-ink-900/95 p-3 shadow-xl shadow-black/10 lg:sticky lg:top-5 lg:mb-0" aria-label="Workspace navigation">
-        <div className="px-2 pb-3 pt-2">
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-steward-teal">Workspace</p>
-          <p className="mt-1 text-sm leading-5 text-steward-mist-muted">Move between focused work areas without losing your place.</p>
-        </div>
-        <nav aria-label="Product areas">
-          <ul className="flex snap-x gap-2 overflow-x-auto pb-2 lg:block lg:space-y-1 lg:overflow-visible lg:pb-0">
-            {areas.map((area) => {
-              const selected = area.id === active.id
-              const accessLabel = area.readAccess?.level === 'none' ? 'limited access'
-                : area.readAccess?.level === 'scoped' ? 'scoped access'
-                  : area.writePermission && area.writeAccess?.level !== 'organization' ? 'read only' : ''
-              return <li className="min-w-[10rem] snap-start lg:min-w-0" key={area.id}>
-                <a
-                  aria-label={`${area.name} — ${area.descriptor}${accessLabel ? ` (${accessLabel})` : ''}`}
-                  aria-current={selected ? 'page' : undefined}
-                  className={`group flex min-h-12 w-full items-center gap-3 rounded-xl border px-3 py-2 text-left transition ${selected ? 'border-steward-teal/60 bg-steward-teal/12 text-steward-mist shadow-inner shadow-steward-teal/5' : 'border-transparent text-steward-mist-muted hover:border-steward-ink-800 hover:bg-steward-ink-950/45 hover:text-steward-mist'}`}
-                  href={workspaceHash(area.id)}
-                  onClick={(event) => { event.preventDefault(); onNavigate(area.id) }}
-                >
-                  <span aria-hidden="true" className={`grid size-8 shrink-0 place-items-center rounded-lg text-xs font-bold ${selected ? 'bg-steward-teal text-steward-ink-950' : 'bg-steward-ink-800 text-steward-mist'}`}>{area.name.slice(0, 2).toUpperCase()}</span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-semibold">{area.name}</span>
-                    <span className="block truncate text-xs">{area.descriptor}</span>
-                  </span>
-                  {accessLabel && <span className="sr-only">{accessLabel}</span>}
-                </a>
-              </li>
-            })}
-          </ul>
-        </nav>
-        <div className="mt-3 grid grid-cols-2 gap-2 border-t border-steward-ink-800/80 pt-3 lg:grid-cols-1">
-          <button className="min-h-11 rounded-lg border border-steward-ink-800 px-3 py-2 text-sm font-semibold text-steward-mist-muted transition hover:border-steward-teal hover:text-steward-teal" onClick={() => onOpenHelp(active.id === 'overview' ? 'workspace' : active.id)} type="button">Open Guide</button>
-          <button className="min-h-11 rounded-lg px-3 py-2 text-sm font-semibold text-steward-teal underline underline-offset-4" onClick={onReportIssue} type="button">Report an issue</button>
-        </div>
+    <section className="lg:grid lg:grid-cols-[17.5rem_minmax(0,1fr)] lg:items-start lg:gap-7" data-feature="experience.workspace" data-requirement="REQ-WORKSPACE-001">
+      <aside aria-label="Workspace navigation" className={`${panelClass} steward-scrollbar sticky top-[5.75rem] hidden max-h-[calc(100vh-7rem)] overflow-y-auto p-3 lg:block`}>
+        {navigation}
       </aside>
 
-      <div className="min-w-0">
-        <header className="rounded-2xl border border-steward-ink-800/80 bg-[linear-gradient(135deg,rgba(18,49,76,0.95),rgba(11,34,56,0.92))] p-5 shadow-xl shadow-black/10 sm:p-6">
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div className="min-w-0">
-              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-steward-teal">Workspace <span aria-hidden="true">/</span> {active.name}</p>
-              <h2 className="mt-2 text-2xl font-bold tracking-tight sm:text-3xl" id="workspace-context-heading" tabIndex={-1}>{active.name} — {active.descriptor}</h2>
-              <p className="mt-2 max-w-3xl leading-7 text-steward-mist-muted">{active.summary}</p>
+      {mobileNavOpen && <div className="fixed inset-0 z-50 lg:hidden">
+        <button aria-hidden="true" className="absolute inset-0 cursor-default bg-black/70 backdrop-blur-sm" onClick={closeMobileNavigation} tabIndex={-1} type="button" />
+        <div aria-label="Workspace navigation" aria-modal="true" className="absolute inset-y-0 left-0 w-[min(21rem,88vw)] overflow-y-auto border-r border-white/10 bg-steward-ink-900 p-4 shadow-2xl" ref={mobilePanelRef} role="dialog">
+          <div className="mb-3 flex justify-end"><button aria-label="Close workspace navigation" className={plainButtonClass} onClick={closeMobileNavigation} ref={mobileCloseButtonRef} type="button"><MenuIcon open /></button></div>
+          {navigation}
+        </div>
+      </div>}
+
+      <div aria-hidden={mobileNavOpen ? true : undefined} className="min-w-0">
+        <header className={`${panelClass} overflow-hidden`}>
+          <div className="relative px-5 pb-5 pt-5 sm:px-7 sm:pb-6 sm:pt-6">
+            <span aria-hidden="true" className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-steward-green via-steward-teal to-steward-blue" />
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div className="min-w-0">
+                <div className="flex items-center gap-3">
+                  <button aria-expanded={mobileNavOpen} aria-label="Open workspace navigation" className={`${secondaryButtonClass} px-3 lg:hidden`} onClick={() => setMobileNavOpen(true)} ref={mobileMenuButtonRef} type="button"><MenuIcon /></button>
+                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-steward-teal">Workspace <span aria-hidden="true" className="text-steward-slate">/</span> {active.name}</p>
+                </div>
+                <h2 className="mt-3 text-2xl font-bold tracking-tight text-white sm:text-3xl" id="workspace-context-heading" tabIndex={-1}>{active.name} — {active.descriptor}</h2>
+                <p className="mt-2 max-w-3xl text-sm leading-6 text-steward-mist-muted sm:text-base sm:leading-7">{active.summary}</p>
+              </div>
+              <button className={secondaryButtonClass} onClick={() => onOpenHelp(active.id === 'overview' ? 'workspace' : active.id)} type="button">Help for {active.name}</button>
             </div>
-            <button className="min-h-11 shrink-0 rounded-lg border border-steward-teal px-4 py-2 text-sm font-semibold text-steward-teal transition hover:bg-steward-teal/10" onClick={() => onOpenHelp(active.id === 'overview' ? 'workspace' : active.id)} type="button">Help for {active.name}</button>
           </div>
-          <dl className="mt-5 grid gap-2 text-sm sm:grid-cols-2 xl:grid-cols-5">
+          <dl className="grid grid-cols-2 border-t border-white/[0.07] bg-steward-ink-950/28 text-sm lg:grid-cols-5 lg:divide-x lg:divide-white/[0.07]">
             <ContextItem label="Current area" value={active.name} />
             <ContextItem label="Your access" value={roleSummary} />
             <ContextItem label="Visible records" value={active.readAccess ? scopeSummary(active.readAccess) : 'Workspace overview'} />
@@ -104,18 +132,16 @@ export default function WorkspaceShell({ activeArea, areas, assetCount, healthLa
         </header>
 
         <div className="mt-5 min-w-0">
-          {healthLabel === 'Unavailable' && <p className="mb-4 rounded-xl border border-steward-warning/50 bg-steward-warning/12 p-4 text-sm leading-6 text-steward-mist-muted" role="status"><strong className="text-steward-mist">Service unavailable.</strong> Previously loaded context may be stale, and protected reads or changes may fail until the Go service reconnects.</p>}
-          {areas.map((area) => {
-            return <div
-              aria-labelledby="workspace-context-heading"
-              className="min-w-0"
-              hidden={area.id !== active.id}
-              id={area.id === 'overview' ? 'workspace-overview' : `guide-${area.id}`}
-              key={area.id}
-            >
-              {visitedAreas.has(area.id) ? area.content : <p className="rounded-xl border border-steward-ink-800 bg-steward-ink-900 p-5 text-steward-mist-muted" role="status">Opening {area.name}…</p>}
-            </div>
-          })}
+          {healthLabel === 'Unavailable' && <p className="mb-4 rounded-xl border border-steward-warning/40 bg-steward-warning/10 p-4 text-sm leading-6 text-steward-mist-muted" role="status"><strong className="text-steward-mist">Service unavailable.</strong> Previously loaded context may be stale, and protected reads or changes may fail until the Go service reconnects.</p>}
+          {areas.map((area) => <div
+            aria-labelledby="workspace-context-heading"
+            className="min-w-0"
+            hidden={area.id !== active.id}
+            id={area.id === 'overview' ? 'workspace-overview' : `guide-${area.id}`}
+            key={area.id}
+          >
+            {visitedAreas.has(area.id) ? area.content : <p className={`${panelClass} p-5 text-steward-mist-muted`} role="status">Opening {area.name}…</p>}
+          </div>)}
         </div>
 
         {active.id === 'overview' && <dl className="sr-only"><dt>Tracked assets</dt><dd>{assetCount}</dd></dl>}
@@ -124,6 +150,49 @@ export default function WorkspaceShell({ activeArea, areas, assetCount, healthLa
   )
 }
 
+function WorkspaceNavigation({ active, areas, onNavigate, onOpenHelp, onReportIssue }: { active: WorkspaceArea; areas: readonly WorkspaceArea[]; onNavigate: (area: WorkspaceAreaID) => void; onOpenHelp: (topic: GuideTopicID) => void; onReportIssue: () => void }) {
+  return <>
+    <div className="px-2 pb-4 pt-2">
+      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-steward-teal">Workspace</p>
+      <p className="mt-1 text-sm leading-5 text-steward-mist-muted">Focused tools for everything your organization stewards.</p>
+    </div>
+    <nav aria-label="Product areas">
+      <ul className="space-y-1">
+        {areas.map((area) => {
+          const selected = area.id === active.id
+          const accessLabel = area.readAccess?.level === 'none' ? 'limited access'
+            : area.readAccess?.level === 'scoped' ? 'scoped access'
+              : area.writePermission && area.writeAccess?.level !== 'organization' ? 'read only' : ''
+          return <li key={area.id}>
+            <a
+              aria-current={selected ? 'page' : undefined}
+              aria-label={`${area.name} — ${area.descriptor}${accessLabel ? ` (${accessLabel})` : ''}`}
+              className={cx(
+                'group relative flex min-h-12 w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left transition',
+                selected ? 'bg-steward-teal/12 text-white ring-1 ring-inset ring-steward-teal/25' : 'text-steward-mist-muted hover:bg-white/[0.045] hover:text-white',
+              )}
+              href={workspaceHash(area.id)}
+              onClick={(event) => { event.preventDefault(); onNavigate(area.id) }}
+            >
+              {selected && <span aria-hidden="true" className="absolute inset-y-3 left-0 w-0.5 rounded-full bg-steward-teal" />}
+              <span aria-hidden="true" className={cx('grid size-9 shrink-0 place-items-center rounded-lg border transition', selected ? 'border-steward-teal/30 bg-steward-teal text-steward-ink-950 shadow-sm' : 'border-white/[0.07] bg-white/[0.04] text-steward-slate group-hover:border-white/15 group-hover:text-steward-mist')}><AreaIcon area={area.id as AreaIconName} /></span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm font-semibold">{area.name}</span>
+                <span className="block truncate text-xs text-steward-slate group-hover:text-steward-mist-muted">{area.descriptor}</span>
+              </span>
+              {accessLabel && <span className="sr-only">{accessLabel}</span>}
+            </a>
+          </li>
+        })}
+      </ul>
+    </nav>
+    <div className="mt-4 grid gap-1 border-t border-white/[0.07] pt-4">
+      <button className={`${plainButtonClass} justify-start`} onClick={() => onOpenHelp(active.id === 'overview' ? 'workspace' : active.id)} type="button">Open Guide</button>
+      <button className={`${plainButtonClass} justify-start text-steward-mist-muted hover:text-steward-teal`} onClick={onReportIssue} type="button">Report an issue</button>
+    </div>
+  </>
+}
+
 function ContextItem({ label, value }: { label: string; value: string }) {
-  return <div className="rounded-lg border border-steward-ink-800/75 bg-steward-ink-950/35 px-3 py-2"><dt className="text-xs font-semibold uppercase tracking-wide text-steward-mist-muted">{label}</dt><dd className="mt-1 truncate font-semibold text-steward-mist">{value}</dd></div>
+  return <div className="min-w-0 border-b border-white/[0.07] px-4 py-3 last:col-span-2 last:border-b-0 lg:col-span-1 lg:border-b-0 lg:last:col-span-1"><dt className="text-[0.6875rem] font-semibold uppercase tracking-wide text-steward-slate">{label}</dt><dd className="mt-1 text-sm font-semibold leading-5 text-steward-mist">{value}</dd></div>
 }

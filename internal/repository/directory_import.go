@@ -1,6 +1,7 @@
 package repository
 
-// Requirement: REQ-DIRECTORY-EXPANSION-002. Feature: integrations.protocols.
+// Requirements: REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003.
+// Features: integrations.protocols, identity.directory.
 
 import (
 	"context"
@@ -98,7 +99,9 @@ func (s *MemoryDirectoryImportStore) ListBatches(_ context.Context, organization
 	if end > len(batches) {
 		end = len(batches)
 	}
-	page := directoryexpansion.BatchPage{Batches: append([]directoryexpansion.Batch(nil), batches[start:end]...)}
+	pageBatches := make([]directoryexpansion.Batch, end-start)
+	copy(pageBatches, batches[start:end])
+	page := directoryexpansion.BatchPage{Batches: pageBatches}
 	if end < len(batches) && end > 0 {
 		page.NextCursor = batches[end-1].ID
 	}
@@ -111,7 +114,7 @@ func (s *MemoryDirectoryImportStore) ListMappings(_ context.Context, organizatio
 	mappings := make([]directoryexpansion.Mapping, 0)
 	for _, mapping := range s.mappings {
 		if mapping.OrganizationID == organizationID && mapping.SourceSystemID == sourceSystemID {
-			mappings = append(mappings, mapping)
+			mappings = append(mappings, cloneMapping(mapping))
 		}
 	}
 	sort.Slice(mappings, func(i, j int) bool { return mappings[i].SourceRecordID < mappings[j].SourceRecordID })
@@ -180,7 +183,7 @@ func (s *MemoryDirectoryImportStore) SaveItem(_ context.Context, organizationID,
 	}
 	s.items[batchID] = items
 	if mapping != nil {
-		s.mappings[mappingKey(mapping.OrganizationID, mapping.SourceSystemID, mapping.SourceRecordID)] = *mapping
+		s.mappings[mappingKey(mapping.OrganizationID, mapping.SourceSystemID, mapping.SourceRecordID)] = cloneMapping(*mapping)
 	}
 	return nil
 }
@@ -242,7 +245,31 @@ func idemKey(org string, operation directoryexpansion.Operation, hash string) st
 }
 func mappingKey(org, source, record string) string { return org + "\x00" + source + "\x00" + record }
 func cloneItems(items []directoryexpansion.Item) []directoryexpansion.Item {
-	return append([]directoryexpansion.Item(nil), items...)
+	result := make([]directoryexpansion.Item, len(items))
+	for index := range items {
+		result[index] = items[index]
+		result[index].Record = cloneRecord(items[index].Record)
+	}
+	return result
+}
+
+func cloneMapping(mapping directoryexpansion.Mapping) directoryexpansion.Mapping {
+	mapping.LastRecord = cloneRecord(mapping.LastRecord)
+	return mapping
+}
+
+func cloneRecord(record directoryexpansion.Record) directoryexpansion.Record {
+	if record.DirectoryAttributes != nil {
+		attributes := make(map[string]string, len(record.DirectoryAttributes))
+		for key, value := range record.DirectoryAttributes {
+			attributes[key] = value
+		}
+		record.DirectoryAttributes = attributes
+	}
+	if record.GroupSourceIDs != nil {
+		record.GroupSourceIDs = append([]string(nil), record.GroupSourceIDs...)
+	}
+	return record
 }
 func cloneAttempts(attempts []directoryexpansion.Attempt) []directoryexpansion.Attempt {
 	result := make([]directoryexpansion.Attempt, len(attempts))

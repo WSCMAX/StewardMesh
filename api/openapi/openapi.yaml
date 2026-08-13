@@ -1,4 +1,4 @@
-# Requirements: REQ-ATLAS-001, REQ-ATLAS-MODELS-001, REQ-ATLAS-CODES-001, REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-HORIZON-001, REQ-LEDGER-001, REQ-STACK-001, REQ-SIGNALS-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
+# Requirements: REQ-ATLAS-001, REQ-ATLAS-MODELS-001, REQ-ATLAS-CODES-001, REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-HORIZON-001, REQ-LEDGER-001, REQ-STACK-001, REQ-SIGNALS-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
 openapi: 3.1.0
 info:
   title: StewardMesh API
@@ -1371,6 +1371,26 @@ paths:
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/directory-import-sources:
+    get:
+      summary: List configured read-only directory sources
+      operationId: listDirectoryImportSources
+      tags: [Bridge]
+      x-requirement: REQ-DIRECTORY-EXPANSION-003
+      x-required-permission: integrations.read
+      description: Requires organization-scoped `integrations.read`. Returns only stable source identity, provider name, and non-secret configuration revision; tenant identifiers, endpoints, and credentials remain server-side.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200':
+          description: Configured credential-free source identities
+          headers:
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DirectoryImportSourceCollection'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
   /api/v1/directory-imports:
     get:
       summary: List directory import batches
@@ -4081,6 +4101,24 @@ components:
       type: string
       description: Provider adapter name recorded for operations and audit; the stable contract remains source-system neutral.
       pattern: '^[a-z0-9][a-z0-9._-]{0,63}$'
+    DirectoryImportSource:
+      type: object
+      additionalProperties: false
+      description: Credential-free identity of one server-configured read-only directory connector.
+      required: [id, provider, configRevision]
+      properties:
+        id: {$ref: '#/components/schemas/DirectoryImportSourceSystemID'}
+        provider: {$ref: '#/components/schemas/DirectoryImportProvider'}
+        configRevision: {type: string, minLength: 1, maxLength: 128}
+    DirectoryImportSourceCollection:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          maxItems: 100
+          items: {$ref: '#/components/schemas/DirectoryImportSource'}
     DirectoryImportBatchStatus:
       type: string
       enum: [previewed, applying, applied, partially_applied, failed]
@@ -4119,7 +4157,7 @@ components:
     DirectoryImportRecord:
       type: object
       additionalProperties: false
-      description: Bounded normalized record safe for reconciliation detail. It contains no raw provider payload, arbitrary attributes, endpoints, credentials, or internal mapping digests.
+      description: Bounded normalized record safe for reconciliation detail. It contains only an allowlisted directory attribute projection and group source references, never raw provider payloads, endpoints, credentials, or internal mapping digests.
       required: [sourceRecordId, kind, displayName, status]
       properties:
         sourceRecordId: {type: string, minLength: 1, maxLength: 255}
@@ -4134,6 +4172,16 @@ components:
         status:
           type: string
           enum: [active, inactive]
+        department: {type: string, maxLength: 200}
+        directoryAttributes:
+          type: object
+          maxProperties: 16
+          additionalProperties: {type: string, minLength: 1, maxLength: 500}
+        groupSourceIds:
+          type: array
+          maxItems: 256
+          uniqueItems: true
+          items: {type: string, minLength: 1, maxLength: 255}
     DirectoryImportItem:
       type: object
       additionalProperties: false

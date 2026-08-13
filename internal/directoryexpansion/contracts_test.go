@@ -1,6 +1,7 @@
 package directoryexpansion_test
 
-// Requirement: REQ-DIRECTORY-EXPANSION-002. Feature: integrations.protocols.
+// Requirements: REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003.
+// Features: integrations.protocols, identity.directory.
 
 import (
 	"context"
@@ -170,6 +171,26 @@ func TestRegistrySnapshotsNormalizedSourceSystemIdentity(t *testing.T) {
 	}
 	if got := registered.SourceSystem(); got.ID != "hr-primary" || got.Provider != "example" || got.ConfigRevision != "v1" {
 		t.Fatalf("registered source metadata was not normalized and pinned: %#v", got)
+	}
+}
+
+func TestRegistryReturnsBoundedSortedCredentialFreeSources(t *testing.T) {
+	connectors := make([]Connector, 0, MaximumSources)
+	for index := MaximumSources - 1; index >= 0; index-- {
+		connectors = append(connectors, &contractConnector{system: SourceSystem{
+			ID: fmt.Sprintf("source-%03d", index), Provider: "example", ConfigRevision: "v1",
+		}})
+	}
+	registry, err := NewRegistry(connectors...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sources := registry.SourceSystems()
+	if len(sources) != MaximumSources || sources[0].ID != "source-000" || sources[len(sources)-1].ID != "source-099" {
+		t.Fatalf("unexpected bounded source discovery: %#v", sources)
+	}
+	if err := registry.Register(&contractConnector{system: SourceSystem{ID: "overflow", Provider: "example", ConfigRevision: "v1"}}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected source bound rejection, got %v", err)
 	}
 }
 
@@ -540,7 +561,11 @@ func TestPermanentPreviewFailureCannotBeRetried(t *testing.T) {
 }
 
 func TestAuditHistoryIsDeterministicAndSanitized(t *testing.T) {
-	connector := onePageConnector("hr-primary", true, []Record{{SourceRecordID: "sensitive-source-id", Kind: RecordIdentity, IdentityKind: "person", DisplayName: "Ada", Email: "secret@example.com", Status: "active"}})
+	connector := onePageConnector("hr-primary", true, []Record{{
+		SourceRecordID: "sensitive-source-id", Kind: RecordIdentity, IdentityKind: "person", DisplayName: "Ada",
+		Email: "secret@example.com", Status: "active", Department: "Secret Department",
+		DirectoryAttributes: map[string]string{"job-title": "Secret Job"}, GroupSourceIDs: []string{"group:sensitive-group"},
+	}})
 	store := newContractMemoryStore()
 	target := &contractTarget{current: map[string]TargetPlan{}, results: map[string]TargetResult{}, errors: map[string]error{}}
 	registry, err := NewRegistry(connector)
@@ -570,7 +595,10 @@ func TestAuditHistoryIsDeterministicAndSanitized(t *testing.T) {
 	}
 	for _, event := range auditor.events {
 		encoded, _ := json.Marshal(event.Metadata)
-		if strings.Contains(string(encoded), "secret@example.com") || strings.Contains(string(encoded), "sensitive-source-id") || event.ResourceID != preview.Batch.ID || event.Metadata["requirementId"] != RequirementID {
+		metadata := string(encoded)
+		if strings.Contains(metadata, "secret@example.com") || strings.Contains(metadata, "sensitive-source-id") ||
+			strings.Contains(metadata, "Secret Department") || strings.Contains(metadata, "Secret Job") || strings.Contains(metadata, "sensitive-group") ||
+			event.ResourceID != preview.Batch.ID || event.Metadata["requirementId"] != RequirementID {
 			t.Fatalf("audit event exposed provider data or lost provenance: %#v", event)
 		}
 	}

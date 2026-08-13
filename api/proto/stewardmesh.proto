@@ -101,7 +101,8 @@ service PeopleService {
 }
 
 // Durable provider-neutral preview, apply, reconciliation, and retry.
-// Requirement: REQ-DIRECTORY-EXPANSION-002. Feature: integrations.protocols.
+// Requirements: REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003.
+// Features: integrations.protocols, identity.directory.
 // Every RPC is organization-scoped. List/Get require integrations.read;
 // Preview/Apply/Retry require integrations.write. Transport adapters map the
 // idempotency key to the REST Idempotency-Key header or equivalent gRPC input.
@@ -109,6 +110,7 @@ service PeopleService {
 // apply and action retry consume only that plan. A transient connector failure
 // before plan creation may retry the same failed batch with its pinned config.
 service DirectoryImportService {
+  rpc ListDirectoryImportSources(ListDirectoryImportSourcesRequest) returns (ListDirectoryImportSourcesResponse);
   rpc ListDirectoryImports(ListDirectoryImportsRequest) returns (ListDirectoryImportsResponse);
   rpc GetDirectoryImport(GetDirectoryImportRequest) returns (DirectoryImportBatchDetail);
   rpc PreviewDirectoryImport(PreviewDirectoryImportRequest) returns (DirectoryImportOperationResult);
@@ -1012,6 +1014,19 @@ message Room {
   google.protobuf.Timestamp updated_at = 10;
 }
 
+message ListDirectoryImportSourcesRequest {}
+
+message DirectoryImportSource {
+  string id = 1;
+  string provider = 2;
+  // Non-secret revision of the server-owned connector configuration.
+  string config_revision = 3;
+}
+
+message ListDirectoryImportSourcesResponse {
+  repeated DirectoryImportSource items = 1;
+}
+
 message ListDirectoryImportsRequest {
   // Zero uses the server default; valid explicit values are 1 through 100.
   uint32 limit = 1;
@@ -1067,6 +1082,12 @@ message DirectoryImportRecord {
   string display_name = 4;
   string email = 5;
   string status = 6;
+  string department = 7;
+  // Provider adapters expose only a bounded allowlisted projection. Raw
+  // Microsoft Graph properties and credentials are never represented.
+  map<string, string> directory_attributes = 8;
+  // Stable direct group source references, sorted and bounded by the server.
+  repeated string group_source_ids = 9;
 }
 
 message DirectoryImportItem {

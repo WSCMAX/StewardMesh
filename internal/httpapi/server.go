@@ -1,7 +1,7 @@
 package httpapi
 
 // Requirements: REQ-FOUNDATION-001, REQ-WORKSPACE-001, REQ-ATLAS-001, REQ-ATLAS-CODES-001, REQ-PEOPLE-001,
-// REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-STACK-001, REQ-HORIZON-001, REQ-SIGNALS-001, REQ-PLATFORM-VALKEY-001,
+// REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-STACK-001, REQ-HORIZON-001, REQ-SIGNALS-001, REQ-PLATFORM-VALKEY-001,
 // SEC-GUARD-001, SEC-HTTP-001. Features include experience.workspace and inventory.models.
 
 import (
@@ -187,6 +187,7 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 	mux.HandleFunc("POST /api/v1/auth/saml/acs", server.samlACS)
 	mux.Handle("GET /api/v1/auth/session", server.protected("", false, server.getSession))
 	mux.Handle("POST /api/v1/auth/logout", server.protected("", true, server.logout))
+	mux.Handle("GET /api/v1/directory-import-sources", server.protected(guard.PermissionIntegrationsRead, false, server.listDirectoryImportSources))
 	mux.Handle("GET /api/v1/directory-imports", server.protected(guard.PermissionIntegrationsRead, false, server.listDirectoryImports))
 	mux.Handle("GET /api/v1/directory-imports/{batchID}", server.protected(guard.PermissionIntegrationsRead, false, server.getDirectoryImport))
 	mux.Handle("POST /api/v1/directory-imports/preview", server.protected(guard.PermissionIntegrationsWrite, true, server.previewDirectoryImport))
@@ -312,6 +313,15 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 	mux.Handle("GET /api/v1/signals/report.csv", server.protected(guard.PermissionSignalsRead, false, server.exportSignalsCSV))
 	mux.Handle("GET /api/v1/graph", server.protected("", false, server.graphView))
 	return server.correlation(server.securityHeaders(server.cors(mux)))
+}
+
+func (s *Server) listDirectoryImportSources(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	s.noStore(w)
+	if s.directoryImports == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "integrations_unavailable", "directory integrations are unavailable")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": s.directoryImports.Sources()})
 }
 
 func (s *Server) listDirectoryImports(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {

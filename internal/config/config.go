@@ -1,5 +1,5 @@
 // Package config loads and validates provider-neutral StewardMesh settings.
-// Requirements: REQ-FOUNDATION-001, REQ-STORAGE-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
+// Requirements: REQ-FOUNDATION-001, REQ-DIRECTORY-EXPANSION-003, REQ-STORAGE-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
 package config
 
 import (
@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/maxlemke/stewardmesh/internal/cache"
+	"github.com/maxlemke/stewardmesh/internal/directoryexpansion/entra"
 	"github.com/maxlemke/stewardmesh/internal/storage"
 )
 
@@ -76,6 +77,10 @@ type Config struct {
 	SAMLDisplayNameAttribute   string
 	SAMLAdministratorAttribute string
 	SAMLAdministratorValues    []string
+	EntraSourceSystemID        string
+	EntraTenantID              string
+	EntraClientID              string
+	EntraClientSecret          string
 	AllowedOrigin              string
 	OrganizationID             string
 	OrganizationName           string
@@ -148,6 +153,10 @@ func FromEnv() Config {
 		SAMLDisplayNameAttribute:   os.Getenv("STEWARDMESH_SAML_DISPLAY_NAME_ATTRIBUTE"),
 		SAMLAdministratorAttribute: os.Getenv("STEWARDMESH_SAML_ADMINISTRATOR_ATTRIBUTE"),
 		SAMLAdministratorValues:    envCSV("STEWARDMESH_SAML_ADMINISTRATOR_VALUES"),
+		EntraSourceSystemID:        envOr("STEWARDMESH_ENTRA_SOURCE_SYSTEM_ID", "entra"),
+		EntraTenantID:              os.Getenv("STEWARDMESH_ENTRA_TENANT_ID"),
+		EntraClientID:              os.Getenv("STEWARDMESH_ENTRA_CLIENT_ID"),
+		EntraClientSecret:          os.Getenv("STEWARDMESH_ENTRA_CLIENT_SECRET"),
 		AllowedOrigin:              allowedOrigin,
 		OrganizationID:             envOr("STEWARDMESH_ORGANIZATION_ID", "local-organization"),
 		OrganizationName:           envOr("STEWARDMESH_ORGANIZATION_NAME", "StewardMesh Local Organization"),
@@ -250,6 +259,9 @@ func (c Config) Validate() error {
 	if err := c.validateSAML(); err != nil {
 		return err
 	}
+	if err := c.validateEntra(); err != nil {
+		return err
+	}
 	if c.SessionTTL < 15*time.Minute || c.SessionTTL > 24*time.Hour {
 		return errors.New("STEWARDMESH_SESSION_TTL must be between 15m and 24h")
 	}
@@ -286,6 +298,32 @@ func (c Config) S3Config() storage.S3Config {
 
 func (c Config) SAMLEnabled() bool {
 	return strings.TrimSpace(c.SAMLIDPMetadataURL) != ""
+}
+
+func (c Config) EntraEnabled() bool {
+	return strings.TrimSpace(c.EntraTenantID) != ""
+}
+
+func (c Config) EntraConfig() entra.Config {
+	return entra.Config{
+		SourceSystemID: c.EntraSourceSystemID,
+		TenantID:       c.EntraTenantID,
+		ClientID:       c.EntraClientID,
+		ClientSecret:   c.EntraClientSecret,
+	}
+}
+
+func (c Config) validateEntra() error {
+	if !c.EntraEnabled() {
+		if strings.TrimSpace(c.EntraClientID) != "" || c.EntraClientSecret != "" {
+			return errors.New("STEWARDMESH_ENTRA_TENANT_ID is required when Microsoft Entra credentials are configured")
+		}
+		return nil
+	}
+	if err := entra.ValidateConfig(c.EntraConfig()); err != nil {
+		return errors.New("Microsoft Entra tenant and application credential configuration is invalid")
+	}
+	return nil
 }
 
 func (c Config) SAMLMetadataURL() string {

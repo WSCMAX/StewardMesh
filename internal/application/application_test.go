@@ -1,6 +1,6 @@
 package application
 
-// Requirements: REQ-FOUNDATION-001, REQ-PATTERNS-001, REQ-STORAGE-001, REQ-HORIZON-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001.
+// Requirements: REQ-FOUNDATION-001, REQ-DIRECTORY-EXPANSION-003, REQ-PATTERNS-001, REQ-STORAGE-001, REQ-HORIZON-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001.
 // Features: lifecycle.planning, templates.schemas.
 
 import (
@@ -51,6 +51,21 @@ func TestNewBuildsReusableMemoryApplication(t *testing.T) {
 	app.Handler().ServeHTTP(templatesResponse, templatesRequest)
 	if templatesResponse.Code != http.StatusUnauthorized {
 		t.Fatalf("expected wired Patterns service to require authentication, got %d: %s", templatesResponse.Code, templatesResponse.Body.String())
+	}
+}
+
+func TestNewRegistersOptionalMicrosoftEntraConnectorWithoutStartupNetworkWrites(t *testing.T) {
+	cfg := memoryConfiguration(t)
+	cfg.EntraSourceSystemID = "entra-primary"
+	cfg.EntraTenantID = "11111111-1111-4111-8111-111111111111"
+	cfg.EntraClientID = "22222222-2222-4222-8222-222222222222"
+	cfg.EntraClientSecret = "0123456789abcdef"
+	app, err := New(context.Background(), cfg, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := app.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -187,6 +202,10 @@ func memoryConfiguration(t *testing.T) config.Config {
 	cfg.OIDCTransactionSecret = ""
 	cfg.OIDCAdministratorClaim = ""
 	cfg.OIDCAdministratorValues = nil
+	cfg.EntraSourceSystemID = "entra"
+	cfg.EntraTenantID = ""
+	cfg.EntraClientID = ""
+	cfg.EntraClientSecret = ""
 	cfg.BlobDir = t.TempDir()
 	cfg.AllowedOrigin = "http://localhost:5173"
 	cfg.SessionCookieSecure = false

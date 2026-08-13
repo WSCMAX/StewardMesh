@@ -1,7 +1,7 @@
 package httpapi
 
 // Requirements: REQ-FOUNDATION-001, REQ-WORKSPACE-001, REQ-ATLAS-001, REQ-ATLAS-MODELS-001, REQ-ATLAS-CODES-001, REQ-PEOPLE-001,
-// REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-STACK-001, REQ-HORIZON-001, REQ-SIGNALS-001, REQ-PLATFORM-VALKEY-001,
+// REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-STACK-001, REQ-HORIZON-001, REQ-SIGNALS-001, REQ-PLATFORM-VALKEY-001,
 // SEC-GUARD-001, SEC-HTTP-001. Features include experience.workspace.
 
 import (
@@ -1971,6 +1971,14 @@ func TestDirectoryImportHTTPRequiresIntegrationPermissionsCSRFAndNoStore(t *test
 	}}}}
 	handler, _, connector := newGuardServerWithDirectory(t, nil, nil, nil, connector)
 	session := bootstrapAdministrator(t, handler)
+	sourcesRequest := authenticatedRequest(http.MethodGet, "/api/v1/directory-import-sources", nil, session)
+	sourcesResponse := httptest.NewRecorder()
+	handler.ServeHTTP(sourcesResponse, sourcesRequest)
+	if sourcesResponse.Code != http.StatusOK || sourcesResponse.Header().Get("Cache-Control") != "no-store" ||
+		!strings.Contains(sourcesResponse.Body.String(), `"id":"hr-primary"`) ||
+		strings.Contains(strings.ToLower(sourcesResponse.Body.String()), "credential") {
+		t.Fatalf("unexpected safe source discovery %d headers=%#v body=%s", sourcesResponse.Code, sourcesResponse.Header(), sourcesResponse.Body.String())
+	}
 
 	unauthenticated := httptest.NewRequest(http.MethodGet, "/api/v1/directory-imports", nil)
 	unauthenticatedRes := httptest.NewRecorder()
@@ -2061,6 +2069,12 @@ func TestDirectoryImportHTTPRejectsSessionWithoutIntegrationPermission(t *testin
 	handler.ServeHTTP(deniedRes, denied)
 	if deniedRes.Code != http.StatusForbidden || !strings.Contains(deniedRes.Body.String(), "permission_denied") {
 		t.Fatalf("expected session without integrations.read to fail, got %d %s", deniedRes.Code, deniedRes.Body.String())
+	}
+	deniedSources := authenticatedRequest(http.MethodGet, "/api/v1/directory-import-sources", nil, deniedSession)
+	deniedSourcesRes := httptest.NewRecorder()
+	handler.ServeHTTP(deniedSourcesRes, deniedSources)
+	if deniedSourcesRes.Code != http.StatusForbidden {
+		t.Fatalf("expected source discovery to enforce integrations.read, got %d", deniedSourcesRes.Code)
 	}
 }
 

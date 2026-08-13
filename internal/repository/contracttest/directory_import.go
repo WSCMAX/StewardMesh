@@ -1,12 +1,14 @@
 package contracttest
 
-// Requirement: REQ-DIRECTORY-EXPANSION-002. Feature: integrations.protocols.
+// Requirements: REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003.
+// Features: integrations.protocols, identity.directory.
 
 import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -19,12 +21,21 @@ func DirectoryImportStore(t *testing.T, store directoryexpansion.Store, organiza
 	t.Helper()
 	ctx := context.Background()
 	now := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)
+	empty, err := store.ListBatches(ctx, organizationID, directoryexpansion.ListQuery{Limit: 1})
+	if err != nil || empty.Batches == nil || len(empty.Batches) != 0 {
+		t.Fatalf("empty batch collection must be a non-nil array: %#v err=%v", empty, err)
+	}
 	batchID := contractDirectoryID("batch", unique)
 	itemID := contractDirectoryID("item", unique)
 	previewAttemptID := contractDirectoryID("preview-attempt", unique)
 	applyAttemptID := contractDirectoryID("apply-attempt", unique)
 	retryAttemptID := contractDirectoryID("retry-attempt", unique)
-	record := directoryexpansion.Record{SourceRecordID: "source-" + unique, Kind: directoryexpansion.RecordIdentity, IdentityKind: "person", DisplayName: "Ada", Email: "ada-" + contractDirectoryID("email", unique)[:8] + "@example.test", Status: "active"}
+	record := directoryexpansion.Record{
+		SourceRecordID: "source-" + unique, Kind: directoryexpansion.RecordIdentity, IdentityKind: "person", DisplayName: "Ada",
+		Email: "ada-" + contractDirectoryID("email", unique)[:8] + "@example.test", Status: "active", Department: "Information Technology",
+		DirectoryAttributes: map[string]string{"job-title": "Engineer", "office-location": "Main Campus"},
+		GroupSourceIDs:      []string{"group:directory-operators", "group:staff"},
+	}
 	batch := directoryexpansion.Batch{ID: batchID, OrganizationID: organizationID, SourceSystemID: "hr-primary", Provider: "example", ConfigRevision: "v1", Status: directoryexpansion.BatchPreviewed, CompleteSnapshot: false, Counts: directoryexpansion.Counts{Created: 1}, CreatedAt: now, UpdatedAt: now}
 	item := directoryexpansion.Item{ID: itemID, OrganizationID: organizationID, BatchID: batchID, Record: record, TargetID: contractDirectoryID("target", unique), SourceDigest: contractDirectoryDigest("source", unique), PlannedTargetDigest: contractDirectoryDigest("target-digest", unique), Action: directoryexpansion.ActionCreate, Outcome: directoryexpansion.OutcomePending, UpdatedAt: now}
 	previewResult := directoryexpansion.OperationResult{Batch: batch}
@@ -33,6 +44,8 @@ func DirectoryImportStore(t *testing.T, store directoryexpansion.Store, organiza
 	if err != nil || replay || created.Batch.ID != batchID {
 		t.Fatalf("create preview: %#v replay=%v err=%v", created, replay, err)
 	}
+	record.DirectoryAttributes["job-title"] = "tampered after create"
+	record.GroupSourceIDs[0] = "group:tampered-after-create"
 	replayed, replay, err := store.CreatePreview(ctx, batch, []directoryexpansion.Item{item}, previewAttempt)
 	if err != nil || !replay || replayed.Batch.ID != batchID {
 		t.Fatalf("replay preview: %#v replay=%v err=%v", replayed, replay, err)
@@ -42,8 +55,17 @@ func DirectoryImportStore(t *testing.T, store directoryexpansion.Store, organiza
 		t.Fatalf("find preview attempt: %#v err=%v", loadedAttempt, err)
 	}
 	detail, err := store.GetBatch(ctx, organizationID, batchID)
-	if err != nil || len(detail.Items) != 1 || len(detail.Attempts) != 1 || detail.Items[0].SourceDigest != item.SourceDigest {
+	if err != nil || len(detail.Items) != 1 || len(detail.Attempts) != 1 || detail.Items[0].SourceDigest != item.SourceDigest ||
+		detail.Items[0].Record.DirectoryAttributes["job-title"] != "Engineer" || detail.Items[0].Record.GroupSourceIDs[0] != "group:directory-operators" {
 		t.Fatalf("get exact preview: %#v err=%v", detail, err)
+	}
+	record.DirectoryAttributes["job-title"] = "Engineer"
+	record.GroupSourceIDs[0] = "group:directory-operators"
+	detail.Items[0].Record.DirectoryAttributes["job-title"] = "tampered returned record"
+	detail.Items[0].Record.GroupSourceIDs[0] = "group:tampered-returned-record"
+	detail, err = store.GetBatch(ctx, organizationID, batchID)
+	if err != nil || !reflect.DeepEqual(detail.Items[0].Record, record) {
+		t.Fatalf("returned item mutated authoritative plan: %#v err=%v", detail.Items, err)
 	}
 
 	applyAttempt := directoryexpansion.Attempt{ID: applyAttemptID, OrganizationID: organizationID, BatchID: batchID, Operation: directoryexpansion.OperationApply, IdempotencyHash: contractDirectoryDigest("apply-key", unique), RequestFingerprint: contractDirectoryDigest("apply-fingerprint", unique), Number: 2, Status: directoryexpansion.BatchApplying, ActorID: "account:test", CorrelationID: applyAttemptID, StartedAt: now.Add(time.Second)}
@@ -86,7 +108,8 @@ func DirectoryImportStore(t *testing.T, store directoryexpansion.Store, organiza
 		t.Fatalf("persisted preview plan was mutated by outcome update: %#v", finished.Items)
 	}
 	mappings, err := store.ListMappings(ctx, organizationID, batch.SourceSystemID)
-	if err != nil || len(mappings) != 1 || mappings[0].TargetID != item.TargetID || !mappings[0].Active {
+	if err != nil || len(mappings) != 1 || mappings[0].TargetID != item.TargetID || !mappings[0].Active ||
+		!reflect.DeepEqual(mappings[0].LastRecord, record) {
 		t.Fatalf("durable mapping: %#v err=%v", mappings, err)
 	}
 	_, exactReplay, err := store.BeginOperation(ctx, organizationID, batchID, applyAttempt, contractDirectoryID("unused", unique), now.Add(5*time.Second), now.Add(time.Minute))

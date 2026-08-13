@@ -1,6 +1,7 @@
 package directoryexpansion
 
-// Requirement: REQ-DIRECTORY-EXPANSION-002. Feature: integrations.protocols.
+// Requirements: REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003.
+// Features: integrations.protocols, identity.directory.
 
 import (
 	"context"
@@ -62,6 +63,10 @@ func NewService(store Store, target Target, auditor foundation.Auditor, registry
 	}
 	return &Service{store: store, target: target, auditor: auditor, registry: registry,
 		organizationID: config.OrganizationID, now: config.Now, maxPages: config.MaxPages, maxRecords: config.MaxRecords}, nil
+}
+
+func (s *Service) Sources() []SourceSystem {
+	return s.registry.SourceSystems()
 }
 
 func (s *Service) Preview(ctx context.Context, authentication guard.Authentication, request PreviewRequest, idempotencyKey string) (OperationResult, error) {
@@ -679,6 +684,7 @@ func normalizeRecord(record Record) (Record, error) {
 	record.Email = strings.ToLower(strings.TrimSpace(record.Email))
 	record.Status = strings.ToLower(strings.TrimSpace(record.Status))
 	record.IdentityKind = strings.ToLower(strings.TrimSpace(record.IdentityKind))
+	record.Department = strings.TrimSpace(record.Department)
 	if record.Kind == "" {
 		record.Kind = RecordIdentity
 	}
@@ -703,7 +709,64 @@ func normalizeRecord(record Record) (Record, error) {
 	if record.IdentityKind == "person" && record.Email == "" {
 		return Record{}, fmt.Errorf("%w: person email is required", ErrInvalidInput)
 	}
+	if !validBoundedText(record.Department, 200) {
+		return Record{}, fmt.Errorf("%w: normalized department is invalid", ErrInvalidInput)
+	}
+	if len(record.DirectoryAttributes) > MaximumAttributes {
+		return Record{}, fmt.Errorf("%w: normalized attributes exceed limit", ErrInvalidInput)
+	}
+	normalizedAttributes := make(map[string]string, len(record.DirectoryAttributes))
+	for key, value := range record.DirectoryAttributes {
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		if !providerNamePattern.MatchString(key) || !validBoundedText(value, 500) || value == "" {
+			return Record{}, fmt.Errorf("%w: normalized directory attribute is invalid", ErrInvalidInput)
+		}
+		if _, duplicate := normalizedAttributes[key]; duplicate {
+			return Record{}, fmt.Errorf("%w: normalized directory attribute is duplicated", ErrInvalidInput)
+		}
+		normalizedAttributes[key] = value
+	}
+	if len(normalizedAttributes) == 0 {
+		record.DirectoryAttributes = nil
+	} else {
+		record.DirectoryAttributes = normalizedAttributes
+	}
+	if len(record.GroupSourceIDs) > MaximumGroupLinks {
+		return Record{}, fmt.Errorf("%w: normalized group memberships exceed limit", ErrInvalidInput)
+	}
+	groups := make([]string, 0, len(record.GroupSourceIDs))
+	seenGroups := make(map[string]struct{}, len(record.GroupSourceIDs))
+	for _, groupID := range record.GroupSourceIDs {
+		groupID = strings.TrimSpace(groupID)
+		if !validSourceRecordID(groupID) {
+			return Record{}, fmt.Errorf("%w: normalized group membership is invalid", ErrInvalidInput)
+		}
+		if _, duplicate := seenGroups[groupID]; duplicate {
+			return Record{}, fmt.Errorf("%w: normalized group membership is duplicated", ErrConflict)
+		}
+		seenGroups[groupID] = struct{}{}
+		groups = append(groups, groupID)
+	}
+	sort.Strings(groups)
+	if len(groups) == 0 {
+		record.GroupSourceIDs = nil
+	} else {
+		record.GroupSourceIDs = groups
+	}
 	return record, nil
+}
+
+func validBoundedText(value string, maximum int) bool {
+	if !utf8.ValidString(value) || utf8.RuneCountInString(value) > maximum {
+		return false
+	}
+	for _, character := range value {
+		if unicode.IsControl(character) {
+			return false
+		}
+	}
+	return true
 }
 
 func validSourceRecordID(value string) bool {

@@ -757,6 +757,49 @@
       }
     },
     {
+      "requirementId": "REQ-DIRECTORY-EXPANSION-003",
+      "featureId": "identity.directory",
+      "artifacts": {
+        "documentation": [
+          ".env.example",
+          "docs/features/dictionary.md",
+          "docs/features/directory-expansion.md",
+          "docs/requirements/initial.md"
+        ],
+        "api": [
+          "api/openapi/openapi.yaml",
+          "api/proto/stewardmesh.proto",
+          "internal/httpapi/server.go"
+        ],
+        "code": [
+          "internal/application/application.go",
+          "internal/config/config.go",
+          "internal/directoryexpansion/connectors.go",
+          "internal/directoryexpansion/contracts.go",
+          "internal/directoryexpansion/entra/connector.go",
+          "internal/directoryexpansion/importer.go",
+          "internal/repository/directory_import.go"
+        ],
+        "schema": [
+          ".env.example"
+        ],
+        "tests": [
+          "internal/application/application_test.go",
+          "internal/config/config_test.go",
+          "internal/directoryexpansion/entra/connector_test.go",
+          "internal/httpapi/server_test.go",
+          "internal/repository/contracttest/directory_import.go",
+          "internal/repository/memory_directory_import_test.go",
+          "internal/repository/postgres/postgres_integration_test.go",
+          "web/src/DirectoryImportManager.test.tsx"
+        ],
+        "ui": [
+          "web/src/DirectoryImportManager.tsx",
+          "web/src/PeopleDirectory.tsx"
+        ]
+      }
+    },
+    {
       "requirementId": "REQ-PLATFORM-VALKEY-001",
       "featureId": "platform.runtime",
       "artifacts": {

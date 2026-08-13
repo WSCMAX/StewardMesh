@@ -1,6 +1,6 @@
 package config
 
-// Requirements: REQ-STORAGE-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
+// Requirements: REQ-DIRECTORY-EXPANSION-003, REQ-STORAGE-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
 
 import (
 	"strings"
@@ -130,6 +130,55 @@ func TestLoadSupportsDisabledMemoryAndValkeyCacheDrivers(t *testing.T) {
 			if configuration.CacheDriver != test.driver || configuration.CacheURL != test.url ||
 				configuration.CacheKeySecret != test.keySecret {
 				t.Fatalf("unexpected cache configuration %#v", configuration)
+			}
+		})
+	}
+}
+
+func TestLoadSupportsOptionalMicrosoftEntraConfiguration(t *testing.T) {
+	t.Setenv("STEWARDMESH_REPOSITORY_DRIVER", "memory")
+	t.Setenv("STEWARDMESH_ENTRA_SOURCE_SYSTEM_ID", "entra-primary")
+	t.Setenv("STEWARDMESH_ENTRA_TENANT_ID", "11111111-1111-4111-8111-111111111111")
+	t.Setenv("STEWARDMESH_ENTRA_CLIENT_ID", "22222222-2222-4222-8222-222222222222")
+	t.Setenv("STEWARDMESH_ENTRA_CLIENT_SECRET", "0123456789abcdef")
+	configuration, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !configuration.EntraEnabled() || configuration.EntraSourceSystemID != "entra-primary" ||
+		configuration.EntraConfig().TenantID != "11111111-1111-4111-8111-111111111111" {
+		t.Fatal("unexpected Microsoft Entra configuration")
+	}
+}
+
+func TestValidateRejectsPartialMicrosoftEntraConfigurationWithoutLeakingCredentials(t *testing.T) {
+	secret := "super-secret-credential"
+	valid := FromEnv()
+	valid.RepositoryDriver = RepositoryDriverMemory
+	valid.EntraSourceSystemID = "entra-primary"
+	valid.EntraTenantID = "11111111-1111-4111-8111-111111111111"
+	valid.EntraClientID = "22222222-2222-4222-8222-222222222222"
+	valid.EntraClientSecret = secret
+	tests := []struct {
+		name   string
+		mutate func(*Config)
+	}{
+		{name: "missing tenant", mutate: func(c *Config) { c.EntraTenantID = "" }},
+		{name: "common tenant", mutate: func(c *Config) { c.EntraTenantID = "common" }},
+		{name: "missing client", mutate: func(c *Config) { c.EntraClientID = "" }},
+		{name: "short secret", mutate: func(c *Config) { c.EntraClientSecret = "short" }},
+		{name: "invalid source", mutate: func(c *Config) { c.EntraSourceSystemID = "entra source" }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			configuration := valid
+			test.mutate(&configuration)
+			err := configuration.Validate()
+			if err == nil {
+				t.Fatal("expected invalid Microsoft Entra configuration")
+			}
+			if strings.Contains(err.Error(), secret) {
+				t.Fatalf("configuration error leaked a credential: %v", err)
 			}
 		})
 	}

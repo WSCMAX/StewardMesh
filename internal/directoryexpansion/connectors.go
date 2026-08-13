@@ -1,10 +1,12 @@
 package directoryexpansion
 
-// Requirement: REQ-DIRECTORY-EXPANSION-002. Feature: integrations.protocols.
+// Requirements: REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003.
+// Features: integrations.protocols, identity.directory.
 
 import (
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"unicode/utf8"
@@ -54,6 +56,9 @@ func (r *Registry) Register(connector Connector) error {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if len(r.connectors) >= MaximumSources {
+		return fmt.Errorf("%w: connector registry exceeds the source limit", ErrInvalidInput)
+	}
 	if _, exists := r.connectors[system.ID]; exists {
 		return fmt.Errorf("%w: source system is already registered", ErrConflict)
 	}
@@ -72,4 +77,21 @@ func (r *Registry) Connector(sourceSystemID string) (Connector, bool) {
 	defer r.mu.RUnlock()
 	connector, ok := r.connectors[sourceSystemID]
 	return connector, ok
+}
+
+// SourceSystems returns the safe, credential-free identities available to an
+// authorized import operator. Connector implementation details and endpoints
+// remain server-side configuration.
+func (r *Registry) SourceSystems() []SourceSystem {
+	if r == nil {
+		return []SourceSystem{}
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	systems := make([]SourceSystem, 0, len(r.connectors))
+	for _, connector := range r.connectors {
+		systems = append(systems, connector.SourceSystem())
+	}
+	sort.Slice(systems, func(i, j int) bool { return systems[i].ID < systems[j].ID })
+	return systems
 }

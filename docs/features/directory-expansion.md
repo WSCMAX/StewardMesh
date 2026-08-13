@@ -2,10 +2,11 @@
 
 - **Canonical IDs:** `identity.directory` for locations and
   `integrations.protocols` for directory imports
-- **Current requirements:** `REQ-DIRECTORY-EXPANSION-001` and
-  `REQ-DIRECTORY-EXPANSION-002`
-- **Roadmap issues:** [#24](https://github.com/WSCMAX/StewardMesh/issues/24)
-  and [#25](https://github.com/WSCMAX/StewardMesh/issues/25)
+- **Current requirements:** `REQ-DIRECTORY-EXPANSION-001` through
+  `REQ-DIRECTORY-EXPANSION-003`
+- **Roadmap issues:** [#24](https://github.com/WSCMAX/StewardMesh/issues/24),
+  [#25](https://github.com/WSCMAX/StewardMesh/issues/25), and
+  [#26](https://github.com/WSCMAX/StewardMesh/issues/26)
 
 Directory Expansion extends People with hierarchical locations, optional
 read-only institutional provider connectors, synthetic demo data, and a
@@ -130,12 +131,75 @@ snapshots, exact-plan apply/retry, source identity retention, idempotency,
 conflicts, durable attempts, authorization, CSRF, audit redaction, bounds,
 `no-store`, and operation with Valkey disabled.
 
+## Microsoft Entra ID read-only synchronization
+
+Set all four server-side values to enable one Microsoft Entra source:
+
+```text
+STEWARDMESH_ENTRA_SOURCE_SYSTEM_ID=entra
+STEWARDMESH_ENTRA_TENANT_ID=<single tenant UUID>
+STEWARDMESH_ENTRA_CLIENT_ID=<application UUID>
+STEWARDMESH_ENTRA_CLIENT_SECRET=<secret-manager value>
+```
+
+Partial, multi-tenant (`common`, `organizations`, or `consumers`), malformed,
+or short-secret configuration fails application startup without echoing the
+credential. The client secret belongs in the deployment secret manager and is
+cleared from the application's working configuration after connector
+construction. It never appears in REST, protobuf, UI, persistence, errors, or
+audits.
+
+Register a single-tenant Microsoft Entra application and grant the application
+permissions `User.Read.All` and `GroupMember.ReadBasic.All`, then grant
+administrator consent. This read-only combination covers the selected user and
+basic group properties plus direct member identifiers without the broader
+`Directory.Read.All` grant. Add `Member.Read.Hidden` only when hidden-membership
+groups are explicitly in scope. Do not grant `Directory.ReadWrite.All`,
+`Group.ReadWrite.All`, `User.ReadWrite.All`, or any delegated permission to this
+connector. StewardMesh requests only the `.default` application scope. OAuth
+client-credential acquisition necessarily
+uses a form POST to the tenant token endpoint; every Microsoft Graph directory
+operation is a GET, redirects are rejected, and there is no code path for a
+Graph POST, PATCH, PUT, or DELETE.
+
+The connector reads only the fixed `https://graph.microsoft.com/v1.0` user,
+group, and direct group-members endpoint set. It follows only validated
+same-scheme, same-host, same-version `@odata.nextLink` values, caps response
+bodies at 2 MiB, uses a 15-second client timeout, caps the snapshot at 100
+pages, 5,000 users/groups, and 20,000 direct memberships, and limits every
+identity to 256 direct groups. HTTP 429 and transient 5xx GET responses retry
+at most three times with a two-second maximum delay; credential, permission,
+shape, duplicate, and unsafe-link errors do not retry.
+
+Users map to People person identities, including disabled users as inactive.
+Groups map to shared identities. Department, direct group source IDs, and an
+allowlisted projection of job title, office location, user type, and group
+mail/security flags remain in the durable reconciliation record. Raw Graph
+documents and unsupported
+directory objects are not retained. Duplicate object IDs or memberships fail
+the preview instead of silently merging records.
+
+An authorized operator uses **People > Microsoft Entra directory import** to
+select the credential-free source identity, preview the complete exact plan,
+review create/update/deactivate/conflict counts and normalized audit detail,
+then apply that persisted plan. `integrations.read` exposes source identity and
+history; `integrations.write` plus CSRF is required for preview/apply/retry.
+The same behavior is defined in REST and protobuf contracts, and all responses
+remain `no-store`.
+
+Connector tests use an injectable fake HTTP server and cover pagination,
+inactive users, groups, direct memberships, attributes, duplicates, bounded
+retries, malformed/oversized/unsafe responses, credential validation, safe
+errors, and method assertions proving Graph traffic remains GET-only. HTTP,
+React, accessibility, race, vet, vulnerability, OpenAPI, protobuf, PostgreSQL,
+and browser checks complete the release gate.
+
 ## Planned provider slices
 
-Provider connectors are deliberately read-only and plug into the delivered
-source-system contract. Microsoft Entra ID and SailPoint provide identity
-records; Internet2 Grouper provides groups and memberships; PeopleSoft Campus
-Solutions provides configurable organization and location records. Each
+Remaining provider connectors are deliberately read-only and plug into the
+delivered source-system contract. SailPoint provides identity records;
+Internet2 Grouper provides groups and memberships; PeopleSoft Campus Solutions
+provides configurable organization and location records. Each
 provider-specific mapper must retain source IDs, use an explicit configuration
 revision, produce the bounded complete snapshot, and report conflicts instead
 of silently overwriting records.

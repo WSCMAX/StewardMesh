@@ -1,11 +1,12 @@
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Asset } from './AtlasInventory'
 import { ApiRequestError, requestJSON } from './api'
+import DirectoryImportManager from './DirectoryImportManager'
 import { documentationHref } from './documentation'
 import { RelatedRecordModeChooser, RelatedRecordWorkflowFrame, useRelatedRecordWorkflow } from './RelatedRecordWorkflow'
 import { buttonClass, inputClass, labelClass, panelClass, plainButtonClass, secondaryButtonClass, subpanelClass } from './ui'
 
-// Requirements: REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, REQ-WORKSPACE-001, A11Y-001, DOC-001, DOC-002.
+// Requirements: REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-003, REQ-WORKSPACE-001, A11Y-001, DOC-001, DOC-002.
 // Features: identity.directory, experience.workspace.
 
 type RecordStatus = 'active' | 'inactive'
@@ -889,7 +890,7 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
       {error && <div ref={errorRef} className="rounded-xl border border-steward-danger/50 bg-steward-danger/15 p-4 text-[#ffccd1]" role="alert" tabIndex={-1}>{error}</div>}
       <p className="sr-only" aria-live="polite" role="status">{status}</p>
 
-      <aside aria-labelledby="people-guide-heading" className={`${subpanelClass} border-steward-teal/20 p-4`}>
+      <section aria-labelledby="people-guide-heading" className={`${subpanelClass} border-steward-teal/20 p-4`}>
         <h3 id="people-guide-heading" className="font-semibold text-steward-mist">Quick guide</h3>
         <ol className="mt-2 list-decimal space-y-1 pl-5 text-sm leading-6 text-steward-mist-muted">
           <li>Use the guided task to add a person and resolve their location together.</li>
@@ -897,7 +898,9 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
           <li>Review the scoped directory and location inventory.</li>
           <li>Choose an asset to add primary, additional-user, and department assignments.</li>
         </ol>
-      </aside>
+      </section>
+
+      <DirectoryImportManager csrfToken={csrfToken} onApplied={() => loadDirectory(filters)} permissions={permissions} />
 
       <form aria-label="Filter People directory" className={`${subpanelClass} p-4`} onSubmit={handleSearch} role="search">
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">

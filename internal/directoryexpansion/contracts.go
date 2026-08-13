@@ -1,6 +1,7 @@
 // Package directoryexpansion implements provider-neutral directory preview,
 // reconciliation, apply, and retry contracts.
-// Requirement: REQ-DIRECTORY-EXPANSION-002. Feature: integrations.protocols.
+// Requirements: REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003.
+// Features: integrations.protocols, identity.directory.
 package directoryexpansion
 
 import (
@@ -15,11 +16,14 @@ const (
 	RequirementID = "REQ-DIRECTORY-EXPANSION-002"
 	FeatureID     = "integrations.protocols"
 
-	DefaultListLimit = 50
-	MaximumListLimit = 100
-	MaximumPages     = 100
-	MaximumRecords   = 5000
-	MaximumAttempts  = 100
+	DefaultListLimit  = 50
+	MaximumListLimit  = 100
+	MaximumPages      = 100
+	MaximumRecords    = 5000
+	MaximumAttempts   = 100
+	MaximumSources    = 100
+	MaximumAttributes = 16
+	MaximumGroupLinks = 256
 )
 
 var (
@@ -75,12 +79,15 @@ const RecordIdentity RecordKind = "identity"
 // Record is the bounded normalized payload shared by every provider adapter.
 // Raw provider responses and credentials never cross this contract or persist.
 type Record struct {
-	SourceRecordID string     `json:"sourceRecordId"`
-	Kind           RecordKind `json:"kind"`
-	IdentityKind   string     `json:"identityKind,omitempty"`
-	DisplayName    string     `json:"displayName"`
-	Email          string     `json:"email,omitempty"`
-	Status         string     `json:"status"`
+	SourceRecordID      string            `json:"sourceRecordId"`
+	Kind                RecordKind        `json:"kind"`
+	IdentityKind        string            `json:"identityKind,omitempty"`
+	DisplayName         string            `json:"displayName"`
+	Email               string            `json:"email,omitempty"`
+	Status              string            `json:"status"`
+	Department          string            `json:"department,omitempty"`
+	DirectoryAttributes map[string]string `json:"directoryAttributes,omitempty"`
+	GroupSourceIDs      []string          `json:"groupSourceIds,omitempty"`
 }
 
 type Page struct {

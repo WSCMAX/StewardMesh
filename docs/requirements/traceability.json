@@ -1,6 +1,83 @@
 {
   "entries": [
     {
+      "requirementId": "REQ-API-001",
+      "featureId": "integrations.protocols",
+      "artifacts": {
+        "documentation": [
+          "docs/features/bridge.md",
+          "docs/features/dictionary.md",
+          "docs/requirements/initial.md",
+          "docs/validation/bridge-security-review.md"
+        ],
+        "api": [
+          "api/openapi/openapi.yaml",
+          "api/proto/stewardmesh.proto"
+        ],
+        "code": [
+          "internal/application/application.go",
+          "internal/bridge/contracts.go",
+          "internal/bridge/service.go",
+          "internal/httpapi/bridge.go"
+        ],
+        "schema": [
+          "internal/repository/postgres/migrations/0034_bridge_mcp.sql"
+        ],
+        "tests": [
+          "internal/application/bridge_test.go",
+          "internal/repository/contracttest/bridge.go",
+          "internal/repository/postgres/postgres_integration_test.go",
+          "web/src/BridgeManager.test.tsx"
+        ],
+        "ui": [
+          "web/src/BridgeManager.tsx",
+          "web/src/documentation.ts"
+        ]
+      }
+    },
+    {
+      "requirementId": "SEC-MCP-001",
+      "featureId": "integrations.protocols",
+      "artifacts": {
+        "documentation": [
+          "docs/features/bridge.md",
+          "docs/features/dictionary.md",
+          "docs/requirements/initial.md",
+          "docs/validation/bridge-security-review.md"
+        ],
+        "api": [
+          "api/openapi/openapi.yaml",
+          "api/proto/stewardmesh.proto"
+        ],
+        "code": [
+          "cmd/stewardmesh-mcp/main.go",
+          "internal/bridge/canonical.go",
+          "internal/bridge/contracts.go",
+          "internal/bridge/mcp.go",
+          "internal/bridge/service.go",
+          "internal/guard/service.go",
+          "internal/httpapi/bridge.go",
+          "internal/repository/memory_bridge.go",
+          "internal/repository/postgres/bridge.go"
+        ],
+        "schema": [
+          "internal/repository/postgres/migrations/0034_bridge_mcp.sql"
+        ],
+        "tests": [
+          "internal/application/bridge_test.go",
+          "internal/repository/contracttest/bridge.go",
+          "internal/repository/memory_bridge_test.go",
+          "internal/repository/postgres/migrate_test.go",
+          "internal/repository/postgres/postgres_integration_test.go",
+          "web/src/BridgeManager.test.tsx"
+        ],
+        "ui": [
+          "web/src/BridgeManager.tsx",
+          "web/src/documentation.ts"
+        ]
+      }
+    },
+    {
       "requirementId": "REQ-FOUNDATION-001",
       "featureId": "platform.foundation",
       "artifacts": {

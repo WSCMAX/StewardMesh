@@ -31,6 +31,7 @@ const iconForPage: Record<DocumentationTopicID, AreaIconName> = {
   vault: 'vault',
   exchange: 'exchange',
   people: 'people',
+  bridge: 'bridge',
   guard: 'guard',
   guide: 'overview',
 }

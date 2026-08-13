@@ -3,8 +3,8 @@ package postgres
 // Requirements: REQ-FOUNDATION-001, SEC-GUARD-001, REQ-PEOPLE-001,
 // REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-005, REQ-ATLAS-001, REQ-ATLAS-MODELS-001,
 // REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-HORIZON-001,
-// REQ-ATLAS-CODES-001, REQ-PATTERNS-001, REQ-STACK-001, REQ-SIGNALS-001, REQ-REACH-001, REQ-EXCHANGE-001.
-// Features: lifecycle.planning, inventory.models, inventory.identifiers, templates.schemas, alerts.rules, messaging.delivery, migration.packages.
+// REQ-ATLAS-CODES-001, REQ-PATTERNS-001, REQ-STACK-001, REQ-SIGNALS-001, REQ-REACH-001, REQ-EXCHANGE-001, REQ-API-001, SEC-MCP-001.
+// Features: lifecycle.planning, inventory.models, inventory.identifiers, templates.schemas, alerts.rules, messaging.delivery, migration.packages, integrations.protocols.
 
 import (
 	"context"
@@ -724,4 +724,38 @@ func TestReachStoreIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	contracttest.ReachStore(t, store, organizationID, fmt.Sprintf("postgres-%d", time.Now().UnixNano()))
+}
+
+func TestBridgeStoreIntegration(t *testing.T) {
+	databaseURL := os.Getenv("STEWARDMESH_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("STEWARDMESH_TEST_DATABASE_URL is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	database, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := Migrate(ctx, database); err != nil {
+		t.Fatal(err)
+	}
+	organizationID := fmt.Sprintf("bridge-integration-%d", time.Now().UnixNano())
+	organizations, err := NewOrganizationRepository(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	organizationService, err := bootstrap.NewOrganizationService(organizations)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := organizationService.EnsureOrganization(ctx, organizationID, "Bridge Integration"); err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewBridgeStore(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contracttest.BridgeStore(t, store, organizationID)
 }

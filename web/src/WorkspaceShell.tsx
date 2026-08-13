@@ -31,7 +31,7 @@ type WorkspaceShellProps = {
   visitedAreas: ReadonlySet<WorkspaceAreaID>
 }
 
-const workspaceAreaIDs: readonly WorkspaceAreaID[] = ['overview', 'atlas', 'horizon', 'ledger', 'stack', 'signals', 'reach', 'threads', 'vault', 'exchange', 'people', 'guard']
+const workspaceAreaIDs: readonly WorkspaceAreaID[] = ['overview', 'atlas', 'horizon', 'ledger', 'stack', 'signals', 'reach', 'threads', 'vault', 'exchange', 'people', 'bridge', 'guard']
 
 export function workspaceAreaFromHash(hash: string): WorkspaceAreaID {
   const candidate = hash.replace(/^#workspace-/, '')
@@ -133,7 +133,7 @@ export default function WorkspaceShell({ activeArea, areas, assetCount, healthLa
 
         <div className="mt-5 min-w-0">
           {healthLabel === 'Unavailable' && <p className="mb-4 rounded-xl border border-steward-warning/40 bg-steward-warning/10 p-4 text-sm leading-6 text-steward-mist-muted" role="status"><strong className="text-steward-mist">Service unavailable.</strong> Previously loaded context may be stale, and protected reads or changes may fail until the Go service reconnects.</p>}
-          {areas.map((area) => <div
+          {areas.map((area) => <section
             aria-labelledby="workspace-context-heading"
             className="min-w-0"
             hidden={area.id !== active.id}
@@ -142,7 +142,7 @@ export default function WorkspaceShell({ activeArea, areas, assetCount, healthLa
             role="region"
           >
             {visitedAreas.has(area.id) ? area.content : <p className={`${panelClass} p-5 text-steward-mist-muted`} role="status">Opening {area.name}…</p>}
-          </div>)}
+          </section>)}
         </div>
 
         {active.id === 'overview' && <dl className="sr-only"><dt>Tracked assets</dt><dd>{assetCount}</dd></dl>}

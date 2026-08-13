@@ -1,6 +1,6 @@
-// Requirements: REQ-DIRECTORY-EXPANSION-005, REQ-SIGNALS-001, REQ-REACH-001, REQ-EXCHANGE-001, DOC-001. Features: integrations.protocols, alerts.rules, messaging.delivery, migration.packages, experience.help.
+// Requirements: REQ-API-001, SEC-MCP-001, REQ-DIRECTORY-EXPANSION-005, REQ-SIGNALS-001, REQ-REACH-001, REQ-EXCHANGE-001, DOC-001. Features: integrations.protocols, alerts.rules, messaging.delivery, migration.packages, experience.help.
 
-export type DocumentationTopicID = 'overview' | 'workspace' | 'atlas' | 'horizon' | 'ledger' | 'stack' | 'signals' | 'reach' | 'threads' | 'vault' | 'exchange' | 'people' | 'guard' | 'guide'
+export type DocumentationTopicID = 'overview' | 'workspace' | 'atlas' | 'horizon' | 'ledger' | 'stack' | 'signals' | 'reach' | 'threads' | 'vault' | 'exchange' | 'people' | 'bridge' | 'guard' | 'guide'
 
 export type DocumentationStep = {
   title: string
@@ -464,6 +464,32 @@ export const documentationPages: readonly DocumentationPage[] = [
     related: ['atlas', 'workspace', 'guard'],
   },
   {
+	  id: 'bridge',
+	  group: 'Administration',
+	  kicker: 'MCP and OAuth integration',
+	  title: 'Bridge',
+	  summary: 'Expose bounded StewardMesh resources through local stdio or authenticated Streamable HTTP without bypassing Guard.',
+	  appHref: '#workspace-bridge',
+	  appLabel: 'Open Bridge',
+	  searchTerms: ['mcp', 'oauth', 'pkce', 'client', 'scope', 'token', 'stdio', 'streamable http'],
+	  sections: [
+		{
+		  id: 'clients', title: 'Register public clients',
+		  paragraphs: ['Bridge clients have exact redirect URIs and granular scopes. Authorization code flow always uses S256 PKCE and the exact MCP resource audience. Client secrets are not issued or stored.'],
+		  callout: { title: 'Token safety', body: 'Only hashes of authorization codes, access tokens, refresh tokens, and confirmation tokens are stored. Tokens never appear in resources, logs, or this administration screen.', tone: 'success' },
+		},
+		{
+		  id: 'writes', title: 'Confirm every write',
+		  paragraphs: ['The phase-one MCP write surface is intentionally tiny: alert acknowledgement. A prepare tool validates current Guard scope and ownership, then returns a server-generated token bound to organization, actor, action, and exact arguments. The confirm tool consumes it once before writing.'],
+		},
+		{
+		  id: 'transports', title: 'Choose a transport',
+		  bullets: ['Remote clients use stateless Streamable HTTP at /mcp and discover OAuth metadata from the well-known endpoints.', 'Local stdio requires an explicit Guard session and scope list in the process environment; stdout remains protocol-only.', 'Resources and tools are bounded, paginated, redacted, deadline-limited, and treat stored text as data rather than instructions.'],
+		},
+	  ],
+	  related: ['guard', 'signals', 'atlas'],
+	},
+	{
     id: 'guard',
     group: 'Administration',
     kicker: 'Authentication and authorization',

@@ -195,6 +195,30 @@ fallbacks, and sanitized issue-report context. See
 [Guide](docs/features/guide.md) for public branding variables, accessibility
 checks, privacy boundaries, and validation coverage.
 
+Bridge (`REQ-API-001`, `SEC-MCP-001`, `integrations.protocols`) provides
+documented REST/gRPC administration contracts plus authenticated MCP
+`2026-07-28` over stateless Streamable HTTP and explicit local stdio. Remote
+clients use OAuth authorization code with S256 PKCE, exact redirects and
+resource audience, granular consent, hashed rotating credentials, and
+revocation. MCP reads are bounded and redacted; the sole phase-one write,
+Signals alert acknowledgement, requires a short-lived argument-bound one-use
+confirmation. See [Bridge](docs/features/bridge.md) and its
+[security review](docs/validation/bridge-security-review.md).
+
+For a local stdio client, first sign in through Guard and supply the current
+opaque session and explicit scopes only to the child process. PostgreSQL is
+required so the command sees the same Guard session as the web server:
+
+```sh
+STEWARDMESH_MCP_SESSION_TOKEN='<current-session>' \
+STEWARDMESH_MCP_SCOPES='mcp:resources assets:read' \
+go run ./cmd/stewardmesh-mcp
+```
+
+Do not save the session token in `.env`, client configuration committed to
+source control, shell history, or logs. The command removes its credential
+environment variable after reading it and reserves stdout for MCP frames.
+
 The loopback development settings in `.env.example` deliberately use an HTTP
 cookie. A shared listener must use an HTTPS allowed origin, secure cookies, and
 a deployment bootstrap token containing at least 32 bytes; configuration fails

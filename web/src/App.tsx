@@ -1,6 +1,7 @@
 import { type CSSProperties, type FormEvent, type ReactNode, useEffect, useRef, useState } from 'react'
 import { ApiRequestError, authenticationRequiredEventName, requestJSON } from './api'
 import AtlasInventory, { isAsset, type Asset } from './AtlasInventory'
+import BridgeManager from './BridgeManager'
 import { documentationHref } from './documentation'
 import ExchangeManager from './ExchangeManager'
 import GuideExperience, { GuideInvitation, type GuideDestination } from './GuideExperience'
@@ -81,6 +82,7 @@ const workspaceModules: readonly WorkspaceModule[] = [
   { id: 'vault', name: 'Vault', descriptor: 'Private files and evidence', summary: 'Store checksummed evidence and authorize private downloads.', permission: 'storage.read', writePermission: 'storage.write' },
   { id: 'exchange', name: 'Exchange', descriptor: 'Migration packages', summary: 'Move selected records through bounded, checksummed, dependency-aware packages.', permission: 'integrations.read', writePermission: 'integrations.write' },
   { id: 'people', name: 'People', descriptor: 'Users and departments', summary: 'Organize locations, departments, identities, and asset assignments.', permission: 'directory.read', writePermission: 'directory.write' },
+  { id: 'bridge', name: 'Bridge', descriptor: 'MCP and OAuth clients', summary: 'Connect approved MCP clients through narrow scopes, explicit consent, and revocable access.', permission: 'integrations.read', writePermission: 'integrations.write' },
   { id: 'guard', name: 'Guard', descriptor: 'Authentication and authorization', summary: 'Manage roles, scoped assignments, ownership, and access policy.', permission: 'guard.manage' },
 ]
 
@@ -430,6 +432,7 @@ export default function App() {
     vault: <VaultManager csrfToken={csrfToken} onOpenHelp={() => openGuide({ view: 'help', topic: 'vault' })} permissions={permissions} />,
     exchange: <ExchangeManager csrfToken={csrfToken} onOpenHelp={() => openGuide({ view: 'help', topic: 'exchange' })} permissions={permissions} />,
     people: <PeopleDirectory assets={assets} csrfToken={csrfToken} issuesUrl={issuesUrl} onOpenHelp={() => openGuide({ view: 'help', topic: 'people' })} onReportIssue={() => openGuide({ view: 'report', topic: 'people' })} permissions={permissions} />,
+    bridge: <BridgeManager csrfToken={csrfToken} permissions={permissions} />,
     guard: <div className="grid gap-6"><GuardAccessManager csrfToken={csrfToken} onOpenHelp={() => openGuide({ view: 'help', topic: 'guard' })} /><PatternsManager csrfToken={csrfToken} /></div>,
   }
   const workspaceAreas: WorkspaceArea[] = [

@@ -1,9 +1,8 @@
 package httpapi
 
 // Requirements: REQ-FOUNDATION-001, REQ-WORKSPACE-001, REQ-ATLAS-001, REQ-ATLAS-CODES-001, REQ-PEOPLE-001,
-// REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-STACK-001, REQ-HORIZON-001, REQ-SIGNALS-001, REQ-REACH-001, REQ-EXCHANGE-001, REQ-PLATFORM-VALKEY-001,
-// SEC-GUARD-001, SEC-HTTP-001. Features include experience.workspace and inventory.models.
-// Feature: migration.packages.
+// REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-STACK-001, REQ-HORIZON-001, REQ-SIGNALS-001, REQ-REACH-001, REQ-EXCHANGE-001, REQ-API-001, REQ-PLATFORM-VALKEY-001,
+// SEC-GUARD-001, SEC-HTTP-001, SEC-MCP-001. Features include experience.workspace, inventory.models, integrations.protocols, and migration.packages.
 
 import (
 	"context"
@@ -24,6 +23,7 @@ import (
 	"github.com/maxlemke/stewardmesh/internal/atlas"
 	"github.com/maxlemke/stewardmesh/internal/atlascodes"
 	"github.com/maxlemke/stewardmesh/internal/bootstrap"
+	"github.com/maxlemke/stewardmesh/internal/bridge"
 	"github.com/maxlemke/stewardmesh/internal/directoryexpansion"
 	"github.com/maxlemke/stewardmesh/internal/domain"
 	"github.com/maxlemke/stewardmesh/internal/exchange"
@@ -67,6 +67,7 @@ type Dependencies struct {
 	Signals             *signals.Service
 	Exchange            *exchange.Service
 	Reach               *reach.Service
+	Bridge              *bridge.Service
 	Guard               *guard.Service
 	OIDC                *identity.OIDCFlow
 	SAML                *identity.SAMLFlow
@@ -89,6 +90,7 @@ type Server struct {
 	signals             *signals.Service
 	exchange            *exchange.Service
 	reach               *reach.Service
+	bridge              *bridge.Service
 	guard               *guard.Service
 	oidc                *identity.OIDCFlow
 	saml                *identity.SAMLFlow
@@ -176,6 +178,7 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 		signals:             deps.Signals,
 		exchange:            deps.Exchange,
 		reach:               deps.Reach,
+		bridge:              deps.Bridge,
 		guard:               deps.Guard,
 		oidc:                deps.OIDC,
 		saml:                deps.SAML,
@@ -189,6 +192,14 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 	mux.HandleFunc("GET /api/v1/auth/bootstrap", server.bootstrapStatus)
 	mux.HandleFunc("POST /api/v1/auth/bootstrap", server.bootstrapAdministrator)
 	mux.HandleFunc("POST /api/v1/auth/login", server.login)
+	mux.HandleFunc("GET /.well-known/oauth-protected-resource", server.bridgeProtectedResourceMetadata)
+	mux.HandleFunc("GET /.well-known/oauth-authorization-server", server.bridgeAuthorizationServerMetadata)
+	mux.HandleFunc("GET /oauth/authorize", server.bridgeAuthorize)
+	mux.HandleFunc("POST /oauth/token", server.bridgeToken)
+	mux.HandleFunc("POST /oauth/revoke", server.bridgeRevokeToken)
+	if server.bridge != nil {
+		mux.Handle("POST /mcp", server.bridge.MCPHTTPHandler())
+	}
 	mux.HandleFunc("GET /api/v1/auth/oidc/start", server.oidcStart)
 	mux.HandleFunc("GET /api/v1/auth/oidc/callback", server.oidcCallback)
 	mux.HandleFunc("GET /api/v1/auth/saml/metadata", server.samlMetadata)
@@ -197,6 +208,13 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 	mux.Handle("GET /api/v1/auth/session", server.protected("", false, server.getSession))
 	mux.Handle("POST /api/v1/auth/logout", server.protected("", true, server.logout))
 	mux.Handle("GET /api/v1/directory-import-sources", server.protected(guard.PermissionIntegrationsRead, false, server.listDirectoryImportSources))
+	mux.Handle("GET /api/v1/bridge/clients", server.protected(guard.PermissionIntegrationsRead, false, server.listBridgeClients))
+	mux.Handle("POST /api/v1/bridge/clients", server.protected(guard.PermissionIntegrationsWrite, true, server.createBridgeClient))
+	mux.Handle("DELETE /api/v1/bridge/clients/{clientID}", server.protected(guard.PermissionIntegrationsWrite, true, server.revokeBridgeClient))
+	mux.Handle("GET /api/v1/bridge/grants", server.protected(guard.PermissionIntegrationsRead, false, server.listBridgeGrants))
+	mux.Handle("DELETE /api/v1/bridge/grants/{grantID}", server.protected(guard.PermissionIntegrationsWrite, true, server.revokeBridgeGrant))
+	mux.Handle("GET /api/v1/bridge/consents/{requestID}", server.protected(guard.PermissionIntegrationsRead, false, server.getBridgeConsent))
+	mux.Handle("POST /api/v1/bridge/consents/{requestID}/decision", server.protected(guard.PermissionIntegrationsRead, true, server.decideBridgeConsent))
 	mux.Handle("GET /api/v1/directory-imports", server.protected(guard.PermissionIntegrationsRead, false, server.listDirectoryImports))
 	mux.Handle("GET /api/v1/directory-imports/{batchID}", server.protected(guard.PermissionIntegrationsRead, false, server.getDirectoryImport))
 	mux.Handle("POST /api/v1/directory-imports/preview", server.protected(guard.PermissionIntegrationsWrite, true, server.previewDirectoryImport))

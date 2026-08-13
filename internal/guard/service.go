@@ -429,6 +429,29 @@ func (s *Service) AuthenticateSession(ctx context.Context, rawToken string) (Aut
 	return authenticationFrom(session, access), nil
 }
 
+// AuthenticateAccount reloads current Guard grants for a previously
+// authenticated transport principal. It is used by short-lived, audience-bound
+// Bridge access tokens so role changes and disabled accounts take effect on
+// every MCP request instead of being copied into OAuth state.
+// Requirement: SEC-MCP-001. Feature: integrations.protocols.
+func (s *Service) AuthenticateAccount(ctx context.Context, accountID string) (Authentication, error) {
+	accountID = strings.TrimSpace(accountID)
+	if !guardIDPattern.MatchString(accountID) {
+		return Authentication{}, ErrInvalidSession
+	}
+	access, err := s.store.AccessForAccount(ctx, s.organizationID, accountID)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return Authentication{}, ErrInvalidSession
+		}
+		return Authentication{}, fmt.Errorf("load account access: %w", err)
+	}
+	if access.Account.Status != "active" {
+		return Authentication{}, ErrInvalidSession
+	}
+	return authenticationFrom(Session{}, access), nil
+}
+
 func (s *Service) RefreshCSRF(ctx context.Context, authentication *Authentication) (string, error) {
 	if authentication == nil || authentication.Session.ID == "" {
 		return "", ErrInvalidSession

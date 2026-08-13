@@ -1,7 +1,7 @@
 // Package application constructs StewardMesh's transport-neutral HTTP
 // application and owns the lifecycle of its shared runtime dependencies.
-// Requirements: REQ-FOUNDATION-001, REQ-ATLAS-001, REQ-ATLAS-CODES-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-STACK-001, REQ-HORIZON-001, REQ-SIGNALS-001, REQ-REACH-001, REQ-EXCHANGE-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001.
-// Feature: migration.packages.
+// Requirements: REQ-API-001, REQ-FOUNDATION-001, REQ-ATLAS-001, REQ-ATLAS-CODES-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-STACK-001, REQ-HORIZON-001, REQ-SIGNALS-001, REQ-REACH-001, REQ-EXCHANGE-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001.
+// Features: integrations.protocols, migration.packages.
 package application
 
 import (
@@ -10,12 +10,14 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/maxlemke/stewardmesh/internal/atlas"
 	"github.com/maxlemke/stewardmesh/internal/atlascodes"
 	"github.com/maxlemke/stewardmesh/internal/bootstrap"
+	"github.com/maxlemke/stewardmesh/internal/bridge"
 	"github.com/maxlemke/stewardmesh/internal/cache"
 	"github.com/maxlemke/stewardmesh/internal/config"
 	"github.com/maxlemke/stewardmesh/internal/directoryexpansion"
@@ -55,6 +57,7 @@ type Options struct {
 // HTTP listener, process signals, or a deployment-specific transport adapter.
 type Application struct {
 	handler         http.Handler
+	bridge          *bridge.Service
 	organization    bootstrap.Organization
 	closeCache      func() error
 	closeFoundation func() error
@@ -318,6 +321,15 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 	if err != nil {
 		return fail(fmt.Errorf("initialize Exchange: %w", err))
 	}
+	bridgeService, err := bridge.NewService(runtime.bridgeStore, guardService, atlasService, peopleService, signalsService, runtime.auditor, runtime.organization, bridge.ServiceConfig{
+		OrganizationID: cfg.OrganizationID,
+		Issuer:         strings.TrimRight(cfg.AllowedOrigin, "/"),
+		ResourceURI:    strings.TrimRight(cfg.AllowedOrigin, "/") + "/mcp",
+	})
+	if err != nil {
+		return fail(fmt.Errorf("initialize Bridge: %w", err))
+	}
+	application.bridge = bridgeService
 
 	application.handler = httpapi.NewServer(httpapi.Dependencies{
 		Atlas:               atlasService,
@@ -333,6 +345,7 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 		Horizon:             horizonService,
 		Signals:             signalsService,
 		Reach:               reachService,
+		Bridge:              bridgeService,
 		Patterns:            patternsService,
 		Exchange:            exchangeService,
 		Guard:               guardService,
@@ -357,6 +370,15 @@ func (a *Application) Organization() bootstrap.Organization {
 		return bootstrap.Organization{}
 	}
 	return a.organization
+}
+
+// Bridge returns the integration service used by the explicit local stdio
+// adapter. HTTP callers use Handler and never receive this service directly.
+func (a *Application) Bridge() *bridge.Service {
+	if a == nil {
+		return nil
+	}
+	return a.bridge
 }
 
 // Close releases the cache before the authoritative repository. It is safe to
@@ -389,6 +411,7 @@ type foundationRuntime struct {
 	horizonStore         horizon.Store
 	signalsStore         signals.Store
 	reachStore           reach.Store
+	bridgeStore          bridge.Store
 	patternsStore        patterns.Store
 	guardStore           guard.Store
 	peopleStore          people.Store
@@ -465,6 +488,7 @@ func initializeFoundation(ctx context.Context, cfg config.Config, runMigrations 
 		horizonStore         horizon.Store
 		signalsStore         signals.Store
 		reachStore           reach.Store
+		bridgeStore          bridge.Store
 		patternsStore        patterns.Store
 		guardStore           guard.Store
 		peopleStore          people.Store
@@ -489,6 +513,7 @@ func initializeFoundation(ctx context.Context, cfg config.Config, runMigrations 
 		horizonStore = repository.NewMemoryHorizonStore()
 		signalsStore = repository.NewMemorySignalsStore()
 		reachStore = repository.NewMemoryReachStore()
+		bridgeStore = repository.NewMemoryBridgeStore()
 		patternsStore = repository.NewMemoryPatternsStore()
 	case config.RepositoryDriverPostgres:
 		database, err := postgresrepository.Open(ctx, cfg.DatabaseURL)
@@ -577,6 +602,11 @@ func initializeFoundation(ctx context.Context, cfg config.Config, runMigrations 
 			_ = database.Close()
 			return foundationRuntime{}, err
 		}
+		bridgeStore, err = postgresrepository.NewBridgeStore(database)
+		if err != nil {
+			_ = database.Close()
+			return foundationRuntime{}, err
+		}
 		patternsStore, err = postgresrepository.NewPatternsStore(database)
 		if err != nil {
 			_ = database.Close()
@@ -639,6 +669,7 @@ func initializeFoundation(ctx context.Context, cfg config.Config, runMigrations 
 		horizonStore:         horizonStore,
 		signalsStore:         signalsStore,
 		reachStore:           reachStore,
+		bridgeStore:          bridgeStore,
 		patternsStore:        patternsStore,
 		guardStore:           guardStore,
 		peopleStore:          peopleStore,

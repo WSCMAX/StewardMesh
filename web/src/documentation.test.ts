@@ -11,7 +11,7 @@ test('creates fixed same-host documentation deep links', () => {
 })
 
 test('keeps every local documentation page complete and connected', () => {
-  expect(documentationPages).toHaveLength(14)
+  expect(documentationPages).toHaveLength(15)
   for (const page of documentationPages) {
     expect(page.sections.length).toBeGreaterThan(0)
     expect(page.related.length).toBeGreaterThan(0)

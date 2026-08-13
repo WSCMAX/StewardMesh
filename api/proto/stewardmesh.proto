@@ -12,6 +12,19 @@ service FoundationService {
   rpc GetOrganization(GetOrganizationRequest) returns (Organization);
 }
 
+// Provider-neutral Bridge administration parity for REST client and grant
+// operations. Browser OAuth redirects, token exchange, MCP Streamable HTTP,
+// and local stdio remain transport-specific and are intentionally not exposed
+// as gRPC RPCs. Requirements: REQ-API-001, SEC-MCP-001.
+// Feature: integrations.protocols. GitHub: #14.
+service BridgeService {
+  rpc ListClients(ListBridgeClientsRequest) returns (ListBridgeClientsResponse);
+  rpc CreateClient(CreateBridgeClientRequest) returns (BridgeClient);
+  rpc RevokeClient(RevokeBridgeClientRequest) returns (BridgeClient);
+  rpc ListGrants(ListBridgeGrantsRequest) returns (ListBridgeGrantsResponse);
+  rpc RevokeGrant(RevokeBridgeGrantRequest) returns (BridgeGrant);
+}
+
 // Versioned record templates and provider-neutral typed validation.
 // Requirement: REQ-PATTERNS-001. Feature: templates.schemas.
 // The schema and validation messages are the stable Exchange seam; Exchange
@@ -2788,4 +2801,65 @@ message ReachProcessResult {
   int32 delivered = 2;
   int32 retrying = 3;
   int32 failed = 4;
+}
+
+message ListBridgeClientsRequest {}
+
+message ListBridgeClientsResponse {
+  repeated BridgeClient items = 1;
+}
+
+message CreateBridgeClientRequest {
+  string name = 1;
+  repeated string redirect_uris = 2;
+  repeated BridgeScope allowed_scopes = 3;
+}
+
+message RevokeBridgeClientRequest {
+  string client_id = 1;
+}
+
+message BridgeClient {
+  string id = 1;
+  string organization_id = 2;
+  string name = 3;
+  repeated string redirect_uris = 4;
+  repeated BridgeScope allowed_scopes = 5;
+  string created_by = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp revoked_at = 8;
+}
+
+enum BridgeScope {
+  BRIDGE_SCOPE_UNSPECIFIED = 0;
+  BRIDGE_SCOPE_MCP_RESOURCES = 1;
+  BRIDGE_SCOPE_ASSETS_READ = 2;
+  BRIDGE_SCOPE_DIRECTORY_READ = 3;
+  BRIDGE_SCOPE_SIGNALS_READ = 4;
+  BRIDGE_SCOPE_SIGNALS_ACKNOWLEDGE = 5;
+}
+
+message ListBridgeGrantsRequest {}
+
+message ListBridgeGrantsResponse {
+  repeated BridgeGrant items = 1;
+}
+
+message RevokeBridgeGrantRequest {
+  string grant_id = 1;
+}
+
+message BridgeGrant {
+  string id = 1;
+  string organization_id = 2;
+  string client_id = 3;
+  string client_name = 4;
+  string actor_id = 5;
+  string resource_uri = 6;
+  repeated BridgeScope scopes = 7;
+  google.protobuf.Timestamp access_expires_at = 8;
+  google.protobuf.Timestamp refresh_expires_at = 9;
+  google.protobuf.Timestamp created_at = 10;
+  google.protobuf.Timestamp last_used_at = 11;
+  google.protobuf.Timestamp revoked_at = 12;
 }

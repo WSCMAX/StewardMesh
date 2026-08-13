@@ -14,8 +14,8 @@ func TestEmbeddedMigrationsAreOrderedAndChecksummed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(migrations) != 33 {
-		t.Fatalf("expected 33 platform migrations, got %d", len(migrations))
+	if len(migrations) != 34 {
+		t.Fatalf("expected 34 platform migrations, got %d", len(migrations))
 	}
 	for index, migration := range migrations {
 		expectedVersion := int64(index + 1)
@@ -99,6 +99,29 @@ func TestReachMigrationAddsProviderSafeMessagingAndAdministratorPermissions(t *t
 	} {
 		if !strings.Contains(contents, expected) {
 			t.Fatalf("Reach migration is missing %q", expected)
+		}
+	}
+}
+
+func TestBridgeMigrationStoresOnlyCredentialHashesAndBoundedOAuthState(t *testing.T) {
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var contents string
+	for _, migration := range migrations {
+		if migration.version == 34 {
+			contents = migration.contents
+		}
+	}
+	for _, expected := range []string{"SEC-MCP-001", "integrations.protocols", "GitHub: #14", "CREATE TABLE bridge_oauth_clients", "access_token_hash", "refresh_token_hash", "CREATE TABLE bridge_mcp_confirmations", "token_hash", "CREATE TABLE bridge_rate_windows"} {
+		if !strings.Contains(contents, expected) {
+			t.Fatalf("Bridge migration is missing %q", expected)
+		}
+	}
+	for _, forbidden := range []string{"access_token TEXT", "refresh_token TEXT", "client_secret"} {
+		if strings.Contains(contents, forbidden) {
+			t.Fatalf("Bridge migration must not persist %q", forbidden)
 		}
 	}
 }

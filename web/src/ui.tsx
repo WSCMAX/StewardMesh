@@ -22,7 +22,7 @@ export const sectionDescriptionClass = 'mt-2 max-w-3xl text-sm leading-6 text-st
 export const tableWrapClass = 'min-w-0 max-w-full overflow-x-auto rounded-xl border border-white/[0.08] bg-steward-ink-950/25'
 export const emptyStateClass = 'rounded-xl border border-dashed border-white/15 bg-white/[0.02] px-5 py-8 text-center text-sm leading-6 text-steward-mist-muted'
 
-export type AreaIconName = 'overview' | 'atlas' | 'horizon' | 'ledger' | 'stack' | 'signals' | 'reach' | 'threads' | 'vault' | 'exchange' | 'people' | 'guard'
+export type AreaIconName = 'overview' | 'atlas' | 'horizon' | 'ledger' | 'stack' | 'signals' | 'reach' | 'threads' | 'vault' | 'exchange' | 'people' | 'bridge' | 'guard'
 
 const iconPaths: Record<AreaIconName, ReactNode> = {
   overview: <><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /></>,
@@ -36,6 +36,7 @@ const iconPaths: Record<AreaIconName, ReactNode> = {
   vault: <><rect x="3" y="5" width="18" height="15" rx="2" /><circle cx="12" cy="12.5" r="3" /><path d="M12 9.5V5M12 15.5V20M9 12.5H3M15 12.5h6" /></>,
   exchange: <><path d="M4 7h13M14 4l3 3-3 3M20 17H7M10 14l-3 3 3 3" /><rect x="3" y="3" width="18" height="18" rx="3" /></>,
   people: <><path d="M16 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2" /><circle cx="9.5" cy="7" r="4" /><path d="M17 11a3.5 3.5 0 0 0 0-7M21 21v-2a4 4 0 0 0-3-3.7" /></>,
+  bridge: <><path d="M8 7h8M8 17h8" /><path d="M6 4v6M18 14v6" /><circle cx="6" cy="12" r="2" /><circle cx="18" cy="12" r="2" /></>,
   guard: <><path d="M12 3 20 6v5c0 5.2-3.3 8.5-8 10-4.7-1.5-8-4.8-8-10V6l8-3Z" /><path d="m8.5 12 2.2 2.2 4.8-5" /></>,
 }
 

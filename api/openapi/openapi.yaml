@@ -1,4 +1,4 @@
-# Requirements: REQ-ATLAS-001, REQ-ATLAS-MODELS-001, REQ-ATLAS-CODES-001, REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-HORIZON-001, REQ-LEDGER-001, REQ-STACK-001, REQ-SIGNALS-001, REQ-REACH-001, REQ-EXCHANGE-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
+# Requirements: REQ-API-001, REQ-ATLAS-001, REQ-ATLAS-MODELS-001, REQ-ATLAS-CODES-001, REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-HORIZON-001, REQ-LEDGER-001, REQ-STACK-001, REQ-SIGNALS-001, REQ-REACH-001, REQ-EXCHANGE-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001, SEC-MCP-001.
 openapi: 3.1.0
 info:
   title: StewardMesh API
@@ -11,6 +11,172 @@ servers:
   - url: /
 security: []
 paths:
+  /.well-known/oauth-protected-resource:
+    get:
+      summary: Discover Bridge protected-resource metadata
+      operationId: getBridgeProtectedResourceMetadata
+      tags: [Bridge]
+      x-requirement: SEC-MCP-001
+      responses:
+        '200':
+          description: RFC 9728 metadata for the exact MCP resource audience
+          content: {application/json: {schema: {$ref: '#/components/schemas/BridgeProtectedResourceMetadata'}}}
+  /.well-known/oauth-authorization-server:
+    get:
+      summary: Discover Bridge authorization-server metadata
+      operationId: getBridgeAuthorizationServerMetadata
+      tags: [Bridge]
+      x-requirement: SEC-MCP-001
+      responses:
+        '200':
+          description: OAuth authorization server metadata
+          content: {application/json: {schema: {$ref: '#/components/schemas/BridgeAuthorizationServerMetadata'}}}
+  /oauth/authorize:
+    get:
+      summary: Begin an authenticated OAuth authorization-code consent request
+      operationId: authorizeBridgeClient
+      tags: [Bridge]
+      x-requirement: SEC-MCP-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - {name: response_type, in: query, required: true, schema: {type: string, const: code}}
+        - {name: client_id, in: query, required: true, schema: {$ref: '#/components/schemas/BridgeID'}}
+        - {name: redirect_uri, in: query, required: true, schema: {type: string, format: uri, maxLength: 2048}}
+        - {name: resource, in: query, required: true, schema: {type: string, format: uri}}
+        - {name: scope, in: query, required: true, schema: {type: string, maxLength: 256}}
+        - {name: state, in: query, required: false, schema: {type: string, maxLength: 512}}
+        - {name: code_challenge, in: query, required: true, schema: {type: string, pattern: '^[A-Za-z0-9_-]{43}$'}}
+        - {name: code_challenge_method, in: query, required: true, schema: {type: string, const: S256}}
+      responses:
+        '303': {description: Continue on the same-origin consent screen}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '429': {description: Authorization attempts are rate limited}
+  /oauth/token:
+    post:
+      summary: Exchange a code or rotate a refresh token
+      operationId: exchangeBridgeToken
+      tags: [Bridge]
+      x-requirement: SEC-MCP-001
+      requestBody:
+        required: true
+        content: {application/x-www-form-urlencoded: {schema: {$ref: '#/components/schemas/BridgeTokenRequest'}}}
+      responses:
+        '200': {description: Short-lived access and rotating refresh credentials, content: {application/json: {schema: {$ref: '#/components/schemas/BridgeTokenResponse'}}}}
+        '400': {description: 'OAuth invalid_request, invalid_grant, or invalid_scope response'}
+        '429': {description: Token attempts are rate limited}
+  /oauth/revoke:
+    post:
+      summary: Revoke a Bridge access or refresh credential
+      operationId: revokeBridgeToken
+      tags: [Bridge]
+      x-requirement: SEC-MCP-001
+      requestBody:
+        required: true
+        content: {application/x-www-form-urlencoded: {schema: {type: object, required: [token], properties: {token: {type: string, maxLength: 512, writeOnly: true}}}}}
+      responses:
+        '200': {description: Idempotent revocation response}
+        '429': {description: Revocation attempts are rate limited}
+  /mcp:
+    post:
+      summary: Send one authenticated MCP 2026-07-28 request over stateless Streamable HTTP
+      operationId: callBridgeMCP
+      tags: [Bridge]
+      x-requirement: SEC-MCP-001
+      security: [{bridgeBearerAuth: ['mcp:resources']}]
+      parameters:
+        - {name: MCP-Protocol-Version, in: header, required: true, schema: {type: string, const: 2026-07-28}}
+        - {name: MCP-Method, in: header, required: true, schema: {type: string, maxLength: 128}}
+      requestBody:
+        required: true
+        content: {application/json: {schema: {type: object, additionalProperties: true, maxProperties: 16}}}
+      responses:
+        '200': {description: One JSON-RPC response}
+        '400': {description: 'Invalid, batched, or unsupported MCP request'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '413': {description: MCP request exceeds 64 KiB}
+        '415': {description: MCP requests require application/json}
+  /api/v1/bridge/clients:
+    get:
+      summary: List registered Bridge OAuth clients
+      operationId: listBridgeClients
+      tags: [Bridge]
+      x-requirement: REQ-API-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200': {description: OAuth clients, content: {application/json: {schema: {$ref: '#/components/schemas/BridgeClientCollection'}}}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+    post:
+      summary: Register a public Bridge OAuth client
+      operationId: createBridgeClient
+      tags: [Bridge]
+      x-requirement: REQ-API-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CreateBridgeClientRequest'}}}}
+      responses:
+        '201': {description: Client registered, content: {application/json: {schema: {$ref: '#/components/schemas/BridgeClient'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {description: Client name or limit conflict}
+  /api/v1/bridge/clients/{clientID}:
+    delete:
+      summary: Revoke a Bridge OAuth client and all its grants
+      operationId: revokeBridgeClient
+      tags: [Bridge]
+      x-requirement: REQ-API-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{name: clientID, in: path, required: true, schema: {$ref: '#/components/schemas/BridgeID'}}]
+      responses:
+        '200': {description: Revoked client, content: {application/json: {schema: {$ref: '#/components/schemas/BridgeClient'}}}}
+        '404': {description: Client not found}
+  /api/v1/bridge/grants:
+    get:
+      summary: List Bridge OAuth grants without raw credentials
+      operationId: listBridgeGrants
+      tags: [Bridge]
+      x-requirement: REQ-API-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200': {description: OAuth grants, content: {application/json: {schema: {$ref: '#/components/schemas/BridgeGrantCollection'}}}}
+  /api/v1/bridge/grants/{grantID}:
+    delete:
+      summary: Revoke one Bridge OAuth grant
+      operationId: revokeBridgeGrant
+      tags: [Bridge]
+      x-requirement: REQ-API-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{name: grantID, in: path, required: true, schema: {$ref: '#/components/schemas/BridgeID'}}]
+      responses:
+        '200': {description: Revoked grant, content: {application/json: {schema: {$ref: '#/components/schemas/BridgeGrant'}}}}
+        '404': {description: Grant not found}
+  /api/v1/bridge/consents/{requestID}:
+    get:
+      summary: Get the current actor's pending Bridge consent
+      operationId: getBridgeConsent
+      tags: [Bridge]
+      x-requirement: SEC-MCP-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{name: requestID, in: path, required: true, schema: {$ref: '#/components/schemas/BridgeID'}}]
+      responses:
+        '200': {description: Pending consent, content: {application/json: {schema: {$ref: '#/components/schemas/BridgeConsent'}}}}
+        '404': {description: Consent not found}
+        '410': {description: Consent expired}
+  /api/v1/bridge/consents/{requestID}/decision:
+    post:
+      summary: Approve or deny one actor-bound Bridge consent
+      operationId: decideBridgeConsent
+      tags: [Bridge]
+      x-requirement: SEC-MCP-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{name: requestID, in: path, required: true, schema: {$ref: '#/components/schemas/BridgeID'}}]
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [approved], additionalProperties: false, properties: {approved: {type: boolean}}}}}}
+      responses:
+        '200': {description: Exact registered redirect selected by the server, content: {application/json: {schema: {type: object, required: [redirectTo], properties: {redirectTo: {type: string, format: uri}}}}}}
+        '409': {description: Consent was already decided}
+        '410': {description: Consent expired}
   /healthz:
     get:
       summary: Get service health
@@ -3351,6 +3517,19 @@ components:
       in: cookie
       name: __Host-stewardmesh_session
       description: Opaque, Secure, host-only server-side session identifier used by HTTPS deployments.
+    bridgeBearerAuth:
+      type: oauth2
+      description: Audience-bound, short-lived Bridge access token sent only in the Authorization header.
+      flows:
+        authorizationCode:
+          authorizationUrl: /oauth/authorize
+          tokenUrl: /oauth/token
+          scopes:
+            mcp:resources: Discover Bridge resources and tools.
+            assets:read: Read authorized, redacted Atlas asset data.
+            directory:read: Read authorized directory data without email or provider identifiers.
+            signals:read: Read authorized, redacted Signals alerts.
+            signals:acknowledge: Prepare and confirm alert acknowledgement.
   headers:
     NoStore:
       description: Protected feature, planning, and integration data is never stored by shared or browser caches.
@@ -3574,6 +3753,107 @@ components:
         application/json:
           schema: {$ref: '#/components/schemas/Error'}
   schemas:
+    BridgeID: {type: string, pattern: '^[a-f0-9]{32}$'}
+    BridgeScope: {type: string, enum: ['mcp:resources', 'assets:read', 'directory:read', 'signals:read', 'signals:acknowledge']}
+    BridgeProtectedResourceMetadata:
+      type: object
+      required: [resource, authorization_servers, scopes_supported, bearer_methods_supported, resource_name]
+      properties:
+        resource: {type: string, format: uri}
+        authorization_servers: {type: array, minItems: 1, maxItems: 1, items: {type: string, format: uri}}
+        scopes_supported: {type: array, minItems: 1, maxItems: 5, items: {$ref: '#/components/schemas/BridgeScope'}}
+        bearer_methods_supported: {type: array, items: {type: string, const: header}}
+        resource_name: {type: string, maxLength: 120}
+    BridgeAuthorizationServerMetadata:
+      type: object
+      required: [issuer, authorization_endpoint, token_endpoint, revocation_endpoint, response_types_supported, grant_types_supported, code_challenge_methods_supported, token_endpoint_auth_methods_supported, scopes_supported]
+      properties:
+        issuer: {type: string, format: uri}
+        authorization_endpoint: {type: string, format: uri}
+        token_endpoint: {type: string, format: uri}
+        revocation_endpoint: {type: string, format: uri}
+        response_types_supported: {type: array, items: {type: string, const: code}}
+        grant_types_supported: {type: array, items: {type: string, enum: [authorization_code, refresh_token]}}
+        code_challenge_methods_supported: {type: array, items: {type: string, const: S256}}
+        token_endpoint_auth_methods_supported: {type: array, items: {type: string, const: none}}
+        scopes_supported: {type: array, items: {$ref: '#/components/schemas/BridgeScope'}}
+        authorization_response_iss_parameter_supported: {type: boolean}
+    BridgeTokenRequest:
+      type: object
+      additionalProperties: false
+      required: [grant_type, client_id, resource]
+      properties:
+        grant_type: {type: string, enum: [authorization_code, refresh_token]}
+        code: {type: string, maxLength: 512, writeOnly: true}
+        refresh_token: {type: string, maxLength: 512, writeOnly: true}
+        client_id: {$ref: '#/components/schemas/BridgeID'}
+        redirect_uri: {type: string, format: uri, maxLength: 2048}
+        resource: {type: string, format: uri}
+        code_verifier: {type: string, minLength: 43, maxLength: 128, writeOnly: true}
+    BridgeTokenResponse:
+      type: object
+      additionalProperties: false
+      required: [access_token, token_type, expires_in, refresh_token, scope]
+      properties:
+        access_token: {type: string, minLength: 40, maxLength: 512, writeOnly: true}
+        token_type: {type: string, const: Bearer}
+        expires_in: {type: integer, minimum: 300, maximum: 3600}
+        refresh_token: {type: string, minLength: 40, maxLength: 512, writeOnly: true}
+        scope: {type: string, maxLength: 256}
+    CreateBridgeClientRequest:
+      type: object
+      additionalProperties: false
+      required: [name, redirectUris, allowedScopes]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 120}
+        redirectUris: {type: array, minItems: 1, maxItems: 10, uniqueItems: true, items: {type: string, format: uri, maxLength: 2048}}
+        allowedScopes: {type: array, minItems: 1, maxItems: 5, uniqueItems: true, contains: {const: 'mcp:resources'}, items: {$ref: '#/components/schemas/BridgeScope'}}
+    BridgeClient:
+      allOf:
+        - {$ref: '#/components/schemas/CreateBridgeClientRequest'}
+        - type: object
+          required: [id, organizationId, createdBy, createdAt]
+          properties:
+            id: {$ref: '#/components/schemas/BridgeID'}
+            organizationId: {type: string, minLength: 1, maxLength: 128}
+            createdBy: {type: string, minLength: 1, maxLength: 128}
+            createdAt: {type: string, format: date-time}
+            revokedAt: {type: string, format: date-time}
+    BridgeClientCollection:
+      type: object
+      required: [items]
+      properties: {items: {type: array, maxItems: 50, items: {$ref: '#/components/schemas/BridgeClient'}}}
+    BridgeGrant:
+      type: object
+      additionalProperties: false
+      required: [id, organizationId, clientId, actorId, resourceUri, scopes, accessExpiresAt, refreshExpiresAt, createdAt]
+      properties:
+        id: {$ref: '#/components/schemas/BridgeID'}
+        organizationId: {type: string, minLength: 1, maxLength: 128}
+        clientId: {$ref: '#/components/schemas/BridgeID'}
+        clientName: {type: string, maxLength: 120}
+        actorId: {type: string, minLength: 1, maxLength: 128}
+        resourceUri: {type: string, format: uri}
+        scopes: {type: array, minItems: 1, maxItems: 5, items: {$ref: '#/components/schemas/BridgeScope'}}
+        accessExpiresAt: {type: string, format: date-time}
+        refreshExpiresAt: {type: string, format: date-time}
+        createdAt: {type: string, format: date-time}
+        lastUsedAt: {type: string, format: date-time}
+        revokedAt: {type: string, format: date-time}
+    BridgeGrantCollection:
+      type: object
+      required: [items]
+      properties: {items: {type: array, maxItems: 1000, items: {$ref: '#/components/schemas/BridgeGrant'}}}
+    BridgeConsent:
+      type: object
+      additionalProperties: false
+      required: [id, clientId, clientName, scopes, expiresAt]
+      properties:
+        id: {$ref: '#/components/schemas/BridgeID'}
+        clientId: {$ref: '#/components/schemas/BridgeID'}
+        clientName: {type: string, minLength: 1, maxLength: 120}
+        scopes: {type: array, minItems: 1, maxItems: 5, items: {$ref: '#/components/schemas/BridgeScope'}}
+        expiresAt: {type: string, format: date-time}
     BootstrapStatus:
       type: object
       required: [required, tokenRequired, minimumPasswordCharacters, oidcEnabled, samlEnabled]

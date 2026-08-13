@@ -207,6 +207,44 @@
       }
     },
     {
+      "requirementId": "REQ-ATLAS-MODELS-001",
+      "featureId": "inventory.models",
+      "artifacts": {
+        "documentation": [
+          "docs/features/atlas-models.md",
+          "docs/features/atlas.md",
+          "docs/features/dictionary.md",
+          "docs/requirements/initial.md"
+        ],
+        "api": [
+          "api/openapi/openapi.yaml",
+          "api/proto/stewardmesh.proto"
+        ],
+        "code": [
+          "internal/atlas/contracts.go",
+          "internal/atlas/service.go",
+          "internal/domain/models.go",
+          "internal/httpapi/server.go",
+          "internal/repository/memory_atlas.go",
+          "internal/repository/postgres/atlas.go"
+        ],
+        "schema": [
+          "internal/repository/postgres/migrations/0023_atlas_models.sql"
+        ],
+        "tests": [
+          "internal/atlas/service_test.go",
+          "internal/httpapi/server_test.go",
+          "internal/repository/contracttest/atlas.go",
+          "internal/repository/memory_atlas_test.go",
+          "internal/repository/postgres/migrate_test.go",
+          "web/src/AtlasInventory.test.tsx"
+        ],
+        "ui": [
+          "web/src/AtlasInventory.tsx"
+        ]
+      }
+    },
+    {
       "requirementId": "REQ-THREADS-001",
       "featureId": "goals.tags",
       "artifacts": {

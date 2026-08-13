@@ -2,7 +2,7 @@ package httpapi
 
 // Requirements: REQ-FOUNDATION-001, REQ-WORKSPACE-001, REQ-ATLAS-001, REQ-ATLAS-CODES-001, REQ-PEOPLE-001,
 // REQ-DIRECTORY-EXPANSION-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-HORIZON-001, REQ-PLATFORM-VALKEY-001,
-// SEC-GUARD-001, SEC-HTTP-001. Features include experience.workspace.
+// SEC-GUARD-001, SEC-HTTP-001. Features include experience.workspace and inventory.models.
 
 import (
 	"context"
@@ -175,6 +175,11 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 	mux.Handle("POST /api/v1/guard/resource-ownership", server.protected(guard.PermissionGuardManage, true, server.registerGuardResourceOwnership))
 	mux.Handle("POST /api/v1/guard/resource-ownership/{resourceType}/{resourceID}/claim", server.protected(guard.PermissionGuardManage, true, server.claimGuardResourceOwnership))
 	mux.Handle("GET /api/v1/organization", server.protected(guard.PermissionOrganizationRead, false, server.getOrganization))
+	mux.Handle("GET /api/v1/asset-models", server.protected(guard.PermissionAssetsRead, false, server.listAssetModels))
+	mux.Handle("POST /api/v1/asset-models", server.protected(guard.PermissionAssetsWrite, true, server.createAssetModel))
+	mux.Handle("GET /api/v1/asset-models/{modelID}", server.protected(guard.PermissionAssetsRead, false, server.getAssetModel))
+	mux.Handle("PUT /api/v1/asset-models/{modelID}", server.protected(guard.PermissionAssetsWrite, true, server.updateAssetModel))
+	mux.Handle("POST /api/v1/asset-models/{modelID}/retire", server.protected(guard.PermissionAssetsWrite, true, server.retireAssetModel))
 	mux.Handle("GET /api/v1/assets", server.protected(guard.PermissionAssetsRead, false, server.listAssets))
 	mux.Handle("POST /api/v1/assets", server.protected(guard.PermissionAssetsWrite, true, server.createAsset))
 	// The handler authorizes the loaded asset so site-, department-, and
@@ -1321,6 +1326,37 @@ func (s *Server) getAsset(w http.ResponseWriter, r *http.Request, authentication
 	writeJSON(w, http.StatusOK, asset)
 }
 
+func (s *Server) listAssetModels(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.atlas == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "repository_unavailable", "asset repository unavailable")
+		return
+	}
+	query, err := assetModelQueryFromRequest(r)
+	if err != nil {
+		writeError(w, r, http.StatusBadRequest, "validation_failed", "model filters are invalid")
+		return
+	}
+	models, err := s.atlas.ListModels(r.Context(), query)
+	if err != nil {
+		writeAtlasError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": models})
+}
+
+func (s *Server) getAssetModel(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.atlas == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "repository_unavailable", "asset repository unavailable")
+		return
+	}
+	model, err := s.atlas.GetModel(r.Context(), r.PathValue("modelID"))
+	if err != nil {
+		writeAtlasError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, model)
+}
+
 func (s *Server) listSites(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
 	if s.people == nil {
 		writeError(w, r, http.StatusServiceUnavailable, "repository_unavailable", "people directory unavailable")
@@ -1885,6 +1921,24 @@ func (s *Server) createAsset(w http.ResponseWriter, r *http.Request, _ guard.Aut
 	writeJSON(w, http.StatusCreated, created)
 }
 
+func (s *Server) createAssetModel(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.atlas == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "repository_unavailable", "asset repository unavailable")
+		return
+	}
+	var input atlas.CreateModelInput
+	if err := decodeJSON(w, r, 64<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid model payload")
+		return
+	}
+	created, err := s.atlas.CreateModel(r.Context(), input)
+	if err != nil {
+		writeAtlasError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, created)
+}
+
 func (s *Server) updateAsset(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
 	if s.atlas == nil {
 		writeError(w, r, http.StatusServiceUnavailable, "repository_unavailable", "asset repository unavailable")
@@ -1906,6 +1960,43 @@ func (s *Server) updateAsset(w http.ResponseWriter, r *http.Request, authenticat
 		return
 	}
 	writeJSON(w, http.StatusOK, updated)
+}
+
+func (s *Server) updateAssetModel(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.atlas == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "repository_unavailable", "asset repository unavailable")
+		return
+	}
+	var input atlas.UpdateModelInput
+	if err := decodeJSON(w, r, 64<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid model payload")
+		return
+	}
+	input.ID = r.PathValue("modelID")
+	updated, err := s.atlas.UpdateModel(r.Context(), input)
+	if err != nil {
+		writeAtlasError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
+}
+
+func (s *Server) retireAssetModel(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.atlas == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "repository_unavailable", "asset repository unavailable")
+		return
+	}
+	revision, err := positiveRevision(r)
+	if err != nil {
+		writeError(w, r, http.StatusBadRequest, "validation_failed", "model revision is invalid")
+		return
+	}
+	retired, err := s.atlas.RetireModel(r.Context(), r.PathValue("modelID"), revision)
+	if err != nil {
+		writeAtlasError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, retired)
 }
 
 func (s *Server) listAssetLifecycle(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
@@ -2095,9 +2186,22 @@ func assetQueryFromRequest(r *http.Request) (atlas.Query, error) {
 	}
 	return atlas.Query{
 		Search: values.Get("q"), Kind: values.Get("kind"), Status: values.Get("status"),
-		SiteID: values.Get("siteId"), DepartmentID: values.Get("departmentId"), UserID: values.Get("userId"),
+		ModelID: values.Get("modelId"), SiteID: values.Get("siteId"), DepartmentID: values.Get("departmentId"), UserID: values.Get("userId"),
 		Limit: limit,
 	}, nil
+}
+
+func assetModelQueryFromRequest(r *http.Request) (atlas.ModelQuery, error) {
+	values := r.URL.Query()
+	limit := 0
+	if rawLimit := strings.TrimSpace(values.Get("limit")); rawLimit != "" {
+		parsed, err := strconv.Atoi(rawLimit)
+		if err != nil {
+			return atlas.ModelQuery{}, err
+		}
+		limit = parsed
+	}
+	return atlas.ModelQuery{Search: values.Get("q"), Kind: values.Get("kind"), Status: values.Get("status"), Limit: limit}, nil
 }
 
 func writeAtlasError(w http.ResponseWriter, r *http.Request, err error) {
@@ -2107,7 +2211,7 @@ func writeAtlasError(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, atlas.ErrNotFound):
 		writeError(w, r, http.StatusNotFound, "not_found", "asset not found")
 	case errors.Is(err, atlas.ErrReferenceMissing):
-		writeError(w, r, http.StatusBadRequest, "reference_missing", "a selected asset location, department, or user is unavailable")
+		writeError(w, r, http.StatusBadRequest, "reference_missing", "a selected asset location, department, user, or model is unavailable")
 	case errors.Is(err, atlas.ErrConflict):
 		writeError(w, r, http.StatusConflict, "conflict", "asset identity or revision conflicts with current data")
 	default:

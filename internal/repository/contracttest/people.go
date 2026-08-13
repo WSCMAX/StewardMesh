@@ -160,7 +160,7 @@ func PeopleStore(t *testing.T, store people.Store, organizationID string) {
 			t.Fatal(err)
 		}
 	}
-	graphTarget := contractIdentity(t, organizationID, "person", "Zeta Graph Label "+suffix, "", "", "", now)
+	graphTarget := contractIdentity(t, organizationID, "person", "Zeta Graph Label "+suffix, "graph."+suffix+"@example.test", "", "", now)
 	if _, err := store.CreateIdentity(ctx, graphTarget); err != nil {
 		t.Fatal(err)
 	}

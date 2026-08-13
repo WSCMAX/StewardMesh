@@ -399,9 +399,21 @@ func TestAtlasStoreIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC().Truncate(time.Microsecond)
-	visibleSite := people.Site{ID: "visible-graph-site-" + unique, OrganizationID: organizationID, Name: "Visible Graph Site " + unique,
+	visibleSiteID, err := foundation.NewCorrelationID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	hiddenSiteID, err := foundation.NewCorrelationID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	visibleUserID, err := foundation.NewCorrelationID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	visibleSite := people.Site{ID: visibleSiteID, OrganizationID: organizationID, Name: "Visible Graph Site " + unique,
 		NormalizedName: strings.ToLower("Visible Graph Site " + unique), Status: people.StatusActive, Revision: 1, CreatedAt: now, UpdatedAt: now}
-	hiddenSite := people.Site{ID: "hidden-graph-site-" + unique, OrganizationID: organizationID, Name: "Hidden Graph Site " + unique,
+	hiddenSite := people.Site{ID: hiddenSiteID, OrganizationID: organizationID, Name: "Hidden Graph Site " + unique,
 		NormalizedName: strings.ToLower("Hidden Graph Site " + unique), Status: people.StatusActive, Revision: 1, CreatedAt: now, UpdatedAt: now}
 	if _, err := peopleStore.CreateSite(ctx, visibleSite); err != nil {
 		t.Fatal(err)
@@ -409,8 +421,9 @@ func TestAtlasStoreIntegration(t *testing.T) {
 	if _, err := peopleStore.CreateSite(ctx, hiddenSite); err != nil {
 		t.Fatal(err)
 	}
-	visibleUser := people.Identity{ID: "visible-graph-user-" + unique, OrganizationID: organizationID, Kind: people.IdentityPerson,
+	visibleUser := people.Identity{ID: visibleUserID, OrganizationID: organizationID, Kind: people.IdentityPerson,
 		DisplayName: "Visible Graph User " + unique, NormalizedName: strings.ToLower("Visible Graph User " + unique),
+		Email: "visible-graph-user-" + unique + "@example.test", NormalizedEmail: "visible-graph-user-" + unique + "@example.test",
 		SiteID: visibleSite.ID, Status: people.StatusActive, Revision: 1, CreatedAt: now, UpdatedAt: now}
 	if _, err := peopleStore.CreateIdentity(ctx, visibleUser); err != nil {
 		t.Fatal(err)

@@ -208,10 +208,11 @@ func AtlasGraphDirectoryStore(t testing.TB, subject atlas.Store, organizationID,
 	t.Helper()
 	now := time.Date(2026, time.August, 13, 12, 0, 0, 0, time.UTC)
 	for index := 0; index < 20; index++ {
+		marker := byte(index)
 		asset := domain.Asset{ID: "hidden-graph-asset-" + suffix + string(rune('a'+index)), OrganizationID: organizationID,
 			Name: "Alpha Hidden Graph Asset " + string(rune('a'+index)), Kind: "computer", SiteID: hiddenSite,
 			Status: "active", Revision: 1, CreatedAt: now, UpdatedAt: now}
-		event := domain.AssetLifecycleEvent{ID: "hidden-graph-event-" + suffix + string(rune('a'+index)), OrganizationID: organizationID,
+		event := domain.AssetLifecycleEvent{ID: graphLifecycleID(suffix, marker), OrganizationID: organizationID,
 			AssetID: asset.ID, ToStatus: asset.Status, Revision: 1, ActorID: "contract-user", OccurredAt: now}
 		if _, err := subject.CreateAsset(context.Background(), asset, event); err != nil {
 			t.Fatalf("create hidden graph asset: %v", err)
@@ -219,14 +220,14 @@ func AtlasGraphDirectoryStore(t testing.TB, subject atlas.Store, organizationID,
 	}
 	visible := domain.Asset{ID: "visible-graph-asset-" + suffix, OrganizationID: organizationID, Name: "Zeta Visible Graph Asset",
 		Kind: "computer", SiteID: visibleSite, Status: "active", Revision: 1, CreatedAt: now, UpdatedAt: now}
-	event := domain.AssetLifecycleEvent{ID: "visible-graph-event-" + suffix, OrganizationID: organizationID, AssetID: visible.ID,
+	event := domain.AssetLifecycleEvent{ID: graphLifecycleID(suffix, 20), OrganizationID: organizationID, AssetID: visible.ID,
 		ToStatus: visible.Status, Revision: 1, ActorID: "contract-user", OccurredAt: now}
 	if _, err := subject.CreateAsset(context.Background(), visible, event); err != nil {
 		t.Fatalf("create visible graph asset: %v", err)
 	}
 	userAsset := domain.Asset{ID: "visible-user-graph-asset-" + suffix, OrganizationID: organizationID, Name: "Zeta User Graph Asset",
 		Kind: "computer", UserID: visibleUser, Status: "active", Revision: 1, CreatedAt: now, UpdatedAt: now}
-	userEvent := domain.AssetLifecycleEvent{ID: "visible-user-graph-event-" + suffix, OrganizationID: organizationID, AssetID: userAsset.ID,
+	userEvent := domain.AssetLifecycleEvent{ID: graphLifecycleID(suffix, 21), OrganizationID: organizationID, AssetID: userAsset.ID,
 		ToStatus: userAsset.Status, Revision: 1, ActorID: "contract-user", OccurredAt: now}
 	if _, err := subject.CreateAsset(context.Background(), userAsset, userEvent); err != nil {
 		t.Fatalf("create user-linked graph asset: %v", err)
@@ -237,6 +238,17 @@ func AtlasGraphDirectoryStore(t testing.TB, subject atlas.Store, organizationID,
 	if err != nil || len(items) != 2 || !contractAssetPresent(items, visible.ID) || !contractAssetPresent(items, userAsset.ID) {
 		t.Fatalf("out-of-directory assets crowded valid asset before source limit: %#v err=%v", items, err)
 	}
+}
+
+func graphLifecycleID(suffix string, marker byte) string {
+	const hexadecimal = "0123456789abcdef"
+	value := make([]byte, 32)
+	for index := range value {
+		value[index] = hexadecimal[(index+len(suffix))%len(hexadecimal)]
+	}
+	value[len(value)-2] = hexadecimal[marker>>4]
+	value[len(value)-1] = hexadecimal[marker&0x0f]
+	return string(value)
 }
 
 func contractAssetPresent(assets []domain.Asset, id string) bool {

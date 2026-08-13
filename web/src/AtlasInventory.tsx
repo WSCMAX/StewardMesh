@@ -1,9 +1,9 @@
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ApiRequestError, requestJSON } from './api'
 import AtlasIdentifiers from './AtlasIdentifiers'
-import { buttonClass, emptyStateClass, inputClass, panelClass, secondaryButtonClass, subpanelClass } from './ui'
+import { StatusBadge, buttonClass, dangerButtonClass, emptyStateClass, inputClass, labelClass, panelClass, plainButtonClass, secondaryButtonClass, subpanelClass } from './ui'
 
-// Requirements: REQ-ATLAS-001, REQ-ATLAS-CODES-001. Features: inventory.assets, inventory.identifiers.
+// Requirements: REQ-ATLAS-001, REQ-ATLAS-CODES-001, REQ-ATLAS-MODELS-001. Features: inventory.assets, inventory.identifiers, inventory.models.
 
 export type Asset = {
   id: string
@@ -383,19 +383,21 @@ export default function AtlasInventory({ assets, csrfToken, permissions, onAsset
       {error && <div className="mt-4 rounded-lg border border-red-400/50 bg-red-950/50 p-3 text-sm" ref={errorRef} role="alert" tabIndex={-1}>{error}</div>}
       {message && <p className="mt-4 rounded-lg border border-steward-green/40 bg-steward-green/10 p-3 text-sm" role="status">{message}</p>}
 
-      <section aria-labelledby="models-heading" className="mt-6 rounded-xl border border-steward-ink-800 bg-steward-ink-950/45 p-5" data-feature="inventory.models" data-requirement="REQ-ATLAS-MODELS-001">
+      <section aria-labelledby="models-heading" className={`${subpanelClass} mt-6 overflow-hidden`} data-feature="inventory.models" data-requirement="REQ-ATLAS-MODELS-001">
+        <div aria-hidden="true" className="h-px bg-gradient-to-r from-steward-green/70 via-steward-teal/70 to-steward-blue/70" />
+        <div className="p-5 sm:p-6">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h3 className="text-lg font-semibold" id="models-heading">Model catalog <span className="text-sm font-normal text-steward-mist-muted">({models.length})</span></h3>
+            <div className="flex flex-wrap items-center gap-2"><h3 className="text-lg font-semibold" id="models-heading">Model catalog</h3><StatusBadge tone="info">{models.length} active</StatusBadge></div>
             <p className="mt-1 text-sm text-steward-mist-muted">Shared manufacturer and model defaults for repeated assets.</p>
           </div>
           {canWrite && <button className={secondaryButtonClass} onClick={openModelCreate} type="button">Add model</button>}
         </div>
         {modelFormOpen && canWrite && (
-          <form aria-label={modelEditing ? 'Edit model' : 'Add model'} className="mt-5 rounded-xl border border-steward-blue/40 bg-steward-ink-900 p-5" onSubmit={handleModelSubmit}>
+          <form aria-label={modelEditing ? 'Edit model' : 'Add model'} className={`${subpanelClass} mt-5 border-steward-blue/35 bg-steward-ink-900/75 p-5`} onSubmit={handleModelSubmit}>
             <div className="flex flex-wrap items-center justify-between gap-3">
               <h4 className="font-semibold">{modelEditing ? `Edit ${modelLabel(modelEditing)}` : 'Register a model'}</h4>
-              <button className="text-sm text-steward-teal underline underline-offset-4" onClick={() => { setModelFormOpen(false); setModelEditing(null) }} type="button">Cancel</button>
+              <button className={plainButtonClass} onClick={() => { setModelFormOpen(false); setModelEditing(null) }} type="button">Cancel</button>
             </div>
             <div className="mt-4 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
               <TextField defaultValue={modelEditing?.manufacturer ?? ''} label="Manufacturer" maxLength={120} name="manufacturer" required />
@@ -410,40 +412,41 @@ export default function AtlasInventory({ assets, csrfToken, permissions, onAsset
             <button className={`${buttonClass} mt-5`} disabled={busy === 'save-model'} type="submit">{busy === 'save-model' ? 'Saving…' : modelEditing ? 'Save model' : 'Create model'}</button>
           </form>
         )}
-        {models.length === 0 ? <p className="mt-4 rounded-xl border border-dashed border-steward-ink-800 p-4 text-sm text-steward-mist-muted">No active models have been registered.</p> : (
+        {models.length === 0 ? <p className={`${emptyStateClass} mt-4`}>No active models have been registered.</p> : (
           <ul className="mt-4 grid gap-3 lg:grid-cols-2">{models.map((model) => (
-            <li className="rounded-lg border border-steward-ink-800 p-4" key={model.id}>
+            <li className={`${subpanelClass} p-4 transition hover:border-white/15 hover:bg-white/[0.025]`} key={model.id}>
               <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
+                <div className="min-w-0">
                   <p className="font-semibold text-steward-mist">{modelLabel(model)}</p>
-                  <p className="mt-1 text-sm text-steward-mist-muted">{model.kind} · {model.instanceCount} asset{model.instanceCount === 1 ? '' : 's'} · {model.warrantyMonths || 0} warranty months</p>
+                  <div className="mt-2 flex flex-wrap gap-2"><StatusBadge>{model.kind}</StatusBadge><StatusBadge tone={model.instanceCount > 0 ? 'success' : 'neutral'}>{model.instanceCount} asset{model.instanceCount === 1 ? '' : 's'}</StatusBadge>{Boolean(model.warrantyMonths) && <StatusBadge tone="info">{model.warrantyMonths} month warranty</StatusBadge>}</div>
                 </div>
                 {canWrite && <div className="flex flex-wrap gap-2">
                   <button className={secondaryButtonClass} onClick={() => openCreateFromModel(model)} type="button">Use</button>
                   <button className={secondaryButtonClass} onClick={() => openModelEdit(model)} type="button">Edit</button>
-                  <button className={secondaryButtonClass} disabled={busy === `retire-model-${model.id}`} onClick={() => void retireModel(model)} type="button">Retire</button>
+                  <button className={dangerButtonClass} disabled={busy === `retire-model-${model.id}`} onClick={() => void retireModel(model)} type="button">{busy === `retire-model-${model.id}` ? 'Retiring…' : 'Retire'}</button>
                 </div>}
               </div>
             </li>
           ))}</ul>
         )}
+        </div>
       </section>
 
       <div aria-label="Filter assets" className="mt-6 grid gap-4 md:grid-cols-3" role="search">
-        <label className="text-sm font-semibold text-steward-mist-muted">Search
+        <label className={labelClass}>Search
           <input className={inputClass} onChange={(event) => setSearch(event.target.value)} placeholder="Name, tag, serial, or hostname" type="search" value={search} />
         </label>
-        <label className="text-sm font-semibold text-steward-mist-muted">Kind
+        <label className={labelClass}>Kind
           <select className={inputClass} onChange={(event) => setKind(event.target.value)} value={kind}><option value="">All kinds</option>{kinds.map((value) => <option key={value} value={value}>{value}</option>)}</select>
         </label>
-        <label className="text-sm font-semibold text-steward-mist-muted">Status
+        <label className={labelClass}>Status
           <select className={inputClass} onChange={(event) => setStatusFilter(event.target.value)} value={statusFilter}><option value="">All statuses</option>{statuses.map((value) => <option key={value} value={value}>{value}</option>)}</select>
         </label>
       </div>
 
       {formOpen && canWrite && (
         <form aria-label={editing ? 'Edit asset' : 'Add asset'} className={`${subpanelClass} mt-6 border-steward-blue/35 p-5`} key={editing?.id ?? 'new'} onSubmit={handleSubmit}>
-          <div className="flex flex-wrap items-center justify-between gap-3"><h3 className="text-lg font-semibold">{editing ? `Edit ${editing.name}` : 'Register an asset'}</h3><button className="text-sm text-steward-teal underline underline-offset-4" onClick={() => { setFormOpen(false); setEditing(null) }} type="button">Cancel</button></div>
+          <div className="flex flex-wrap items-center justify-between gap-3"><h3 className="text-lg font-semibold">{editing ? `Edit ${editing.name}` : 'Register an asset'}</h3><button className={plainButtonClass} onClick={() => { setFormOpen(false); setEditing(null) }} type="button">Cancel</button></div>
           <div className="mt-4 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
             <TextField defaultValue={assetValue(editing, 'name')} label="Asset name" name="name" required />
             <ModelSelect defaultValue={assetValue(editing, 'modelId') || prefillModelID} models={models} />
@@ -452,7 +455,7 @@ export default function AtlasInventory({ assets, csrfToken, permissions, onAsset
             <TextField defaultValue={assetValue(editing, 'assetTag')} label="Asset tag" maxLength={128} name="assetTag" />
             <TextField defaultValue={assetValue(editing, 'serialNumber')} label="Serial number" maxLength={255} name="serialNumber" />
             <TextField defaultValue={assetValue(editing, 'hostname')} label="Hostname" maxLength={253} name="hostname" />
-            <label className="text-sm font-semibold text-steward-mist-muted">Purchase date<input className={inputClass} defaultValue={assetValue(editing, 'purchaseDate').slice(0, 10)} name="purchaseDate" type="date" /></label>
+            <label className={labelClass}>Purchase date<input className={inputClass} defaultValue={assetValue(editing, 'purchaseDate').slice(0, 10)} name="purchaseDate" type="date" /></label>
             <ReferenceSelect defaultValue={assetValue(editing, 'siteId')} label="Site" name="siteId" options={references.sites} />
             <ReferenceSelect defaultValue={assetValue(editing, 'buildingId')} label="Building" name="buildingId" options={references.buildings} />
             <ReferenceSelect defaultValue={assetValue(editing, 'roomId')} label="Room" name="roomId" options={references.rooms} />
@@ -493,25 +496,25 @@ export default function AtlasInventory({ assets, csrfToken, permissions, onAsset
 
 function TextField({ defaultValue, help, label, maxLength, name, required }: { defaultValue: string; help?: string; label: string; maxLength?: number; name: string; required?: boolean }) {
   const helpID = help ? `${name}-help` : undefined
-  return <label className="text-sm font-semibold text-steward-mist-muted">{label}{help && <span className="mt-1 block font-normal leading-5" id={helpID}>{help}</span>}<input aria-describedby={helpID} className={inputClass} defaultValue={defaultValue} maxLength={maxLength} name={name} required={required} /></label>
+  return <label className={labelClass}>{label}{help && <span className="mt-1 block font-normal leading-5 text-steward-mist-muted" id={helpID}>{help}</span>}<input aria-describedby={helpID} className={inputClass} defaultValue={defaultValue} maxLength={maxLength} name={name} required={required} /></label>
 }
 
 function SelectField({ defaultValue, label, name, options }: { defaultValue: string; label: string; name: string; options: string[] }) {
-  return <label className="text-sm font-semibold text-steward-mist-muted">{label}<select className={inputClass} defaultValue={defaultValue} name={name}>{options.map((option) => <option key={option} value={option}>{option}</option>)}</select></label>
+  return <label className={labelClass}>{label}<select className={inputClass} defaultValue={defaultValue} name={name}>{options.map((option) => <option key={option} value={option}>{option}</option>)}</select></label>
 }
 
 function NumberField({ defaultValue, label, max, name }: { defaultValue: number; label: string; max: number; name: string }) {
-  return <label className="text-sm font-semibold text-steward-mist-muted">{label}<input className={inputClass} defaultValue={defaultValue} max={max} min={0} name={name} type="number" /></label>
+  return <label className={labelClass}>{label}<input className={inputClass} defaultValue={defaultValue} max={max} min={0} name={name} type="number" /></label>
 }
 
 function ModelSelect({ defaultValue, models }: { defaultValue: string; models: AssetModel[] }) {
   const hasDefault = !defaultValue || models.some((model) => model.id === defaultValue)
-  return <label className="text-sm font-semibold text-steward-mist-muted">Model<select className={inputClass} defaultValue={defaultValue} name="modelId"><option value="">No model</option>{!hasDefault && <option value={defaultValue}>{defaultValue} (current)</option>}{models.map((model) => <option key={model.id} value={model.id}>{modelLabel(model)}</option>)}</select></label>
+  return <label className={labelClass}>Model<select className={inputClass} defaultValue={defaultValue} name="modelId"><option value="">No model</option>{!hasDefault && <option value={defaultValue}>{defaultValue} (current)</option>}{models.map((model) => <option key={model.id} value={model.id}>{modelLabel(model)}</option>)}</select></label>
 }
 
 function ReferenceSelect({ defaultValue, label, name, options }: { defaultValue: string; label: string; name: string; options: ReferenceRecord[] }) {
   const hasDefault = !defaultValue || options.some((option) => option.id === defaultValue)
-  return <label className="text-sm font-semibold text-steward-mist-muted">{label}<select className={inputClass} defaultValue={defaultValue} name={name}><option value="">Not assigned</option>{!hasDefault && <option value={defaultValue}>{defaultValue} (current)</option>}{options.map((option) => <option key={option.id} value={option.id}>{referenceLabel(option)}</option>)}</select></label>
+  return <label className={labelClass}>{label}<select className={inputClass} defaultValue={defaultValue} name={name}><option value="">Not assigned</option>{!hasDefault && <option value={defaultValue}>{defaultValue} (current)</option>}{options.map((option) => <option key={option.id} value={option.id}>{referenceLabel(option)}</option>)}</select></label>
 }
 
 function Detail({ label, value }: { label: string; value: string | undefined }) {

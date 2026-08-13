@@ -1,5 +1,8 @@
 package traceability
 
+// Requirements: REQ-FOUNDATION-001, REQ-ATLAS-CATALOG-001.
+// Features: platform.foundation, inventory.catalog.
+
 import (
 	"os"
 	"path/filepath"
@@ -58,6 +61,43 @@ func TestVerifyReportsMissingArtifacts(t *testing.T) {
 	err := Verify(root, "docs/requirements/traceability.json")
 	if err == nil || !strings.Contains(err.Error(), "has no api artifacts") {
 		t.Fatalf("expected missing artifact error, got %v", err)
+	}
+}
+
+func TestVerifySupportsHonestFoundationTraceWithoutTransportOrUI(t *testing.T) {
+	root := t.TempDir()
+	paths := []string{
+		"docs/requirements/initial.md",
+		"docs/features/dictionary.md",
+		"docs/feature.md",
+		"internal/code.go",
+		"migrations/0001.sql",
+		"tests/code_test.go",
+	}
+	for _, path := range paths {
+		writeFixture(t, root, path, foundationMarker)
+	}
+	writeFixture(t, root, "docs/requirements/traceability.json", `{
+		"entries": [{
+			"requirementId": "REQ-FOUNDATION-001",
+			"featureId": "platform.foundation",
+			"deliveryStatus": "foundation",
+			"artifacts": {
+				"documentation": ["docs/feature.md"],
+				"code": ["internal/code.go"],
+				"schema": ["migrations/0001.sql"],
+				"tests": ["tests/code_test.go"]
+			}
+		}]
+	}`)
+	if err := Verify(root, "docs/requirements/traceability.json"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestVerifyRejectsUnknownDeliveryStatus(t *testing.T) {
+	if _, err := artifactKindsForStatus("half-built"); err == nil {
+		t.Fatal("expected unknown delivery status rejection")
 	}
 }
 

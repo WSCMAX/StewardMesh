@@ -7,14 +7,15 @@ import (
 
 // Requirements: REQ-FOUNDATION-001, SEC-GUARD-001, REQ-PEOPLE-001,
 // REQ-DIRECTORY-EXPANSION-001, REQ-ATLAS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001,
-// REQ-HORIZON-001, REQ-ATLAS-CODES-001. Features: lifecycle.planning, inventory.identifiers.
+// REQ-HORIZON-001, REQ-ATLAS-CODES-001, REQ-ATLAS-MODELS-001, REQ-ATLAS-CATALOG-001.
+// Features: lifecycle.planning, inventory.identifiers, inventory.models, inventory.catalog.
 func TestEmbeddedMigrationsAreOrderedAndChecksummed(t *testing.T) {
 	migrations, err := loadMigrations()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(migrations) != 22 {
-		t.Fatalf("expected 22 platform migrations, got %d", len(migrations))
+	if len(migrations) != 24 {
+		t.Fatalf("expected 24 platform migrations, got %d", len(migrations))
 	}
 	for index, migration := range migrations {
 		expectedVersion := int64(index + 1)
@@ -23,6 +24,43 @@ func TestEmbeddedMigrationsAreOrderedAndChecksummed(t *testing.T) {
 		}
 		if len(migration.checksum) != 64 {
 			t.Fatalf("expected SHA-256 checksum for migration %d", migration.version)
+		}
+	}
+}
+
+func TestAtlasModelsMigrationAddsCatalogDefaultsAndAssetLinks(t *testing.T) {
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents := migrations[22].contents
+	for _, expected := range []string{
+		"REQ-ATLAS-MODELS-001", "inventory.models", "CREATE TABLE atlas_models",
+		"UNIQUE (organization_id, normalized_manufacturer, normalized_name, normalized_model_number)",
+		"specifications JSONB", "warranty_months", "useful_life_months",
+		"ADD COLUMN model_id TEXT", "atlas_assets_model_fk", "CREATE INDEX atlas_assets_model_idx",
+	} {
+		if !strings.Contains(contents, expected) {
+			t.Fatalf("Atlas Models migration is missing %q", expected)
+		}
+	}
+}
+
+func TestAtlasCatalogMigrationExtendsModelsWithConfigurationsPricesAndUpgradePaths(t *testing.T) {
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents := migrations[23].contents
+	for _, expected := range []string{
+		"REQ-ATLAS-CATALOG-001", "inventory.catalog", "CREATE TABLE atlas_catalog_configurations",
+		"REFERENCES atlas_models (organization_id, id)", "CREATE TABLE atlas_catalog_prices",
+		"amount_minor BETWEEN 0 AND 9007199254740991", "effective_to >= effective_from",
+		"CREATE TABLE atlas_catalog_upgrade_paths", "relationship_kind IN ('successor', 'replacement', 'upgrade')",
+		"from_configuration_id IS DISTINCT FROM to_configuration_id", "atlas_catalog_upgrade_paths_identity_idx",
+	} {
+		if !strings.Contains(contents, expected) {
+			t.Fatalf("Atlas Catalog migration is missing %q", expected)
 		}
 	}
 }

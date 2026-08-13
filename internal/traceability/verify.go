@@ -25,9 +25,10 @@ type Manifest struct {
 }
 
 type Entry struct {
-	RequirementID string              `json:"requirementId"`
-	FeatureID     string              `json:"featureId"`
-	Artifacts     map[string][]string `json:"artifacts"`
+	RequirementID  string              `json:"requirementId"`
+	FeatureID      string              `json:"featureId"`
+	DeliveryStatus string              `json:"deliveryStatus,omitempty"`
+	Artifacts      map[string][]string `json:"artifacts"`
 }
 
 func Verify(root, manifestPath string) error {
@@ -98,7 +99,12 @@ func Verify(root, manifestPath string) error {
 		if !bytes.Contains(featuresData, []byte(entry.FeatureID)) {
 			problems = append(problems, fmt.Errorf("%s is missing from the feature dictionary", entry.FeatureID))
 		}
-		for _, kind := range requiredArtifactKinds {
+		requiredKinds, statusErr := artifactKindsForStatus(entry.DeliveryStatus)
+		if statusErr != nil {
+			problems = append(problems, fmt.Errorf("%s: %w", entry.RequirementID, statusErr))
+			continue
+		}
+		for _, kind := range requiredKinds {
 			paths := entry.Artifacts[kind]
 			if len(paths) == 0 {
 				problems = append(problems, fmt.Errorf("%s has no %s artifacts", entry.RequirementID, kind))
@@ -113,6 +119,19 @@ func Verify(root, manifestPath string) error {
 		}
 	}
 	return errors.Join(problems...)
+}
+
+func artifactKindsForStatus(status string) ([]string, error) {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "", "complete":
+		return requiredArtifactKinds, nil
+	case "foundation":
+		return []string{"code", "documentation", "schema", "tests"}, nil
+	case "planned":
+		return []string{"documentation"}, nil
+	default:
+		return nil, fmt.Errorf("invalid delivery status %q", status)
+	}
 }
 
 func verifyArtifact(root, path string, entry Entry) error {

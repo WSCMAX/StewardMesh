@@ -72,6 +72,14 @@ DynamoDB adapter and Exchange imports reuse the same validation and audit rules.
 See [Atlas](docs/features/atlas.md) for permissions, API behavior, the accessible
 workflow, migration details, and validation coverage.
 
+Atlas Catalog (`REQ-ATLAS-CATALOG-001`, `inventory.catalog`) extends reusable
+Atlas Models with named configurations, effective-dated prices, and directed
+upgrade paths instead of creating a competing product record. Its foundation
+service and schema establish the lifecycle inputs that later Atlas association
+and Horizon forecasting slices will consume. See
+[Atlas Catalog](docs/features/atlas-catalog.md) for the boundary, price semantics,
+delivery slices, and current integration status.
+
 Atlas Codes adds organization-scoped Code 128 and QR associations with visible
 provenance, active uniqueness, optimistic replacement and deactivation history,
 Guard ownership locks, and redacted audits. Memory and PostgreSQL providers,

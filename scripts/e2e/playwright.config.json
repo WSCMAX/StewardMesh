@@ -1,0 +1,35 @@
+{
+  "browser": {
+    "browserName": "chromium",
+    "isolated": true,
+    "launchOptions": {
+      "headless": true
+    },
+    "contextOptions": {
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      },
+      "reducedMotion": "reduce",
+      "permissions": [
+        "clipboard-read",
+        "clipboard-write"
+      ]
+    }
+  },
+  "outputDir": "output/playwright/phase-one-gate",
+  "outputMode": "stdout",
+  "console": {
+    "level": "warning"
+  },
+  "network": {
+    "allowedOrigins": [
+      "http://127.0.0.1:15173"
+    ]
+  },
+  "timeouts": {
+    "action": 10000,
+    "navigation": 30000
+  },
+  "codegen": "none"
+}

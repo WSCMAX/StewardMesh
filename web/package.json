@@ -8,6 +8,7 @@
   },
   "scripts": {
     "dev": "vite",
+    "e2e:phase-one": "../scripts/e2e/run-phase-one.sh",
     "build": "tsc -b && vite build",
     "openapi:lint": "redocly lint ../api/openapi/openapi.yaml --config ../redocly.yaml",
     "test": "vitest run",
@@ -19,6 +20,7 @@
   },
   "devDependencies": {
     "@babel/core": "^8.0.1",
+    "@playwright/cli": "0.1.18",
     "@redocly/cli": "2.46.0",
     "@rolldown/plugin-babel": "^0.2.3",
     "@tailwindcss/vite": "4.3.3",

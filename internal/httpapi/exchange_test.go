@@ -28,6 +28,8 @@ func TestExchangeHTTPRoundTripReplayHistoryAndOwnershipClaim(t *testing.T) {
 	handler.ServeHTTP(records, authenticatedRequest(http.MethodGet, "/api/v1/exchange/records", nil, session))
 	if records.Code != http.StatusOK || !strings.Contains(records.Body.String(), `"id":"exchange-version"`) ||
 		!strings.Contains(records.Body.String(), `"maximumArchiveBytes":33554432`) ||
+		!strings.Contains(records.Body.String(), `"type":"guard.account"`) ||
+		!strings.Contains(records.Body.String(), `destination-owned security state`) ||
 		!strings.Contains(records.Body.String(), `"dependencies":[]`) ||
 		strings.Contains(records.Body.String(), `"dependencies":null`) {
 		t.Fatalf("unexpected Exchange catalog %d: %s", records.Code, records.Body.String())

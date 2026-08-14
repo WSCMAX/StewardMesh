@@ -30,6 +30,13 @@ func DirectoryGroupTargetStore(t *testing.T, store directoryexpansion.GroupTarge
 	if err != nil || loaded.Metadata["classification"] != "internal" {
 		t.Fatalf("load managed group: %#v err=%v", loaded, err)
 	}
+	loadedBySource, err := store.GetManagedGroupBySource(ctx, organizationID, group.SourceSystemID, group.SourceRecordID)
+	if err != nil || loadedBySource.ID != group.ID {
+		t.Fatalf("load managed group by authoritative source: %#v err=%v", loadedBySource, err)
+	}
+	if _, err := store.GetManagedGroupBySource(ctx, organizationID+"-other", group.SourceSystemID, group.SourceRecordID); !errors.Is(err, directoryexpansion.ErrNotFound) {
+		t.Fatalf("expected organization-scoped group source lookup, got %v", err)
+	}
 	loaded.Metadata["classification"] = "tampered"
 	reloaded, _ := store.GetManagedGroup(ctx, organizationID, group.ID)
 	if reloaded.Metadata["classification"] != "internal" {
@@ -48,6 +55,13 @@ func DirectoryGroupTargetStore(t *testing.T, store directoryexpansion.GroupTarge
 	createdMembership, err := store.CreateManagedMembership(ctx, membership)
 	if err != nil || createdMembership.GroupID != group.ID {
 		t.Fatalf("create managed membership: %#v err=%v", createdMembership, err)
+	}
+	loadedMembershipBySource, err := store.GetManagedMembershipBySource(ctx, organizationID, membership.SourceSystemID, membership.SourceRecordID)
+	if err != nil || loadedMembershipBySource.ID != membership.ID {
+		t.Fatalf("load managed membership by authoritative source: %#v err=%v", loadedMembershipBySource, err)
+	}
+	if _, err := store.GetManagedMembershipBySource(ctx, organizationID+"-other", membership.SourceSystemID, membership.SourceRecordID); !errors.Is(err, directoryexpansion.ErrNotFound) {
+		t.Fatalf("expected organization-scoped membership source lookup, got %v", err)
 	}
 	if _, err := store.CreateManagedMembership(ctx, membership); !errors.Is(err, directoryexpansion.ErrConflict) {
 		t.Fatalf("expected duplicate managed membership conflict, got %v", err)
@@ -119,6 +133,35 @@ func DirectoryGroupTargetStore(t *testing.T, store directoryexpansion.GroupTarge
 	}
 	if _, err := store.GetManagedMembership(ctx, organizationID, cascade.ID); !errors.Is(err, directoryexpansion.ErrNotFound) {
 		t.Fatalf("expected group delete to cascade membership, got %v", err)
+	}
+
+	parent := group
+	parent.ID, parent.SourceRecordID = contractDirectoryID("nested-parent", unique), "nested-parent-source-"+unique
+	memberGroup := group
+	memberGroup.ID, memberGroup.SourceRecordID = contractDirectoryID("nested-member", unique), "nested-member-source-"+unique
+	if _, err := store.CreateManagedGroup(ctx, parent); err != nil {
+		t.Fatalf("create nested-membership parent group: %v", err)
+	}
+	if _, err := store.CreateManagedGroup(ctx, memberGroup); err != nil {
+		t.Fatalf("create nested-membership member group: %v", err)
+	}
+	nestedMembership := membership
+	nestedMembership.ID = contractDirectoryID("nested-membership", unique)
+	nestedMembership.SourceRecordID = "nested-membership-source-" + unique
+	nestedMembership.GroupID, nestedMembership.GroupSourceID = parent.ID, parent.SourceRecordID
+	nestedMembership.MemberID, nestedMembership.MemberSourceID = memberGroup.ID, memberGroup.SourceRecordID
+	nestedMembership.MemberKind, nestedMembership.Revision = directoryexpansion.MemberGroup, 1
+	if _, err := store.CreateManagedMembership(ctx, nestedMembership); err != nil {
+		t.Fatalf("create nested-group membership: %v", err)
+	}
+	if err := store.DeleteManagedGroup(ctx, organizationID, memberGroup.ID, memberGroup.Revision); err != nil {
+		t.Fatalf("delete nested member group: %v", err)
+	}
+	if _, err := store.GetManagedMembership(ctx, organizationID, nestedMembership.ID); !errors.Is(err, directoryexpansion.ErrNotFound) {
+		t.Fatalf("expected nested member-group delete to remove membership, got %v", err)
+	}
+	if _, err := store.GetManagedGroup(ctx, organizationID, parent.ID); err != nil {
+		t.Fatalf("nested member-group delete removed parent group: %v", err)
 	}
 }
 

@@ -18,6 +18,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/maxlemke/stewardmesh/internal/foundation"
+	"github.com/maxlemke/stewardmesh/internal/portabletime"
 )
 
 var (
@@ -30,29 +31,43 @@ var (
 )
 
 type ServiceConfig struct {
-	OrganizationID      string
-	SubscriptionTargets SubscriptionTargetCatalog
-	Now                 func() time.Time
+	OrganizationID               string
+	SubscriptionTargets          SubscriptionTargetCatalog
+	SubscriptionTargetReferences SubscriptionTargetReferenceCatalog
+	Now                          func() time.Time
 }
 
 type Service struct {
 	store          Store
 	evaluator      Evaluator
 	targets        SubscriptionTargetCatalog
+	targetRefs     SubscriptionTargetReferenceCatalog
+	writes         WriteGate
 	auditor        foundation.Auditor
 	organizationID string
 	now            func() time.Time
 }
 
 func NewService(store Store, evaluator Evaluator, auditor foundation.Auditor, configuration ServiceConfig) (*Service, error) {
+	service, _, err := NewServiceWithExchangeImporter(store, evaluator, nil, auditor, configuration)
+	return service, err
+}
+
+func NewServiceWithExchangeImporter(store Store, evaluator Evaluator, writes WriteGate, auditor foundation.Auditor, configuration ServiceConfig) (*Service, ExchangeImporter, error) {
 	configuration.OrganizationID = strings.TrimSpace(configuration.OrganizationID)
 	if store == nil || evaluator == nil || configuration.SubscriptionTargets == nil || auditor == nil || configuration.OrganizationID == "" {
-		return nil, errors.New("Signals store, evaluator, subscription targets, auditor, and organization id are required")
+		return nil, nil, errors.New("Signals store, evaluator, subscription targets, auditor, and organization id are required")
 	}
-	if configuration.Now == nil {
-		configuration.Now = func() time.Time { return time.Now().UTC() }
+	clock := configuration.Now
+	if clock == nil {
+		clock = time.Now
 	}
-	return &Service{store: store, evaluator: evaluator, targets: configuration.SubscriptionTargets, auditor: auditor, organizationID: configuration.OrganizationID, now: configuration.Now}, nil
+	if configuration.SubscriptionTargetReferences == nil {
+		configuration.SubscriptionTargetReferences = activeSubscriptionTargetReferences{catalog: configuration.SubscriptionTargets}
+	}
+	service := &Service{store: store, evaluator: evaluator, targets: configuration.SubscriptionTargets, targetRefs: configuration.SubscriptionTargetReferences, writes: writes, auditor: auditor, organizationID: configuration.OrganizationID,
+		now: func() time.Time { return portabletime.Normalize(clock()) }}
+	return service, &exchangeImporter{service: service}, nil
 }
 
 func (s *Service) ListRules(ctx context.Context) ([]Rule, error) {
@@ -70,6 +85,9 @@ func (s *Service) CreateRule(ctx context.Context, input CreateRuleInput) (Rule, 
 		if err != nil {
 			return Rule{}, fmt.Errorf("create Signals rule id: %w", err)
 		}
+	}
+	if err := s.checkWrite(ctx, "signals.rule", id); err != nil {
+		return Rule{}, err
 	}
 	now := s.now().UTC()
 	enabled := true
@@ -97,6 +115,9 @@ func (s *Service) UpdateRule(ctx context.Context, id string, input UpdateRuleInp
 	if err != nil || !stableIDPattern.MatchString(id) || input.Revision < 1 {
 		return Rule{}, ErrInvalidInput
 	}
+	if err := s.checkWrite(ctx, "signals.rule", id); err != nil {
+		return Rule{}, err
+	}
 	existing, err := s.store.GetRule(ctx, s.organizationID, id)
 	if err != nil {
 		return Rule{}, err
@@ -104,7 +125,7 @@ func (s *Service) UpdateRule(ctx context.Context, id string, input UpdateRuleInp
 	updated := existing
 	updated.Name, updated.Condition, updated.Severity, updated.Enabled = normalized.Name, normalized.Condition, normalized.Severity, enabled
 	updated.ThresholdDays, updated.FiscalPeriod, updated.Scenario = normalized.ThresholdDays, normalized.FiscalPeriod, normalized.Scenario
-	updated.Revision, updated.UpdatedAt = existing.Revision+1, s.now().UTC()
+	updated.Revision, updated.UpdatedAt = existing.Revision+1, portabletime.Max(s.now(), existing.UpdatedAt)
 	updated, err = s.store.UpdateRule(ctx, updated, input.Revision)
 	if err != nil {
 		return Rule{}, err
@@ -337,7 +358,11 @@ func (s *Service) CreateSubscription(ctx context.Context, input CreateSubscripti
 			return Subscription{}, err
 		}
 	}
-	subscription := Subscription{ID: id, OrganizationID: s.organizationID, RuleID: input.RuleID, TargetKind: input.TargetKind, TargetID: input.TargetID, Enabled: true, CreatedBy: actor(ctx), CreatedAt: s.now().UTC()}
+	if err := s.checkWrite(ctx, "signals.subscription", id); err != nil {
+		return Subscription{}, err
+	}
+	now := s.now().UTC()
+	subscription := Subscription{ID: id, OrganizationID: s.organizationID, RuleID: input.RuleID, TargetKind: input.TargetKind, TargetID: input.TargetID, Enabled: true, CreatedBy: actor(ctx), Revision: 1, CreatedAt: now, UpdatedAt: now}
 	created, err := s.store.CreateSubscription(ctx, subscription)
 	if err != nil {
 		return Subscription{}, err
@@ -352,6 +377,9 @@ func (s *Service) DeleteSubscription(ctx context.Context, id string) (bool, erro
 	id = strings.TrimSpace(id)
 	if !stableIDPattern.MatchString(id) {
 		return false, ErrInvalidInput
+	}
+	if err := s.checkWrite(ctx, "signals.subscription", id); err != nil {
+		return false, err
 	}
 	deleted, err := s.store.DeleteSubscription(ctx, s.organizationID, id)
 	if err != nil || !deleted {

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -28,6 +29,89 @@ func NewAtlasStore(database *sql.DB) (*AtlasStore, error) {
 		return nil, errors.New("database is required")
 	}
 	return &AtlasStore{database: database}, nil
+}
+
+func (s *AtlasStore) ExchangeSnapshot(ctx context.Context, organizationID string, maximum int) (atlas.ExchangeSnapshot, error) {
+	if strings.TrimSpace(organizationID) == "" || maximum < 1 {
+		return atlas.ExchangeSnapshot{}, atlas.ErrInvalidInput
+	}
+	tx, err := s.database.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	if err != nil {
+		return atlas.ExchangeSnapshot{}, fmt.Errorf("begin Atlas Exchange snapshot: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	result := atlas.ExchangeSnapshot{Models: []domain.AssetModel{}, Assets: []domain.Asset{}, LifecycleEvents: []domain.AssetLifecycleEvent{}}
+	modelRows, err := tx.QueryContext(ctx, `SELECT `+atlasModelColumns+` FROM atlas_models WHERE organization_id = $1 ORDER BY id LIMIT $2`, organizationID, maximum+1)
+	if err != nil {
+		return atlas.ExchangeSnapshot{}, fmt.Errorf("list Atlas Exchange models: %w", err)
+	}
+	for modelRows.Next() {
+		model, scanErr := scanAtlasModel(modelRows, false)
+		if scanErr != nil {
+			_ = modelRows.Close()
+			return atlas.ExchangeSnapshot{}, fmt.Errorf("scan Atlas Exchange model: %w", scanErr)
+		}
+		result.Models = append(result.Models, model)
+	}
+	if err := modelRows.Close(); err != nil {
+		return atlas.ExchangeSnapshot{}, fmt.Errorf("close Atlas Exchange models: %w", err)
+	}
+	if err := modelRows.Err(); err != nil {
+		return atlas.ExchangeSnapshot{}, fmt.Errorf("iterate Atlas Exchange models: %w", err)
+	}
+	if len(result.Models) > maximum {
+		return atlas.ExchangeSnapshot{}, atlas.ErrTooLarge
+	}
+	assetRows, err := tx.QueryContext(ctx, `SELECT `+atlasAssetColumns+` FROM atlas_assets WHERE organization_id = $1 ORDER BY id LIMIT $2`, organizationID, maximum-len(result.Models)+1)
+	if err != nil {
+		return atlas.ExchangeSnapshot{}, fmt.Errorf("list Atlas Exchange assets: %w", err)
+	}
+	for assetRows.Next() {
+		asset, scanErr := scanAtlasAsset(assetRows)
+		if scanErr != nil {
+			_ = assetRows.Close()
+			return atlas.ExchangeSnapshot{}, fmt.Errorf("scan Atlas Exchange asset: %w", scanErr)
+		}
+		result.Assets = append(result.Assets, asset)
+	}
+	if err := assetRows.Close(); err != nil {
+		return atlas.ExchangeSnapshot{}, fmt.Errorf("close Atlas Exchange assets: %w", err)
+	}
+	if err := assetRows.Err(); err != nil {
+		return atlas.ExchangeSnapshot{}, fmt.Errorf("iterate Atlas Exchange assets: %w", err)
+	}
+	if len(result.Models)+len(result.Assets) > maximum {
+		return atlas.ExchangeSnapshot{}, atlas.ErrTooLarge
+	}
+	remaining := maximum - len(result.Models) - len(result.Assets)
+	eventRows, err := tx.QueryContext(ctx, `
+		SELECT organization_id, id, asset_id, from_status, to_status, note, revision, actor_id, occurred_at
+		FROM atlas_asset_lifecycle_events WHERE organization_id = $1 ORDER BY id LIMIT $2`, organizationID, remaining+1)
+	if err != nil {
+		return atlas.ExchangeSnapshot{}, fmt.Errorf("list Atlas Exchange lifecycle: %w", err)
+	}
+	for eventRows.Next() {
+		var event domain.AssetLifecycleEvent
+		if scanErr := eventRows.Scan(&event.OrganizationID, &event.ID, &event.AssetID, &event.FromStatus, &event.ToStatus,
+			&event.Note, &event.Revision, &event.ActorID, &event.OccurredAt); scanErr != nil {
+			_ = eventRows.Close()
+			return atlas.ExchangeSnapshot{}, fmt.Errorf("scan Atlas Exchange lifecycle: %w", scanErr)
+		}
+		result.LifecycleEvents = append(result.LifecycleEvents, event)
+	}
+	if err := eventRows.Close(); err != nil {
+		return atlas.ExchangeSnapshot{}, fmt.Errorf("close Atlas Exchange lifecycle: %w", err)
+	}
+	if err := eventRows.Err(); err != nil {
+		return atlas.ExchangeSnapshot{}, fmt.Errorf("iterate Atlas Exchange lifecycle: %w", err)
+	}
+	if len(result.LifecycleEvents) > remaining {
+		return atlas.ExchangeSnapshot{}, atlas.ErrTooLarge
+	}
+	if err := tx.Commit(); err != nil {
+		return atlas.ExchangeSnapshot{}, fmt.Errorf("complete Atlas Exchange snapshot: %w", err)
+	}
+	return result, nil
 }
 
 const atlasAssetColumns = `
@@ -624,6 +708,121 @@ func (s *AtlasStore) ListAssetLifecycle(ctx context.Context, organizationID, ass
 		return nil, fmt.Errorf("iterate Atlas lifecycle: %w", err)
 	}
 	return items, nil
+}
+
+func (s *AtlasStore) GetAssetLifecycleEvent(ctx context.Context, organizationID, eventID string) (domain.AssetLifecycleEvent, error) {
+	var event domain.AssetLifecycleEvent
+	err := s.database.QueryRowContext(ctx, `
+		SELECT organization_id, id, asset_id, from_status, to_status, note, revision, actor_id, occurred_at
+		FROM atlas_asset_lifecycle_events WHERE organization_id = $1 AND id = $2`, organizationID, eventID).Scan(
+		&event.OrganizationID, &event.ID, &event.AssetID, &event.FromStatus, &event.ToStatus,
+		&event.Note, &event.Revision, &event.ActorID, &event.OccurredAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.AssetLifecycleEvent{}, atlas.ErrNotFound
+	}
+	if err != nil {
+		return domain.AssetLifecycleEvent{}, fmt.Errorf("get Atlas lifecycle event: %w", err)
+	}
+	return event, nil
+}
+
+func (s *AtlasStore) ImportModel(ctx context.Context, model domain.AssetModel) (domain.AssetModel, bool, error) {
+	specifications, err := marshalAtlasSpecifications(model.Specifications)
+	if err != nil {
+		return domain.AssetModel{}, false, fmt.Errorf("marshal imported Atlas model specifications: %w", err)
+	}
+	created, err := scanAtlasModel(s.database.QueryRowContext(ctx, `
+		INSERT INTO atlas_models (
+			organization_id, id, manufacturer, name, model_number, normalized_manufacturer,
+			normalized_name, normalized_model_number, kind, vendor_identifier, specifications,
+			support_url, warranty_months, useful_life_months, status, source_system_id,
+			source_record_id, revision, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, lower(btrim($3)), lower(btrim($4)), lower(btrim($5)),
+			$6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+		ON CONFLICT (organization_id, id) DO NOTHING
+		RETURNING `+atlasModelColumns,
+		model.OrganizationID, model.ID, model.Manufacturer, model.Name, model.ModelNumber, model.Kind,
+		model.VendorIdentifier, specifications, model.SupportURL, model.WarrantyMonths, model.UsefulLifeMonths,
+		model.Status, model.SourceSystemID, model.SourceRecordID, model.Revision, model.CreatedAt, model.UpdatedAt), false)
+	if err == nil {
+		return created, true, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return domain.AssetModel{}, false, translateAtlasWriteError("import Atlas model", err)
+	}
+	existing, readErr := scanAtlasModel(s.database.QueryRowContext(ctx, `SELECT `+atlasModelColumns+` FROM atlas_models WHERE organization_id = $1 AND id = $2`, model.OrganizationID, model.ID), false)
+	model.InstanceCount = 0
+	if readErr == nil && reflect.DeepEqual(existing, model) {
+		return existing, false, nil
+	}
+	if readErr != nil {
+		return domain.AssetModel{}, false, fmt.Errorf("read imported Atlas model: %w", readErr)
+	}
+	return domain.AssetModel{}, false, atlas.ErrConflict
+}
+
+func (s *AtlasStore) ImportAsset(ctx context.Context, asset domain.Asset) (domain.Asset, bool, error) {
+	modelContext, err := marshalAtlasModelContext(asset.ModelContext)
+	if err != nil {
+		return domain.Asset{}, false, err
+	}
+	created, err := scanAtlasAsset(s.database.QueryRowContext(ctx, `
+		INSERT INTO atlas_assets (
+			organization_id, id, model_id, model_context, name, kind, asset_tag, normalized_asset_tag,
+			serial_number, normalized_serial_number, hostname, deployment_notes, site_id, building_id,
+			room_id, department_id, user_id, status, purchase_date, revision, created_at, updated_at
+		) VALUES ($1, $2, NULLIF($3, ''), $4, $5, $6, $7, lower(btrim($7)), $8, lower(btrim($8)),
+			$9, $10, NULLIF($11, ''), NULLIF($12, ''), NULLIF($13, ''), NULLIF($14, ''), NULLIF($15, ''),
+			$16, $17, $18, $19, $20)
+		ON CONFLICT (organization_id, id) DO NOTHING
+		RETURNING `+atlasAssetColumns,
+		asset.OrganizationID, asset.ID, asset.ModelID, modelContext, asset.Name, asset.Kind, asset.AssetTag,
+		asset.SerialNumber, asset.Hostname, asset.DeploymentNotes, asset.SiteID, asset.BuildingID, asset.RoomID,
+		asset.DepartmentID, asset.UserID, asset.Status, asset.PurchaseDate, asset.Revision, asset.CreatedAt, asset.UpdatedAt))
+	if err == nil {
+		return created, true, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return domain.Asset{}, false, translateAtlasWriteError("import Atlas asset", err)
+	}
+	existing, readErr := s.GetAsset(ctx, asset.OrganizationID, asset.ID)
+	if readErr == nil && reflect.DeepEqual(existing, asset) {
+		return existing, false, nil
+	}
+	if readErr != nil {
+		return domain.Asset{}, false, fmt.Errorf("read imported Atlas asset: %w", readErr)
+	}
+	return domain.Asset{}, false, atlas.ErrConflict
+}
+
+func (s *AtlasStore) ImportAssetLifecycleEvent(ctx context.Context, event domain.AssetLifecycleEvent) (domain.AssetLifecycleEvent, bool, error) {
+	var created domain.AssetLifecycleEvent
+	err := s.database.QueryRowContext(ctx, `
+		INSERT INTO atlas_asset_lifecycle_events (
+			organization_id, id, asset_id, from_status, to_status, note, revision, actor_id, occurred_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		ON CONFLICT (organization_id, id) DO NOTHING
+		RETURNING organization_id, id, asset_id, from_status, to_status, note, revision, actor_id, occurred_at`,
+		event.OrganizationID, event.ID, event.AssetID, event.FromStatus, event.ToStatus, event.Note,
+		event.Revision, event.ActorID, event.OccurredAt).Scan(
+		&created.OrganizationID, &created.ID, &created.AssetID, &created.FromStatus, &created.ToStatus,
+		&created.Note, &created.Revision, &created.ActorID, &created.OccurredAt,
+	)
+	if err == nil {
+		return created, true, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return domain.AssetLifecycleEvent{}, false, translateAtlasWriteError("import Atlas lifecycle event", err)
+	}
+	existing, readErr := s.GetAssetLifecycleEvent(ctx, event.OrganizationID, event.ID)
+	if readErr == nil && reflect.DeepEqual(existing, event) {
+		return existing, false, nil
+	}
+	if readErr != nil {
+		return domain.AssetLifecycleEvent{}, false, readErr
+	}
+	return domain.AssetLifecycleEvent{}, false, atlas.ErrConflict
 }
 
 type atlasScanner interface {

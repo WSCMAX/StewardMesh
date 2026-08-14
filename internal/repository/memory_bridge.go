@@ -1,7 +1,7 @@
 package repository
 
-// In-memory Bridge adapter. Requirements: REQ-API-001, SEC-MCP-001.
-// Feature: integrations.protocols. GitHub: #14.
+// In-memory Bridge adapter. Requirements: REQ-API-001, SEC-MCP-001, REQ-EXCHANGE-001.
+// Features: integrations.protocols, migration.packages. GitHub: #9, #14.
 
 import (
 	"context"
@@ -80,6 +80,25 @@ func (s *MemoryBridgeStore) ListClients(_ context.Context, organizationID string
 	return bridgeClientPage(items, page)
 }
 
+func (s *MemoryBridgeStore) ListExchangeClients(_ context.Context, organizationID string, limit int) ([]bridge.Client, error) {
+	if limit < 1 {
+		return nil, bridge.ErrInvalidInput
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	items := make([]bridge.Client, 0)
+	for _, client := range s.clients {
+		if client.OrganizationID == organizationID {
+			items = append(items, cloneBridgeClient(client))
+		}
+	}
+	if len(items) > limit {
+		return nil, bridge.ErrTooLarge
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].ID < items[j].ID })
+	return items, nil
+}
+
 func (s *MemoryBridgeStore) GetClient(_ context.Context, organizationID, clientID string) (bridge.Client, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -88,6 +107,35 @@ func (s *MemoryBridgeStore) GetClient(_ context.Context, organizationID, clientI
 		return bridge.Client{}, bridge.ErrNotFound
 	}
 	return cloneBridgeClient(client), nil
+}
+
+func (s *MemoryBridgeStore) ImportExchangeClient(_ context.Context, client bridge.Client) (bridge.Client, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := bridgeKey(client.OrganizationID, client.ID)
+	if existing, exists := s.clients[key]; exists {
+		if !reflect.DeepEqual(existing, client) {
+			return bridge.Client{}, false, bridge.ErrConflict
+		}
+		return cloneBridgeClient(existing), false, nil
+	}
+	activeCount := 0
+	if client.RevokedAt == nil {
+		for _, existing := range s.clients {
+			if existing.OrganizationID != client.OrganizationID || existing.RevokedAt != nil {
+				continue
+			}
+			activeCount++
+			if strings.EqualFold(existing.Name, client.Name) {
+				return bridge.Client{}, false, bridge.ErrConflict
+			}
+		}
+		if activeCount >= bridge.MaximumClients {
+			return bridge.Client{}, false, bridge.ErrConflict
+		}
+	}
+	s.clients[key] = cloneBridgeClient(client)
+	return cloneBridgeClient(client), true, nil
 }
 
 func (s *MemoryBridgeStore) RevokeClient(_ context.Context, organizationID, clientID string, revokedAt time.Time) (bridge.Client, error) {

@@ -488,7 +488,7 @@ func (s *ManagedGraphStore) projectRelationshipContext(ctx context.Context, buil
 }
 
 func (s *ManagedGraphStore) listMembershipGroups(ctx context.Context, memberships []ManagedMembership, limit int) ([]ManagedGroup, error) {
-	ids := make([]string, 0, min(len(memberships)*2, limit))
+	ids := make([]string, 0, boundedMembershipIDCapacity(len(memberships), limit))
 	for _, membership := range memberships {
 		appendUniqueGraphID(&ids, membership.GroupID, limit)
 		if membership.MemberKind == MemberGroup {
@@ -537,6 +537,23 @@ func (s *ManagedGraphStore) projectManagedRecords(builder *graphBuilder, organiz
 		}
 		builder.addEdgeWithID(membership.ID, RelationshipMemberOf, from, to, map[string]string{"origin": "imported"})
 	}
+}
+
+func boundedGraphCapacity(limit int) int {
+	if limit < 1 {
+		return 1
+	}
+	if limit > MaximumGraphLimit {
+		return MaximumGraphLimit
+	}
+	return limit
+}
+
+func boundedMembershipIDCapacity(membershipCount, limit int) int {
+	if membershipCount > MaximumGraphLimit {
+		membershipCount = MaximumGraphLimit
+	}
+	return min(membershipCount*2, boundedGraphCapacity(limit))
 }
 
 func appendUniqueGraphID(values *[]string, value string, limit int) {
@@ -945,7 +962,7 @@ func filterGraph(graph Graph, query GraphQuery) Graph {
 	}
 
 	result := emptyGraph()
-	allowed := make(map[string]struct{}, min(query.Limit, len(anchors)))
+	allowed := make(map[string]struct{}, boundedGraphCapacity(min(query.Limit, len(anchors))))
 	for _, node := range anchors {
 		if len(result.Nodes) == query.Limit {
 			break
@@ -986,7 +1003,7 @@ func filterRelationshipGraph(available map[string]Node, anchors []Node, edges []
 	for _, node := range anchors {
 		anchorIDs[node.ID] = struct{}{}
 	}
-	selected := make(map[string]struct{}, min(query.Limit, len(available)))
+	selected := make(map[string]struct{}, boundedGraphCapacity(min(query.Limit, len(available))))
 	seenEdges := make(map[string]struct{}, len(edges))
 	for _, edge := range edges {
 		if edge.Kind != query.Relationship {

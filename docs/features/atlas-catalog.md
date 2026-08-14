@@ -37,16 +37,20 @@ The intended end-to-end workflow is:
 
 This prevents a fleet of identical items from requiring the same lifecycle price to be edited repeatedly. It also allows a newer product to become the planned replacement without changing what the existing asset actually is.
 
-## Ownership and permissions
+## Exchange, ownership, and permissions
 
-The foundation package is organization-scoped and provider-neutral. The transport and browser slices will add `catalog.read` and `catalog.write` authorization, same-origin and CSRF protection for browser writes, ownership-lock handling for imported catalog records, accessible management workflows, and REST/OpenAPI plus gRPC parity. Until those slices are complete, the catalog service is not wired into the running application.
+The organization-scoped memory and PostgreSQL adapters and Catalog service are initialized in the running application. Exchange owns one provider for each Catalog family: `atlas.catalog-configuration`, `atlas.catalog-price`, and `atlas.catalog-upgrade-path`. Its portable projections omit organization IDs, timestamps, operators, private database state, and monetary audit detail; retain stable IDs, revisions, effective dates, typed fields, and model/configuration relationships; and pin the newest immutable Patterns schema version. Imports use an opaque construction-time capability so ordinary callers cannot supply source revisions or bypass ownership checks.
+
+Every ordinary Catalog create path calls the service-layer Guard write gate with the canonical Exchange record type and stable ID. The application resolves the actor from the authenticated request scope, reloads that account through Guard, and uses Guard's audited ownership decision. An imported Catalog record therefore remains readable but rejects local service writes until an authorized operator claims ownership. Exchange alone bypasses this check after its durable package intent and ownership workflow has approved the record.
+
+Catalog management remains intentionally unexposed in this foundation slice. A later transport and browser slice will add `catalog.read` and `catalog.write` permissions, same-origin and CSRF protection, accessible workflows, and REST/OpenAPI plus gRPC management parity. Until then, no Catalog management endpoint or browser surface is exposed.
 
 Audit events are emitted for configuration, price, and upgrade-path creation. Metadata includes `REQ-ATLAS-CATALOG-001`, stable model and catalog record IDs, kind/status/revision, and price source/currency where applicable. Audit metadata excludes specifications, SKU values, source references, and monetary amounts.
 
 ## Delivery slices
 
 1. **Foundation:** feature and requirement registration, provider-neutral domain/service contracts, deterministic memory adapter, PostgreSQL schema, validation, effective-price resolution, audit redaction, and tests.
-2. **Catalog management:** PostgreSQL adapter, Guard permissions, REST/OpenAPI and gRPC operations, import ownership, and an accessible Atlas Catalog surface.
+2. **Catalog management:** Guard permissions, REST/OpenAPI and gRPC operations, and an accessible Atlas Catalog surface. The PostgreSQL adapter, internal runtime service seam, Exchange provider, and imported-record ownership fence are complete.
 3. **Asset association:** optional configuration reference alongside the existing Atlas `modelId`, bulk association, preserved per-item overrides, search/filter support, and migration-safe API evolution.
 4. **Horizon integration:** replacement model/configuration selection, effective-date price resolution, explicit source provenance, manual-override labeling, scenario comparison, and forecast/export parity.
 5. **Operational hardening:** change/update history, upgrade-path cycle policy, integration reconciliation, accessibility and browser validation, security review, and release evidence.
@@ -64,4 +68,6 @@ Guide will explain the product-versus-asset boundary, show a permission-aware wa
 - Atlas-model and configuration reference validation and self-link rejection.
 - Effective-date and configuration-specific price resolution with explicit source preference and no implicit currency conversion.
 - Audit actions and metadata redaction.
+- Lossless three-family Exchange projection/import, strict payload decoding, dependency resolution, deterministic audit replay, and service-layer ownership denial.
+- Application registration plus a real package import that proves an imported Catalog record is Guard write-locked at the Catalog service boundary.
 - Ordered, checksum-verified PostgreSQL schema coverage and requirement traceability.

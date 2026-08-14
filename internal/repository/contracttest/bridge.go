@@ -1,7 +1,8 @@
 package contracttest
 
 // Provider-neutral Bridge adapter contract.
-// Requirements: REQ-API-001, SEC-MCP-001. Feature: integrations.protocols. GitHub: #14.
+// Requirements: REQ-API-001, SEC-MCP-001, REQ-EXCHANGE-001.
+// Features: integrations.protocols, migration.packages. GitHub: #9, #14.
 
 import (
 	"context"
@@ -47,6 +48,30 @@ func BridgeStore(t testing.TB, subject bridge.Store, organizationID string) {
 	}
 	if _, err := subject.ListClients(ctx, organizationID, bridge.PageRequest{Cursor: "ffffffffffffffffffffffffffffffff", Limit: 1}); !errors.Is(err, bridge.ErrInvalidInput) {
 		t.Fatalf("invalid Bridge client cursor error=%v", err)
+	}
+	if _, err := subject.ListExchangeClients(ctx, organizationID, 2); !errors.Is(err, bridge.ErrTooLarge) {
+		t.Fatalf("unbounded Bridge Exchange snapshot error=%v", err)
+	}
+	exchangeRevokedAt := now.Add(30 * time.Second)
+	exchangeClient := bridge.Client{
+		ID: "99999999999999999999999999999999", OrganizationID: organizationID, Name: "Imported contract client",
+		RedirectURIs: []string{"https://imported.example.test/callback"}, AllowedScopes: []bridge.Scope{bridge.ScopeMCPResources},
+		CreatedBy: "system:exchange", CreatedAt: now, RevokedAt: &exchangeRevokedAt,
+	}
+	imported, importCreated, err := subject.ImportExchangeClient(ctx, exchangeClient)
+	if err != nil || !importCreated || imported.RevokedAt == nil {
+		t.Fatalf("import Bridge Exchange client %#v created=%t err=%v", imported, importCreated, err)
+	}
+	if replayed, replayCreated, err := subject.ImportExchangeClient(ctx, exchangeClient); err != nil || replayCreated || replayed.ID != exchangeClient.ID {
+		t.Fatalf("replay Bridge Exchange client %#v created=%t err=%v", replayed, replayCreated, err)
+	}
+	conflict := exchangeClient
+	conflict.Name = "Changed imported client"
+	if _, _, err := subject.ImportExchangeClient(ctx, conflict); !errors.Is(err, bridge.ErrConflict) {
+		t.Fatalf("conflicting Bridge Exchange client error=%v", err)
+	}
+	if snapshot, err := subject.ListExchangeClients(ctx, organizationID, 10); err != nil || len(snapshot) != 4 {
+		t.Fatalf("Bridge Exchange snapshot %#v err=%v", snapshot, err)
 	}
 
 	request := bridge.AuthorizationRequest{ID: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", OrganizationID: organizationID, ClientID: loaded.ID, ActorID: "account-one", RedirectURI: loaded.RedirectURIs[0], ResourceURI: "https://steward.example/mcp", Scopes: loaded.AllowedScopes, State: "opaque-state", CodeChallenge: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", CreatedAt: now, ExpiresAt: now.Add(5 * time.Minute)}

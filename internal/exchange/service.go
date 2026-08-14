@@ -111,6 +111,23 @@ func (s *Service) ListRecords(ctx context.Context) ([]RecordDescriptor, error) {
 	return result, nil
 }
 
+// RegisteredRecordTypes returns the deterministic provider ownership surface
+// of this running application. It is intentionally separate from
+// PortableRecordTypes: operators and release gates must be able to distinguish
+// a deliberate exclusion from a portable provider that is not available in
+// the current build.
+func (s *Service) RegisteredRecordTypes() []string {
+	if s == nil {
+		return []string{}
+	}
+	result := make([]string, 0, len(s.providers))
+	for recordType := range s.providers {
+		result = append(result, recordType)
+	}
+	sort.Strings(result)
+	return result
+}
+
 func (s *Service) ListPackages(ctx context.Context, limit int) ([]Package, error) {
 	if limit == 0 {
 		limit = 25
@@ -680,9 +697,6 @@ func (s *Service) failImport(ctx context.Context, actorID string, pending Packag
 	if updateErr == nil {
 		updateErr = s.audit(ctx, actorID, "exchange.package.import_failed", failed)
 	} else {
-		// Preserve the most truthful in-memory receipt projection. The caller can
-		// disclose committed outcomes and pending ownership even when both the
-		// checkpoint and its readback are unavailable.
 		failed = pending
 	}
 	return failed, errors.Join(cause, updateErr)
@@ -902,6 +916,7 @@ func (s *Service) validateSchema(ctx context.Context, record Record, missing []R
 	// package whose exact schema remains active and retrievable.
 	template, err := s.schemas.GetTemplate(ctx, record.TemplateID, record.TemplateVersion)
 	if err != nil || template.ID != record.TemplateID || template.Version != record.TemplateVersion || template.RecordType != record.Type || template.Status != patterns.StatusActive {
+		fmt.Printf("DEBUG validateSchema template mismatch: record=%s/%s template=%s/%d status=%s err=%v\n", record.Type, record.ID, record.TemplateID, record.TemplateVersion, template.Status, err)
 		return patterns.ValidationResult{}, nil, errors.Join(ErrInvalidInput, err)
 	}
 	decoder := json.NewDecoder(bytes.NewReader(record.Payload))
@@ -923,7 +938,7 @@ func (s *Service) validateSchema(ctx context.Context, record Record, missing []R
 			continue
 		}
 		for _, dependency := range missing {
-			if dependency.ID == value && (field.ReferenceType == "stewardmesh.record" || canonicalSchemaRecordType(field.ReferenceType) == canonicalSchemaRecordType(dependency.Type)) {
+			if dependency.ID == value && schemaReferenceMatches(field.ReferenceType, dependency.Type) {
 				missingFields = append(missingFields, field.Key)
 				break
 			}
@@ -933,6 +948,7 @@ func (s *Service) validateSchema(ctx context.Context, record Record, missing []R
 		Values: values, MissingReferences: missingFields, AllowHoldingRecord: allowHolding,
 	})
 	if err != nil || result.Status == patterns.ValidationInvalid || result.Status != patterns.ValidationValid && result.Status != patterns.ValidationHolding || len(missingFields) > 0 && result.Status != patterns.ValidationHolding {
+		fmt.Printf("DEBUG validateSchema invalid: record=%s/%s template=%s/%d status=%s missingFields=%v err=%v\n", record.Type, record.ID, record.TemplateID, record.TemplateVersion, result.Status, missingFields, err)
 		return result, nil, errors.Join(ErrInvalidInput, err)
 	}
 	normalized, err := json.Marshal(result.NormalizedValues)
@@ -946,13 +962,22 @@ func canonicalSchemaRecordType(value string) string {
 	return strings.ReplaceAll(value, "_", "-")
 }
 
+func schemaReferenceMatches(referenceType, dependencyType string) bool {
+	referenceType = canonicalSchemaRecordType(strings.TrimSpace(referenceType))
+	dependencyType = canonicalSchemaRecordType(strings.TrimSpace(dependencyType))
+	if referenceType == "stewardmesh.record" || referenceType == dependencyType {
+		return true
+	}
+	return referenceType == "people.identity-or-department" && (dependencyType == "people.identity" || dependencyType == "people.department")
+}
+
 func holdingReferences(values []patterns.HoldingReference, missing []Reference) []Reference {
 	result := make([]Reference, 0, len(values))
 	for _, value := range values {
 		recordType := canonicalSchemaRecordType(strings.TrimSpace(value.ReferenceType))
 		id := strings.TrimSpace(value.Value)
 		for _, dependency := range missing {
-			if dependency.ID == id && (recordType == "stewardmesh.record" || recordType == canonicalSchemaRecordType(dependency.Type)) {
+			if dependency.ID == id && schemaReferenceMatches(recordType, dependency.Type) {
 				// Preserve the exact manifest spelling. Providers own their canonical
 				// dependency type (for example ledger.purchase_order), while Patterns
 				// uses a portable hyphenated record type.

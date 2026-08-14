@@ -666,6 +666,8 @@ func patternsVersion(w http.ResponseWriter, r *http.Request) (int64, bool) {
 
 func writePatternsError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
+	case errors.Is(err, guard.ErrResourceWriteLocked):
+		writeError(w, r, http.StatusLocked, "ownership_locked", "claim local ownership before changing this imported Patterns template")
 	case errors.Is(err, patterns.ErrInvalidInput):
 		writeError(w, r, http.StatusBadRequest, "validation_failed", "Patterns template or record values are invalid")
 	case errors.Is(err, patterns.ErrNotFound):
@@ -872,6 +874,8 @@ func (s *Server) exportLedgerCSV(w http.ResponseWriter, r *http.Request, _ guard
 
 func writeLedgerError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
+	case errors.Is(err, guard.ErrResourceWriteLocked):
+		writeError(w, r, http.StatusLocked, "ownership_locked", "claim local ownership before changing this imported Ledger record")
 	case errors.Is(err, ledger.ErrInvalidInput):
 		writeError(w, r, http.StatusBadRequest, "validation_failed", "Ledger details are invalid")
 	case errors.Is(err, ledger.ErrReferenceMissing):
@@ -1403,6 +1407,8 @@ func optionalQueryInt(value string) (int, error) {
 
 func writeHorizonError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
+	case errors.Is(err, guard.ErrResourceWriteLocked):
+		writeError(w, r, http.StatusLocked, "ownership_locked", "claim local ownership before changing this imported Horizon plan")
 	case errors.Is(err, horizon.ErrInvalidInput):
 		writeError(w, r, http.StatusBadRequest, "validation_failed", "Horizon planning details are invalid")
 	case errors.Is(err, horizon.ErrReferenceMissing):
@@ -3300,6 +3306,8 @@ func assetModelQueryFromRequest(r *http.Request) (atlas.ModelQuery, error) {
 
 func writeAtlasError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
+	case errors.Is(err, guard.ErrResourceWriteLocked):
+		writeError(w, r, http.StatusLocked, "ownership_locked", "claim local ownership before changing this imported Atlas record")
 	case errors.Is(err, atlas.ErrInvalidInput):
 		writeError(w, r, http.StatusBadRequest, "validation_failed", "asset details or filters are invalid")
 	case errors.Is(err, atlas.ErrNotFound):
@@ -3315,6 +3323,10 @@ func writeAtlasError(w http.ResponseWriter, r *http.Request, err error) {
 
 func writeThreadsError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
+	case errors.Is(err, guard.ErrResourceWriteLocked):
+		writeError(w, r, http.StatusLocked, "ownership_locked", "claim local ownership before changing this imported Threads record")
+	case errors.Is(err, guard.ErrPermissionDenied):
+		writeError(w, r, http.StatusForbidden, "permission_denied", "Threads write permission is required for this operation")
 	case errors.Is(err, threads.ErrInvalidInput):
 		writeError(w, r, http.StatusBadRequest, "validation_failed", "tag, goal, target, or revision details are invalid")
 	case errors.Is(err, threads.ErrNotFound):
@@ -3717,6 +3729,10 @@ func writeError(w http.ResponseWriter, r *http.Request, status int, code, messag
 
 func writePeopleError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
+	case errors.Is(err, guard.ErrResourceWriteLocked):
+		writeError(w, r, http.StatusLocked, "ownership_locked", "claim local ownership before changing this imported directory record")
+	case errors.Is(err, guard.ErrPermissionDenied):
+		writeError(w, r, http.StatusForbidden, "permission_denied", "directory write permission is required for this operation")
 	case errors.Is(err, people.ErrInvalidInput):
 		writeError(w, r, http.StatusBadRequest, "validation_failed", "people directory input is invalid")
 	case errors.Is(err, people.ErrNotFound), errors.Is(err, people.ErrReferenceMissing):

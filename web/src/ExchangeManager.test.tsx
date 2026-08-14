@@ -1,9 +1,9 @@
 import axe from 'axe-core'
 import { fireEvent, render, screen, within } from '@testing-library/react'
 import { beforeEach, expect, test, vi } from 'vitest'
-import ExchangeManager, { exchangeMediaType, maximumExchangePackageBytes, parseExchangeImport, parseExchangePackages, parseExchangeRecords } from './ExchangeManager'
+import ExchangeManager, { exchangeMediaType, exchangeRecordTypeDescription, maximumExchangePackageBytes, parseExchangeExcludedRecordTypes, parseExchangeImport, parseExchangePackages, parseExchangeProviderStatus, parseExchangeRecords } from './ExchangeManager'
 
-// Requirement: REQ-EXCHANGE-001. Feature: migration.packages. GitHub: #9.
+// Requirements: REQ-EXCHANGE-001, REQ-PATTERNS-001. Features: migration.packages, templates.schemas. GitHub: #8, #9.
 
 const checksum = 'a'.repeat(64)
 const recordChecksum = 'b'.repeat(64)
@@ -11,7 +11,15 @@ const records = [
   { type: 'stack.product', id: 'product-one', revision: 2, templateId: 'builtin-stack-product', templateVersion: 1, dependencies: [], hasFile: false },
   { type: 'stack.version', id: 'version-one', revision: 1, templateId: 'builtin-stack-version', templateVersion: 1, dependencies: [{ type: 'stack.product', id: 'product-one' }], hasFile: false },
   { type: 'vault.blob', id: '0123456789abcdef0123456789abcdef', revision: 1, templateId: 'builtin-vault-blob', templateVersion: 1, dependencies: [], hasFile: true },
+  { type: 'bridge.oauth-client', id: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', revision: 2, templateId: 'builtin-bridge-oauth-client', templateVersion: 2, dependencies: [], hasFile: false },
 ]
+const excludedRecordTypes = [
+  { type: 'guard.account', reason: 'accounts and authentication credentials are destination-owned security state' },
+  { type: 'reach.message', reason: 'queued and delivered messages are operational state whose import could replay delivery' },
+]
+const portableRecordTypes = ['stack.product', 'stack.version', 'stack.installation', 'stack.license', 'stack.assignment', 'vault.blob', 'bridge.oauth-client']
+const registeredRecordTypes = portableRecordTypes.slice(0, 6)
+const recordCollection = { items: records, excludedRecordTypes, portableRecordTypes, registeredRecordTypes, providerRegistryComplete: false }
 
 const completedPackage = {
   packageId: 'package-export', direction: 'export', schemaVersion: '1.1', sourceSystemId: 'example-org', archiveSha256: checksum,
@@ -45,7 +53,7 @@ beforeEach(() => {
 })
 
 test('renders selectable records and visible holding outcomes accessibly on a narrow-safe surface', async () => {
-  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => String(input).includes('/records') ? jsonResponse({ items: records }) : jsonResponse({ items: [holdingPackage] })))
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => String(input).includes('/records') ? jsonResponse(recordCollection) : jsonResponse({ items: [holdingPackage] })))
   const { container } = render(<ExchangeManager csrfToken="csrf" permissions={['integrations.read']} />)
 
   expect(await screen.findByText('product-one')).toBeInTheDocument()
@@ -53,6 +61,7 @@ test('renders selectable records and visible holding outcomes accessibly on a na
   expect(screen.getAllByText('Requires integrations.write')).toHaveLength(2)
   expect(screen.getAllByText('Holding')).toHaveLength(2)
   expect(screen.getByText('builtin-stack-product')).toBeInTheDocument()
+	expect(screen.getByText(exchangeRecordTypeDescription('bridge.oauth-client'))).toHaveTextContent('OAuth grants, credentials, and authorization transactions are excluded')
   expect(screen.getAllByText('version 1').length).toBeGreaterThan(0)
   fireEvent.click(screen.getByText(/Import ·/))
   expect(screen.getByText('Write locked until claimed')).toBeInTheDocument()
@@ -61,6 +70,10 @@ test('renders selectable records and visible holding outcomes accessibly on a na
   expect(screen.getByRole('region', { name: 'Portable records' })).toHaveClass('overflow-x-auto')
   expect(screen.getByRole('region', { name: 'Outcomes for package package-import' })).toHaveClass('overflow-x-auto')
   expect(screen.getByRole('region', { name: 'Exchange package workflow' })).toBeInTheDocument()
+  expect(screen.getByText('guard.account')).toBeInTheDocument()
+  expect(screen.getByText(/destination-owned security state/)).toBeInTheDocument()
+  expect(screen.getByText(/6 of 7 portable record families/)).toBeInTheDocument()
+  expect(screen.getByText(/does not satisfy the complete phase-one Exchange provider gate/)).toBeInTheDocument()
   expect(container.firstElementChild).toHaveClass('min-w-0')
   expect((await axe.run(container)).violations).toEqual([])
 })
@@ -70,7 +83,7 @@ test('exports the selected dependency-aware scope and prepares a fixed .openinve
   const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined)
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input)
-    if (path === '/api/v1/exchange/records') return jsonResponse({ items: records })
+    if (path === '/api/v1/exchange/records') return jsonResponse(recordCollection)
     if (path === '/api/v1/exchange/packages?limit=25') return jsonResponse({ items: init ? [] : [completedPackage] })
     if (path === '/api/v1/exchange/export' && init?.method === 'POST') return new Response(new Uint8Array([80, 75, 3, 4]), {
       status: 200,
@@ -103,7 +116,7 @@ test('exports the selected dependency-aware scope and prepares a fixed .openinve
 test('uploads a bounded package with CSRF and exposes idempotent holding details', async () => {
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input)
-    if (path === '/api/v1/exchange/records') return jsonResponse({ items: records })
+    if (path === '/api/v1/exchange/records') return jsonResponse(recordCollection)
     if (path === '/api/v1/exchange/packages?limit=25') return jsonResponse({ items: [] })
     if (path === '/api/v1/exchange/import' && init?.method === 'POST') return jsonResponse({ package: holdingPackage, replay: true })
     throw new Error(`unexpected request: ${path}`)
@@ -130,7 +143,7 @@ test('uploads a bounded package with CSRF and exposes idempotent holding details
 })
 
 test('rejects oversized and incorrectly named files before network upload', async () => {
-  const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => String(input).includes('/records') ? jsonResponse({ items: records }) : jsonResponse({ items: [] }))
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => String(input).includes('/records') ? jsonResponse(recordCollection) : jsonResponse({ items: [] }))
   vi.stubGlobal('fetch', fetchMock)
   render(<ExchangeManager csrfToken="csrf" permissions={['integrations.read', 'integrations.write']} />)
   await screen.findByText('product-one')
@@ -162,6 +175,15 @@ test('does not request protected collections without integrations.read', () => {
 
 test('rejects malformed and internally inconsistent Exchange responses', () => {
 	expect(parseExchangePackages({ items: [partialFailedPackage] })).toEqual([partialFailedPackage])
+	expect(parseExchangeExcludedRecordTypes(recordCollection)).toEqual(excludedRecordTypes)
+	expect(parseExchangeProviderStatus(recordCollection)).toEqual({ portableRecordTypes, registeredRecordTypes, complete: false })
+	expect(parseExchangeProviderStatus({
+		...recordCollection,
+		registeredRecordTypes: portableRecordTypes,
+		providerRegistryComplete: true,
+	})).toEqual({ portableRecordTypes, registeredRecordTypes: portableRecordTypes, complete: true })
+	expect(() => parseExchangeProviderStatus({ ...recordCollection, providerRegistryComplete: true })).toThrow('invalid Exchange provider status response')
+	expect(() => parseExchangeExcludedRecordTypes({ ...recordCollection, excludedRecordTypes: [...excludedRecordTypes, excludedRecordTypes[0]] })).toThrow('invalid Exchange exclusion response')
 	expect(() => parseExchangeRecords({ items: [{ ...records[0], revision: 0 }] })).toThrow('invalid Exchange record response')
 	expect(() => parseExchangeRecords({ items: [{ ...records[0], templateId: '' }] })).toThrow('invalid Exchange record response')
 	expect(() => parseExchangePackages({ items: [{ ...holdingPackage, holdingCount: 0 }] })).toThrow('invalid Exchange package response')

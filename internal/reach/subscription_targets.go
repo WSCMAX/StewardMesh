@@ -77,6 +77,60 @@ func (c *SubscriptionTargetCatalog) ListSubscriptionTargets(ctx context.Context,
 	return result, nil
 }
 
+// SubscriptionTargetReferenceExists is the migration-only existence view.
+// Imported providers deliberately remain disabled and unconfigured, but their
+// stable records may still be referenced by an imported Signals subscription.
+func (c *SubscriptionTargetCatalog) SubscriptionTargetReferenceExists(ctx context.Context, organizationID, targetKind, targetID string) (bool, error) {
+	organizationID, targetKind, targetID = strings.TrimSpace(organizationID), strings.ToLower(strings.TrimSpace(targetKind)), strings.TrimSpace(targetID)
+	if c == nil || c.store == nil || !stableIDPattern.MatchString(organizationID) || !stableIDPattern.MatchString(targetID) {
+		return false, ErrInvalidInput
+	}
+	switch targetKind {
+	case "webhook":
+		provider, err := c.store.GetProvider(ctx, organizationID, targetID)
+		if errors.Is(err, ErrNotFound) {
+			return false, nil
+		}
+		return err == nil && provider.Kind == ProviderWebhook && validSubscriptionReferenceProvider(provider), err
+	case "group":
+		group, err := c.store.GetGroup(ctx, organizationID, targetID)
+		if errors.Is(err, ErrNotFound) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		if !validExchangeGroup(group) {
+			return false, nil
+		}
+		provider, err := c.store.GetProvider(ctx, organizationID, group.ProviderID)
+		if errors.Is(err, ErrNotFound) {
+			return false, nil
+		}
+		if err != nil || !validSubscriptionReferenceProvider(provider) {
+			return false, err
+		}
+		template, err := c.store.GetTemplate(ctx, organizationID, group.TemplateID)
+		if errors.Is(err, ErrNotFound) {
+			return false, nil
+		} else if err != nil {
+			return false, err
+		}
+		if !validExchangeTemplate(template) || !portableRecipientCompatibility(provider.Kind, group.Recipients) {
+			return false, nil
+		}
+		return true, nil
+	default:
+		return false, ErrInvalidInput
+	}
+}
+
+func validSubscriptionReferenceProvider(provider Provider) bool {
+	return stableIDPattern.MatchString(provider.ID) && provider.Name == strings.TrimSpace(provider.Name) && validText(provider.Name, 1, 160) &&
+		validProviderKind(provider.Kind) && validSender(provider.Kind, provider.Sender) &&
+		validExchangeRevisionTimes(provider.Revision, provider.CreatedAt, provider.UpdatedAt)
+}
+
 func (c *SubscriptionTargetCatalog) configuredEndpoint(provider Provider) (Endpoint, bool) {
 	if !provider.Enabled || !provider.SecretConfigured || !secretReferencePattern.MatchString(provider.SecretRef) ||
 		!stableIDPattern.MatchString(provider.ID) || !validProviderKind(provider.Kind) {

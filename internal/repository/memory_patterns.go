@@ -4,6 +4,7 @@ package repository
 
 import (
 	"context"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -106,6 +107,40 @@ func (s *MemoryPatternsStore) CreateVersion(_ context.Context, template patterns
 	}
 	s.versions[key] = append(versions, cloneMemoryTemplate(template))
 	return cloneMemoryTemplate(template), nil
+}
+
+func (s *MemoryPatternsStore) ImportTemplateHistory(_ context.Context, organizationID string, history []patterns.Template) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(history) == 0 || len(history) > patterns.MaximumExchangeVersions {
+		return patterns.ErrInvalidInput
+	}
+	first := history[0]
+	if first.OrganizationID != organizationID {
+		return patterns.ErrInvalidInput
+	}
+	key := patternsMemoryKey(organizationID, first.ID)
+	if existing := s.versions[key]; len(existing) > 0 {
+		if reflect.DeepEqual(existing, history) {
+			return nil
+		}
+		return patterns.ErrConflict
+	}
+	for _, versions := range s.versions {
+		if len(versions) > 0 && versions[0].OrganizationID == organizationID && strings.EqualFold(versions[0].Name, first.Name) {
+			return patterns.ErrConflict
+		}
+	}
+	cloned := make([]patterns.Template, len(history))
+	for index, template := range history {
+		if template.OrganizationID != organizationID || template.ID != first.ID || template.RecordType != first.RecordType ||
+			template.Name != first.Name || template.Version != int64(index+1) || template.BuiltIn {
+			return patterns.ErrInvalidInput
+		}
+		cloned[index] = cloneMemoryTemplate(template)
+	}
+	s.versions[key] = cloned
+	return nil
 }
 
 func cloneMemoryTemplate(template patterns.Template) patterns.Template {

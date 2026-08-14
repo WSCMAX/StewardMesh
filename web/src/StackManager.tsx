@@ -1,20 +1,20 @@
 import { type FormEvent, type InputHTMLAttributes, type ReactNode, useEffect, useId, useRef, useState } from 'react'
-import { ApiRequestError, requestJSON } from './api'
+import { ApiRequestError, isRevision, requestJSON, type Revision } from './api'
 import type { Asset } from './AtlasInventory'
 import { buttonClass, inputClass, panelClass, secondaryButtonClass, subpanelClass, tableWrapClass } from './ui'
 
 // Requirement: REQ-STACK-001. Feature: software.licenses.
 
-type Product = { id: string; name: string; publisher: string; category?: string; status: string; revision: number }
-type Version = { id: string; productId: string; name: string; releasedOn?: string; status: string; revision: number }
-type Installation = { id: string; versionId: string; assetId: string; status: string; usageState: string; installedAt: string; lastUsedAt?: string; removedAt?: string; revision: number }
-type License = { id: string; productId: string; versionId?: string; name: string; entitlementMetric: string; quantity: number; status: string; startsOn?: string; expiresOn?: string; vendorId?: string; purchaseOrderId?: string; contractId?: string; costRecordId?: string; documentIds: string[]; revision: number }
-type Assignment = { id: string; licenseId: string; assigneeKind: string; assigneeId: string; seats: number; usageState: string; assignedAt: string; lastUsedAt?: string; endedAt?: string; revision: number }
+type Product = { id: string; name: string; publisher: string; category?: string; status: string; revision: Revision }
+type Version = { id: string; productId: string; name: string; releasedOn?: string; status: string; revision: Revision }
+type Installation = { id: string; versionId: string; assetId: string; status: string; usageState: string; installedAt: string; lastUsedAt?: string; removedAt?: string; revision: Revision }
+type License = { id: string; productId: string; versionId?: string; name: string; entitlementMetric: string; quantity: number; status: string; startsOn?: string; expiresOn?: string; vendorId?: string; purchaseOrderId?: string; contractId?: string; costRecordId?: string; documentIds: string[]; revision: Revision }
+type Assignment = { id: string; licenseId: string; assigneeKind: string; assigneeId: string; seats: number; usageState: string; assignedAt: string; lastUsedAt?: string; endedAt?: string; revision: Revision }
 type Snapshot = { products: Product[]; versions: Version[]; installations: Installation[]; licenses: License[]; assignments: Assignment[] }
 type Condition = { code: string; severity: string; productId: string; versionId?: string; licenseId?: string; assetId?: string; entitledQuantity?: number; assignedQuantity?: number; underusedQuantity?: number; daysUntilExpiry?: number; humanReadableState: string }
 type Analytics = { asOf: string; expiringWithinDays: number; products: number; activeInstallations: number; activeLicenses: number; entitledQuantity: number; assignedQuantity: number; underusedAssignments: number; complianceConditions: Condition[] }
 type ImportReference = { type: string; id: string }
-type ImportOutcome = ImportReference & { revision: number; checksum: string; status: 'created' | 'unchanged' | 'holding'; missingDependencies: ImportReference[]; writeLocked: boolean }
+type ImportOutcome = ImportReference & { revision: Revision; checksum: string; status: 'created' | 'unchanged' | 'holding'; missingDependencies: ImportReference[]; writeLocked: boolean }
 type ImportOwnership = ImportReference & { writeLocked: boolean }
 export type StackImportResult = { packageId: string; status: 'processing' | 'completed' | 'holding' | 'failed'; created: number; unchanged: number; holding: number; replay: boolean; errorCode?: string; records: ImportOutcome[]; pendingOwnership: ImportOwnership[] }
 type StackManagerProps = { assets: readonly Asset[]; csrfToken: string; permissions: readonly string[]; onOpenHelp?: () => void }
@@ -42,11 +42,11 @@ function optionalInstantValue(value: unknown) { return value === undefined || va
 
 export function parseStackSnapshot(value: unknown): Snapshot {
   if (!isObject(value)
-    || !validItems(value.products, (item) => hasID(item) && typeof item.name === 'string' && typeof item.publisher === 'string' && optionalString(item.category) && typeof item.status === 'string' && validPositive(item.revision))
-    || !validItems(value.versions, (item) => hasID(item) && typeof item.productId === 'string' && typeof item.name === 'string' && optionalInstantValue(item.releasedOn) && typeof item.status === 'string' && validPositive(item.revision))
-    || !validItems(value.installations, (item) => hasID(item) && typeof item.versionId === 'string' && typeof item.assetId === 'string' && typeof item.status === 'string' && typeof item.usageState === 'string' && validInstantValue(item.installedAt) && optionalInstantValue(item.lastUsedAt) && optionalInstantValue(item.removedAt) && validPositive(item.revision))
-    || !validItems(value.licenses, (item) => hasID(item) && typeof item.productId === 'string' && optionalString(item.versionId) && typeof item.name === 'string' && typeof item.entitlementMetric === 'string' && validPositive(item.quantity) && typeof item.status === 'string' && optionalInstantValue(item.startsOn) && optionalInstantValue(item.expiresOn) && validStringItems(item.documentIds) && validPositive(item.revision))
-    || !validItems(value.assignments, (item) => hasID(item) && typeof item.licenseId === 'string' && typeof item.assigneeKind === 'string' && typeof item.assigneeId === 'string' && validPositive(item.seats) && typeof item.usageState === 'string' && validInstantValue(item.assignedAt) && optionalInstantValue(item.lastUsedAt) && optionalInstantValue(item.endedAt) && validPositive(item.revision))) {
+    || !validItems(value.products, (item) => hasID(item) && typeof item.name === 'string' && typeof item.publisher === 'string' && optionalString(item.category) && typeof item.status === 'string' && isRevision(item.revision))
+    || !validItems(value.versions, (item) => hasID(item) && typeof item.productId === 'string' && typeof item.name === 'string' && optionalInstantValue(item.releasedOn) && typeof item.status === 'string' && isRevision(item.revision))
+    || !validItems(value.installations, (item) => hasID(item) && typeof item.versionId === 'string' && typeof item.assetId === 'string' && typeof item.status === 'string' && typeof item.usageState === 'string' && validInstantValue(item.installedAt) && optionalInstantValue(item.lastUsedAt) && optionalInstantValue(item.removedAt) && isRevision(item.revision))
+    || !validItems(value.licenses, (item) => hasID(item) && typeof item.productId === 'string' && optionalString(item.versionId) && typeof item.name === 'string' && typeof item.entitlementMetric === 'string' && validPositive(item.quantity) && typeof item.status === 'string' && optionalInstantValue(item.startsOn) && optionalInstantValue(item.expiresOn) && validStringItems(item.documentIds) && isRevision(item.revision))
+    || !validItems(value.assignments, (item) => hasID(item) && typeof item.licenseId === 'string' && typeof item.assigneeKind === 'string' && typeof item.assigneeId === 'string' && validPositive(item.seats) && typeof item.usageState === 'string' && validInstantValue(item.assignedAt) && optionalInstantValue(item.lastUsedAt) && optionalInstantValue(item.endedAt) && isRevision(item.revision))) {
     throw new Error('invalid Stack response')
   }
   return value as Snapshot
@@ -73,7 +73,7 @@ export function parseStackImportResult(value: unknown): StackImportResult {
     || !validCount(value.holding) || value.holding > 10_000 || typeof value.replay !== 'boolean'
     || !(value.errorCode === undefined || typeof value.errorCode === 'string' && /^[a-z][a-z0-9_]{0,63}$/.test(value.errorCode))
     || !validItems(value.records, (item) => isObject(item) && typeof item.type === 'string' && /^[a-z][a-z0-9_.-]{0,63}$/.test(item.type)
-      && typeof item.id === 'string' && stableIDPattern.test(item.id) && validPositive(item.revision)
+      && typeof item.id === 'string' && stableIDPattern.test(item.id) && isRevision(item.revision)
       && typeof item.checksum === 'string' && sha256Pattern.test(item.checksum)
       && typeof item.status === 'string' && ['created', 'unchanged', 'holding'].includes(item.status) && typeof item.writeLocked === 'boolean'
       && Array.isArray(item.missingDependencies) && item.missingDependencies.length <= 130

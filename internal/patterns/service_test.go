@@ -27,7 +27,14 @@ func TestBuiltInTemplatesCoverCoreRecordsAndEveryFieldType(t *testing.T) {
 	records := map[string]bool{}
 	types := map[patterns.FieldType]bool{}
 	for _, item := range items {
-		if !item.BuiltIn || item.Version != 1 || item.Status != patterns.StatusActive {
+		wantVersion := int64(1)
+		if strings.HasPrefix(item.RecordType, "atlas.catalog-") || item.RecordType == "horizon.plan" ||
+			item.RecordType == "atlas.asset" || item.RecordType == "atlas.model" ||
+			item.RecordType == "atlas.identifier" || item.RecordType == "atlas.lifecycle-event" ||
+			strings.HasPrefix(item.RecordType, "people.") || strings.HasPrefix(item.RecordType, "threads.") || strings.HasPrefix(item.RecordType, "ledger.") || strings.HasPrefix(item.RecordType, "signals.") && item.RecordType != "signals.alert" || strings.HasPrefix(item.RecordType, "reach.") && item.RecordType != "reach.message" || strings.HasPrefix(item.RecordType, "directory.") && item.RecordType != "directory.import-batch" || item.RecordType == "patterns.template" || item.RecordType == "bridge.oauth-client" {
+			wantVersion = 2
+		}
+		if !item.BuiltIn || item.Version != wantVersion || item.Status != patterns.StatusActive {
 			t.Fatalf("unexpected built-in metadata: %#v", item)
 		}
 		records[item.RecordType] = true
@@ -44,13 +51,26 @@ func TestBuiltInTemplatesCoverCoreRecordsAndEveryFieldType(t *testing.T) {
 		}
 		if record != "atlas.label-template" {
 			id, version, ok := patterns.BuiltInTemplateReference(record)
-			if !ok || id == "" || version != 1 {
+			wantVersion := int64(1)
+			if strings.HasPrefix(record, "atlas.catalog-") || record == "horizon.plan" ||
+				record == "atlas.asset" || record == "atlas.model" || record == "atlas.identifier" || record == "atlas.lifecycle-event" ||
+				strings.HasPrefix(record, "people.") || strings.HasPrefix(record, "threads.") || strings.HasPrefix(record, "ledger.") || strings.HasPrefix(record, "signals.") && record != "signals.alert" || strings.HasPrefix(record, "reach.") && record != "reach.message" || strings.HasPrefix(record, "directory.") && record != "directory.import-batch" || record == "patterns.template" || record == "bridge.oauth-client" {
+				wantVersion = 2
+			}
+			if !ok || id == "" || version != wantVersion {
 				t.Errorf("missing stable built-in reference for %s: %q v%d", record, id, version)
 			}
 		}
 	}
 	if len(records) != len(wantRecords) || len(items) != len(wantRecords)+1 { // atlas.label-template has two immutable layouts.
 		t.Errorf("authoritative core list drifted from built-ins: templates=%d records=%d core=%d", len(items), len(records), len(wantRecords))
+	}
+	// Historical immutable schemas remain part of the supported field-type
+	// contract even when the lossless active version uses portable ID arrays.
+	for _, item := range patterns.BuiltInTemplates() {
+		for _, field := range item.Fields {
+			types[field.Type] = true
+		}
 	}
 	for _, fieldType := range []patterns.FieldType{patterns.FieldText, patterns.FieldNumber, patterns.FieldDate, patterns.FieldMoney, patterns.FieldEnum, patterns.FieldAttachment, patterns.FieldReference} {
 		if !types[fieldType] {
@@ -77,16 +97,191 @@ func TestBuiltInTemplateContractFingerprint(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := fmt.Sprintf("%x", sha256.Sum256(encoded))
-	const want = "4ca3db9e264790c2941a2d93cb9613bae5bff360dac4d09676d1f4506b35b336"
+	const want = "646e304be8e3301fb18931a501bc0a558ec54bc2f9baa8a00410c38ab3fa07eb"
 	if got != want {
 		t.Fatalf("built-in contract changed; review domain parity and intentionally update the fingerprint: got %s want %s", got, want)
+	}
+}
+
+func TestHorizonPlanV2RequiresLosslessLifecycleStage(t *testing.T) {
+	service := newPatternsService(t)
+	legacy, err := service.GetTemplate(context.Background(), "builtin-horizon-plan", 1)
+	if err != nil || legacy.Version != 1 {
+		t.Fatalf("historical Horizon schema is not resolvable: %#v err=%v", legacy, err)
+	}
+	latest, err := service.ActiveTemplateForRecordType(context.Background(), "horizon.plan")
+	if err != nil || latest.ID != "builtin-horizon-plan" || latest.Version != 2 {
+		t.Fatalf("unexpected active Horizon schema %#v err=%v", latest, err)
+	}
+	values := map[string]any{
+		"assetId": "asset-portable", "scenario": "baseline", "expectedUsefulLifeMonths": int64(60),
+		"replacementDate": "2030-06-30", "lifecycleStage": "approved", "replacementCostMinor": int64(450_000),
+		"currency": "USD", "effectiveFrom": "2027-01-01",
+	}
+	valid, err := service.Validate(context.Background(), latest.ID, latest.Version, patterns.ValidationInput{Values: values})
+	if err != nil || valid.Status != patterns.ValidationValid || valid.NormalizedValues["lifecycleStage"] != "approved" {
+		t.Fatalf("Horizon v2 did not preserve lifecycle stage: %#v err=%v", valid, err)
+	}
+	delete(values, "lifecycleStage")
+	invalid, err := service.Validate(context.Background(), latest.ID, latest.Version, patterns.ValidationInput{Values: values})
+	if err != nil || invalid.Status != patterns.ValidationInvalid {
+		t.Fatalf("Horizon v2 accepted a lossy plan payload: %#v err=%v", invalid, err)
+	}
+}
+
+func TestSignalsV2SchemasPreservePortableStateAndHistoricalV1(t *testing.T) {
+	service := newPatternsService(t)
+	for _, recordType := range []string{"signals.rule", "signals.subscription"} {
+		latest, err := service.ActiveTemplateForRecordType(context.Background(), recordType)
+		if err != nil || latest.Version != 2 {
+			t.Fatalf("unexpected active Signals schema for %s: %#v err=%v", recordType, latest, err)
+		}
+		legacy, err := service.GetTemplate(context.Background(), latest.ID, 1)
+		if err != nil || legacy.Version != 1 {
+			t.Fatalf("historical Signals schema for %s is unavailable: %#v err=%v", recordType, legacy, err)
+		}
+	}
+	rule, _ := service.ActiveTemplateForRecordType(context.Background(), "signals.rule")
+	valid, err := service.Validate(context.Background(), rule.ID, rule.Version, patterns.ValidationInput{Values: map[string]any{
+		"name": "Renewals", "condition": "renewal", "severity": "warning", "enabled": "false", "thresholdDays": "[365,90,30]",
+		"createdAt": "2026-08-13T12:00:00Z", "updatedAt": "2026-08-14T12:00:00Z",
+	}})
+	if err != nil || valid.Status != patterns.ValidationValid {
+		t.Fatalf("Signals rule v2 rejected lossless fields: %#v err=%v", valid, err)
+	}
+	if _, exists := valid.NormalizedValues["createdBy"]; exists {
+		t.Fatal("Signals schema exposed operator identity")
+	}
+}
+
+func TestBridgeOAuthClientV2PreservesOnlyPublicConfiguration(t *testing.T) {
+	service := newPatternsService(t)
+	legacy, err := service.GetTemplate(context.Background(), "builtin-bridge-oauth-client", 1)
+	if err != nil || legacy.Version != 1 {
+		t.Fatalf("historical Bridge OAuth client schema is not resolvable: %#v err=%v", legacy, err)
+	}
+	latest, err := service.ActiveTemplateForRecordType(context.Background(), "bridge.oauth-client")
+	if err != nil || latest.ID != "builtin-bridge-oauth-client" || latest.Version != 2 {
+		t.Fatalf("unexpected active Bridge OAuth client schema %#v err=%v", latest, err)
+	}
+	valid, err := service.Validate(context.Background(), latest.ID, latest.Version, patterns.ValidationInput{Values: map[string]any{
+		"name": "Portable client", "redirectUris": "http://127.0.0.1:8181/callback\nhttps://client.example.test/callback",
+		"allowedScopes": "assets:read,mcp:resources", "revokedAt": "2026-08-13T18:00:00Z",
+	}})
+	if err != nil || valid.Status != patterns.ValidationValid {
+		t.Fatalf("Bridge OAuth client v2 rejected public portable fields: %#v err=%v", valid, err)
+	}
+	invalid, err := service.Validate(context.Background(), latest.ID, latest.Version, patterns.ValidationInput{Values: map[string]any{
+		"name": "Portable client", "redirectUris": "https://client.example.test/callback", "allowedScopes": "mcp:resources", "clientSecret": "forbidden",
+	}})
+	if err != nil || invalid.Status != patterns.ValidationInvalid {
+		t.Fatalf("Bridge OAuth client v2 accepted a secret field: %#v err=%v", invalid, err)
+	}
+}
+
+func TestPeopleV2SchemasPreservePortableStateAndHistory(t *testing.T) {
+	service := newPatternsService(t)
+	for _, recordType := range []string{"people.site", "people.building", "people.room", "people.department", "people.identity", "people.assignment"} {
+		latest, err := service.ActiveTemplateForRecordType(context.Background(), recordType)
+		if err != nil || latest.Version != 2 {
+			t.Fatalf("unexpected active People schema for %s: %#v err=%v", recordType, latest, err)
+		}
+		legacy, err := service.GetTemplate(context.Background(), latest.ID, 1)
+		if err != nil || legacy.Version != 1 {
+			t.Fatalf("historical People schema for %s is not resolvable: %#v err=%v", recordType, legacy, err)
+		}
+	}
+	identity, err := service.ActiveTemplateForRecordType(context.Background(), "people.identity")
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid, err := service.Validate(context.Background(), identity.ID, identity.Version, patterns.ValidationInput{Values: map[string]any{
+		"kind": "shared", "displayName": "Lab operators", "email": "lab@example.test", "departmentId": "department-one",
+		"siteId": "site-one", "status": "active", "provider": "directory.example", "providerSubject": "subject-one",
+		"createdAt": "2026-08-13T12:00:00Z", "updatedAt": "2026-08-14T12:00:00Z",
+	}})
+	if err != nil || valid.Status != patterns.ValidationValid {
+		t.Fatalf("People identity v2 rejected lossless fields: %#v err=%v", valid, err)
+	}
+	assignment, err := service.ActiveTemplateForRecordType(context.Background(), "people.assignment")
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid, err = service.Validate(context.Background(), assignment.ID, assignment.Version, patterns.ValidationInput{Values: map[string]any{
+		"assetId": "asset-one", "assigneeKind": "identity", "assigneeId": "identity-one", "role": "user",
+		"effectiveFrom": "2026-08-13T12:00:00Z", "effectiveTo": "2026-08-14T12:00:00Z", "createdAt": "2026-08-13T12:00:00Z",
+	}})
+	if err != nil || valid.Status != patterns.ValidationValid {
+		t.Fatalf("People assignment v2 rejected ended history: %#v err=%v", valid, err)
+	}
+}
+
+func TestThreadsV2SchemasPreservePortableHierarchyAndRelationships(t *testing.T) {
+	service := newPatternsService(t)
+	for _, recordType := range []string{"threads.tag", "threads.goal", "threads.tag-rule", "threads.goal-link"} {
+		latest, err := service.ActiveTemplateForRecordType(context.Background(), recordType)
+		if err != nil || latest.Version != 2 {
+			t.Fatalf("unexpected active Threads schema for %s: %#v err=%v", recordType, latest, err)
+		}
+		legacy, err := service.GetTemplate(context.Background(), latest.ID, 1)
+		if err != nil || legacy.Version != 1 {
+			t.Fatalf("historical Threads schema for %s is not resolvable: %#v err=%v", recordType, legacy, err)
+		}
+	}
+	rule, err := service.ActiveTemplateForRecordType(context.Background(), "threads.tag-rule")
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid, err := service.Validate(context.Background(), rule.ID, rule.Version, patterns.ValidationInput{Values: map[string]any{
+		"targetType": "software", "targetId": "installation-one", "tagId": "security", "rule": "suppress",
+	}})
+	if err != nil || valid.Status != patterns.ValidationValid {
+		t.Fatalf("Threads tag-rule v2 rejected portable fields: %#v err=%v", valid, err)
+	}
+	valid, err = service.Validate(context.Background(), "builtin-threads-goal-link", 2, patterns.ValidationInput{Values: map[string]any{
+		"targetType": "purchase", "targetId": "purchase-one", "goalId": "reduce-risk",
+	}})
+	if err != nil || valid.Status != patterns.ValidationValid {
+		t.Fatalf("Threads goal-link v2 rejected portable fields: %#v err=%v", valid, err)
+	}
+}
+
+func TestDirectoryV2SchemasPreserveNormalizedStateAndConditionalMembershipReferences(t *testing.T) {
+	service := newPatternsService(t)
+	for _, recordType := range []string{"directory.group", "directory.membership"} {
+		latest, err := service.ActiveTemplateForRecordType(context.Background(), recordType)
+		if err != nil || latest.Version != 2 {
+			t.Fatalf("unexpected active Directory schema for %s: %#v err=%v", recordType, latest, err)
+		}
+		legacy, err := service.GetTemplate(context.Background(), latest.ID, 1)
+		if err != nil || legacy.Version != 1 {
+			t.Fatalf("historical Directory schema for %s is unavailable: %#v err=%v", recordType, legacy, err)
+		}
+	}
+	membership, err := service.ActiveTemplateForRecordType(context.Background(), "directory.membership")
+	if err != nil {
+		t.Fatal(err)
+	}
+	memberID := templateField(t, membership, "memberId")
+	if memberID.Type != patterns.FieldText || memberID.ReferenceType != "" {
+		t.Fatalf("embedded subject memberId was made an unconditional external reference: %#v", memberID)
+	}
+	valid, err := service.Validate(context.Background(), membership.ID, membership.Version, patterns.ValidationInput{Values: map[string]any{
+		"sourceSystemId": "directory-source", "sourceRecordId": "membership-one", "groupId": "11111111111111111111111111111111",
+		"groupSourceId": "group-one", "memberId": "22222222222222222222222222222222", "memberSourceId": "subject-one",
+		"memberKind": "subject", "memberDisplayName": "Embedded subject", "status": "active", "metadata": "{}",
+		"createdAt": "2026-08-13T12:00:00Z", "updatedAt": "2026-08-14T12:00:00Z",
+	}})
+	if err != nil || valid.Status != patterns.ValidationValid {
+		t.Fatalf("Directory membership v2 rejected lossless embedded-subject fields: %#v err=%v", valid, err)
 	}
 }
 
 func TestPhaseOneExpansionBuiltInsMatchDurablePortableShapes(t *testing.T) {
 	templates := map[string]patterns.Template{}
 	for _, template := range patterns.BuiltInTemplates() {
-		if _, exists := templates[template.RecordType]; !exists {
+		current, exists := templates[template.RecordType]
+		if !exists || template.Version > current.Version {
 			templates[template.RecordType] = template
 		}
 	}
@@ -103,13 +298,13 @@ func TestPhaseOneExpansionBuiltInsMatchDurablePortableShapes(t *testing.T) {
 		{"signals.rule", []string{"name", "condition", "severity", "enabled", "thresholdDays"}, []string{"createdBy"}},
 		{"signals.alert", []string{"ruleId", "condition", "severity", "status", "targetId"}, []string{"deduplicationKey", "acknowledgedBy"}},
 		{"signals.subscription", []string{"ruleId", "targetKind", "targetId", "enabled"}, []string{"createdBy"}},
-		{"reach.provider", []string{"name", "kind", "endpointId", "enabled"}, []string{"secretRef", "createdBy"}},
+		{"reach.provider", []string{"name", "kind", "createdAt", "updatedAt"}, []string{"endpointId", "secretRef", "enabled", "createdBy"}},
 		{"reach.template", []string{"name", "subject", "body"}, []string{"createdBy"}},
 		{"reach.subscriber-group", []string{"name", "providerId", "templateId", "recipients"}, []string{"createdBy"}},
 		{"reach.message", []string{"providerId", "sourceKind", "subject", "body", "recipients", "status"}, []string{"lastErrorCode", "createdBy"}},
 		{"directory.import-batch", []string{"sourceSystemId", "provider", "configRevision", "completeSnapshot", "createdCount", "failedCount"}, []string{"leaseToken", "organizationId"}},
-		{"directory.group", []string{"sourceSystemId", "sourceRecordId", "name", "displayName", "metadata", "revision"}, []string{"organizationId"}},
-		{"directory.membership", []string{"groupId", "groupSourceId", "memberId", "memberSourceId", "memberKind", "memberDisplayName"}, []string{"identityId", "organizationId"}},
+		{"directory.group", []string{"sourceSystemId", "sourceRecordId", "name", "displayName", "status", "metadata", "createdAt", "updatedAt"}, []string{"organizationId", "revision"}},
+		{"directory.membership", []string{"groupId", "groupSourceId", "memberId", "memberSourceId", "memberKind", "memberDisplayName", "status", "metadata", "createdAt", "updatedAt"}, []string{"identityId", "organizationId", "revision"}},
 		{"exchange.package", []string{"packageId", "direction", "schemaVersion", "sourceSystemId", "recordCount"}, []string{"archive", "createdBy"}},
 		{"bridge.oauth-client", []string{"name", "redirectUris", "allowedScopes", "revokedAt"}, []string{"clientSecret", "organizationId"}},
 		{"bridge.oauth-grant", []string{"clientId", "actorId", "resourceUri", "scopes", "accessExpiresAt", "refreshExpiresAt"}, []string{"accessTokenHash", "refreshTokenHash"}},

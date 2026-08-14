@@ -288,6 +288,8 @@ func signalAlertQuery(w http.ResponseWriter, r *http.Request) (signals.AlertQuer
 }
 func writeSignalsError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
+	case errors.Is(err, guard.ErrResourceWriteLocked):
+		writeError(w, r, http.StatusLocked, "ownership_locked", "claim local ownership before changing this imported Signals record")
 	case errors.Is(err, signals.ErrInvalidInput):
 		writeError(w, r, http.StatusBadRequest, "validation_failed", "Signals input is invalid")
 	case errors.Is(err, signals.ErrNotFound):

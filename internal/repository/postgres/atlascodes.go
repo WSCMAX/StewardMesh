@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"reflect"
 	"regexp"
 	"strings"
 	"time"
@@ -29,6 +30,33 @@ func NewAtlasCodesStore(database *sql.DB) (*AtlasCodesStore, error) {
 		return nil, errors.New("database is required")
 	}
 	return &AtlasCodesStore{database: database}, nil
+}
+
+func (s *AtlasCodesStore) SnapshotIdentifiers(ctx context.Context, organizationID string, maximum int) ([]atlascodes.Identifier, error) {
+	if strings.TrimSpace(organizationID) == "" || maximum < 1 {
+		return nil, atlascodes.ErrInvalidInput
+	}
+	rows, err := s.database.QueryContext(ctx, `SELECT `+atlasCodesIdentifierColumns+`
+		FROM atlas_asset_identifiers WHERE organization_id = $1 ORDER BY id LIMIT $2`, organizationID, maximum+1)
+	if err != nil {
+		return nil, fmt.Errorf("snapshot Atlas Codes identifiers: %w", err)
+	}
+	defer rows.Close()
+	items := make([]atlascodes.Identifier, 0)
+	for rows.Next() {
+		item, scanErr := scanAtlasCodesIdentifier(rows)
+		if scanErr != nil {
+			return nil, fmt.Errorf("scan Atlas Codes snapshot: %w", scanErr)
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate Atlas Codes snapshot: %w", err)
+	}
+	if len(items) > maximum {
+		return nil, atlascodes.ErrTooLarge
+	}
+	return items, nil
 }
 
 const atlasCodesIdentifierColumns = `organization_id, id, asset_id, symbology, normalized_value,
@@ -241,6 +269,75 @@ func (s *AtlasCodesStore) DeactivateIdentifier(
 		return atlascodes.Identifier{}, false, translateAtlasCodesWriteError("commit Atlas Codes deactivation", err)
 	}
 	return deactivated, true, nil
+}
+
+func (s *AtlasCodesStore) ImportIdentifierChain(ctx context.Context, organizationID string, chain atlascodes.IdentifierChain) (atlascodes.IdentifierChain, bool, error) {
+	if strings.TrimSpace(organizationID) == "" || chain.TerminalID == "" || len(chain.Items) == 0 {
+		return atlascodes.IdentifierChain{}, false, atlascodes.ErrInvalidInput
+	}
+	transaction, err := s.database.BeginTx(ctx, nil)
+	if err != nil {
+		return atlascodes.IdentifierChain{}, false, fmt.Errorf("begin Atlas Codes chain import: %w", err)
+	}
+	defer transaction.Rollback()
+	existingCount := 0
+	for _, item := range chain.Items {
+		if item.OrganizationID != organizationID {
+			return atlascodes.IdentifierChain{}, false, atlascodes.ErrInvalidInput
+		}
+		existing, readErr := scanAtlasCodesIdentifier(transaction.QueryRowContext(ctx, `SELECT `+atlasCodesIdentifierColumns+`
+			FROM atlas_asset_identifiers WHERE organization_id = $1 AND id = $2 FOR UPDATE`, organizationID, item.ID))
+		switch {
+		case readErr == nil:
+			existingCount++
+			if !reflect.DeepEqual(existing, item) {
+				return atlascodes.IdentifierChain{}, false, atlascodes.ErrConflict
+			}
+		case errors.Is(readErr, sql.ErrNoRows):
+		default:
+			return atlascodes.IdentifierChain{}, false, fmt.Errorf("read Atlas Codes chain import: %w", readErr)
+		}
+	}
+	if existingCount == len(chain.Items) {
+		if err := transaction.Commit(); err != nil {
+			return atlascodes.IdentifierChain{}, false, fmt.Errorf("complete Atlas Codes chain replay: %w", err)
+		}
+		return clonePostgresAtlasCodesChain(chain), false, nil
+	}
+	if existingCount != 0 {
+		return atlascodes.IdentifierChain{}, false, atlascodes.ErrConflict
+	}
+	for _, item := range chain.Items {
+		if _, err := transaction.ExecContext(ctx, `
+			INSERT INTO atlas_asset_identifiers (
+				organization_id, id, asset_id, symbology, normalized_value, display_value, source,
+				is_primary, status, supersedes_id, replaced_by_id, revision, created_by,
+				created_correlation_id, updated_by, updated_correlation_id, created_at, updated_at, deactivated_at
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULLIF($10, ''), NULLIF($11, ''), $12,
+				$13, $14, $15, $16, $17, $18, $19)`,
+			item.OrganizationID, item.ID, item.AssetID, item.Symbology, item.NormalizedValue, item.DisplayValue,
+			item.Source, item.Primary, item.Status, item.SupersedesID, item.ReplacedByID, item.Revision,
+			item.CreatedBy, item.CreatedCorrelationID, item.UpdatedBy, item.UpdatedCorrelationID,
+			item.CreatedAt, item.UpdatedAt, item.DeactivatedAt); err != nil {
+			return atlascodes.IdentifierChain{}, false, translateAtlasCodesWriteError("import Atlas Codes identifier chain", err)
+		}
+	}
+	if err := transaction.Commit(); err != nil {
+		return atlascodes.IdentifierChain{}, false, translateAtlasCodesWriteError("commit Atlas Codes identifier chain", err)
+	}
+	return clonePostgresAtlasCodesChain(chain), true, nil
+}
+
+func clonePostgresAtlasCodesChain(chain atlascodes.IdentifierChain) atlascodes.IdentifierChain {
+	result := atlascodes.IdentifierChain{TerminalID: chain.TerminalID, Items: make([]atlascodes.Identifier, len(chain.Items))}
+	for index, item := range chain.Items {
+		if item.DeactivatedAt != nil {
+			value := *item.DeactivatedAt
+			item.DeactivatedAt = &value
+		}
+		result.Items[index] = item
+	}
+	return result
 }
 
 func (s *AtlasCodesStore) getIdentifierByID(ctx context.Context, organizationID, identifierID string) (atlascodes.Identifier, error) {

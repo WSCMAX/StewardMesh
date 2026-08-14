@@ -3,7 +3,7 @@ package postgres
 // Requirements: REQ-FOUNDATION-001, SEC-GUARD-001, REQ-PEOPLE-001,
 // REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-005, REQ-DIRECTORY-EXPANSION-006, REQ-DIRECTORY-EXPANSION-008, REQ-ATLAS-001, REQ-ATLAS-MODELS-001,
 // REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-HORIZON-001,
-// REQ-ATLAS-CODES-001, REQ-PATTERNS-001, REQ-STACK-001, REQ-SIGNALS-001, REQ-REACH-001, REQ-EXCHANGE-001, REQ-API-001, SEC-MCP-001.
+// REQ-ATLAS-CODES-001, REQ-ATLAS-CATALOG-001, REQ-PATTERNS-001, REQ-STACK-001, REQ-SIGNALS-001, REQ-REACH-001, REQ-EXCHANGE-001, REQ-API-001, SEC-MCP-001.
 // Features: lifecycle.planning, inventory.models, inventory.identifiers, templates.schemas, alerts.rules, messaging.delivery, migration.packages, integrations.protocols, threads.relationships.
 
 import (
@@ -18,11 +18,92 @@ import (
 
 	"github.com/maxlemke/stewardmesh/internal/bootstrap"
 	"github.com/maxlemke/stewardmesh/internal/bridge"
+	"github.com/maxlemke/stewardmesh/internal/catalog"
 	"github.com/maxlemke/stewardmesh/internal/domain"
 	"github.com/maxlemke/stewardmesh/internal/foundation"
 	"github.com/maxlemke/stewardmesh/internal/people"
 	"github.com/maxlemke/stewardmesh/internal/repository/contracttest"
 )
+
+func TestCatalogStoreIntegration(t *testing.T) {
+	databaseURL := os.Getenv("STEWARDMESH_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("STEWARDMESH_TEST_DATABASE_URL is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	database, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := Migrate(ctx, database); err != nil {
+		t.Fatal(err)
+	}
+	unique := fmt.Sprintf("catalog-integration-%d", time.Now().UnixNano())
+	organizations, err := NewOrganizationRepository(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	organizationService, err := bootstrap.NewOrganizationService(organizations)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := organizationService.EnsureOrganization(ctx, unique, "Catalog Integration"); err != nil {
+		t.Fatal(err)
+	}
+	atlasStore, err := NewAtlasStore(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, time.August, 13, 18, 0, 0, 0, time.UTC)
+	for _, id := range []string{"model-current", "model-next"} {
+		if _, err := atlasStore.CreateModel(ctx, domain.AssetModel{
+			ID: id, OrganizationID: unique, Manufacturer: "Example", Name: id, Kind: "server", Status: "active",
+			Specifications: map[string]string{}, Revision: 1, CreatedAt: now, UpdatedAt: now,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store, err := NewCatalogStore(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configuration, err := store.CreateConfiguration(ctx, catalog.Configuration{
+		ID: "configuration-one", OrganizationID: unique, ModelID: "model-current", Name: "Standard", Status: catalog.StatusActive,
+		Specifications: map[string]string{"memory_gb": "64"}, Revision: 1, CreatedAt: now, UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	price, err := store.CreatePrice(ctx, catalog.Price{
+		ID: "price-one", OrganizationID: unique, ModelID: "model-current", ConfigurationID: configuration.ID,
+		Kind: catalog.PriceKindList, AmountMinor: 100, Currency: "USD", EffectiveFrom: now, Revision: 1, CreatedAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, err := store.CreateUpgradePath(ctx, catalog.UpgradePath{
+		ID: "path-one", OrganizationID: unique, FromModelID: "model-current", FromConfigurationID: configuration.ID,
+		ToModelID: "model-next", Kind: catalog.UpgradeKindSuccessor, EffectiveFrom: now, Revision: 1, CreatedAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := store.Snapshot(ctx, unique)
+	if err != nil || len(snapshot.Configurations) != 1 || len(snapshot.Prices) != 1 || len(snapshot.UpgradePaths) != 1 {
+		t.Fatalf("unexpected Catalog snapshot %#v err=%v", snapshot, err)
+	}
+	if exact, err := store.GetConfiguration(ctx, unique, configuration.ID); err != nil || exact.ID != configuration.ID {
+		t.Fatalf("get Catalog configuration %#v err=%v", exact, err)
+	}
+	if exact, err := store.GetPrice(ctx, unique, price.ID); err != nil || exact.ID != price.ID {
+		t.Fatalf("get Catalog price %#v err=%v", exact, err)
+	}
+	if exact, err := store.GetUpgradePath(ctx, unique, path.ID); err != nil || exact.ID != path.ID {
+		t.Fatalf("get Catalog path %#v err=%v", exact, err)
+	}
+}
 
 func TestOrganizationRepositoryIntegration(t *testing.T) {
 	databaseURL := os.Getenv("STEWARDMESH_TEST_DATABASE_URL")

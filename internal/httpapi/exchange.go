@@ -27,8 +27,23 @@ func (s *Server) listExchangeRecords(w http.ResponseWriter, r *http.Request, _ g
 		writeExchangeError(w, r, err)
 		return
 	}
+	portableRecordTypes := exchange.PortableRecordTypes()
+	registeredRecordTypes := s.exchange.RegisteredRecordTypes()
+	providerRegistryComplete := len(registeredRecordTypes) == len(portableRecordTypes)
+	if providerRegistryComplete {
+		for index := range registeredRecordTypes {
+			if registeredRecordTypes[index] != portableRecordTypes[index] {
+				providerRegistryComplete = false
+				break
+			}
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"items": records,
+		"items":                    records,
+		"excludedRecordTypes":      exchange.ExplicitlyExcludedRecordTypes(),
+		"portableRecordTypes":      portableRecordTypes,
+		"registeredRecordTypes":    registeredRecordTypes,
+		"providerRegistryComplete": providerRegistryComplete,
 		"limits": map[string]any{
 			"maximumArchiveBytes": exchange.MaximumArchiveBytes,
 			"maximumSelections":   exchange.MaximumSelections,

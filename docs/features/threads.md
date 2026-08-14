@@ -51,6 +51,18 @@ REST endpoints:
 
 OpenAPI and protobuf contracts carry the same hierarchy, revision, target, provenance, and relationship fields. `threads.Store` is the adapter contract shared by memory and PostgreSQL implementations and reserved for a future DynamoDB adapter. Provider conformance tests cover hierarchy persistence, name conflicts, stale revisions, tag-rule replacement and deletion, and idempotent goal links.
 
+Exchange registers `threads.tag`, `threads.goal`, `threads.tag-rule`, and
+`threads.goal-link` as portable families. The provider projects only typed
+business state, pins version-2 Patterns schemas, preserves arbitrary positive
+source revisions, and declares parent, target, tag, and goal dependencies.
+Tag rules and goal links use deterministic IDs derived from their complete
+compound keys so Guard ownership locks cannot alias. Imports execute only
+through the service's opaque construction-time capability, create destination-
+local timestamps and `system:exchange` actor provenance, and replay one
+organization-scoped deterministic audit event after ambiguous audit delivery.
+Ordinary service mutations check the imported-resource fence and remain blocked
+until an authorized administrator claims local ownership.
+
 Migration `0012_threads.sql` creates scoped tag and goal hierarchies, explicit tag rules, and goal links. Migration `0013_threads_administrator_permission.sql` grants `goals.write` to existing built-in Administrator bundles without modifying custom roles. PostgreSQL checks constrain supported target and rule types; foreign keys protect hierarchy and tag/goal identities. Feature-owned target IDs remain intentionally outside cross-module foreign keys and are validated through services.
 
 ## Audit events

@@ -49,6 +49,15 @@ func SignalsStore(t testing.TB, subject signals.Store, organizationID, suffix st
 	if _, err := subject.UpdateRule(ctx, updatedRule, 1); !errors.Is(err, signals.ErrConflict) {
 		t.Fatalf("expected stale Signals rule conflict, got %v", err)
 	}
+	importedRule := signals.Rule{ID: "signal-imported-rule-" + suffix, OrganizationID: organizationID, Name: "Imported renewals " + suffix,
+		Condition: signals.ConditionRenewal, Severity: signals.SeverityCritical, Enabled: false, ThresholdDays: []int{365, 90, 30},
+		CreatedBy: "system:exchange", Revision: 9, CreatedAt: now.Add(-24 * time.Hour), UpdatedAt: now.Add(2 * time.Hour)}
+	if persisted, created, err := subject.ImportRule(ctx, importedRule); err != nil || !created || persisted.Revision != 9 || !persisted.UpdatedAt.Equal(importedRule.UpdatedAt) {
+		t.Fatalf("import Signals rule %#v created=%t err=%v", persisted, created, err)
+	}
+	if replay, created, err := subject.ImportRule(ctx, importedRule); err != nil || created || replay.ID != importedRule.ID {
+		t.Fatalf("replay Signals rule %#v created=%t err=%v", replay, created, err)
+	}
 
 	history := signals.AlertHistory{ID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", OrganizationID: organizationID, AlertID: "signal-alert-" + suffix, Action: "created", ActorID: "account-one", OccurredAt: now, Revision: 1}
 	alert := signals.Alert{ID: history.AlertID, OrganizationID: organizationID, RuleID: loaded.ID, Condition: signals.ConditionRenewal, Severity: signals.SeverityWarning,
@@ -83,7 +92,7 @@ func SignalsStore(t testing.TB, subject signals.Store, organizationID, suffix st
 		t.Fatalf("unexpected Signals history %#v err=%v", historyItems, err)
 	}
 
-	subscription := signals.Subscription{ID: "signal-subscription-" + suffix, OrganizationID: organizationID, RuleID: loaded.ID, TargetKind: "group", TargetID: "finance-owners", Enabled: true, CreatedBy: "account-one", CreatedAt: now}
+	subscription := signals.Subscription{ID: "signal-subscription-" + suffix, OrganizationID: organizationID, RuleID: loaded.ID, TargetKind: "group", TargetID: "finance-owners", Enabled: true, CreatedBy: "account-one", Revision: 1, CreatedAt: now, UpdatedAt: now}
 	createdSubscription, err := subject.CreateSubscription(ctx, subscription)
 	if err != nil {
 		t.Fatal(err)
@@ -94,6 +103,26 @@ func SignalsStore(t testing.TB, subject signals.Store, organizationID, suffix st
 	subscriptions, err := subject.ListSubscriptions(ctx, organizationID)
 	if err != nil || len(subscriptions) != 1 || subscriptions[0].ID != subscription.ID {
 		t.Fatalf("unexpected Signals subscriptions %#v err=%v", subscriptions, err)
+	}
+	loadedSubscription, err := subject.GetSubscription(ctx, organizationID, subscription.ID)
+	if err != nil || loadedSubscription.Revision != 1 || !loadedSubscription.UpdatedAt.Equal(now) {
+		t.Fatalf("get Signals subscription %#v err=%v", loadedSubscription, err)
+	}
+	importedSubscription := signals.Subscription{ID: "signal-imported-subscription-" + suffix, OrganizationID: organizationID, RuleID: importedRule.ID,
+		TargetKind: "webhook", TargetID: "operations-hook", Enabled: false, CreatedBy: "system:exchange", Revision: 6,
+		CreatedAt: now.Add(-time.Hour), UpdatedAt: now.Add(3 * time.Hour)}
+	if persisted, created, err := subject.ImportSubscription(ctx, importedSubscription); err != nil || !created || persisted.Revision != 6 || !persisted.UpdatedAt.Equal(importedSubscription.UpdatedAt) {
+		t.Fatalf("import Signals subscription %#v created=%t err=%v", persisted, created, err)
+	}
+	if replay, created, err := subject.ImportSubscription(ctx, importedSubscription); err != nil || created || replay.ID != importedSubscription.ID {
+		t.Fatalf("replay Signals subscription %#v created=%t err=%v", replay, created, err)
+	}
+	snapshot, err := subject.ExchangeSnapshot(ctx, organizationID, 4)
+	if err != nil || len(snapshot.Rules) != 2 || len(snapshot.Subscriptions) != 2 {
+		t.Fatalf("Signals Exchange snapshot %#v err=%v", snapshot, err)
+	}
+	if _, err := subject.ExchangeSnapshot(ctx, organizationID, 3); !errors.Is(err, signals.ErrTooLarge) {
+		t.Fatalf("Signals Exchange snapshot bound was ignored: %v", err)
 	}
 	next := now
 	delivery := signals.Delivery{ID: "cccccccccccccccccccccccccccccccc", OrganizationID: organizationID, AlertID: alert.ID, SubscriptionID: subscription.ID,

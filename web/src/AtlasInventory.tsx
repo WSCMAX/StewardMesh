@@ -1,5 +1,5 @@
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ApiRequestError, requestJSON } from './api'
+import { ApiRequestError, isRevision, requestJSON, type Revision } from './api'
 import AtlasIdentifiers from './AtlasIdentifiers'
 import AtlasLabelPrint from './AtlasLabelPrint'
 import AtlasScanner from './AtlasScanner'
@@ -25,7 +25,7 @@ export type Asset = {
   userId?: string
   status: string
   purchaseDate?: string
-  revision: number
+  revision: Revision
   createdAt: string
   updatedAt: string
 }
@@ -64,7 +64,7 @@ export type AssetModel = {
   sourceSystemId?: string
   sourceRecordId?: string
   instanceCount: number
-  revision: number
+  revision: Revision
   createdAt: string
   updatedAt: string
 }
@@ -97,7 +97,7 @@ type LifecycleEvent = {
   fromStatus?: string
   toStatus: string
   note?: string
-  revision: number
+  revision: Revision
   actorId: string
   occurredAt: string
 }
@@ -147,7 +147,7 @@ export function isAsset(value: unknown): value is Asset {
   const item = value as Record<string, unknown>
   return typeof item.id === 'string' && typeof item.organizationId === 'string'
     && typeof item.name === 'string' && typeof item.kind === 'string' && typeof item.status === 'string'
-    && typeof item.revision === 'number' && typeof item.createdAt === 'string' && typeof item.updatedAt === 'string'
+    && isRevision(item.revision) && typeof item.createdAt === 'string' && typeof item.updatedAt === 'string'
 }
 
 function readItems(value: unknown): unknown[] {
@@ -164,7 +164,7 @@ function isReference(value: unknown): value is ReferenceRecord {
 function isLifecycleEvent(value: unknown): value is LifecycleEvent {
   if (typeof value !== 'object' || value === null) return false
   const item = value as Record<string, unknown>
-  return typeof item.id === 'string' && typeof item.toStatus === 'string' && typeof item.revision === 'number'
+  return typeof item.id === 'string' && typeof item.toStatus === 'string' && isRevision(item.revision)
     && typeof item.actorId === 'string' && typeof item.occurredAt === 'string'
 }
 
@@ -174,7 +174,7 @@ function isAssetModel(value: unknown): value is AssetModel {
   return typeof item.id === 'string' && typeof item.organizationId === 'string'
     && typeof item.manufacturer === 'string' && typeof item.name === 'string'
     && typeof item.kind === 'string' && typeof item.status === 'string'
-    && typeof item.instanceCount === 'number' && typeof item.revision === 'number'
+    && typeof item.instanceCount === 'number' && isRevision(item.revision)
     && typeof item.createdAt === 'string' && typeof item.updatedAt === 'string'
     && ['modelNumber', 'vendorIdentifier', 'supportUrl', 'sourceSystemId', 'sourceRecordId']
       .every((key) => item[key] === undefined || typeof item[key] === 'string')

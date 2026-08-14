@@ -17,6 +17,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/maxlemke/stewardmesh/internal/foundation"
+	"github.com/maxlemke/stewardmesh/internal/portabletime"
 )
 
 var (
@@ -40,27 +41,91 @@ type ServiceConfig struct {
 type Service struct {
 	store          Store
 	references     ReferenceValidator
+	writes         WriteGate
 	auditor        foundation.Auditor
 	organizationID string
 	now            func() time.Time
 }
 
 func NewService(store Store, references ReferenceValidator, auditor foundation.Auditor, configuration ServiceConfig) (*Service, error) {
+	service, _, err := NewServiceWithExchangeImporter(store, references, nil, auditor, configuration)
+	return service, err
+}
+
+func NewServiceWithExchangeImporter(store Store, references ReferenceValidator, writes WriteGate, auditor foundation.Auditor, configuration ServiceConfig) (*Service, ExchangeImporter, error) {
 	if store == nil || references == nil || auditor == nil {
-		return nil, errors.New("Ledger store, reference validator, and auditor are required")
+		return nil, nil, errors.New("Ledger store, reference validator, and auditor are required")
 	}
 	configuration.OrganizationID = strings.TrimSpace(configuration.OrganizationID)
 	if configuration.OrganizationID == "" {
-		return nil, errors.New("Ledger organization id is required")
+		return nil, nil, errors.New("Ledger organization id is required")
 	}
-	if configuration.Now == nil {
-		configuration.Now = func() time.Time { return time.Now().UTC() }
+	clock := configuration.Now
+	if clock == nil {
+		clock = time.Now
 	}
-	return &Service{store: store, references: references, auditor: auditor, organizationID: configuration.OrganizationID, now: configuration.Now}, nil
+	service := &Service{store: store, references: references, writes: writes, auditor: auditor, organizationID: configuration.OrganizationID,
+		now: func() time.Time { return portabletime.Normalize(clock()) }}
+	return service, &exchangeImporter{service: service}, nil
 }
 
 func (s *Service) Snapshot(ctx context.Context) (Snapshot, error) {
 	return s.store.Snapshot(ctx, s.organizationID)
+}
+
+func (s *Service) ExchangeSnapshot(ctx context.Context, maximum int) (Snapshot, error) {
+	if maximum < 1 {
+		return Snapshot{}, ErrInvalidInput
+	}
+	return s.store.ExchangeSnapshot(ctx, s.organizationID, maximum)
+}
+
+func (s *Service) GetVendor(ctx context.Context, id string) (Vendor, error) {
+	id = strings.TrimSpace(id)
+	if !idPattern.MatchString(id) {
+		return Vendor{}, ErrInvalidInput
+	}
+	return s.store.GetVendor(ctx, s.organizationID, id)
+}
+
+func (s *Service) GetPurchaseOrder(ctx context.Context, id string) (PurchaseOrder, error) {
+	id = strings.TrimSpace(id)
+	if !idPattern.MatchString(id) {
+		return PurchaseOrder{}, ErrInvalidInput
+	}
+	return s.store.GetPurchaseOrder(ctx, s.organizationID, id)
+}
+
+func (s *Service) GetContract(ctx context.Context, id string) (Contract, error) {
+	id = strings.TrimSpace(id)
+	if !idPattern.MatchString(id) {
+		return Contract{}, ErrInvalidInput
+	}
+	return s.store.GetContract(ctx, s.organizationID, id)
+}
+
+func (s *Service) GetCommitment(ctx context.Context, id string) (Commitment, error) {
+	id = strings.TrimSpace(id)
+	if !idPattern.MatchString(id) {
+		return Commitment{}, ErrInvalidInput
+	}
+	return s.store.GetCommitment(ctx, s.organizationID, id)
+}
+
+func (s *Service) GetBudget(ctx context.Context, id string) (Budget, error) {
+	id = strings.TrimSpace(id)
+	if !idPattern.MatchString(id) {
+		return Budget{}, ErrInvalidInput
+	}
+	return s.store.GetBudget(ctx, s.organizationID, id)
+}
+
+func (s *Service) GetCost(ctx context.Context, id string) (CostRecord, error) {
+	id = strings.TrimSpace(id)
+	if !idPattern.MatchString(id) {
+		return CostRecord{}, ErrInvalidInput
+	}
+	return s.store.GetCost(ctx, s.organizationID, id)
 }
 
 func (s *Service) CreateVendor(ctx context.Context, input CreateVendorInput) (Vendor, error) {
@@ -76,6 +141,9 @@ func (s *Service) CreateVendor(ctx context.Context, input CreateVendorInput) (Ve
 	}
 	id, err := s.id(input.ID)
 	if err != nil {
+		return Vendor{}, err
+	}
+	if err := s.checkWrite(ctx, "ledger.vendor", id); err != nil {
 		return Vendor{}, err
 	}
 	now := s.now().UTC()
@@ -110,6 +178,9 @@ func (s *Service) CreatePurchaseOrder(ctx context.Context, input CreatePurchaseO
 	if err != nil {
 		return PurchaseOrder{}, err
 	}
+	if err := s.checkWrite(ctx, "ledger.purchase-order", id); err != nil {
+		return PurchaseOrder{}, err
+	}
 	now := s.now().UTC()
 	purchaseOrder, err := s.store.CreatePurchaseOrder(ctx, PurchaseOrder{
 		ID: id, OrganizationID: s.organizationID, Number: normalized.Number, VendorID: normalized.VendorID,
@@ -134,6 +205,9 @@ func (s *Service) UpdatePurchaseOrderStatus(ctx context.Context, input UpdatePur
 	if !idPattern.MatchString(input.ID) || input.Revision < 1 || !contains(validPurchaseOrderStatuses, input.Status) {
 		return PurchaseOrder{}, ErrInvalidInput
 	}
+	if err := s.checkWrite(ctx, "ledger.purchase-order", input.ID); err != nil {
+		return PurchaseOrder{}, err
+	}
 	existing, err := s.store.GetPurchaseOrder(ctx, s.organizationID, input.ID)
 	if err != nil {
 		return PurchaseOrder{}, err
@@ -147,7 +221,7 @@ func (s *Service) UpdatePurchaseOrderStatus(ctx context.Context, input UpdatePur
 	updated := existing
 	updated.Status = input.Status
 	updated.Revision++
-	updated.UpdatedAt = s.now().UTC()
+	updated.UpdatedAt = portabletime.Max(s.now(), existing.UpdatedAt)
 	updated, err = s.store.UpdatePurchaseOrder(ctx, updated, existing.Revision)
 	if err != nil {
 		return PurchaseOrder{}, err
@@ -173,6 +247,9 @@ func (s *Service) CreateContract(ctx context.Context, input CreateContractInput)
 	}
 	id, err := s.id(normalized.ID)
 	if err != nil {
+		return Contract{}, err
+	}
+	if err := s.checkWrite(ctx, "ledger.contract", id); err != nil {
 		return Contract{}, err
 	}
 	now := s.now().UTC()
@@ -201,6 +278,9 @@ func (s *Service) UpdateContractStatus(ctx context.Context, input UpdateContract
 	if !idPattern.MatchString(input.ID) || input.Revision < 1 || !contains(validOperationalStatuses, input.OperationalStatus) || !contains(validFinancialStatuses, input.FinancialStatus) {
 		return Contract{}, ErrInvalidInput
 	}
+	if err := s.checkWrite(ctx, "ledger.contract", input.ID); err != nil {
+		return Contract{}, err
+	}
 	existing, err := s.store.GetContract(ctx, s.organizationID, input.ID)
 	if err != nil {
 		return Contract{}, err
@@ -215,7 +295,7 @@ func (s *Service) UpdateContractStatus(ctx context.Context, input UpdateContract
 	updated.OperationalStatus = input.OperationalStatus
 	updated.FinancialStatus = input.FinancialStatus
 	updated.Revision++
-	updated.UpdatedAt = s.now().UTC()
+	updated.UpdatedAt = portabletime.Max(s.now(), existing.UpdatedAt)
 	updated, err = s.store.UpdateContract(ctx, updated, existing.Revision)
 	if err != nil {
 		return Contract{}, err
@@ -239,6 +319,9 @@ func (s *Service) CreateCommitment(ctx context.Context, input CreateCommitmentIn
 	}
 	id, err := s.id(normalized.ID)
 	if err != nil {
+		return Commitment{}, err
+	}
+	if err := s.checkWrite(ctx, "ledger.commitment", id); err != nil {
 		return Commitment{}, err
 	}
 	now := s.now().UTC()
@@ -271,6 +354,9 @@ func (s *Service) CreateBudget(ctx context.Context, input CreateBudgetInput) (Bu
 	if err != nil {
 		return Budget{}, err
 	}
+	if err := s.checkWrite(ctx, "ledger.budget", id); err != nil {
+		return Budget{}, err
+	}
 	now := s.now().UTC()
 	budget, err := s.store.CreateBudget(ctx, Budget{
 		ID: id, OrganizationID: s.organizationID, Name: normalized.Name, FiscalPeriod: normalized.FiscalPeriod,
@@ -301,7 +387,10 @@ func (s *Service) ReconcileCost(ctx context.Context, input ReconcileCostInput) (
 		existing, err := s.store.GetCostBySource(ctx, s.organizationID, normalized.SourceSystemID, normalized.SourceRecordID)
 		switch {
 		case err == nil:
-			candidate := costFromInput(normalized, existing.ID, s.organizationID, existing.CreatedAt, s.now().UTC(), existing.Revision+1)
+			if err := s.checkWrite(ctx, "ledger.cost", existing.ID); err != nil {
+				return ReconcileResult{}, err
+			}
+			candidate := costFromInput(normalized, existing.ID, s.organizationID, existing.CreatedAt, portabletime.Max(s.now(), existing.UpdatedAt), existing.Revision+1)
 			if sameCost(existing, candidate) {
 				return ReconcileResult{Record: existing}, nil
 			}
@@ -321,6 +410,9 @@ func (s *Service) ReconcileCost(ctx context.Context, input ReconcileCostInput) (
 	}
 	id, err := s.id(normalized.ID)
 	if err != nil {
+		return ReconcileResult{}, err
+	}
+	if err := s.checkWrite(ctx, "ledger.cost", id); err != nil {
 		return ReconcileResult{}, err
 	}
 	now := s.now().UTC()

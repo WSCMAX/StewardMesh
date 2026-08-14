@@ -10,6 +10,7 @@ import (
 
 	"github.com/maxlemke/stewardmesh/internal/guard"
 	"github.com/maxlemke/stewardmesh/internal/people"
+	"github.com/maxlemke/stewardmesh/internal/portabletime"
 )
 
 const peopleIdentityResourceType = "people.identity"
@@ -25,9 +26,10 @@ func NewPeopleTarget(store people.Store, guardService *guard.Service, now func()
 		return nil, errors.New("people store and Guard service are required")
 	}
 	if now == nil {
-		now = func() time.Time { return time.Now().UTC() }
+		now = time.Now
 	}
-	return &PeopleTarget{store: store, guard: guardService, now: now}, nil
+	clock := now
+	return &PeopleTarget{store: store, guard: guardService, now: func() time.Time { return portabletime.Normalize(clock()) }}, nil
 }
 
 func (t *PeopleTarget) Preview(ctx context.Context, organizationID string, system SourceSystem, record Record, mapping *Mapping) (TargetPlan, error) {

@@ -1,4 +1,4 @@
-// Requirements: REQ-API-001, REQ-SIGNALS-001. Feature: integrations.protocols.
+// Requirements: REQ-API-001, REQ-SIGNALS-001, REQ-REACH-001. Feature: integrations.protocols.
 package grpcapi
 
 import "net/http"
@@ -28,6 +28,7 @@ const (
 	transformNone requestTransform = iota
 	transformPatternsFieldPresence
 	transformSignalEnabledPresence
+	transformReachUpdateProvider
 	transformAtlasCreateModel
 	transformAtlasUpdateModel
 	transformAtlasCreateAsset
@@ -209,7 +210,7 @@ func routes() map[string]route {
 		"/stewardmesh.v1.ReachService/ListEndpoints":        endpoint(http.MethodGet, "/api/v1/reach/endpoints"),
 		"/stewardmesh.v1.ReachService/ListProviders":        endpoint(http.MethodGet, "/api/v1/reach/providers"),
 		"/stewardmesh.v1.ReachService/CreateProvider":       endpoint(http.MethodPost, "/api/v1/reach/providers"),
-		"/stewardmesh.v1.ReachService/UpdateProvider":       endpoint(http.MethodPut, "/api/v1/reach/providers/{providerId}"),
+		"/stewardmesh.v1.ReachService/UpdateProvider":       {method: http.MethodPut, path: "/api/v1/reach/providers/{providerId}", transform: transformReachUpdateProvider},
 		"/stewardmesh.v1.ReachService/RotateProviderSecret": endpoint(http.MethodPost, "/api/v1/reach/providers/{providerId}/rotate-secret"),
 		"/stewardmesh.v1.ReachService/TestProvider":         endpoint(http.MethodPost, "/api/v1/reach/providers/{providerId}/test"),
 		"/stewardmesh.v1.ReachService/ListProviderTests":    endpoint(http.MethodGet, "/api/v1/reach/providers/{providerId}/tests"),

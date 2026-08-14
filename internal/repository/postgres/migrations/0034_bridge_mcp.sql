@@ -1,5 +1,6 @@
 -- Bridge MCP, OAuth, confirmation, and abuse-control persistence.
--- Requirements: REQ-API-001, SEC-MCP-001. Feature: integrations.protocols. GitHub: #14.
+-- Requirements: REQ-API-001, SEC-MCP-001, REQ-EXCHANGE-001.
+-- Features: integrations.protocols, migration.packages. GitHub: #14, #9.
 
 CREATE TABLE bridge_oauth_clients (
     organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,

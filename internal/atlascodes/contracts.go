@@ -20,6 +20,7 @@ var (
 	ErrNotFound         = errors.New("Atlas Codes identifier not found")
 	ErrConflict         = errors.New("Atlas Codes identifier conflicts with existing data")
 	ErrReferenceMissing = errors.New("Atlas Codes asset reference does not exist")
+	ErrTooLarge         = errors.New("Atlas Codes snapshot exceeds its bounded limit")
 )
 
 type Symbology string
@@ -103,10 +104,41 @@ type AssetReader interface {
 	GetAsset(ctx context.Context, id string) (domain.Asset, error)
 }
 
+// IdentifierChain is one complete replacement lineage. Rows are stored and
+// imported atomically because supersedes_id and replaced_by_id form a deferred
+// self-referential pair in PostgreSQL. TerminalID is the stable Exchange
+// record identity and must name the only row without ReplacedByID.
+type IdentifierChain struct {
+	TerminalID string
+	Items      []Identifier
+}
+
+type ExchangeImportOperation struct {
+	Token      string
+	OccurredAt time.Time
+}
+
+type ExchangeImportResult struct {
+	Committed bool
+	Created   bool
+}
+
+// ExchangeImporter is an opaque construction-time capability for exact,
+// atomic identifier-history imports.
+type ExchangeImporter interface {
+	ImportIdentifierChain(context.Context, ExchangeImportOperation, IdentifierChain) (ExchangeImportResult, error)
+	atlasCodesExchangeImporter()
+}
+
+type WriteGate interface {
+	CheckResourceWrite(context.Context, string, string) error
+}
+
 // Store is the provider-neutral identifier association boundary. Replace and
 // deactivate must apply their history transition and active-state mutation
 // atomically. The booleans distinguish an applied mutation from a safe retry.
 type Store interface {
+	SnapshotIdentifiers(ctx context.Context, organizationID string, maximum int) ([]Identifier, error)
 	ListIdentifiers(ctx context.Context, organizationID, assetID string) ([]Identifier, error)
 	GetIdentifier(ctx context.Context, organizationID, assetID, identifierID string) (Identifier, error)
 	GetIdentifierByID(ctx context.Context, organizationID, identifierID string) (Identifier, error)
@@ -126,4 +158,5 @@ type Store interface {
 		deactivatedAt time.Time,
 		actorID, correlationID string,
 	) (Identifier, bool, error)
+	ImportIdentifierChain(ctx context.Context, organizationID string, chain IdentifierChain) (IdentifierChain, bool, error)
 }

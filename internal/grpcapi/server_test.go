@@ -765,6 +765,19 @@ func TestPresenceHelpersTranslateToStrictRESTContracts(t *testing.T) {
 				"createdBy": "administrator", "updatedBy": "administrator",
 				"createdAt": "2026-08-13T12:00:00Z", "updatedAt": "2026-08-13T12:00:00Z",
 			})
+		case "/api/v1/reach/providers/reach-provider":
+			if body["endpointId"] != "webhook-primary" || body["name"] != "Reach provider" || body["enabled"] != false || body["revision"] != float64(1) {
+				t.Fatalf("Reach provider update body = %#v", body)
+			}
+			if _, leaked := body["secretRef"]; leaked {
+				t.Fatalf("generic Reach provider update accepted a secret field: %#v", body)
+			}
+			writeTestJSON(w, http.StatusOK, map[string]any{
+				"id": "reach-provider", "organizationId": "example-org", "name": "Reach provider", "kind": "webhook",
+				"endpointId": "webhook-primary", "secretConfigured": false, "enabled": false, "revision": 2,
+				"createdBy": "administrator", "updatedBy": "administrator",
+				"createdAt": "2026-08-13T12:00:00Z", "updatedAt": "2026-08-13T12:01:00Z",
+			})
 		default:
 			t.Fatalf("unexpected route %s", r.URL.Path)
 		}
@@ -831,8 +844,18 @@ func TestPresenceHelpersTranslateToStrictRESTContracts(t *testing.T) {
 			}
 		})
 	}
-	if requests != 4 {
-		t.Fatalf("HTTP requests = %d, want four", requests)
+	updateMethod := reachService.Methods().ByName("UpdateProvider")
+	updated, err := gateway.invoke(ctx, "/stewardmesh.v1.ReachService/UpdateProvider", updateMethod.Output(), &stewardmeshv1.UpdateReachProviderRequest{
+		ProviderId: "reach-provider", Name: "Reach provider", EndpointId: "webhook-primary", Enabled: false, Revision: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if endpoint := updated.ProtoReflect().Get(updated.ProtoReflect().Descriptor().Fields().ByName("endpoint_id")).String(); endpoint != "webhook-primary" {
+		t.Fatalf("updated Reach endpoint = %q", endpoint)
+	}
+	if requests != 5 {
+		t.Fatalf("HTTP requests = %d, want five", requests)
 	}
 }
 

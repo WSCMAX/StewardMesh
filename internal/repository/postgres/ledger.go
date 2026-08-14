@@ -47,6 +47,90 @@ func (s *LedgerStore) Snapshot(ctx context.Context, organizationID string) (ledg
 	return result, nil
 }
 
+func (s *LedgerStore) ExchangeSnapshot(ctx context.Context, organizationID string, maximum int) (ledger.Snapshot, error) {
+	if organizationID == "" || maximum < 1 {
+		return ledger.Snapshot{}, ledger.ErrInvalidInput
+	}
+	transaction, err := s.database.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	if err != nil {
+		return ledger.Snapshot{}, fmt.Errorf("begin Ledger Exchange snapshot: %w", err)
+	}
+	defer transaction.Rollback()
+	result := ledger.Snapshot{}
+	remaining := maximum
+	read := func(destination any, query string, scan func(ledgerScanner) (any, error)) error {
+		rows, queryErr := transaction.QueryContext(ctx, query, organizationID, remaining+1)
+		if queryErr != nil {
+			return queryErr
+		}
+		defer rows.Close()
+		items := make([]any, 0)
+		for rows.Next() {
+			item, scanErr := scan(rows)
+			if scanErr != nil {
+				return scanErr
+			}
+			items = append(items, item)
+		}
+		if rowsErr := rows.Err(); rowsErr != nil {
+			return rowsErr
+		}
+		if len(items) > remaining {
+			return ledger.ErrTooLarge
+		}
+		remaining -= len(items)
+		switch target := destination.(type) {
+		case *[]ledger.Vendor:
+			for _, item := range items {
+				*target = append(*target, item.(ledger.Vendor))
+			}
+		case *[]ledger.PurchaseOrder:
+			for _, item := range items {
+				*target = append(*target, item.(ledger.PurchaseOrder))
+			}
+		case *[]ledger.Contract:
+			for _, item := range items {
+				*target = append(*target, item.(ledger.Contract))
+			}
+		case *[]ledger.Commitment:
+			for _, item := range items {
+				*target = append(*target, item.(ledger.Commitment))
+			}
+		case *[]ledger.Budget:
+			for _, item := range items {
+				*target = append(*target, item.(ledger.Budget))
+			}
+		case *[]ledger.CostRecord:
+			for _, item := range items {
+				*target = append(*target, item.(ledger.CostRecord))
+			}
+		}
+		return nil
+	}
+	if err := read(&result.Vendors, vendorSelect+` WHERE organization_id = $1 ORDER BY normalized_name, id LIMIT $2`, func(row ledgerScanner) (any, error) { return scanVendor(row) }); err != nil {
+		return ledger.Snapshot{}, fmt.Errorf("list Ledger Exchange vendors: %w", err)
+	}
+	if err := read(&result.PurchaseOrders, purchaseOrderSelect+` WHERE organization_id = $1 ORDER BY normalized_number, id LIMIT $2`, func(row ledgerScanner) (any, error) { return scanPurchaseOrder(row) }); err != nil {
+		return ledger.Snapshot{}, fmt.Errorf("list Ledger Exchange purchase orders: %w", err)
+	}
+	if err := read(&result.Contracts, contractSelect+` WHERE organization_id = $1 ORDER BY lower(name), id LIMIT $2`, func(row ledgerScanner) (any, error) { return scanContract(row) }); err != nil {
+		return ledger.Snapshot{}, fmt.Errorf("list Ledger Exchange contracts: %w", err)
+	}
+	if err := read(&result.Commitments, commitmentSelect+` WHERE organization_id = $1 ORDER BY created_at, id LIMIT $2`, func(row ledgerScanner) (any, error) { return scanCommitment(row) }); err != nil {
+		return ledger.Snapshot{}, fmt.Errorf("list Ledger Exchange commitments: %w", err)
+	}
+	if err := read(&result.Budgets, budgetSelect+` WHERE organization_id = $1 ORDER BY fiscal_period, scenario, lower(name), id LIMIT $2`, func(row ledgerScanner) (any, error) { return scanBudget(row) }); err != nil {
+		return ledger.Snapshot{}, fmt.Errorf("list Ledger Exchange budgets: %w", err)
+	}
+	if err := read(&result.Costs, costSelect+` WHERE organization_id = $1 ORDER BY created_at, id LIMIT $2`, func(row ledgerScanner) (any, error) { return scanCost(row) }); err != nil {
+		return ledger.Snapshot{}, fmt.Errorf("list Ledger Exchange costs: %w", err)
+	}
+	if err := transaction.Commit(); err != nil {
+		return ledger.Snapshot{}, fmt.Errorf("complete Ledger Exchange snapshot: %w", err)
+	}
+	return result, nil
+}
+
 func (s *LedgerStore) GetVendor(ctx context.Context, organizationID, id string) (ledger.Vendor, error) {
 	item, err := scanVendor(s.database.QueryRowContext(ctx, vendorSelect+` WHERE organization_id = $1 AND id = $2`, organizationID, id))
 	return item, translateLedgerReadError("get Ledger vendor", err)
@@ -139,6 +223,11 @@ func (s *LedgerStore) CreateCommitment(ctx context.Context, item ledger.Commitme
 	return created, translateLedgerWriteError("create Ledger commitment", err)
 }
 
+func (s *LedgerStore) GetCommitment(ctx context.Context, organizationID, id string) (ledger.Commitment, error) {
+	item, err := scanCommitment(s.database.QueryRowContext(ctx, commitmentSelect+` WHERE organization_id = $1 AND id = $2`, organizationID, id))
+	return item, translateLedgerReadError("get Ledger commitment", err)
+}
+
 func (s *LedgerStore) CreateBudget(ctx context.Context, item ledger.Budget) (ledger.Budget, error) {
 	created, err := scanBudget(s.database.QueryRowContext(ctx, `
 		INSERT INTO ledger_budgets (
@@ -150,6 +239,16 @@ func (s *LedgerStore) CreateBudget(ctx context.Context, item ledger.Budget) (led
 	`, item.OrganizationID, item.ID, item.Name, item.FiscalPeriod, item.Scenario, item.DepartmentID, item.SiteID,
 		item.Currency, item.AllocatedMinor, item.Revision, item.CreatedAt, item.UpdatedAt))
 	return created, translateLedgerWriteError("create Ledger budget", err)
+}
+
+func (s *LedgerStore) GetBudget(ctx context.Context, organizationID, id string) (ledger.Budget, error) {
+	item, err := scanBudget(s.database.QueryRowContext(ctx, budgetSelect+` WHERE organization_id = $1 AND id = $2`, organizationID, id))
+	return item, translateLedgerReadError("get Ledger budget", err)
+}
+
+func (s *LedgerStore) GetCost(ctx context.Context, organizationID, id string) (ledger.CostRecord, error) {
+	item, err := scanCost(s.database.QueryRowContext(ctx, costSelect+` WHERE organization_id = $1 AND id = $2`, organizationID, id))
+	return item, translateLedgerReadError("get Ledger cost", err)
 }
 
 func (s *LedgerStore) GetCostBySource(ctx context.Context, organizationID, sourceSystemID, sourceRecordID string) (ledger.CostRecord, error) {

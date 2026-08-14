@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -204,6 +205,108 @@ func AtlasStore(t testing.TB, subject atlas.Store, organizationID, suffix string
 	if err != nil || maintained.Revision != 3 || maintained.ModelContext == nil || maintained.ModelContext.ModelRevision != 1 {
 		t.Fatalf("existing retired-model link prevented Atlas asset maintenance %#v err=%v", maintained, err)
 	}
+	assertAtlasExchangeStore(t, subject, organizationID, suffix, now)
+}
+
+func assertAtlasExchangeStore(t testing.TB, subject atlas.Store, organizationID, suffix string, now time.Time) {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := subject.ExchangeSnapshot(ctx, organizationID, 1); !errors.Is(err, atlas.ErrTooLarge) {
+		t.Fatalf("expected bounded Atlas Exchange snapshot, got %v", err)
+	}
+	model := domain.AssetModel{
+		ID: "exchange-model-" + suffix, OrganizationID: organizationID, Manufacturer: "Exchange",
+		Name: "Portable appliance " + suffix, ModelNumber: "EX-" + suffix, Kind: "server",
+		Specifications: map[string]string{"cpu": "32 core", "memory": "256 GB"},
+		SupportURL:     "https://exchange.example.test/models/" + suffix, WarrantyMonths: 48, UsefulLifeMonths: 84,
+		Status: "retired", SourceSystemID: "legacy-cmdb", SourceRecordID: "models/" + suffix,
+		Revision: 9, CreatedAt: now.Add(-48 * time.Hour), UpdatedAt: now.Add(-24 * time.Hour),
+	}
+	persistedModel, created, err := subject.ImportModel(ctx, model)
+	if err != nil || !created || !reflect.DeepEqual(persistedModel, model) {
+		t.Fatalf("exact Atlas model import failed: model=%#v created=%t err=%v", persistedModel, created, err)
+	}
+	if replayed, created, err := subject.ImportModel(ctx, model); err != nil || created || !reflect.DeepEqual(replayed, model) {
+		t.Fatalf("exact Atlas model replay failed: model=%#v created=%t err=%v", replayed, created, err)
+	}
+	conflictingModel := model
+	conflictingModel.Name += " changed"
+	if _, _, err := subject.ImportModel(ctx, conflictingModel); !errors.Is(err, atlas.ErrConflict) {
+		t.Fatalf("expected changed Atlas model replay conflict, got %v", err)
+	}
+	asset := domain.Asset{
+		ID: "exchange-asset-" + suffix, OrganizationID: organizationID, ModelID: model.ID,
+		ModelContext: &domain.AssetModelContext{
+			Manufacturer: model.Manufacturer, Name: model.Name, ModelNumber: model.ModelNumber, Kind: model.Kind,
+			Specifications: map[string]string{"cpu": "32 core", "memory": "256 GB"},
+			SupportURL:     model.SupportURL, WarrantyMonths: model.WarrantyMonths, UsefulLifeMonths: model.UsefulLifeMonths,
+			SourceSystemID: model.SourceSystemID, SourceRecordID: model.SourceRecordID, ModelRevision: model.Revision,
+			DefaultsEffectiveAt: model.UpdatedAt, AppliedAt: model.UpdatedAt.Add(time.Hour), Overrides: []string{},
+		},
+		Name: "Portable appliance instance", Kind: "server", AssetTag: "EXCHANGE-" + suffix,
+		SerialNumber: "EX-SERIAL-" + suffix, Hostname: "exchange-" + suffix + ".example.test",
+		DeploymentNotes: "Preserved deployment context", Status: "retired", Revision: 9,
+		CreatedAt: model.UpdatedAt.Add(time.Hour), UpdatedAt: now,
+	}
+	persistedAsset, created, err := subject.ImportAsset(ctx, asset)
+	if err != nil || !created || !reflect.DeepEqual(persistedAsset, asset) {
+		t.Fatalf("exact Atlas asset import failed: asset=%#v created=%t err=%v", persistedAsset, created, err)
+	}
+	if replayed, created, err := subject.ImportAsset(ctx, asset); err != nil || created || !reflect.DeepEqual(replayed, asset) {
+		t.Fatalf("exact Atlas asset replay failed: asset=%#v created=%t err=%v", replayed, created, err)
+	}
+	event := domain.AssetLifecycleEvent{
+		ID: lifecycleID(suffix, 'e'), OrganizationID: organizationID, AssetID: asset.ID,
+		FromStatus: "active", ToStatus: "retired", Note: "Source retirement", Revision: asset.Revision,
+		ActorID: "source-operator", OccurredAt: asset.UpdatedAt,
+	}
+	persistedEvent, created, err := subject.ImportAssetLifecycleEvent(ctx, event)
+	if err != nil || !created || persistedEvent != event {
+		t.Fatalf("exact Atlas lifecycle import failed: event=%#v created=%t err=%v", persistedEvent, created, err)
+	}
+	if replayed, created, err := subject.ImportAssetLifecycleEvent(ctx, event); err != nil || created || replayed != event {
+		t.Fatalf("exact Atlas lifecycle replay failed: event=%#v created=%t err=%v", replayed, created, err)
+	}
+	conflictingEvent := event
+	conflictingEvent.Note = "changed"
+	if _, _, err := subject.ImportAssetLifecycleEvent(ctx, conflictingEvent); !errors.Is(err, atlas.ErrConflict) {
+		t.Fatalf("expected changed Atlas lifecycle replay conflict, got %v", err)
+	}
+	snapshot, err := subject.ExchangeSnapshot(ctx, organizationID, 10_000)
+	if err != nil {
+		t.Fatalf("complete Atlas Exchange snapshot failed: %v", err)
+	}
+	if !containsAtlasExchangeModel(snapshot.Models, model) || !containsAtlasExchangeAsset(snapshot.Assets, asset) ||
+		!containsAtlasExchangeLifecycle(snapshot.LifecycleEvents, event) {
+		t.Fatalf("Atlas Exchange snapshot omitted exact imported state: %#v", snapshot)
+	}
+}
+
+func containsAtlasExchangeModel(items []domain.AssetModel, expected domain.AssetModel) bool {
+	for _, item := range items {
+		if reflect.DeepEqual(item, expected) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsAtlasExchangeAsset(items []domain.Asset, expected domain.Asset) bool {
+	for _, item := range items {
+		if reflect.DeepEqual(item, expected) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsAtlasExchangeLifecycle(items []domain.AssetLifecycleEvent, expected domain.AssetLifecycleEvent) bool {
+	for _, item := range items {
+		if item == expected {
+			return true
+		}
+	}
+	return false
 }
 
 func assertAuthorizedAtlasKeyset(t testing.TB, subject atlas.Store, organizationID, suffix string, now time.Time) {

@@ -82,6 +82,17 @@ Atlas supplies the asset-existence check through a small `AssetReader` interface
 
 The `people.Store` interface is the behavior contract for memory, PostgreSQL, and future DynamoDB adapters. The same conformance suite validates organization isolation, scoped search, unique email and provider mappings, multi-user assignments, replacement history, and ending assignments.
 
+Exchange owns one provider for each People family: `people.site`,
+`people.building`, `people.room`, `people.department`, `people.identity`, and
+`people.assignment`. Version-2 Patterns schemas preserve exact revisions,
+status, structured addresses, source mappings, UTC timestamps, effective dates,
+and ended assignment history. Packages omit organization and creating-operator
+identity; imported assignments use the non-personal `system:exchange` actor.
+The memory adapter locks one bounded snapshot and PostgreSQL uses a bounded
+repeatable-read transaction. Exact imports use an opaque construction-time
+capability, while ordinary People service mutations remain denied by Guard
+until an imported record is explicitly claimed.
+
 ## Security and privacy
 
 - Search terms and emails are parameterized in PostgreSQL queries.

@@ -1,6 +1,6 @@
 package repository
 
-// Requirement: REQ-REACH-001. Feature: messaging.delivery. GitHub: #12.
+// Requirements: REQ-REACH-001, REQ-EXCHANGE-001. Features: messaging.delivery, migration.packages. GitHub: #9, #12.
 
 import (
 	"context"
@@ -30,6 +30,37 @@ func NewMemoryReachStore() *MemoryReachStore {
 }
 
 func reachKey(organizationID, id string) string { return organizationID + "\x00" + id }
+
+func (s *MemoryReachStore) ExchangeSnapshot(_ context.Context, organizationID string, maximum int) (reach.ExchangeSnapshot, error) {
+	if maximum < 1 {
+		return reach.ExchangeSnapshot{}, reach.ErrInvalidInput
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	result := reach.ExchangeSnapshot{Providers: []reach.Provider{}, Templates: []reach.Template{}, Groups: []reach.SubscriberGroup{}}
+	for _, item := range s.providers {
+		if item.OrganizationID == organizationID {
+			result.Providers = append(result.Providers, item)
+		}
+	}
+	for _, item := range s.templates {
+		if item.OrganizationID == organizationID {
+			result.Templates = append(result.Templates, item)
+		}
+	}
+	for _, item := range s.groups {
+		if item.OrganizationID == organizationID {
+			result.Groups = append(result.Groups, cloneReachGroup(item))
+		}
+	}
+	if len(result.Providers)+len(result.Templates)+len(result.Groups) > maximum {
+		return reach.ExchangeSnapshot{}, reach.ErrTooLarge
+	}
+	sort.Slice(result.Providers, func(i, j int) bool { return result.Providers[i].ID < result.Providers[j].ID })
+	sort.Slice(result.Templates, func(i, j int) bool { return result.Templates[i].ID < result.Templates[j].ID })
+	sort.Slice(result.Groups, func(i, j int) bool { return result.Groups[i].ID < result.Groups[j].ID })
+	return result, nil
+}
 
 func (s *MemoryReachStore) ListProviders(_ context.Context, organizationID string) ([]reach.Provider, error) {
 	s.mu.RLock()
@@ -78,6 +109,20 @@ func (s *MemoryReachStore) UpdateProvider(_ context.Context, item reach.Provider
 	}
 	s.providers[key] = item
 	return item, nil
+}
+
+func (s *MemoryReachStore) ImportProvider(_ context.Context, item reach.Provider) (reach.Provider, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := reachKey(item.OrganizationID, item.ID)
+	if existing, exists := s.providers[key]; exists {
+		return existing, false, nil
+	}
+	if memoryReachNameConflict(s.providers, item.OrganizationID, item.Name, "") || countReachOrganization(s.providers, item.OrganizationID) >= reach.MaximumProviders {
+		return reach.Provider{}, false, reach.ErrConflict
+	}
+	s.providers[key] = item
+	return item, true, nil
 }
 
 func (s *MemoryReachStore) ListTemplates(_ context.Context, organizationID string) ([]reach.Template, error) {
@@ -129,6 +174,20 @@ func (s *MemoryReachStore) UpdateTemplate(_ context.Context, item reach.Template
 	return item, nil
 }
 
+func (s *MemoryReachStore) ImportTemplate(_ context.Context, item reach.Template) (reach.Template, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := reachKey(item.OrganizationID, item.ID)
+	if existing, exists := s.templates[key]; exists {
+		return existing, false, nil
+	}
+	if memoryReachNameConflict(s.templates, item.OrganizationID, item.Name, "") || countReachOrganization(s.templates, item.OrganizationID) >= reach.MaximumTemplates {
+		return reach.Template{}, false, reach.ErrConflict
+	}
+	s.templates[key] = item
+	return item, true, nil
+}
+
 func (s *MemoryReachStore) ListGroups(_ context.Context, organizationID string) ([]reach.SubscriberGroup, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -176,6 +235,26 @@ func (s *MemoryReachStore) UpdateGroup(_ context.Context, item reach.SubscriberG
 	}
 	s.groups[key] = cloneReachGroup(item)
 	return cloneReachGroup(item), nil
+}
+
+func (s *MemoryReachStore) ImportGroup(_ context.Context, item reach.SubscriberGroup) (reach.SubscriberGroup, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := reachKey(item.OrganizationID, item.ID)
+	if existing, exists := s.groups[key]; exists {
+		return cloneReachGroup(existing), false, nil
+	}
+	if _, ok := s.providers[reachKey(item.OrganizationID, item.ProviderID)]; !ok {
+		return reach.SubscriberGroup{}, false, reach.ErrNotFound
+	}
+	if _, ok := s.templates[reachKey(item.OrganizationID, item.TemplateID)]; !ok {
+		return reach.SubscriberGroup{}, false, reach.ErrNotFound
+	}
+	if memoryReachNameConflict(s.groups, item.OrganizationID, item.Name, "") || countReachOrganization(s.groups, item.OrganizationID) >= reach.MaximumGroups {
+		return reach.SubscriberGroup{}, false, reach.ErrConflict
+	}
+	s.groups[key] = cloneReachGroup(item)
+	return cloneReachGroup(item), true, nil
 }
 
 func (s *MemoryReachStore) ListMessages(_ context.Context, organizationID string, limit int) ([]reach.Message, error) {

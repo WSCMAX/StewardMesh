@@ -20,6 +20,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/maxlemke/stewardmesh/internal/foundation"
+	"github.com/maxlemke/stewardmesh/internal/portabletime"
 )
 
 var stableIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
@@ -73,10 +74,12 @@ func newService(store Store, references ReferenceValidator, auditor foundation.A
 	if !stableIDPattern.MatchString(configuration.OrganizationID) {
 		return nil, errors.New("Stack organization id is required")
 	}
-	if configuration.Now == nil {
-		configuration.Now = func() time.Time { return time.Now().UTC() }
+	clock := configuration.Now
+	if clock == nil {
+		clock = time.Now
 	}
-	return &Service{store: store, references: references, auditor: auditor, organizationID: configuration.OrganizationID, now: configuration.Now}, nil
+	return &Service{store: store, references: references, auditor: auditor, organizationID: configuration.OrganizationID,
+		now: func() time.Time { return portabletime.Normalize(clock()) }}, nil
 }
 
 func (s *Service) Snapshot(ctx context.Context) (Snapshot, error) {
@@ -967,7 +970,7 @@ func createRevision(ctx context.Context) int64 {
 
 func normalizeExchangeImportOperation(operation ExchangeImportOperation) (ExchangeImportOperation, error) {
 	operation.Token = strings.TrimSpace(operation.Token)
-	operation.OccurredAt = operation.OccurredAt.UTC()
+	operation.OccurredAt = portabletime.Normalize(operation.OccurredAt)
 	if !stableIDPattern.MatchString(operation.Token) || operation.OccurredAt.IsZero() || operation.OccurredAt.Year() < 2000 || operation.OccurredAt.Year() > 9999 {
 		return ExchangeImportOperation{}, ErrInvalidInput
 	}
@@ -1319,7 +1322,7 @@ func optionalDate(value *time.Time) (*time.Time, bool) {
 	return &normalized, true
 }
 func requiredInstant(value time.Time) (time.Time, bool) {
-	value = value.UTC()
+	value = portabletime.Normalize(value)
 	return value, !value.IsZero() && value.Year() >= 1970 && value.Year() <= 9999
 }
 func optionalInstant(value *time.Time) (*time.Time, bool) {

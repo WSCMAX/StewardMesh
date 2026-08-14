@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/stdlib"
 )
 
@@ -23,7 +24,10 @@ func Open(ctx context.Context, databaseURL string) (*sql.DB, error) {
 	if err != nil {
 		return nil, errors.New("database configuration is invalid")
 	}
-	database := stdlib.OpenDB(*configuration)
+	database := stdlib.OpenDB(*configuration, stdlib.OptionAfterConnect(func(_ context.Context, connection *pgx.Conn) error {
+		registerPortablePostgresTypes(connection.TypeMap())
+		return nil
+	}))
 	database.SetMaxOpenConns(20)
 	database.SetMaxIdleConns(5)
 	database.SetConnMaxIdleTime(5 * time.Minute)
@@ -33,4 +37,11 @@ func Open(ctx context.Context, databaseURL string) (*sql.DB, error) {
 		return nil, errors.New("connect to PostgreSQL: connection failed")
 	}
 	return database, nil
+}
+
+func registerPortablePostgresTypes(typeMap *pgtype.Map) {
+	typeMap.RegisterType(&pgtype.Type{
+		Name: "timestamptz", OID: pgtype.TimestamptzOID,
+		Codec: &pgtype.TimestamptzCodec{ScanLocation: time.UTC},
+	})
 }

@@ -1,6 +1,7 @@
 package bridge
 
-// Requirements: REQ-API-001, SEC-MCP-001. Feature: integrations.protocols. GitHub: #14.
+// Requirements: REQ-API-001, SEC-MCP-001, REQ-EXCHANGE-001.
+// Features: integrations.protocols, migration.packages. GitHub: #9, #14.
 
 import (
 	"context"
@@ -13,6 +14,7 @@ import (
 	"net"
 	"net/url"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -23,6 +25,7 @@ import (
 	"github.com/maxlemke/stewardmesh/internal/foundation"
 	"github.com/maxlemke/stewardmesh/internal/guard"
 	"github.com/maxlemke/stewardmesh/internal/people"
+	"github.com/maxlemke/stewardmesh/internal/portabletime"
 	"github.com/maxlemke/stewardmesh/internal/signals"
 )
 
@@ -72,6 +75,12 @@ type Service struct {
 	concurrency     chan struct{}
 }
 
+type exchangeImporter struct{ service *Service }
+
+type exchangeImportContextKey struct{}
+
+type exchangeImportContext struct{ operation ExchangeImportOperation }
+
 type AuthorizationInput struct {
 	ResponseType        string
 	ClientID            string
@@ -100,25 +109,30 @@ type Access struct {
 }
 
 func NewService(store Store, guardService *guard.Service, atlasService *atlas.Service, peopleService *people.Service, signalsService *signals.Service, auditor foundation.Auditor, organization domain.Organization, configuration ServiceConfig) (*Service, error) {
+	service, _, err := NewServiceWithExchangeImporter(store, guardService, atlasService, peopleService, signalsService, auditor, organization, configuration)
+	return service, err
+}
+
+func NewServiceWithExchangeImporter(store Store, guardService *guard.Service, atlasService *atlas.Service, peopleService *people.Service, signalsService *signals.Service, auditor foundation.Auditor, organization domain.Organization, configuration ServiceConfig) (*Service, ExchangeImporter, error) {
 	if store == nil || guardService == nil || atlasService == nil || peopleService == nil || signalsService == nil || auditor == nil {
-		return nil, errors.New("Bridge store, Guard, domain services, and auditor are required")
+		return nil, nil, errors.New("Bridge store, Guard, domain services, and auditor are required")
 	}
 	configuration.OrganizationID = strings.TrimSpace(configuration.OrganizationID)
 	if configuration.OrganizationID == "" || organization.ID != configuration.OrganizationID {
-		return nil, errors.New("Bridge organization is required and must match the configured organization")
+		return nil, nil, errors.New("Bridge organization is required and must match the configured organization")
 	}
 	issuer, err := normalizeIssuer(configuration.Issuer)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	resourceURI, err := normalizeResourceURI(configuration.ResourceURI)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	issuerURL, _ := url.Parse(issuer)
 	resourceURL, _ := url.Parse(resourceURI)
 	if !strings.EqualFold(issuerURL.Scheme, resourceURL.Scheme) || !strings.EqualFold(issuerURL.Host, resourceURL.Host) {
-		return nil, errors.New("Bridge issuer and MCP resource must use the same origin")
+		return nil, nil, errors.New("Bridge issuer and MCP resource must use the same origin")
 	}
 	configuration.AuthorizationRequestTTL = durationOr(configuration.AuthorizationRequestTTL, defaultAuthorizationRequestTTL)
 	configuration.AuthorizationCodeTTL = durationOr(configuration.AuthorizationCodeTTL, defaultAuthorizationCodeTTL)
@@ -130,19 +144,22 @@ func NewService(store Store, guardService *guard.Service, atlasService *atlas.Se
 		configuration.AccessTokenTTL < 5*time.Minute || configuration.AccessTokenTTL > time.Hour ||
 		configuration.RefreshTokenTTL < time.Hour || configuration.RefreshTokenTTL > 24*time.Hour ||
 		configuration.ConfirmationTTL < 30*time.Second || configuration.ConfirmationTTL > 5*time.Minute {
-		return nil, errors.New("Bridge credential lifetimes are outside their safe bounds")
+		return nil, nil, errors.New("Bridge credential lifetimes are outside their safe bounds")
 	}
-	if configuration.Now == nil {
-		configuration.Now = func() time.Time { return time.Now().UTC() }
+	clock := configuration.Now
+	if clock == nil {
+		clock = time.Now
 	}
-	return &Service{
+	service := &Service{
 		store: store, guard: guardService, atlas: atlasService, people: peopleService, signals: signalsService,
 		auditor: auditor, organization: organization, issuer: issuer, resourceURI: resourceURI,
 		authorizeTTL: configuration.AuthorizationRequestTTL, codeTTL: configuration.AuthorizationCodeTTL,
 		accessTTL: configuration.AccessTokenTTL, refreshTTL: configuration.RefreshTokenTTL,
-		confirmationTTL: configuration.ConfirmationTTL, now: configuration.Now,
-		concurrency: make(chan struct{}, MaximumConcurrentMCPCalls),
-	}, nil
+		confirmationTTL: configuration.ConfirmationTTL,
+		now:             func() time.Time { return portabletime.Normalize(clock()) },
+		concurrency:     make(chan struct{}, MaximumConcurrentMCPCalls),
+	}
+	return service, &exchangeImporter{service: service}, nil
 }
 
 func durationOr(value, fallback time.Duration) time.Duration {
@@ -157,6 +174,103 @@ func (s *Service) ResourceURI() string               { return s.resourceURI }
 func (s *Service) Organization() domain.Organization { return s.organization }
 func (s *Service) DomainServices() (*atlas.Service, *people.Service, *signals.Service) {
 	return s.atlas, s.people, s.signals
+}
+
+func (*exchangeImporter) bridgeExchangeImporter() {}
+
+func (s *Service) OwnsExchangeImporter(candidate ExchangeImporter) bool {
+	importer, ok := candidate.(*exchangeImporter)
+	return ok && importer != nil && importer.service == s
+}
+
+// ExchangeClients exposes only the bounded public-client collection used by
+// Exchange. Authorization requests, codes, grants, credential hashes, MCP
+// confirmations, and rate-window state are never reachable through this seam.
+func (s *Service) ExchangeClients(ctx context.Context, limit int) ([]Client, error) {
+	if limit < 1 {
+		return nil, ErrInvalidInput
+	}
+	return s.store.ListExchangeClients(ctx, s.organization.ID, limit)
+}
+
+func (s *Service) ExchangeClient(ctx context.Context, id string) (Client, error) {
+	id = strings.TrimSpace(id)
+	if !bridgeIDPattern.MatchString(id) {
+		return Client{}, ErrInvalidInput
+	}
+	return s.store.GetClient(ctx, s.organization.ID, id)
+}
+
+// ValidateExchangeClient applies the same public-client policy as normal
+// registration while also enforcing Exchange's deployment-state exclusions.
+func ValidateExchangeClient(candidate Client, revision int64) error {
+	if !bridgeIDPattern.MatchString(candidate.ID) || candidate.OrganizationID != "" || candidate.CreatedBy != "" || !candidate.CreatedAt.IsZero() ||
+		revision != clientExchangeRevision(candidate) {
+		return ErrInvalidInput
+	}
+	input, err := normalizeCreateClientInput(CreateClientInput{Name: candidate.Name, RedirectURIs: candidate.RedirectURIs, AllowedScopes: candidate.AllowedScopes})
+	if err != nil || input.Name != candidate.Name || !slices.Equal(input.RedirectURIs, candidate.RedirectURIs) || !slices.Equal(input.AllowedScopes, candidate.AllowedScopes) {
+		return ErrInvalidInput
+	}
+	if candidate.RevokedAt != nil {
+		if !portabletime.IsCanonical(*candidate.RevokedAt) || candidate.RevokedAt.Year() < 2000 || candidate.RevokedAt.Year() > 9999 {
+			return ErrInvalidInput
+		}
+	}
+	return nil
+}
+
+func (i *exchangeImporter) ImportClient(ctx context.Context, operation ExchangeImportOperation, revision int64, candidate Client) (ExchangeImportResult, error) {
+	operation.Token = strings.TrimSpace(operation.Token)
+	operation.OccurredAt = portabletime.Normalize(operation.OccurredAt)
+	if !stableOperationToken(operation.Token) || operation.OccurredAt.IsZero() || operation.OccurredAt.Year() < 2000 || operation.OccurredAt.Year() > 9999 ||
+		ValidateExchangeClient(candidate, revision) != nil {
+		return ExchangeImportResult{}, ErrInvalidInput
+	}
+	createdAt := operation.OccurredAt
+	if candidate.RevokedAt != nil && candidate.RevokedAt.Before(createdAt) {
+		createdAt = *candidate.RevokedAt
+	}
+	candidate.OrganizationID = i.service.organization.ID
+	candidate.CreatedBy = "system:exchange"
+	candidate.CreatedAt = createdAt
+	ctx = context.WithValue(ctx, exchangeImportContextKey{}, exchangeImportContext{operation: operation})
+	stored, created, err := i.service.store.ImportExchangeClient(ctx, candidate)
+	if err != nil {
+		return ExchangeImportResult{}, err
+	}
+	metadata := map[string]string{
+		"redirectCount": fmt.Sprintf("%d", len(stored.RedirectURIs)), "scopeCount": fmt.Sprintf("%d", len(stored.AllowedScopes)),
+		"revision": fmt.Sprintf("%d", revision), "state": "active",
+	}
+	if stored.RevokedAt != nil {
+		metadata["state"] = "revoked"
+	}
+	if err := i.service.audit(ctx, "system:exchange", "bridge.oauth.client.imported", "oauth_client", stored.ID, metadata); err != nil {
+		return ExchangeImportResult{Committed: true, Created: created}, fmt.Errorf("audit imported OAuth client: %w", err)
+	}
+	return ExchangeImportResult{Committed: true, Created: created}, nil
+}
+
+func clientExchangeRevision(client Client) int64 {
+	if client.RevokedAt != nil {
+		return 2
+	}
+	return 1
+}
+
+func stableOperationToken(value string) bool {
+	if value == "" || len(value) > 128 {
+		return false
+	}
+	for index, character := range value {
+		if character >= 'A' && character <= 'Z' || character >= 'a' && character <= 'z' || character >= '0' && character <= '9' ||
+			index > 0 && (character == '.' || character == '_' || character == ':' || character == '-') {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func (s *Service) Acquire(ctx context.Context) error {
@@ -176,15 +290,7 @@ func (s *Service) CreateClient(ctx context.Context, authentication guard.Authent
 	if err := s.requirePermission(ctx, authentication, guard.PermissionIntegrationsWrite); err != nil {
 		return Client{}, err
 	}
-	name := strings.TrimSpace(input.Name)
-	if name == "" || !utf8.ValidString(name) || utf8.RuneCountInString(name) > 120 {
-		return Client{}, ErrInvalidInput
-	}
-	redirects, err := normalizeRedirectURIs(input.RedirectURIs)
-	if err != nil {
-		return Client{}, err
-	}
-	scopes, err := normalizeScopes(input.AllowedScopes, true)
+	input, err := normalizeCreateClientInput(input)
 	if err != nil {
 		return Client{}, err
 	}
@@ -192,7 +298,7 @@ func (s *Service) CreateClient(ctx context.Context, authentication guard.Authent
 	if err != nil {
 		return Client{}, err
 	}
-	client := Client{ID: id, OrganizationID: s.organization.ID, Name: name, RedirectURIs: redirects, AllowedScopes: scopes,
+	client := Client{ID: id, OrganizationID: s.organization.ID, Name: input.Name, RedirectURIs: input.RedirectURIs, AllowedScopes: input.AllowedScopes,
 		CreatedBy: authentication.Principal.Subject, CreatedAt: s.now().UTC()}
 	created, err := s.store.CreateClient(ctx, client)
 	if err != nil {
@@ -231,6 +337,9 @@ func (s *Service) RevokeClient(ctx context.Context, authentication guard.Authent
 	}
 	if !bridgeIDPattern.MatchString(strings.TrimSpace(clientID)) {
 		return Client{}, ErrInvalidInput
+	}
+	if err := s.guard.CheckResourceWrite(ctx, authentication, "bridge.oauth-client", clientID); err != nil {
+		return Client{}, err
 	}
 	revoked, err := s.store.RevokeClient(ctx, s.organization.ID, clientID, s.now().UTC())
 	if err != nil {
@@ -800,6 +909,24 @@ func expiresInSeconds(now, expiresAt time.Time) int64 {
 	return seconds
 }
 
+func normalizeCreateClientInput(input CreateClientInput) (CreateClientInput, error) {
+	input.Name = strings.TrimSpace(input.Name)
+	if input.Name == "" || !utf8.ValidString(input.Name) || utf8.RuneCountInString(input.Name) > 120 {
+		return CreateClientInput{}, ErrInvalidInput
+	}
+	redirects, err := normalizeRedirectURIs(input.RedirectURIs)
+	if err != nil {
+		return CreateClientInput{}, err
+	}
+	scopes, err := normalizeScopes(input.AllowedScopes, true)
+	if err != nil {
+		return CreateClientInput{}, err
+	}
+	input.RedirectURIs = redirects
+	input.AllowedScopes = scopes
+	return input, nil
+}
+
 func normalizeRedirectURIs(values []string) ([]string, error) {
 	if len(values) == 0 || len(values) > MaximumRedirectURIs {
 		return nil, ErrInvalidInput
@@ -893,6 +1020,19 @@ func secretHash(value string) []byte {
 }
 
 func (s *Service) audit(ctx context.Context, actorID, action, resourceType, resourceID string, metadata map[string]string) error {
+	if state, importing := ctx.Value(exchangeImportContextKey{}).(exchangeImportContext); importing {
+		metadata = cloneBridgeAuditMetadata(metadata)
+		metadata["requirementId"] = RequirementID
+		digest := sha256.Sum256([]byte(strings.Join([]string{
+			s.organization.ID, state.operation.Token, action, resourceType, resourceID,
+		}, "\x00")))
+		scope := foundation.Scope{OrganizationID: s.organization.ID, ActorID: "system:exchange", CorrelationID: state.operation.Token}
+		return s.auditor.Record(foundation.WithScope(ctx, scope), foundation.AuditEvent{
+			ID: fmt.Sprintf("%x", digest[:]), OrganizationID: s.organization.ID, ActorID: "system:exchange",
+			CorrelationID: state.operation.Token, Action: action, ResourceType: resourceType, ResourceID: resourceID,
+			OccurredAt: state.operation.OccurredAt.UTC(), Metadata: metadata,
+		})
+	}
 	ctx, scope, err := s.scopedContext(ctx, actorID)
 	if err != nil {
 		return err
@@ -908,6 +1048,14 @@ func (s *Service) audit(ctx context.Context, actorID, action, resourceType, reso
 	return s.auditor.Record(ctx, foundation.AuditEvent{ID: eventID, OrganizationID: s.organization.ID, ActorID: actorID,
 		CorrelationID: scope.CorrelationID, Action: action, ResourceType: resourceType, ResourceID: resourceID,
 		OccurredAt: s.now().UTC(), Metadata: metadata})
+}
+
+func cloneBridgeAuditMetadata(values map[string]string) map[string]string {
+	result := make(map[string]string, len(values)+1)
+	for key, value := range values {
+		result[key] = value
+	}
+	return result
 }
 
 func (s *Service) scopedContext(ctx context.Context, actorID string) (context.Context, foundation.Scope, error) {

@@ -1,5 +1,5 @@
 import { type FormEvent, useEffect, useRef, useState } from 'react'
-import { ApiRequestError, requestJSON } from './api'
+import { ApiRequestError, isRevision, requestJSON, type Revision } from './api'
 import { buttonClass, emptyStateClass, inputClass, secondaryButtonClass, subpanelClass } from './ui'
 
 // Requirement: REQ-ATLAS-CODES-001. Feature: inventory.identifiers.
@@ -16,7 +16,7 @@ export type AssetIdentifier = {
   status: 'active' | 'replaced' | 'deactivated'
   supersedesId?: string
   replacedById?: string
-  revision: number
+  revision: Revision
   createdBy: string
   createdAt: string
   updatedAt: string
@@ -45,7 +45,7 @@ function isIdentifier(value: unknown): value is AssetIdentifier {
     && typeof item.assetId === 'string' && (item.symbology === 'code128' || item.symbology === 'qr')
     && typeof item.normalizedValue === 'string' && typeof item.displayValue === 'string'
     && typeof item.source === 'string' && typeof item.primary === 'boolean'
-    && typeof item.status === 'string' && typeof item.revision === 'number'
+    && typeof item.status === 'string' && isRevision(item.revision)
     && typeof item.createdBy === 'string' && typeof item.createdAt === 'string'
     && typeof item.updatedAt === 'string'
 }

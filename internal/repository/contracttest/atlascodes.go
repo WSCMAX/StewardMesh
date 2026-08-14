@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -312,6 +313,88 @@ func AtlasCodesStore(
 	history, err := subject.ListIdentifiers(ctx, organizationID, assetID)
 	if err != nil || len(history) != 4 {
 		t.Fatalf("unexpected complete Atlas Codes history %#v err=%v", history, err)
+	}
+	assertAtlasCodesExchangeStore(t, subject, organizationID, assetID, suffix, now)
+}
+
+func assertAtlasCodesExchangeStore(
+	t testing.TB,
+	subject atlascodes.Store,
+	organizationID, assetID, suffix string,
+	now time.Time,
+) {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := subject.SnapshotIdentifiers(ctx, organizationID, 1); !errors.Is(err, atlascodes.ErrTooLarge) {
+		t.Fatalf("expected bounded Atlas Codes Exchange snapshot, got %v", err)
+	}
+	replacedAt := now.Add(12 * time.Hour)
+	chain := atlascodes.IdentifierChain{TerminalID: "exchange-code-new-" + suffix, Items: []atlascodes.Identifier{
+		{
+			ID: "exchange-code-old-" + suffix, OrganizationID: organizationID, AssetID: assetID,
+			Symbology: atlascodes.SymbologyCode128, NormalizedValue: "EXCHANGE-OLD-" + suffix,
+			DisplayValue: "Exchange old " + suffix, Source: atlascodes.SourceImported, Primary: false,
+			Status: atlascodes.StatusReplaced, ReplacedByID: "exchange-code-new-" + suffix, Revision: 2,
+			CreatedBy: "exchange-source", CreatedCorrelationID: "exchange-create-" + suffix,
+			UpdatedBy: "exchange-replacer", UpdatedCorrelationID: "exchange-replace-" + suffix,
+			CreatedAt: now.Add(10 * time.Hour), UpdatedAt: replacedAt, DeactivatedAt: &replacedAt,
+		},
+		{
+			ID: "exchange-code-new-" + suffix, OrganizationID: organizationID, AssetID: assetID,
+			Symbology: atlascodes.SymbologyQR, NormalizedValue: "https://exchange.example.test/codes/" + suffix,
+			DisplayValue: "Exchange new " + suffix, Source: atlascodes.SourceGenerated, Primary: false,
+			Status: atlascodes.StatusActive, SupersedesID: "exchange-code-old-" + suffix, Revision: 1,
+			CreatedBy: "exchange-replacer", CreatedCorrelationID: "exchange-replace-" + suffix,
+			UpdatedBy: "exchange-replacer", UpdatedCorrelationID: "exchange-replace-" + suffix,
+			CreatedAt: replacedAt, UpdatedAt: replacedAt,
+		},
+	}}
+	persisted, created, err := subject.ImportIdentifierChain(ctx, organizationID, chain)
+	if err != nil || !created || !reflect.DeepEqual(persisted, chain) {
+		t.Fatalf("atomic Atlas Codes chain import failed: chain=%#v created=%t err=%v", persisted, created, err)
+	}
+	if replayed, created, err := subject.ImportIdentifierChain(ctx, organizationID, chain); err != nil || created || !reflect.DeepEqual(replayed, chain) {
+		t.Fatalf("exact Atlas Codes chain replay failed: chain=%#v created=%t err=%v", replayed, created, err)
+	}
+	conflicting := chain
+	conflicting.Items = append([]atlascodes.Identifier(nil), chain.Items...)
+	conflicting.Items[1].DisplayValue = "changed"
+	if _, _, err := subject.ImportIdentifierChain(ctx, organizationID, conflicting); !errors.Is(err, atlascodes.ErrConflict) {
+		t.Fatalf("expected changed Atlas Codes chain replay conflict, got %v", err)
+	}
+	partial := atlascodes.IdentifierChain{TerminalID: "exchange-code-partial-" + suffix, Items: []atlascodes.Identifier{
+		chain.Items[0],
+		{
+			ID: "exchange-code-partial-" + suffix, OrganizationID: organizationID, AssetID: assetID,
+			Symbology: atlascodes.SymbologyQR, NormalizedValue: "https://exchange.example.test/partial/" + suffix,
+			DisplayValue: "Exchange partial " + suffix, Source: atlascodes.SourceImported, Primary: false,
+			Status: atlascodes.StatusActive, SupersedesID: chain.Items[0].ID, Revision: 1,
+			CreatedBy: "exchange-replacer", CreatedCorrelationID: "exchange-replace-" + suffix,
+			UpdatedBy: "exchange-replacer", UpdatedCorrelationID: "exchange-replace-" + suffix,
+			CreatedAt: replacedAt, UpdatedAt: replacedAt,
+		},
+	}}
+	if _, _, err := subject.ImportIdentifierChain(ctx, organizationID, partial); !errors.Is(err, atlascodes.ErrConflict) {
+		t.Fatalf("expected partial Atlas Codes chain conflict, got %v", err)
+	}
+	if _, err := subject.GetIdentifierByID(ctx, organizationID, partial.TerminalID); !errors.Is(err, atlascodes.ErrNotFound) {
+		t.Fatalf("partial Atlas Codes chain left a row behind: %v", err)
+	}
+	snapshot, err := subject.SnapshotIdentifiers(ctx, organizationID, 10_000)
+	if err != nil {
+		t.Fatalf("complete Atlas Codes Exchange snapshot failed: %v", err)
+	}
+	for _, expected := range chain.Items {
+		found := false
+		for _, item := range snapshot {
+			if reflect.DeepEqual(item, expected) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("Atlas Codes Exchange snapshot omitted %#v", expected)
+		}
 	}
 }
 

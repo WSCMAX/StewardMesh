@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { beforeEach, expect, test, vi } from 'vitest'
 import ReachManager from './ReachManager'
 
-// Requirement: REQ-REACH-001. Feature: messaging.delivery. GitHub: #12.
+// Requirements: REQ-REACH-001, REQ-EXCHANGE-001. Features: messaging.delivery, migration.packages. GitHub: #9, #12.
 
 const endpoint = { id: 'hook-primary', label: 'Operations webhook', kind: 'webhook' }
 const teamsEndpoint = { id: 'teams-primary', label: 'Operations Teams', kind: 'teams', destinationKey: 'operations-channel' }
@@ -15,6 +15,10 @@ const message = { id: 'message-one', groupId: group.id, providerId: provider.id,
 const attempt = { id: 'attempt-one', messageId: message.id, attempt: 1, outcome: 'retrying', errorCode: 'provider_unavailable', retryable: true, nextAttemptAt: '2026-08-13T12:05:00Z', occurredAt: '2026-08-13T12:00:00Z' }
 
 function response(body: unknown, status = 200) { return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } }) }
+function responseWithRawRevision(body: Record<string, unknown>, revision: string, status = 200) {
+  const encoded = JSON.stringify(Object.fromEntries(Object.entries(body).filter(([key]) => key !== 'revision')))
+  return new Response(`${encoded.slice(0, -1)},"revision":${revision}}`, { status, headers: { 'Content-Type': 'application/json' } })
+}
 function reads(input: RequestInfo | URL) {
   const path = String(input)
   if (path === '/api/v1/reach/endpoints') return response({ items: [endpoint, teamsEndpoint] })
@@ -131,4 +135,63 @@ test('derives the exact Teams recipient from safe endpoint metadata', async () =
     providerId: teamsProvider.id,
     recipients: [{ kind: 'channel', address: teamsEndpoint.destinationKey }],
   })
+})
+
+test('reconfigures an inert imported provider through endpoint, confirmed secret, then explicit enablement', async () => {
+  const revisions = ['9007199254740993', '9007199254740994', '9007199254740995', '9007199254740996'] as const
+  let revisionIndex = 0
+  let current = { id: 'imported-hook', name: 'Imported webhook', kind: 'webhook', endpointId: '', secretConfigured: false, enabled: false, revision: revisions[revisionIndex] }
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input)
+    if (path === '/api/v1/reach/endpoints') return response({ items: [endpoint] })
+    if (path === '/api/v1/reach/providers' && !init?.method) {
+      const providerResponse = responseWithRawRevision(current, current.revision)
+      return new Response(`{"items":[${await providerResponse.text()}]}`, { headers: { 'Content-Type': 'application/json' } })
+    }
+    if (path === '/api/v1/reach/providers/imported-hook/tests') return response({ items: [] })
+    if (path === '/api/v1/reach/templates') return response({ items: [] })
+    if (path === '/api/v1/reach/groups') return response({ items: [] })
+    if (path === '/api/v1/reach/messages?limit=100') return response({ items: [] })
+    if (path === '/api/v1/reach/providers/imported-hook' && init?.method === 'PUT') {
+      const enabled = revisionIndex !== 0
+      expect(String(init.body)).toBe(`{"name":"Imported webhook","sender":"","endpointId":"${endpoint.id}","enabled":${enabled},"revision":${revisions[revisionIndex]}}`)
+      expect(String(init.body)).not.toContain('secretRef')
+      revisionIndex += 1
+      current = { ...current, endpointId: endpoint.id, enabled, revision: revisions[revisionIndex] }
+      return responseWithRawRevision(current, current.revision)
+    }
+    if (path === '/api/v1/reach/providers/imported-hook/rotate-secret' && init?.method === 'POST') {
+      expect(String(init.body)).toBe(`{"secretRef":"env:IMPORTED_REACH","revision":${revisions[revisionIndex]},"confirm":true}`)
+      revisionIndex += 1
+      current = { ...current, secretConfigured: true, revision: revisions[revisionIndex] }
+      return responseWithRawRevision(current, current.revision)
+    }
+    throw new Error(`unexpected request: ${path}`)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  Object.defineProperty(window, 'innerWidth', { configurable: true, value: 320 })
+  const { container } = render(<ReachManager csrfToken="csrf-token" permissions={['messaging.read', 'messaging.write']} />)
+  expect(await screen.findByText(/route missing/)).toBeInTheDocument()
+
+  const enable = screen.getByRole('checkbox', { name: /Enable Imported webhook/ })
+  expect(enable).toBeDisabled()
+  fireEvent.change(screen.getByLabelText('Approved endpoint for Imported webhook'), { target: { value: endpoint.id } })
+  fireEvent.click(screen.getByRole('button', { name: 'Save Imported webhook configuration' }))
+  expect(await screen.findByText('Provider configuration saved disabled.')).toBeInTheDocument()
+
+  fireEvent.change(screen.getByLabelText('New external secret reference for Imported webhook'), { target: { value: 'env:IMPORTED_REACH' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Confirm rotation' }))
+  expect(await screen.findByText('External secret reference rotated.')).toBeInTheDocument()
+  const enabledAfterConfiguration = screen.getByRole('checkbox', { name: /Enable Imported webhook/ })
+  expect(enabledAfterConfiguration).not.toBeDisabled()
+
+  fireEvent.click(enabledAfterConfiguration)
+  fireEvent.click(screen.getByRole('button', { name: 'Save Imported webhook configuration' }))
+  await waitFor(() => {
+    const updateCalls = fetchMock.mock.calls.filter(([path, init]) => path === '/api/v1/reach/providers/imported-hook' && init?.method === 'PUT')
+    expect(updateCalls).toHaveLength(2)
+    expect(String(updateCalls[1]?.[1]?.body)).toBe(`{"name":"Imported webhook","sender":"","endpointId":"${endpoint.id}","enabled":true,"revision":9007199254740995}`)
+  })
+  expect(revisionIndex).toBe(3)
+  expect((await axe.run(container)).violations).toEqual([])
 })

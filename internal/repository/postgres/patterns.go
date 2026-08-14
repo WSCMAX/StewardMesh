@@ -92,6 +92,65 @@ func (s *PatternsStore) CreateVersion(ctx context.Context, template patterns.Tem
 	return created, nil
 }
 
+func (s *PatternsStore) ImportTemplateHistory(ctx context.Context, organizationID string, history []patterns.Template) error {
+	if len(history) == 0 || len(history) > patterns.MaximumExchangeVersions {
+		return patterns.ErrInvalidInput
+	}
+	first := history[0]
+	if first.OrganizationID != organizationID {
+		return patterns.ErrInvalidInput
+	}
+	transaction, err := s.database.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin Patterns Exchange history import: %w", err)
+	}
+	defer transaction.Rollback()
+	// The lock serializes both stable-ID and organization-local normalized-name
+	// decisions before any version is written, so partial histories cannot leak.
+	if _, err := transaction.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1 || chr(31) || $2, 8108))`, organizationID, first.ID); err != nil {
+		return fmt.Errorf("lock Patterns Exchange history import: %w", err)
+	}
+	var existingCount int
+	if err := transaction.QueryRowContext(ctx, `SELECT count(*) FROM pattern_template_versions WHERE organization_id=$1 AND id=$2`, organizationID, first.ID).Scan(&existingCount); err != nil {
+		return fmt.Errorf("inspect Patterns Exchange history: %w", err)
+	}
+	if existingCount > 0 {
+		if existingCount != len(history) {
+			return patterns.ErrConflict
+		}
+		for _, expected := range history {
+			observed, err := scanPatternsRead("read Patterns Exchange history", transaction.QueryRowContext(ctx,
+				`SELECT `+patternsColumns+` FROM pattern_template_versions WHERE organization_id=$1 AND id=$2 AND version=$3`, organizationID, first.ID, expected.Version))
+			if err != nil || !samePostgresPatternsTemplate(observed, expected) {
+				return patterns.ErrConflict
+			}
+		}
+		return transaction.Commit()
+	}
+	for index, template := range history {
+		if template.OrganizationID != organizationID || template.ID != first.ID || template.RecordType != first.RecordType ||
+			template.Name != first.Name || template.Version != int64(index+1) || template.BuiltIn {
+			return patterns.ErrInvalidInput
+		}
+		if _, err := insertPatternsTemplate(ctx, transaction, template); err != nil {
+			return err
+		}
+	}
+	if err := transaction.Commit(); err != nil {
+		return fmt.Errorf("commit Patterns Exchange history import: %w", err)
+	}
+	return nil
+}
+
+func samePostgresPatternsTemplate(left, right patterns.Template) bool {
+	leftFields, leftErr := json.Marshal(left.Fields)
+	rightFields, rightErr := json.Marshal(right.Fields)
+	return leftErr == nil && rightErr == nil && left.ID == right.ID && left.OrganizationID == right.OrganizationID &&
+		left.RecordType == right.RecordType && left.Name == right.Name && left.Description == right.Description &&
+		left.Version == right.Version && left.Status == right.Status && left.CreatedBy == right.CreatedBy &&
+		left.CreatedAt.Equal(right.CreatedAt) && string(leftFields) == string(rightFields)
+}
+
 func (s *PatternsStore) insertTemplate(ctx context.Context, template patterns.Template) (patterns.Template, error) {
 	return insertPatternsTemplate(ctx, s.database, template)
 }

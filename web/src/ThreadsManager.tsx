@@ -1,5 +1,5 @@
 import { type FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
-import { ApiRequestError, requestJSON } from './api'
+import { ApiRequestError, isRevision, requestJSON, type Revision } from './api'
 import type { Asset } from './AtlasInventory'
 import { buttonClass, inputClass, panelClass, secondaryButtonClass, subpanelClass } from './ui'
 
@@ -11,7 +11,7 @@ type Tag = {
   name: string
   parentId?: string
   inheritByDefault: boolean
-  revision: number
+  revision: Revision
 }
 
 type Goal = {
@@ -20,13 +20,13 @@ type Goal = {
   name: string
   description?: string
   parentId?: string
-  revision: number
+  revision: Revision
 }
 
 type TagRule = {
   tagId: string
   mode: 'include' | 'suppress'
-  revision: number
+  revision: Revision
 }
 
 type EffectiveTag = {
@@ -60,7 +60,7 @@ function isTag(value: unknown): value is Tag {
   if (typeof value !== 'object' || value === null) return false
   const item = value as Record<string, unknown>
   return typeof item.id === 'string' && typeof item.organizationId === 'string' && typeof item.name === 'string'
-    && typeof item.inheritByDefault === 'boolean' && typeof item.revision === 'number'
+    && typeof item.inheritByDefault === 'boolean' && isRevision(item.revision)
     && (item.parentId === undefined || typeof item.parentId === 'string')
 }
 
@@ -68,7 +68,7 @@ function isGoal(value: unknown): value is Goal {
   if (typeof value !== 'object' || value === null) return false
   const item = value as Record<string, unknown>
   return typeof item.id === 'string' && typeof item.organizationId === 'string' && typeof item.name === 'string'
-    && typeof item.revision === 'number' && (item.parentId === undefined || typeof item.parentId === 'string')
+    && isRevision(item.revision) && (item.parentId === undefined || typeof item.parentId === 'string')
 }
 
 function isEffectiveTag(value: unknown): value is EffectiveTag {
@@ -78,7 +78,7 @@ function isEffectiveTag(value: unknown): value is EffectiveTag {
   if (item.rule === undefined) return item.sourceTagId === undefined || typeof item.sourceTagId === 'string'
   if (typeof item.rule !== 'object' || item.rule === null) return false
   const rule = item.rule as Record<string, unknown>
-  return typeof rule.tagId === 'string' && ['include', 'suppress'].includes(String(rule.mode)) && typeof rule.revision === 'number'
+  return typeof rule.tagId === 'string' && ['include', 'suppress'].includes(String(rule.mode)) && isRevision(rule.revision)
 }
 
 function isGoalLink(value: unknown): value is GoalLink {
@@ -257,7 +257,7 @@ export default function ThreadsManager({ assets, csrfToken, permissions, onOpenH
     }
   }
 
-  async function removeTagRule(tag: Tag, revision: number) {
+  async function removeTagRule(tag: Tag, revision: Revision) {
     if (!assetID) return
     setBusy(`tag-${tag.id}`)
     setError('')
@@ -371,7 +371,7 @@ function TagTree({ tags, tagByID, effectiveByID, canWrite, busy, onSet, onRemove
   canWrite: boolean
   busy: string
   onSet: (tag: Tag, mode: 'include' | 'suppress') => Promise<void>
-  onRemove: (tag: Tag, revision: number) => Promise<void>
+  onRemove: (tag: Tag, revision: Revision) => Promise<void>
 }) {
   const children = new Map<string, Tag[]>()
   for (const tag of tags) {

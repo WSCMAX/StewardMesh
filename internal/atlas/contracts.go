@@ -25,6 +25,7 @@ var (
 	ErrNotFound         = errors.New("Atlas record not found")
 	ErrConflict         = errors.New("Atlas record conflicts with existing data")
 	ErrReferenceMissing = errors.New("Atlas reference does not exist")
+	ErrTooLarge         = errors.New("Atlas snapshot exceeds its bounded limit")
 )
 
 type Query struct {
@@ -282,7 +283,46 @@ type UpdateModelInput struct {
 	Revision         int64             `json:"revision"`
 }
 
+// ExchangeSnapshot is an organization-consistent, bounded view used only by
+// the Exchange provider. InstanceCount is derived and is therefore cleared by
+// adapters before returning Models.
+type ExchangeSnapshot struct {
+	Models          []domain.AssetModel
+	Assets          []domain.Asset
+	LifecycleEvents []domain.AssetLifecycleEvent
+}
+
+// ExchangeImportOperation is the deterministic mutation identity issued by
+// Exchange after durable intent and imported ownership have been reserved.
+type ExchangeImportOperation struct {
+	Token      string
+	OccurredAt time.Time
+}
+
+type ExchangeImportResult struct {
+	Committed bool
+	Created   bool
+}
+
+// ExchangeImporter is an opaque construction-time capability. It is the only
+// supported way to preserve source revisions, timestamps, immutable model
+// context, and lifecycle provenance during an Exchange import.
+type ExchangeImporter interface {
+	ImportModel(context.Context, ExchangeImportOperation, domain.AssetModel) (ExchangeImportResult, error)
+	ImportAsset(context.Context, ExchangeImportOperation, domain.Asset) (ExchangeImportResult, error)
+	ImportLifecycleEvent(context.Context, ExchangeImportOperation, domain.AssetLifecycleEvent) (ExchangeImportResult, error)
+	atlasExchangeImporter()
+}
+
+// WriteGate is the service-layer imported-ownership fence. Exchange receives
+// a private capability that bypasses the ordinary mutation gate only after its
+// own durable intent and ownership workflow has completed.
+type WriteGate interface {
+	CheckResourceWrite(context.Context, string, string) error
+}
+
 type Store interface {
+	ExchangeSnapshot(ctx context.Context, organizationID string, maximum int) (ExchangeSnapshot, error)
 	ListModels(ctx context.Context, organizationID string, query ModelQuery) ([]domain.AssetModel, error)
 	GetModel(ctx context.Context, organizationID, id string) (domain.AssetModel, error)
 	ResolveModel(ctx context.Context, organizationID string, identity ModelIdentity) (domain.AssetModel, error)
@@ -298,6 +338,10 @@ type Store interface {
 	CreateAssets(ctx context.Context, assets []domain.Asset, initialEvents []domain.AssetLifecycleEvent) ([]domain.Asset, error)
 	UpdateAsset(ctx context.Context, asset domain.Asset, expectedRevision int64, lifecycleEvent *domain.AssetLifecycleEvent) (domain.Asset, error)
 	ListAssetLifecycle(ctx context.Context, organizationID, assetID string) ([]domain.AssetLifecycleEvent, error)
+	GetAssetLifecycleEvent(ctx context.Context, organizationID, eventID string) (domain.AssetLifecycleEvent, error)
+	ImportModel(ctx context.Context, model domain.AssetModel) (domain.AssetModel, bool, error)
+	ImportAsset(ctx context.Context, asset domain.Asset) (domain.Asset, bool, error)
+	ImportAssetLifecycleEvent(ctx context.Context, event domain.AssetLifecycleEvent) (domain.AssetLifecycleEvent, bool, error)
 }
 
 type ReferenceValidator interface {

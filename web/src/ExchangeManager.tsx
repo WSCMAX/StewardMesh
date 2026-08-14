@@ -1,16 +1,18 @@
 import { type FormEvent, useEffect, useRef, useState } from 'react'
-import { ApiRequestError, requestArtifact, requestJSON } from './api'
+import { ApiRequestError, isRevision, requestArtifact, requestJSON, type Revision } from './api'
 import { StatusBadge, buttonClass, emptyStateClass, panelClass, plainButtonClass, secondaryButtonClass, subpanelClass, tableWrapClass } from './ui'
 
-// Requirement: REQ-EXCHANGE-001. Feature: migration.packages. GitHub: #9.
+// Requirements: REQ-EXCHANGE-001, REQ-PATTERNS-001. Features: migration.packages, templates.schemas. GitHub: #8, #9.
 
 export const exchangeMediaType = 'application/vnd.stewardmesh.openinventory+zip'
 export const maximumExchangePackageBytes = 32 * 1024 * 1024
 
 type ExchangeReference = { type: string; id: string }
-export type ExchangeRecord = ExchangeReference & { revision: number; templateId: string; templateVersion: number; dependencies: ExchangeReference[]; hasFile: boolean }
+export type ExchangeRecord = ExchangeReference & { revision: Revision; templateId: string; templateVersion: number; dependencies: ExchangeReference[]; hasFile: boolean }
+export type ExchangeExcludedRecordType = { type: string; reason: string }
+export type ExchangeProviderStatus = { portableRecordTypes: string[]; registeredRecordTypes: string[]; complete: boolean }
 type ExchangeRecordOutcome = ExchangeReference & {
-  revision: number
+  revision: Revision
   checksum: string
   status: 'created' | 'unchanged' | 'holding'
   missingDependencies: ExchangeReference[]
@@ -63,14 +65,14 @@ function isReferenceList(value: unknown, maximum = 130): value is ExchangeRefere
 function isExchangeRecord(value: unknown): value is ExchangeRecord {
   if (!isReference(value)) return false
   const candidate = value as ExchangeReference & Record<string, unknown>
-  return isPositiveCount(candidate.revision) && typeof candidate.templateId === 'string' && stableIDPattern.test(candidate.templateId)
+  return isRevision(candidate.revision) && typeof candidate.templateId === 'string' && stableIDPattern.test(candidate.templateId)
     && isPositiveCount(candidate.templateVersion) && isReferenceList(candidate.dependencies, 128) && typeof candidate.hasFile === 'boolean'
 }
 
 function isRecordOutcome(value: unknown): value is ExchangeRecordOutcome {
   if (!isReference(value)) return false
   const candidate = value as ExchangeReference & Record<string, unknown>
-  return isPositiveCount(candidate.revision) && typeof candidate.checksum === 'string' && sha256Pattern.test(candidate.checksum)
+  return isRevision(candidate.revision) && typeof candidate.checksum === 'string' && sha256Pattern.test(candidate.checksum)
     && typeof candidate.status === 'string' && outcomeStatuses.has(candidate.status) && isReferenceList(candidate.missingDependencies)
     && typeof candidate.writeLocked === 'boolean'
 }
@@ -106,6 +108,48 @@ export function parseExchangeRecords(value: unknown): ExchangeRecord[] {
   return value.items
 }
 
+export function parseExchangeExcludedRecordTypes(value: unknown): ExchangeExcludedRecordType[] {
+  if (!isObject(value) || !Array.isArray(value.excludedRecordTypes) || value.excludedRecordTypes.length > 51) {
+    throw new Error('invalid Exchange exclusion response')
+  }
+  const seen = new Set<string>()
+  return value.excludedRecordTypes.map((item) => {
+    if (!isObject(item) || typeof item.type !== 'string' || !recordTypePattern.test(item.type)
+      || typeof item.reason !== 'string' || item.reason.trim() !== item.reason || item.reason.length < 1 || item.reason.length > 500
+      || seen.has(item.type)) throw new Error('invalid Exchange exclusion response')
+    seen.add(item.type)
+    return { type: item.type, reason: item.reason }
+  })
+}
+
+export function parseExchangeProviderStatus(value: unknown): ExchangeProviderStatus {
+  if (!isObject(value) || !Array.isArray(value.portableRecordTypes) || value.portableRecordTypes.length < 1 || value.portableRecordTypes.length > 51
+    || !Array.isArray(value.registeredRecordTypes) || value.registeredRecordTypes.length > 51 || typeof value.providerRegistryComplete !== 'boolean') {
+    throw new Error('invalid Exchange provider status response')
+  }
+  const parseTypes = (items: unknown[], label: string) => {
+    const result: string[] = []
+    const seen = new Set<string>()
+    for (const item of items) {
+      if (typeof item !== 'string' || !recordTypePattern.test(item) || seen.has(item)) throw new Error(`invalid Exchange ${label} response`)
+      seen.add(item)
+      result.push(item)
+    }
+    return result
+  }
+  const portableRecordTypes = parseTypes(value.portableRecordTypes, 'portable provider status')
+  const registeredRecordTypes = parseTypes(value.registeredRecordTypes, 'registered provider status')
+  const portable = new Set(portableRecordTypes)
+  const registered = new Set(registeredRecordTypes)
+  const complete = portableRecordTypes.length === registeredRecordTypes.length
+    && portableRecordTypes.every((recordType) => registered.has(recordType))
+  if (registeredRecordTypes.some((recordType) => !portable.has(recordType))
+    || value.providerRegistryComplete !== complete) {
+    throw new Error('invalid Exchange provider status response')
+  }
+  return { portableRecordTypes, registeredRecordTypes, complete: value.providerRegistryComplete }
+}
+
 export function parseExchangePackages(value: unknown): ExchangePackage[] {
   if (!isObject(value) || !Array.isArray(value.items) || value.items.length > 100 || !value.items.every(isExchangePackage)) {
     throw new Error('invalid Exchange package response')
@@ -122,6 +166,10 @@ export function parseExchangeImport(value: unknown): ImportResult {
 
 function referenceKey(reference: ExchangeReference) { return `${reference.type}:${reference.id}` }
 function referenceLabel(reference: ExchangeReference) { return `${reference.type} · ${reference.id}` }
+export function exchangeRecordTypeDescription(recordType: string) {
+	if (recordType === 'bridge.oauth-client') return 'Public PKCE client configuration only; OAuth grants, credentials, and authorization transactions are excluded.'
+	return 'Portable domain record'
+}
 function formatBytes(value: number) {
   if (value < 1024) return `${value} B`
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KiB`
@@ -134,6 +182,8 @@ export default function ExchangeManager({ csrfToken, permissions, onOpenHelp }: 
   const canRead = permissions.includes('integrations.read')
   const canWrite = permissions.includes('integrations.write')
   const [records, setRecords] = useState<ExchangeRecord[]>([])
+  const [excludedRecordTypes, setExcludedRecordTypes] = useState<ExchangeExcludedRecordType[]>([])
+  const [providerStatus, setProviderStatus] = useState<ExchangeProviderStatus>({ portableRecordTypes: [], registeredRecordTypes: [], complete: false })
   const [packages, setPackages] = useState<ExchangePackage[]>([])
   const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set())
   const [includeDependencies, setIncludeDependencies] = useState(true)
@@ -158,6 +208,8 @@ export default function ExchangeManager({ csrfToken, permissions, onOpenHelp }: 
       requestJSON('/api/v1/exchange/packages?limit=25', { signal: controller.signal }),
     ]).then(([recordValue, packageValue]) => {
       setRecords(parseExchangeRecords(recordValue))
+      setExcludedRecordTypes(parseExchangeExcludedRecordTypes(recordValue))
+      setProviderStatus(parseExchangeProviderStatus(recordValue))
       setPackages(parseExchangePackages(packageValue))
       setError('')
     }).catch((cause) => {
@@ -241,12 +293,13 @@ export default function ExchangeManager({ csrfToken, permissions, onOpenHelp }: 
     <div className={`${panelClass} p-5 sm:p-6`}>
       <div className="flex flex-wrap items-start justify-between gap-4"><div><p className="text-sm font-semibold text-steward-teal">Portable, dependency-aware archives</p><h2 className="mt-1 text-2xl font-semibold" id="exchange-heading">Exchange — Migration packages</h2><p className="mt-2 max-w-3xl leading-7 text-steward-mist-muted">Export selected records with provenance and checksums, or import a bounded .openinventory package. Imports preserve source identity and remain write-locked until an explicit ownership claim.</p></div>{onOpenHelp && <button className={secondaryButtonClass} onClick={onOpenHelp} type="button">Exchange help</button>}</div>
       {error && <div className="mt-4 rounded-xl border border-steward-danger/50 bg-steward-danger/15 p-4 text-sm text-[#ffccd1]" ref={errorRef} role="alert" tabIndex={-1}>{error}</div>}
+      {providerStatus.portableRecordTypes.length > 0 && <div className={`mt-4 rounded-xl border p-4 text-sm leading-6 ${providerStatus.complete ? 'border-steward-teal/35 bg-steward-teal/10 text-steward-mist-muted' : 'border-steward-warning/45 bg-steward-warning/10 text-[#ffdca8]'}`} role="status"><strong className="text-steward-mist">Provider availability:</strong> {providerStatus.registeredRecordTypes.length} of {providerStatus.portableRecordTypes.length} portable record families are registered.{!providerStatus.complete && ' This build does not satisfy the complete phase-one Exchange provider gate; only records shown below are selectable.'}</div>}
       <p aria-live="polite" className="mt-4 text-sm font-semibold text-[#aaf0c6]" role="status">{message}</p>
     </div>
 
     <form className={`${panelClass} min-w-0 p-5 sm:p-6`} onSubmit={exportPackage}>
       <div className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="text-xl font-semibold" id="exchange-export-heading">Build an export package</h3><p className="mt-2 max-w-3xl text-sm leading-6 text-steward-mist-muted">Choose explicit records. Required dependencies can be added automatically; the server still validates the complete dependency graph.</p></div>{records.length > 0 && <button className={plainButtonClass} disabled={!canWrite || busy !== ''} onClick={() => setSelected(allSelected ? new Set() : new Set(records.map(referenceKey)))} type="button">{allSelected ? 'Clear selection' : 'Select all records'}</button>}</div>
-      {records.length === 0 ? <p className={`${emptyStateClass} mt-4`}>{busy === 'loading' ? 'Loading portable records…' : 'No portable records are available.'}</p> : <fieldset className="mt-4 min-w-0 max-w-full" disabled={!canWrite || busy !== ''}><legend className="sr-only">Records to export</legend><div aria-label="Portable records" className={tableWrapClass} role="region" tabIndex={0}><table className="min-w-[52rem] w-full text-left text-sm"><thead className="border-b border-white/10 text-xs uppercase tracking-wide text-steward-slate"><tr><th className="px-4 py-3" scope="col">Select</th><th className="px-4 py-3" scope="col">Record</th><th className="px-4 py-3" scope="col">Revision</th><th className="px-4 py-3" scope="col">Patterns schema</th><th className="px-4 py-3" scope="col">Dependencies</th><th className="px-4 py-3" scope="col">File</th></tr></thead><tbody>{records.map((record) => { const key = referenceKey(record); return <tr className="border-b border-white/[0.07] last:border-0" key={key}><td className="px-4 py-3"><input aria-label={`Select ${referenceLabel(record)}`} checked={selected.has(key)} className="size-5 accent-steward-teal" onChange={() => toggleRecord(key)} type="checkbox" /></td><th className="px-4 py-3 font-semibold text-steward-mist" scope="row"><span className="block">{record.type}</span><span className="mt-1 block break-all font-mono text-xs font-normal text-steward-mist-muted">{record.id}</span></th><td className="px-4 py-3 text-steward-mist-muted">{record.revision}</td><td className="px-4 py-3 text-steward-mist-muted"><span className="block break-all font-mono text-xs">{record.templateId}</span><span className="mt-1 block">version {record.templateVersion}</span></td><td className="px-4 py-3 text-steward-mist-muted">{record.dependencies.length === 0 ? 'None' : record.dependencies.map(referenceLabel).join(', ')}</td><td className="px-4 py-3 text-steward-mist-muted">{record.hasFile ? 'Available' : 'None'}</td></tr> })}</tbody></table></div></fieldset>}
+      {records.length === 0 ? <p className={`${emptyStateClass} mt-4`}>{busy === 'loading' ? 'Loading portable records…' : 'No portable records are available.'}</p> : <fieldset className="mt-4 min-w-0 max-w-full" disabled={!canWrite || busy !== ''}><legend className="sr-only">Records to export</legend><div aria-label="Portable records" className={tableWrapClass} role="region" tabIndex={0}><table className="min-w-[52rem] w-full text-left text-sm"><thead className="border-b border-white/10 text-xs uppercase tracking-wide text-steward-slate"><tr><th className="px-4 py-3" scope="col">Select</th><th className="px-4 py-3" scope="col">Record</th><th className="px-4 py-3" scope="col">Revision</th><th className="px-4 py-3" scope="col">Patterns schema</th><th className="px-4 py-3" scope="col">Dependencies</th><th className="px-4 py-3" scope="col">File</th></tr></thead><tbody>{records.map((record) => { const key = referenceKey(record); return <tr className="border-b border-white/[0.07] last:border-0" key={key}><td className="px-4 py-3"><input aria-label={`Select ${referenceLabel(record)}`} checked={selected.has(key)} className="size-5 accent-steward-teal" onChange={() => toggleRecord(key)} type="checkbox" /></td><th className="px-4 py-3 font-semibold text-steward-mist" scope="row"><span className="block">{record.type}</span><span className="mt-1 block text-xs font-normal leading-5 text-steward-mist-muted">{exchangeRecordTypeDescription(record.type)}</span><span className="mt-1 block break-all font-mono text-xs font-normal text-steward-mist-muted">{record.id}</span></th><td className="px-4 py-3 text-steward-mist-muted">{record.revision}</td><td className="px-4 py-3 text-steward-mist-muted"><span className="block break-all font-mono text-xs">{record.templateId}</span><span className="mt-1 block">version {record.templateVersion}</span></td><td className="px-4 py-3 text-steward-mist-muted">{record.dependencies.length === 0 ? 'None' : record.dependencies.map(referenceLabel).join(', ')}</td><td className="px-4 py-3 text-steward-mist-muted">{record.hasFile ? 'Available' : 'None'}</td></tr> })}</tbody></table></div></fieldset>}
       <div className="mt-5 grid gap-4 lg:grid-cols-2">
         <fieldset className={`${subpanelClass} p-4`} disabled={!canWrite || busy !== ''}><legend className="font-semibold">Dependency scope</legend><label className="mt-3 flex min-h-11 items-start gap-3 text-sm leading-6"><input aria-label="Include required dependencies" checked={includeDependencies} className="mt-1 size-5 shrink-0 accent-steward-teal" onChange={(event) => setIncludeDependencies(event.target.checked)} type="checkbox" /><span><strong className="block text-steward-mist">Include required dependencies</strong><span className="text-steward-mist-muted">Recommended for a complete round trip. Dependencies are ordered before records that use them.</span></span></label></fieldset>
         <fieldset className={`${subpanelClass} p-4`} disabled={!canWrite || busy !== ''}><legend className="font-semibold">Vault file handling</legend><label className="mt-3 flex min-h-11 items-start gap-3 text-sm leading-6"><input aria-label="Metadata only" checked={fileMode === 'metadata'} className="mt-1 size-5 shrink-0 accent-steward-teal" name="file-mode" onChange={() => setFileMode('metadata')} type="radio" /><span><strong className="block text-steward-mist">Metadata only</strong><span className="text-steward-mist-muted">Move checksums, names, provider metadata, and relationships without file bytes.</span></span></label><label className="mt-3 flex min-h-11 items-start gap-3 text-sm leading-6"><input aria-label="Include file bytes" checked={fileMode === 'include'} className="mt-1 size-5 shrink-0 accent-steward-teal" name="file-mode" onChange={() => setFileMode('include')} type="radio" /><span><strong className="block text-steward-mist">Include file bytes</strong><span className="text-steward-mist-muted">Embed bounded, checksummed Vault content. Credentials and signed URLs are never packaged.</span></span></label></fieldset>
@@ -254,6 +307,12 @@ export default function ExchangeManager({ csrfToken, permissions, onOpenHelp }: 
       <div className="mt-5 flex flex-wrap items-center gap-3"><button className={buttonClass} disabled={!canWrite || busy !== '' || selected.size === 0} type="submit">{busy === 'export' ? 'Preparing package…' : 'Prepare export'}</button>{!canWrite && <span className="text-sm text-steward-warning">Requires integrations.write</span>}{download && <a className={secondaryButtonClass} download={download.name} href={download.href}>Download {download.name}</a>}</div>
       {download && <p className="mt-3 break-words text-xs leading-5 text-steward-mist-muted">{formatBytes(download.sizeBytes)} · SHA-256 <code className="break-all">{download.sha256}</code></p>}
     </form>
+
+    <section aria-labelledby="exchange-exclusions-heading" className={`${panelClass} min-w-0 p-5 sm:p-6`}>
+      <h3 className="text-xl font-semibold" id="exchange-exclusions-heading">Deliberately non-portable records</h3>
+      <p className="mt-2 max-w-3xl text-sm leading-6 text-steward-mist-muted">These record families remain destination-owned, derived, operational, or security-sensitive. They are never silently interpreted as ordinary domain data.</p>
+      {excludedRecordTypes.length === 0 ? <p className={`${emptyStateClass} mt-4`}>No exclusion policy was returned.</p> : <dl className="mt-4 grid min-w-0 gap-3 lg:grid-cols-2">{excludedRecordTypes.map((item) => <div className={`${subpanelClass} min-w-0 p-4`} key={item.type}><dt className="break-all font-mono text-sm font-semibold text-steward-mist">{item.type}</dt><dd className="mt-2 text-sm leading-6 text-steward-mist-muted">{item.reason}</dd></div>)}</dl>}
+    </section>
 
     <form className={`${panelClass} p-5 sm:p-6`} onSubmit={importPackage}>
       <h3 className="text-xl font-semibold">Import a package</h3><p className="mt-2 max-w-3xl text-sm leading-6 text-steward-mist-muted">Packages are limited to {formatBytes(maximumExchangePackageBytes)}. StewardMesh verifies the archive, manifest, checksums, identity, and dependencies before domain records are written.</p>

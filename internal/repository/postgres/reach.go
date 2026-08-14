@@ -1,6 +1,6 @@
 package postgres
 
-// PostgreSQL Reach adapter. Requirement: REQ-REACH-001. Feature: messaging.delivery. GitHub: #12.
+// PostgreSQL Reach adapter. Requirements: REQ-REACH-001, REQ-EXCHANGE-001. Features: messaging.delivery, migration.packages. GitHub: #9, #12.
 
 import (
 	"context"
@@ -30,6 +30,86 @@ const reachMessageColumns = `organization_id,id,group_id,provider_id,template_id
 const reachAttemptColumns = `organization_id,id,message_id,attempt,outcome,error_code,retryable,next_attempt_at,occurred_at`
 const reachProviderTestColumns = `organization_id,id,provider_id,outcome,error_code,tested_by,tested_at`
 
+func (s *ReachStore) ExchangeSnapshot(ctx context.Context, organizationID string, maximum int) (reach.ExchangeSnapshot, error) {
+	if maximum < 1 {
+		return reach.ExchangeSnapshot{}, reach.ErrInvalidInput
+	}
+	tx, err := s.database.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	if err != nil {
+		return reach.ExchangeSnapshot{}, fmt.Errorf("begin Reach Exchange snapshot: %w", err)
+	}
+	defer tx.Rollback()
+	var count int64
+	if err := tx.QueryRowContext(ctx, `SELECT
+		(SELECT count(*) FROM reach_providers WHERE organization_id=$1) +
+		(SELECT count(*) FROM reach_templates WHERE organization_id=$1) +
+		(SELECT count(*) FROM reach_subscriber_groups WHERE organization_id=$1)`, organizationID).Scan(&count); err != nil {
+		return reach.ExchangeSnapshot{}, fmt.Errorf("count Reach Exchange snapshot: %w", err)
+	}
+	if count > int64(maximum) {
+		return reach.ExchangeSnapshot{}, reach.ErrTooLarge
+	}
+	result := reach.ExchangeSnapshot{Providers: []reach.Provider{}, Templates: []reach.Template{}, Groups: []reach.SubscriberGroup{}}
+	providerRows, err := tx.QueryContext(ctx, `SELECT `+reachProviderColumns+` FROM reach_providers WHERE organization_id=$1 ORDER BY id`, organizationID)
+	if err != nil {
+		return reach.ExchangeSnapshot{}, fmt.Errorf("list Reach Exchange providers: %w", err)
+	}
+	for providerRows.Next() {
+		item, scanErr := scanReachProvider(providerRows)
+		if scanErr != nil {
+			providerRows.Close()
+			return reach.ExchangeSnapshot{}, fmt.Errorf("scan Reach Exchange provider: %w", scanErr)
+		}
+		result.Providers = append(result.Providers, item)
+	}
+	if err := providerRows.Close(); err != nil {
+		return reach.ExchangeSnapshot{}, fmt.Errorf("close Reach Exchange providers: %w", err)
+	}
+	if err := providerRows.Err(); err != nil {
+		return reach.ExchangeSnapshot{}, fmt.Errorf("iterate Reach Exchange providers: %w", err)
+	}
+	templateRows, err := tx.QueryContext(ctx, `SELECT `+reachTemplateColumns+` FROM reach_templates WHERE organization_id=$1 ORDER BY id`, organizationID)
+	if err != nil {
+		return reach.ExchangeSnapshot{}, fmt.Errorf("list Reach Exchange templates: %w", err)
+	}
+	for templateRows.Next() {
+		item, scanErr := scanReachTemplate(templateRows)
+		if scanErr != nil {
+			templateRows.Close()
+			return reach.ExchangeSnapshot{}, fmt.Errorf("scan Reach Exchange template: %w", scanErr)
+		}
+		result.Templates = append(result.Templates, item)
+	}
+	if err := templateRows.Close(); err != nil {
+		return reach.ExchangeSnapshot{}, fmt.Errorf("close Reach Exchange templates: %w", err)
+	}
+	if err := templateRows.Err(); err != nil {
+		return reach.ExchangeSnapshot{}, fmt.Errorf("iterate Reach Exchange templates: %w", err)
+	}
+	groupRows, err := tx.QueryContext(ctx, `SELECT `+reachGroupColumns+` FROM reach_subscriber_groups WHERE organization_id=$1 ORDER BY id`, organizationID)
+	if err != nil {
+		return reach.ExchangeSnapshot{}, fmt.Errorf("list Reach Exchange groups: %w", err)
+	}
+	for groupRows.Next() {
+		item, scanErr := scanReachGroup(groupRows)
+		if scanErr != nil {
+			groupRows.Close()
+			return reach.ExchangeSnapshot{}, fmt.Errorf("scan Reach Exchange group: %w", scanErr)
+		}
+		result.Groups = append(result.Groups, item)
+	}
+	if err := groupRows.Close(); err != nil {
+		return reach.ExchangeSnapshot{}, fmt.Errorf("close Reach Exchange groups: %w", err)
+	}
+	if err := groupRows.Err(); err != nil {
+		return reach.ExchangeSnapshot{}, fmt.Errorf("iterate Reach Exchange groups: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return reach.ExchangeSnapshot{}, fmt.Errorf("complete Reach Exchange snapshot: %w", err)
+	}
+	return result, nil
+}
+
 func (s *ReachStore) ListProviders(ctx context.Context, organizationID string) ([]reach.Provider, error) {
 	rows, err := s.database.QueryContext(ctx, `SELECT `+reachProviderColumns+` FROM reach_providers WHERE organization_id=$1 ORDER BY lower(name),id`, organizationID)
 	if err != nil {
@@ -54,7 +134,7 @@ func (s *ReachStore) GetProvider(ctx context.Context, organizationID, id string)
 
 func (s *ReachStore) CreateProvider(ctx context.Context, item reach.Provider) (reach.Provider, error) {
 	created, err := scanReachProvider(s.database.QueryRowContext(ctx, `INSERT INTO reach_providers (organization_id,id,name,kind,endpoint_id,sender,secret_ref,enabled,revision,created_by,updated_by,created_at,updated_at)
-		SELECT $1,$2,$3,$4,$5,NULLIF($6,''),$7,$8,$9,$10,$11,$12,$13 WHERE (SELECT count(*) FROM reach_providers WHERE organization_id=$1) < $14 RETURNING `+reachProviderColumns,
+		SELECT $1,$2,$3,$4,NULLIF($5,''),NULLIF($6,''),NULLIF($7,''),$8,$9,$10,$11,$12,$13 WHERE (SELECT count(*) FROM reach_providers WHERE organization_id=$1) < $14 RETURNING `+reachProviderColumns,
 		item.OrganizationID, item.ID, item.Name, item.Kind, item.EndpointID, item.Sender, item.SecretRef, item.Enabled, item.Revision, item.CreatedBy, item.UpdatedBy, item.CreatedAt, item.UpdatedAt, reach.MaximumProviders))
 	if errors.Is(err, sql.ErrNoRows) {
 		return reach.Provider{}, reach.ErrConflict
@@ -63,12 +143,27 @@ func (s *ReachStore) CreateProvider(ctx context.Context, item reach.Provider) (r
 }
 
 func (s *ReachStore) UpdateProvider(ctx context.Context, item reach.Provider, expectedRevision int64) (reach.Provider, error) {
-	updated, err := scanReachProvider(s.database.QueryRowContext(ctx, `UPDATE reach_providers SET name=$3,sender=NULLIF($4,''),secret_ref=$5,enabled=$6,revision=$7,updated_by=$8,updated_at=$9 WHERE organization_id=$1 AND id=$2 AND revision=$10 RETURNING `+reachProviderColumns,
-		item.OrganizationID, item.ID, item.Name, item.Sender, item.SecretRef, item.Enabled, item.Revision, item.UpdatedBy, item.UpdatedAt, expectedRevision))
+	updated, err := scanReachProvider(s.database.QueryRowContext(ctx, `UPDATE reach_providers SET name=$3,endpoint_id=NULLIF($4,''),sender=NULLIF($5,''),secret_ref=NULLIF($6,''),enabled=$7,revision=$8,updated_by=$9,updated_at=$10 WHERE organization_id=$1 AND id=$2 AND revision=$11 RETURNING `+reachProviderColumns,
+		item.OrganizationID, item.ID, item.Name, item.EndpointID, item.Sender, item.SecretRef, item.Enabled, item.Revision, item.UpdatedBy, item.UpdatedAt, expectedRevision))
 	if errors.Is(err, sql.ErrNoRows) {
 		return reach.Provider{}, reachMissingOrConflict(ctx, s.database, "reach_providers", item.OrganizationID, item.ID)
 	}
 	return updated, reachWriteError("update Reach provider", err)
+}
+
+func (s *ReachStore) ImportProvider(ctx context.Context, item reach.Provider) (reach.Provider, bool, error) {
+	created, err := scanReachProvider(s.database.QueryRowContext(ctx, `INSERT INTO reach_providers (organization_id,id,name,kind,endpoint_id,sender,secret_ref,enabled,revision,created_by,updated_by,created_at,updated_at)
+		SELECT $1,$2,$3,$4,NULLIF($5,''),NULLIF($6,''),NULLIF($7,''),$8,$9,$10,$11,$12,$13
+		WHERE (SELECT count(*) FROM reach_providers WHERE organization_id=$1) < $14 ON CONFLICT (organization_id,id) DO NOTHING RETURNING `+reachProviderColumns,
+		item.OrganizationID, item.ID, item.Name, item.Kind, item.EndpointID, item.Sender, item.SecretRef, item.Enabled, item.Revision, item.CreatedBy, item.UpdatedBy, item.CreatedAt, item.UpdatedAt, reach.MaximumProviders))
+	if errors.Is(err, sql.ErrNoRows) {
+		existing, getErr := s.GetProvider(ctx, item.OrganizationID, item.ID)
+		if errors.Is(getErr, reach.ErrNotFound) {
+			return reach.Provider{}, false, reach.ErrConflict
+		}
+		return existing, false, getErr
+	}
+	return created, err == nil, reachWriteError("import Reach provider", err)
 }
 
 func (s *ReachStore) ListTemplates(ctx context.Context, organizationID string) ([]reach.Template, error) {
@@ -110,6 +205,21 @@ func (s *ReachStore) UpdateTemplate(ctx context.Context, item reach.Template, ex
 		return reach.Template{}, reachMissingOrConflict(ctx, s.database, "reach_templates", item.OrganizationID, item.ID)
 	}
 	return updated, reachWriteError("update Reach template", err)
+}
+
+func (s *ReachStore) ImportTemplate(ctx context.Context, item reach.Template) (reach.Template, bool, error) {
+	created, err := scanReachTemplate(s.database.QueryRowContext(ctx, `INSERT INTO reach_templates (organization_id,id,name,subject,body,revision,created_by,updated_by,created_at,updated_at)
+		SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10 WHERE (SELECT count(*) FROM reach_templates WHERE organization_id=$1) < $11
+		ON CONFLICT (organization_id,id) DO NOTHING RETURNING `+reachTemplateColumns,
+		item.OrganizationID, item.ID, item.Name, item.Subject, item.Body, item.Revision, item.CreatedBy, item.UpdatedBy, item.CreatedAt, item.UpdatedAt, reach.MaximumTemplates))
+	if errors.Is(err, sql.ErrNoRows) {
+		existing, getErr := s.GetTemplate(ctx, item.OrganizationID, item.ID)
+		if errors.Is(getErr, reach.ErrNotFound) {
+			return reach.Template{}, false, reach.ErrConflict
+		}
+		return existing, false, getErr
+	}
+	return created, err == nil, reachWriteError("import Reach template", err)
 }
 
 func (s *ReachStore) ListGroups(ctx context.Context, organizationID string) ([]reach.SubscriberGroup, error) {
@@ -159,6 +269,25 @@ func (s *ReachStore) UpdateGroup(ctx context.Context, item reach.SubscriberGroup
 		return reach.SubscriberGroup{}, reachMissingOrConflict(ctx, s.database, "reach_subscriber_groups", item.OrganizationID, item.ID)
 	}
 	return updated, reachWriteError("update Reach subscriber group", err)
+}
+
+func (s *ReachStore) ImportGroup(ctx context.Context, item reach.SubscriberGroup) (reach.SubscriberGroup, bool, error) {
+	recipients, err := json.Marshal(item.Recipients)
+	if err != nil {
+		return reach.SubscriberGroup{}, false, reach.ErrInvalidInput
+	}
+	created, err := scanReachGroup(s.database.QueryRowContext(ctx, `INSERT INTO reach_subscriber_groups (organization_id,id,name,provider_id,template_id,recipients,revision,created_by,updated_by,created_at,updated_at)
+		SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11 WHERE (SELECT count(*) FROM reach_subscriber_groups WHERE organization_id=$1) < $12
+		ON CONFLICT (organization_id,id) DO NOTHING RETURNING `+reachGroupColumns,
+		item.OrganizationID, item.ID, item.Name, item.ProviderID, item.TemplateID, recipients, item.Revision, item.CreatedBy, item.UpdatedBy, item.CreatedAt, item.UpdatedAt, reach.MaximumGroups))
+	if errors.Is(err, sql.ErrNoRows) {
+		existing, getErr := s.GetGroup(ctx, item.OrganizationID, item.ID)
+		if errors.Is(getErr, reach.ErrNotFound) {
+			return reach.SubscriberGroup{}, false, reach.ErrConflict
+		}
+		return existing, false, getErr
+	}
+	return created, err == nil, reachWriteError("import Reach subscriber group", err)
 }
 
 func (s *ReachStore) ListMessages(ctx context.Context, organizationID string, limit int) ([]reach.Message, error) {
@@ -303,9 +432,9 @@ type reachScanner interface{ Scan(...any) error }
 
 func scanReachProvider(row reachScanner) (reach.Provider, error) {
 	var item reach.Provider
-	var sender sql.NullString
-	err := row.Scan(&item.OrganizationID, &item.ID, &item.Name, &item.Kind, &item.EndpointID, &sender, &item.SecretRef, &item.Enabled, &item.Revision, &item.CreatedBy, &item.UpdatedBy, &item.CreatedAt, &item.UpdatedAt)
-	item.Sender, item.SecretConfigured = sender.String, item.SecretRef != ""
+	var endpointID, sender, secretRef sql.NullString
+	err := row.Scan(&item.OrganizationID, &item.ID, &item.Name, &item.Kind, &endpointID, &sender, &secretRef, &item.Enabled, &item.Revision, &item.CreatedBy, &item.UpdatedBy, &item.CreatedAt, &item.UpdatedAt)
+	item.EndpointID, item.Sender, item.SecretRef, item.SecretConfigured = endpointID.String, sender.String, secretRef.String, secretRef.Valid
 	return item, err
 }
 

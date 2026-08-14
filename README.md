@@ -16,6 +16,8 @@ cp .env.example .env
 set -a
 . ./.env
 set +a
+docker compose -f deploy/docker-compose.yml down -v
+
 docker compose -f deploy/docker-compose.yml up -d --wait postgres
 export STEWARDMESH_TEST_DATABASE_URL="${STEWARDMESH_DATABASE_URL}"
 go test ./...
@@ -237,31 +239,40 @@ Signals alert acknowledgement, requires a short-lived argument-bound one-use
 confirmation. See [Bridge](docs/features/bridge.md) and its
 [security review](docs/validation/bridge-security-review.md).
 
-Every domain service in the checked-in protobuf descriptor has a validated
-gRPC runtime adapter. The current standalone command remains Bridge-only until
-the all-domain listener activation receives its deployment security approval.
-A fixed adapter routes each method through the same in-process
-REST application, repositories, Guard authorization, ownership, validation,
-limits, audit, and error handling. Except for Guard bootstrap status, bootstrap,
-and local login, it revalidates exactly one opaque Guard session bearer from
-gRPC `authorization` metadata on every RPC:
+Every domain service in the checked-in protobuf descriptor is active in the
+standalone gRPC command. A fixed adapter routes all 154 RPCs through the same
+in-process REST application, repositories, Guard authorization, ownership,
+validation, limits, audit, and error handling. The command separates public
+Guard setup/login traffic from protected domain traffic: `9091` contains only
+bootstrap status, administrator bootstrap, local authentication, and standard
+unary gRPC health Check; `9090` contains the other 151 authenticated RPCs. Protected calls
+revalidate exactly one opaque Guard session bearer from gRPC `authorization`
+metadata before protobuf decoding:
 
 ```sh
 STEWARDMESH_GRPC_ADDR=127.0.0.1:9090 \
+STEWARDMESH_GRPC_PUBLIC_ADDR=127.0.0.1:9091 \
 go run ./cmd/stewardmesh-grpc
 ```
 
-That command currently serves the approved Bridge administration surface; it
-does not activate the all-domain adapter described below.
+Loopback plaintext is for local adapters only. If either listener is
+non-loopback, both `STEWARDMESH_GRPC_TLS_CERT_FILE` and
+`STEWARDMESH_GRPC_TLS_KEY_FILE`, an HTTPS `STEWARDMESH_ALLOWED_ORIGIN`, and
+secure session cookies are required; the listeners enforce TLS 1.3 or newer.
+A remote public listener also requires `STEWARDMESH_BOOTSTRAP_TOKEN` until
+administrator setup is complete. The public receive/send envelope is 64 KiB;
+the protected 34 MiB envelope admits the documented 32 MiB Exchange archive
+plus framing. Both listeners bound headers, streams per connection, RPC
+duration, and shared process concurrency before decoding, while narrower route
+limits remain authoritative. Cookies, origins, and CSRF values supplied by a
+gRPC client are never forwarded. OAuth and MCP retain their native HTTP and
+stdio protocols rather than being wrapped in gRPC.
 
-When the all-domain adapter is activated, loopback plaintext is for local
-adapters only. A non-loopback address requires
-both `STEWARDMESH_GRPC_TLS_CERT_FILE` and `STEWARDMESH_GRPC_TLS_KEY_FILE`; the
-listener enforces TLS 1.3 or newer. Cookies, origins, and CSRF values supplied
-by a gRPC client are never forwarded. The 34 MiB protobuf envelope admits the
-documented 32 MiB Exchange archive plus framing; narrower domain limits still
-apply. OAuth and MCP retain their native HTTP and stdio protocols rather than
-being wrapped in gRPC.
+Build the non-root runtime container with `docker build --file
+deploy/Dockerfile --target stewardmesh-grpc .`. When HTTP and gRPC run as
+separate processes, configure both with the same PostgreSQL database and Valkey
+service so Guard sessions, domain state, and cross-process rate state are
+shared. Memory repositories and the `none`/memory cache modes are process-local.
 
 For a local stdio client, first sign in through Guard and supply the current
 opaque session and explicit scopes only to the child process. PostgreSQL is

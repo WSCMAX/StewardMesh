@@ -2448,6 +2448,8 @@ message SignalSubscription {
   bool enabled = 6;
   string created_by = 7;
   google.protobuf.Timestamp created_at = 8;
+  int64 revision = 9;
+  google.protobuf.Timestamp updated_at = 10;
 }
 
 message CreateSignalSubscriptionRequest {
@@ -2708,6 +2710,8 @@ message ReachProvider {
   string organization_id = 2;
   string name = 3;
   string kind = 4;
+  // Empty only for a safely inert imported provider. A local owner must select
+  // a deployment-approved endpoint before the provider can be enabled.
   string endpoint_id = 5;
   string sender = 6;
   // True indicates an external reference exists. Its identifier and resolved
@@ -2742,6 +2746,9 @@ message UpdateReachProviderRequest {
   string sender = 3;
   bool enabled = 4;
   int64 revision = 5;
+  // Optional deployment-approved route selection. Provider secrets remain
+  // exclusive to RotateProviderSecret and its explicit confirmation.
+  string endpoint_id = 6;
 }
 
 message RotateReachProviderSecretRequest {

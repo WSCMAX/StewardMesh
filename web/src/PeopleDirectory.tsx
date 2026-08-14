@@ -1,6 +1,6 @@
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Asset } from './AtlasInventory'
-import { ApiRequestError, requestJSON } from './api'
+import { ApiRequestError, isRevision, requestJSON, type Revision } from './api'
 import DirectoryImportManager from './DirectoryImportManager'
 import RelationshipGraphView from './RelationshipGraphView'
 import { documentationHref } from './documentation'
@@ -30,7 +30,7 @@ type Site = {
   name: string
   address?: SiteAddress
   status: RecordStatus
-  revision: number
+  revision: Revision
   createdAt: string
   updatedAt: string
 }
@@ -41,7 +41,7 @@ type Building = {
   siteId: string
   name: string
   status: RecordStatus
-  revision: number
+  revision: Revision
   createdAt: string
   updatedAt: string
 }
@@ -54,7 +54,7 @@ type Room = {
   number: string
   name?: string
   status: RecordStatus
-  revision: number
+  revision: Revision
   createdAt: string
   updatedAt: string
 }
@@ -65,7 +65,7 @@ type Department = {
   name: string
   siteId?: string
   status: RecordStatus
-  revision: number
+  revision: Revision
   createdAt: string
   updatedAt: string
 }
@@ -81,7 +81,7 @@ type Identity = {
   status: RecordStatus
   provider?: string
   providerSubject?: string
-  revision: number
+  revision: Revision
   createdAt: string
   updatedAt: string
 }
@@ -172,7 +172,7 @@ function isBaseRecord(value: unknown): value is Record<string, unknown> {
   const record = value as Record<string, unknown>
   return isString(record.id) && record.id.length > 0
     && isString(record.organizationId) && record.organizationId.length > 0
-    && typeof record.revision === 'number' && record.revision > 0
+    && isRevision(record.revision)
     && isString(record.createdAt) && isString(record.updatedAt)
 }
 

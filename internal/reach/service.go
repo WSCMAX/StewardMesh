@@ -1,6 +1,6 @@
 package reach
 
-// Requirement: REQ-REACH-001. Feature: messaging.delivery. GitHub: #12.
+// Requirements: REQ-REACH-001, REQ-EXCHANGE-001. Features: messaging.delivery, migration.packages. GitHub: #9, #12.
 
 import (
 	"context"
@@ -17,6 +17,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/maxlemke/stewardmesh/internal/foundation"
+	"github.com/maxlemke/stewardmesh/internal/portabletime"
 	"github.com/maxlemke/stewardmesh/internal/signals"
 )
 
@@ -40,20 +41,29 @@ type Service struct {
 	transports     *TransportRegistry
 	secrets        SecretResolver
 	signals        SignalSource
+	writes         WriteGate
 	auditor        foundation.Auditor
 	organizationID string
 	now            func() time.Time
 }
 
 func NewService(store Store, endpoints *EndpointCatalog, transports *TransportRegistry, secrets SecretResolver, signalSource SignalSource, auditor foundation.Auditor, configuration ServiceConfig) (*Service, error) {
+	service, _, err := NewServiceWithExchangeImporter(store, endpoints, transports, secrets, signalSource, nil, auditor, configuration)
+	return service, err
+}
+
+func NewServiceWithExchangeImporter(store Store, endpoints *EndpointCatalog, transports *TransportRegistry, secrets SecretResolver, signalSource SignalSource, writes WriteGate, auditor foundation.Auditor, configuration ServiceConfig) (*Service, ExchangeImporter, error) {
 	configuration.OrganizationID = strings.TrimSpace(configuration.OrganizationID)
 	if store == nil || endpoints == nil || transports == nil || secrets == nil || auditor == nil || configuration.OrganizationID == "" {
-		return nil, errors.New("Reach store, endpoints, transports, secrets, auditor, and organization id are required")
+		return nil, nil, errors.New("Reach store, endpoints, transports, secrets, auditor, and organization id are required")
 	}
-	if configuration.Now == nil {
-		configuration.Now = func() time.Time { return time.Now().UTC() }
+	clock := configuration.Now
+	if clock == nil {
+		clock = time.Now
 	}
-	return &Service{store: store, endpoints: endpoints, transports: transports, secrets: secrets, signals: signalSource, auditor: auditor, organizationID: configuration.OrganizationID, now: configuration.Now}, nil
+	service := &Service{store: store, endpoints: endpoints, transports: transports, secrets: secrets, signals: signalSource, writes: writes, auditor: auditor, organizationID: configuration.OrganizationID,
+		now: func() time.Time { return portabletime.Normalize(clock()) }}
+	return service, &exchangeImporter{service: service}, nil
 }
 
 func (s *Service) ListEndpoints() []Endpoint { return s.endpoints.List() }
@@ -76,6 +86,9 @@ func (s *Service) CreateProvider(ctx context.Context, input CreateProviderInput)
 	if err != nil {
 		return Provider{}, err
 	}
+	if err := s.checkWrite(ctx, "reach.provider", id); err != nil {
+		return Provider{}, err
+	}
 	enabled := true
 	if input.Enabled != nil {
 		enabled = *input.Enabled
@@ -96,18 +109,42 @@ func (s *Service) CreateProvider(ctx context.Context, input CreateProviderInput)
 
 func (s *Service) UpdateProvider(ctx context.Context, id string, input UpdateProviderInput) (Provider, error) {
 	id, input.Name, input.Sender = strings.TrimSpace(id), strings.TrimSpace(input.Name), strings.TrimSpace(input.Sender)
+	input.EndpointID = strings.TrimSpace(input.EndpointID)
 	if !stableIDPattern.MatchString(id) || !validText(input.Name, 1, 160) || input.Revision < 1 {
 		return Provider{}, ErrInvalidInput
+	}
+	if err := s.checkWrite(ctx, "reach.provider", id); err != nil {
+		return Provider{}, err
 	}
 	existing, err := s.store.GetProvider(ctx, s.organizationID, id)
 	if err != nil {
 		return Provider{}, err
 	}
-	if !validSender(existing.Kind, input.Sender) {
+	endpointID := existing.EndpointID
+	if input.EndpointID != "" {
+		endpointID = input.EndpointID
+	}
+	if !validSender(existing.Kind, input.Sender) || endpointID != "" && !stableIDPattern.MatchString(endpointID) ||
+		input.Enabled && (endpointID == "" || existing.SecretRef == "") {
 		return Provider{}, ErrInvalidInput
 	}
-	existing.Name, existing.Sender, existing.Enabled = input.Name, input.Sender, input.Enabled
-	existing.Revision, existing.UpdatedBy, existing.UpdatedAt = existing.Revision+1, actor(ctx), s.now().UTC()
+	if endpointID != "" {
+		endpoint, endpointErr := s.endpoints.Get(endpointID, existing.Kind)
+		if endpointErr != nil {
+			return Provider{}, endpointErr
+		}
+		groups, listErr := s.store.ListGroups(ctx, s.organizationID)
+		if listErr != nil {
+			return Provider{}, listErr
+		}
+		for _, group := range groups {
+			if group.ProviderID == existing.ID && !compatibleRecipients(existing.Kind, endpoint, group.Recipients) {
+				return Provider{}, ErrInvalidInput
+			}
+		}
+	}
+	existing.Name, existing.Sender, existing.EndpointID, existing.Enabled = input.Name, input.Sender, endpointID, input.Enabled
+	existing.Revision, existing.UpdatedBy, existing.UpdatedAt = existing.Revision+1, actor(ctx), portabletime.Max(s.now(), existing.UpdatedAt)
 	updated, err := s.store.UpdateProvider(ctx, existing, input.Revision)
 	if err != nil {
 		return Provider{}, err
@@ -123,12 +160,18 @@ func (s *Service) RotateProviderSecret(ctx context.Context, id string, input Rot
 	if !input.Confirm || !stableIDPattern.MatchString(id) || !secretReferencePattern.MatchString(input.SecretRef) || input.Revision < 1 {
 		return Provider{}, ErrInvalidInput
 	}
+	if err := s.checkWrite(ctx, "reach.provider", id); err != nil {
+		return Provider{}, err
+	}
 	existing, err := s.store.GetProvider(ctx, s.organizationID, id)
 	if err != nil {
 		return Provider{}, err
 	}
+	if existing.EndpointID == "" {
+		return Provider{}, ErrConflict
+	}
 	existing.SecretRef, existing.SecretConfigured = input.SecretRef, true
-	existing.Revision, existing.UpdatedBy, existing.UpdatedAt = existing.Revision+1, actor(ctx), s.now().UTC()
+	existing.Revision, existing.UpdatedBy, existing.UpdatedAt = existing.Revision+1, actor(ctx), portabletime.Max(s.now(), existing.UpdatedAt)
 	updated, err := s.store.UpdateProvider(ctx, existing, input.Revision)
 	if err != nil {
 		return Provider{}, err
@@ -143,6 +186,9 @@ func (s *Service) TestProvider(ctx context.Context, id string, input TestProvide
 	id = strings.TrimSpace(id)
 	if !input.Confirm || !stableIDPattern.MatchString(id) {
 		return ProviderTest{}, ErrInvalidInput
+	}
+	if err := s.checkWrite(ctx, "reach.provider", id); err != nil {
+		return ProviderTest{}, err
 	}
 	provider, err := s.store.GetProvider(ctx, s.organizationID, id)
 	if err != nil {
@@ -210,6 +256,9 @@ func (s *Service) CreateTemplate(ctx context.Context, input CreateTemplateInput)
 	if err != nil {
 		return Template{}, err
 	}
+	if err := s.checkWrite(ctx, "reach.template", id); err != nil {
+		return Template{}, err
+	}
 	now, actorID := s.now().UTC(), actor(ctx)
 	template := Template{ID: id, OrganizationID: s.organizationID, Name: input.Name, Subject: input.Subject, Body: input.Body,
 		Revision: 1, CreatedBy: actorID, UpdatedBy: actorID, CreatedAt: now, UpdatedAt: now}
@@ -228,12 +277,15 @@ func (s *Service) UpdateTemplate(ctx context.Context, id string, input UpdateTem
 	if !stableIDPattern.MatchString(id) || !validText(input.Name, 1, 160) || input.Revision < 1 || validateTemplate(input.Subject, input.Body) != nil {
 		return Template{}, ErrInvalidInput
 	}
+	if err := s.checkWrite(ctx, "reach.template", id); err != nil {
+		return Template{}, err
+	}
 	existing, err := s.store.GetTemplate(ctx, s.organizationID, id)
 	if err != nil {
 		return Template{}, err
 	}
 	existing.Name, existing.Subject, existing.Body = input.Name, input.Subject, input.Body
-	existing.Revision, existing.UpdatedBy, existing.UpdatedAt = existing.Revision+1, actor(ctx), s.now().UTC()
+	existing.Revision, existing.UpdatedBy, existing.UpdatedAt = existing.Revision+1, actor(ctx), portabletime.Max(s.now(), existing.UpdatedAt)
 	updated, err := s.store.UpdateTemplate(ctx, existing, input.Revision)
 	if err != nil {
 		return Template{}, err
@@ -275,6 +327,9 @@ func (s *Service) CreateGroup(ctx context.Context, input CreateGroupInput) (Subs
 	if err != nil {
 		return SubscriberGroup{}, err
 	}
+	if err := s.checkWrite(ctx, "reach.subscriber-group", id); err != nil {
+		return SubscriberGroup{}, err
+	}
 	now, actorID := s.now().UTC(), actor(ctx)
 	group := SubscriberGroup{ID: id, OrganizationID: s.organizationID, Name: input.Name, ProviderID: input.ProviderID, TemplateID: input.TemplateID,
 		Recipients: recipients, Revision: 1, CreatedBy: actorID, UpdatedBy: actorID, CreatedAt: now, UpdatedAt: now}
@@ -292,6 +347,9 @@ func (s *Service) UpdateGroup(ctx context.Context, id string, input UpdateGroupI
 	id, input.Name, input.ProviderID, input.TemplateID = strings.TrimSpace(id), strings.TrimSpace(input.Name), strings.TrimSpace(input.ProviderID), strings.TrimSpace(input.TemplateID)
 	if !stableIDPattern.MatchString(id) || !validText(input.Name, 1, 160) || !stableIDPattern.MatchString(input.ProviderID) || !stableIDPattern.MatchString(input.TemplateID) || input.Revision < 1 {
 		return SubscriberGroup{}, ErrInvalidInput
+	}
+	if err := s.checkWrite(ctx, "reach.subscriber-group", id); err != nil {
+		return SubscriberGroup{}, err
 	}
 	recipients, err := normalizeRecipients(input.Recipients)
 	if err != nil {
@@ -316,7 +374,7 @@ func (s *Service) UpdateGroup(ctx context.Context, id string, input UpdateGroupI
 		return SubscriberGroup{}, err
 	}
 	existing.Name, existing.ProviderID, existing.TemplateID, existing.Recipients = input.Name, input.ProviderID, input.TemplateID, recipients
-	existing.Revision, existing.UpdatedBy, existing.UpdatedAt = existing.Revision+1, actor(ctx), s.now().UTC()
+	existing.Revision, existing.UpdatedBy, existing.UpdatedAt = existing.Revision+1, actor(ctx), portabletime.Max(s.now(), existing.UpdatedAt)
 	updated, err := s.store.UpdateGroup(ctx, existing, input.Revision)
 	if err != nil {
 		return SubscriberGroup{}, err

@@ -497,6 +497,14 @@ func transformRequestPresence(transform requestTransform, object map[string]any)
 		return nil
 	case transformSignalEnabledPresence:
 		return applyPresenceFlag(object, "enabled", "hasEnabled")
+	case transformReachUpdateProvider:
+		// UpdateProvider always carries the complete desired enabled state. A
+		// false proto3 scalar is omitted on the wire but remains an explicit
+		// disabled value in the strict REST contract.
+		if _, ok := object["enabled"]; !ok {
+			object["enabled"] = false
+		}
+		return nil
 	case transformAtlasCreateModel:
 		return rejectNestedMutationFields(object, "model", "status", "instanceCount", "revision", "createdAt", "updatedAt")
 	case transformAtlasUpdateModel:

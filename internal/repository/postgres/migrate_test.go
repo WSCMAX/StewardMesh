@@ -14,8 +14,8 @@ func TestEmbeddedMigrationsAreOrderedAndChecksummed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(migrations) != 36 {
-		t.Fatalf("expected 36 platform migrations, got %d", len(migrations))
+	if len(migrations) != 39 {
+		t.Fatalf("expected 39 platform migrations, got %d", len(migrations))
 	}
 	for index, migration := range migrations {
 		expectedVersion := int64(index + 1)
@@ -24,6 +24,25 @@ func TestEmbeddedMigrationsAreOrderedAndChecksummed(t *testing.T) {
 		}
 		if len(migration.checksum) != 64 {
 			t.Fatalf("expected SHA-256 checksum for migration %d", migration.version)
+		}
+	}
+}
+
+func TestDirectoryExchangeMigrationScopesStableIDsByOrganization(t *testing.T) {
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents := migrations[38].contents
+	for _, expected := range []string{
+		"REQ-DIRECTORY-EXPANSION-005", "REQ-EXCHANGE-001", "directory_managed_groups_pkey",
+		"directory_managed_memberships_pkey", "PRIMARY KEY (organization_id, id)",
+		"DROP CONSTRAINT directory_managed_groups_organization_id_id_key",
+		"DROP CONSTRAINT directory_managed_memberships_organization_id_id_key",
+		"ADD CONSTRAINT directory_managed_memberships_organization_id_group_id_fkey",
+	} {
+		if !strings.Contains(contents, expected) {
+			t.Fatalf("Directory Exchange organization-key migration is missing %q", expected)
 		}
 	}
 }
@@ -61,6 +80,35 @@ func TestReachDeliveryClaimMigrationPrecedesExternalSideEffects(t *testing.T) {
 	for _, expected := range []string{"REQ-REACH-001", "claim_token", "claimed_at", "reach_messages_claim_pair", "reach_messages_claim_recovery_idx"} {
 		if !strings.Contains(contents, expected) {
 			t.Fatalf("Reach claim migration is missing %q", expected)
+		}
+	}
+}
+
+func TestSignalsSubscriptionPortabilityMigrationPreservesExistingRows(t *testing.T) {
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents := migrations[36].contents
+	for _, expected := range []string{"REQ-SIGNALS-001", "REQ-EXCHANGE-001", "ADD COLUMN revision", "UPDATE signal_subscriptions SET updated_at = created_at", "updated_at >= created_at"} {
+		if !strings.Contains(contents, expected) {
+			t.Fatalf("Signals subscription portability migration is missing %q", expected)
+		}
+	}
+}
+
+func TestReachExchangeMigrationMakesImportedProvidersInert(t *testing.T) {
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents := migrations[37].contents
+	for _, expected := range []string{
+		"REQ-REACH-001", "REQ-EXCHANGE-001", "ALTER COLUMN endpoint_id DROP NOT NULL", "ALTER COLUMN secret_ref DROP NOT NULL",
+		"reach_providers_endpoint_id_optional_check", "reach_providers_secret_ref_optional_check", "reach_providers_enabled_configuration_check",
+	} {
+		if !strings.Contains(contents, expected) {
+			t.Fatalf("Reach Exchange inert-provider migration is missing %q", expected)
 		}
 	}
 }
@@ -181,7 +229,7 @@ func TestDirectoryImportMigrationAddsDurablePlansAttemptsMappingsAndLeases(t *te
 		"REQ-DIRECTORY-EXPANSION-002", "integrations.protocols", "GitHub: #25",
 		"CREATE TABLE directory_import_items", "CREATE TABLE directory_import_attempts",
 		"CREATE TABLE directory_import_mappings", "idempotency_hash", "lease_token",
-		"integrations.read", "integrations.write",
+		"integrations.read", "integrations.write", "lower(btrim(r.name)) = 'administrator'",
 	} {
 		if !strings.Contains(contents, expected) {
 			t.Fatalf("directory import migration is missing %q", expected)

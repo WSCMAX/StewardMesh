@@ -3396,6 +3396,7 @@ paths:
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '409': {$ref: '#/components/responses/Conflict'}
+        '423': {$ref: '#/components/responses/Locked'}
         '503': {$ref: '#/components/responses/ServiceUnavailable'}
   /api/v1/reach/providers/{providerId}:
     parameters: [{in: path, name: providerId, required: true, schema: {$ref: '#/components/schemas/ReachID'}}]
@@ -3414,6 +3415,7 @@ paths:
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
+        '423': {$ref: '#/components/responses/Locked'}
   /api/v1/reach/providers/{providerId}/rotate-secret:
     parameters: [{in: path, name: providerId, required: true, schema: {$ref: '#/components/schemas/ReachID'}}]
     post:
@@ -3431,6 +3433,7 @@ paths:
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
+        '423': {$ref: '#/components/responses/Locked'}
   /api/v1/reach/providers/{providerId}/test:
     parameters: [{in: path, name: providerId, required: true, schema: {$ref: '#/components/schemas/ReachID'}}]
     post:
@@ -3447,6 +3450,7 @@ paths:
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
+        '423': {$ref: '#/components/responses/Locked'}
   /api/v1/reach/providers/{providerId}/tests:
     parameters: [{in: path, name: providerId, required: true, schema: {$ref: '#/components/schemas/ReachID'}}]
     get:
@@ -3485,6 +3489,7 @@ paths:
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '409': {$ref: '#/components/responses/Conflict'}
+        '423': {$ref: '#/components/responses/Locked'}
   /api/v1/reach/templates/{templateId}:
     parameters: [{in: path, name: templateId, required: true, schema: {$ref: '#/components/schemas/ReachID'}}]
     put:
@@ -3502,6 +3507,7 @@ paths:
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
+        '423': {$ref: '#/components/responses/Locked'}
   /api/v1/reach/groups:
     get:
       summary: List Reach subscriber groups
@@ -3528,6 +3534,7 @@ paths:
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
+        '423': {$ref: '#/components/responses/Locked'}
   /api/v1/reach/groups/{groupId}:
     parameters: [{in: path, name: groupId, required: true, schema: {$ref: '#/components/schemas/ReachID'}}]
     put:
@@ -3545,6 +3552,7 @@ paths:
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
+        '423': {$ref: '#/components/responses/Locked'}
   /api/v1/reach/messages:
     get:
       summary: List Reach delivery history
@@ -6230,7 +6238,7 @@ components:
     SignalSubscription:
       type: object
       additionalProperties: false
-      required: [id, organizationId, targetKind, targetId, enabled, createdBy, createdAt]
+      required: [id, organizationId, targetKind, targetId, enabled, createdBy, revision, createdAt, updatedAt]
       properties:
         id: {$ref: '#/components/schemas/SignalID'}
         organizationId: {$ref: '#/components/schemas/SignalID'}
@@ -6239,7 +6247,9 @@ components:
         targetId: {$ref: '#/components/schemas/SignalID'}
         enabled: {type: boolean}
         createdBy: {type: string, minLength: 1, maxLength: 200}
+        revision: {type: integer, format: int64, minimum: 1}
         createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
     SignalSubscriptionCollection:
       type: object
       additionalProperties: false
@@ -6341,6 +6351,17 @@ components:
         hasFile:
           type: boolean
           description: True when the domain provider can contribute portable file metadata; included bytes still require fileMode `include`.
+    ExchangeExcludedRecordType:
+      type: object
+      additionalProperties: false
+      required: [type, reason]
+      properties:
+        type: {$ref: '#/components/schemas/ExchangeRecordType'}
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 500
+          description: Stable operator-facing reason this security, deployment, derived, operational, or self-referential family is not portable.
     ExchangeLimits:
       type: object
       additionalProperties: false
@@ -6351,12 +6372,34 @@ components:
     ExchangeRecordCollection:
       type: object
       additionalProperties: false
-      required: [items, limits]
+      required: [items, excludedRecordTypes, portableRecordTypes, registeredRecordTypes, providerRegistryComplete, limits]
       properties:
         items:
           type: array
           maxItems: 10000
           items: {$ref: '#/components/schemas/ExchangeRecordDescriptor'}
+        excludedRecordTypes:
+          type: array
+          minItems: 1
+          maxItems: 51
+          uniqueItems: true
+          items: {$ref: '#/components/schemas/ExchangeExcludedRecordType'}
+        portableRecordTypes:
+          type: array
+          minItems: 1
+          maxItems: 51
+          uniqueItems: true
+          description: Complete policy list of record families that require an owning provider for phase one.
+          items: {$ref: '#/components/schemas/ExchangeRecordType'}
+        registeredRecordTypes:
+          type: array
+          maxItems: 51
+          uniqueItems: true
+          description: Portable record families actually owned by providers in this running application.
+          items: {$ref: '#/components/schemas/ExchangeRecordType'}
+        providerRegistryComplete:
+          type: boolean
+          description: True only when every portable phase-one record family has exactly one registered provider.
         limits: {$ref: '#/components/schemas/ExchangeLimits'}
     ExchangeFileMode:
       type: string
@@ -6481,13 +6524,16 @@ components:
     ReachProvider:
       type: object
       additionalProperties: false
-      required: [id, organizationId, name, kind, endpointId, secretConfigured, enabled, revision, createdBy, updatedBy, createdAt, updatedAt]
+      required: [id, organizationId, name, kind, secretConfigured, enabled, revision, createdBy, updatedBy, createdAt, updatedAt]
       properties:
         id: {$ref: '#/components/schemas/ReachID'}
         organizationId: {$ref: '#/components/schemas/ReachID'}
         name: {type: string, minLength: 1, maxLength: 160}
         kind: {$ref: '#/components/schemas/ReachProviderKind'}
-        endpointId: {$ref: '#/components/schemas/ReachID'}
+        endpointId:
+          type: string
+          pattern: '^$|^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+          description: Empty only for a safely inert imported provider awaiting an explicit local endpoint selection after ownership claim.
         sender: {type: string, format: email, maxLength: 320}
         secretConfigured: {type: boolean, description: Indicates an external reference exists; the reference and secret value are never returned.}
         enabled: {type: boolean}
@@ -6524,6 +6570,9 @@ components:
       properties:
         name: {type: string, minLength: 1, maxLength: 160}
         sender: {type: string, format: email, maxLength: 320}
+        endpointId:
+          allOf: [{$ref: '#/components/schemas/ReachID'}]
+          description: Optional deployment-approved route selection. Secret references remain exclusive to the confirmed rotation endpoint.
         enabled: {type: boolean}
         revision: {type: integer, format: int64, minimum: 1}
     RotateReachSecretRequest:

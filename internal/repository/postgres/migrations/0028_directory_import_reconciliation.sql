@@ -101,4 +101,5 @@ FROM guard_role_policy_bundles rb
 JOIN guard_roles r ON r.organization_id = rb.organization_id AND r.id = rb.role_id
 CROSS JOIN (VALUES ('integrations.read'), ('integrations.write')) requested(permission)
 WHERE r.source = 'builtin'
+  AND lower(btrim(r.name)) = 'administrator'
 ON CONFLICT DO NOTHING;

@@ -1,6 +1,6 @@
 package repository
 
-// Requirements: REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-008. Features: identity.directory, integrations.protocols, threads.relationships.
+// Requirements: REQ-PEOPLE-001, REQ-EXCHANGE-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-008. Features: identity.directory, migration.packages, integrations.protocols, threads.relationships.
 
 import (
 	"context"
@@ -46,6 +46,58 @@ func NewMemoryPeopleStore() *MemoryPeopleStore {
 		identityByEmail:    make(map[string]string),
 		identityByProvider: make(map[string]string),
 	}
+}
+
+func (s *MemoryPeopleStore) ExchangeSnapshot(_ context.Context, organizationID string, maximum int) (people.ExchangeSnapshot, error) {
+	if organizationID == "" || maximum < 1 {
+		return people.ExchangeSnapshot{}, people.ErrInvalidInput
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	result := people.ExchangeSnapshot{
+		Sites: []people.Site{}, Buildings: []people.Building{}, Rooms: []people.Room{},
+		Departments: []people.Department{}, Identities: []people.Identity{}, Assignments: []people.AssetAssignment{},
+	}
+	for _, item := range s.sites {
+		if item.OrganizationID == organizationID {
+			result.Sites = append(result.Sites, item)
+		}
+	}
+	for _, item := range s.buildings {
+		if item.OrganizationID == organizationID {
+			result.Buildings = append(result.Buildings, item)
+		}
+	}
+	for _, item := range s.rooms {
+		if item.OrganizationID == organizationID {
+			result.Rooms = append(result.Rooms, item)
+		}
+	}
+	for _, item := range s.departments {
+		if item.OrganizationID == organizationID {
+			result.Departments = append(result.Departments, item)
+		}
+	}
+	for _, item := range s.identities {
+		if item.OrganizationID == organizationID {
+			result.Identities = append(result.Identities, item)
+		}
+	}
+	for _, item := range s.assignments {
+		if item.OrganizationID == organizationID {
+			result.Assignments = append(result.Assignments, clonePeopleAssignment(item))
+		}
+	}
+	if len(result.Sites)+len(result.Buildings)+len(result.Rooms)+len(result.Departments)+len(result.Identities)+len(result.Assignments) > maximum {
+		return people.ExchangeSnapshot{}, people.ErrTooLarge
+	}
+	sort.Slice(result.Sites, func(i, j int) bool { return result.Sites[i].ID < result.Sites[j].ID })
+	sort.Slice(result.Buildings, func(i, j int) bool { return result.Buildings[i].ID < result.Buildings[j].ID })
+	sort.Slice(result.Rooms, func(i, j int) bool { return result.Rooms[i].ID < result.Rooms[j].ID })
+	sort.Slice(result.Departments, func(i, j int) bool { return result.Departments[i].ID < result.Departments[j].ID })
+	sort.Slice(result.Identities, func(i, j int) bool { return result.Identities[i].ID < result.Identities[j].ID })
+	sort.Slice(result.Assignments, func(i, j int) bool { return result.Assignments[i].ID < result.Assignments[j].ID })
+	return result, nil
 }
 
 func (s *MemoryPeopleStore) CreateSite(_ context.Context, site people.Site) (people.Site, error) {
@@ -330,7 +382,7 @@ func (s *MemoryPeopleStore) ListGraphLocations(_ context.Context, organizationID
 		room       *people.Room
 		department *people.Department
 	}
-	candidates := make([]candidate, 0, query.Limit)
+	candidates := make([]candidate, 0, min(query.Limit, people.MaximumGraphIdentityLimit))
 	if query.Kind == "" || query.Kind == people.GraphLocationSite {
 		for _, item := range s.sites {
 			if item.OrganizationID != organizationID || item.Status != people.StatusActive || !visibility.All && !setContains(visibleSites, item.ID) {
@@ -634,7 +686,7 @@ func (s *MemoryPeopleStore) ListGraphIdentities(_ context.Context, organizationI
 	siteIDs := stringSet(query.SiteIDs)
 	hasSelector := len(identityIDs)+len(departmentIDs)+len(siteIDs) > 0
 	search := strings.ToLower(query.LabelSearch)
-	result := make([]people.Identity, 0, query.Limit)
+	result := make([]people.Identity, 0, min(query.Limit, people.MaximumGraphIdentityLimit))
 	for _, identity := range s.identities {
 		if identity.OrganizationID != organizationID || identity.Status != people.StatusActive {
 			continue
@@ -705,6 +757,45 @@ func (s *MemoryPeopleStore) CreateAssetAssignment(_ context.Context, assignment 
 		}
 	}
 	s.assignments[assignment.ID] = clonePeopleAssignment(assignment)
+	return clonePeopleAssignment(assignment), nil
+}
+
+func (s *MemoryPeopleStore) ImportAssetAssignment(_ context.Context, assignment people.AssetAssignment) (people.AssetAssignment, error) {
+	if !validMemoryAssignment(assignment) || assignment.EffectiveTo != nil && !assignment.EffectiveTo.After(assignment.EffectiveFrom) {
+		return people.AssetAssignment{}, people.ErrInvalidInput
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.assignments[assignment.ID]; exists {
+		return people.AssetAssignment{}, people.ErrConflict
+	}
+	if !s.assigneeExists(assignment) {
+		return people.AssetAssignment{}, people.ErrReferenceMissing
+	}
+	if assignment.EffectiveTo == nil {
+		for _, existing := range s.assignments {
+			if existing.OrganizationID != assignment.OrganizationID || existing.AssetID != assignment.AssetID || existing.EffectiveTo != nil || existing.Role != assignment.Role {
+				continue
+			}
+			if assignment.Role != people.AssignmentUser || existing.AssigneeKind == assignment.AssigneeKind && existing.AssigneeID == assignment.AssigneeID {
+				return people.AssetAssignment{}, people.ErrConflict
+			}
+		}
+	}
+	s.assignments[assignment.ID] = clonePeopleAssignment(assignment)
+	return clonePeopleAssignment(assignment), nil
+}
+
+func (s *MemoryPeopleStore) GetAssetAssignment(_ context.Context, organizationID, assignmentID string) (people.AssetAssignment, error) {
+	if organizationID == "" || assignmentID == "" {
+		return people.AssetAssignment{}, people.ErrInvalidInput
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	assignment, exists := s.assignments[assignmentID]
+	if !exists || assignment.OrganizationID != organizationID {
+		return people.AssetAssignment{}, people.ErrNotFound
+	}
 	return clonePeopleAssignment(assignment), nil
 }
 

@@ -4,6 +4,7 @@ package repository
 
 import (
 	"context"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -43,6 +44,35 @@ func NewMemoryAtlasStore() *MemoryAtlasStore {
 
 func atlasMemoryKey(organizationID, id string) string {
 	return organizationID + "\x00" + id
+}
+
+func (s *MemoryAtlasStore) ExchangeSnapshot(_ context.Context, organizationID string, maximum int) (atlas.ExchangeSnapshot, error) {
+	if strings.TrimSpace(organizationID) == "" || maximum < 1 {
+		return atlas.ExchangeSnapshot{}, atlas.ErrInvalidInput
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	result := atlas.ExchangeSnapshot{Models: []domain.AssetModel{}, Assets: []domain.Asset{}, LifecycleEvents: []domain.AssetLifecycleEvent{}}
+	for _, model := range s.models {
+		if model.OrganizationID == organizationID {
+			model.InstanceCount = 0
+			result.Models = append(result.Models, cloneAssetModel(model))
+		}
+	}
+	for key, asset := range s.assets {
+		if asset.OrganizationID != organizationID {
+			continue
+		}
+		result.Assets = append(result.Assets, cloneAsset(asset))
+		result.LifecycleEvents = append(result.LifecycleEvents, s.lifecycle[key]...)
+	}
+	if len(result.Models)+len(result.Assets)+len(result.LifecycleEvents) > maximum {
+		return atlas.ExchangeSnapshot{}, atlas.ErrTooLarge
+	}
+	sortAssetModels(result.Models)
+	sort.Slice(result.Assets, func(i, j int) bool { return result.Assets[i].ID < result.Assets[j].ID })
+	sort.Slice(result.LifecycleEvents, func(i, j int) bool { return result.LifecycleEvents[i].ID < result.LifecycleEvents[j].ID })
+	return result, nil
 }
 
 func (s *MemoryAtlasStore) ListModels(_ context.Context, organizationID string, query atlas.ModelQuery) ([]domain.AssetModel, error) {
@@ -413,6 +443,87 @@ func (s *MemoryAtlasStore) ListAssetLifecycle(_ context.Context, organizationID,
 	items := append([]domain.AssetLifecycleEvent(nil), s.lifecycle[key]...)
 	sortLifecycle(items)
 	return items, nil
+}
+
+func (s *MemoryAtlasStore) GetAssetLifecycleEvent(_ context.Context, organizationID, eventID string) (domain.AssetLifecycleEvent, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for key, events := range s.lifecycle {
+		asset, exists := s.assets[key]
+		if !exists || asset.OrganizationID != organizationID {
+			continue
+		}
+		for _, event := range events {
+			if event.ID == eventID {
+				return event, nil
+			}
+		}
+	}
+	return domain.AssetLifecycleEvent{}, atlas.ErrNotFound
+}
+
+func (s *MemoryAtlasStore) ImportModel(_ context.Context, model domain.AssetModel) (domain.AssetModel, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := atlasMemoryKey(model.OrganizationID, model.ID)
+	if existing, exists := s.models[key]; exists {
+		existing.InstanceCount, model.InstanceCount = 0, 0
+		if reflect.DeepEqual(existing, model) {
+			return cloneAssetModel(existing), false, nil
+		}
+		return domain.AssetModel{}, false, atlas.ErrConflict
+	}
+	if s.modelIdentityConflict(model, "") {
+		return domain.AssetModel{}, false, atlas.ErrConflict
+	}
+	model.InstanceCount = 0
+	s.models[key] = cloneAssetModel(model)
+	return cloneAssetModel(model), true, nil
+}
+
+func (s *MemoryAtlasStore) ImportAsset(_ context.Context, asset domain.Asset) (domain.Asset, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := atlasMemoryKey(asset.OrganizationID, asset.ID)
+	if existing, exists := s.assets[key]; exists {
+		if reflect.DeepEqual(existing, asset) {
+			return cloneAsset(existing), false, nil
+		}
+		return domain.Asset{}, false, atlas.ErrConflict
+	}
+	if asset.ModelID != "" {
+		if _, exists := s.models[atlasMemoryKey(asset.OrganizationID, asset.ModelID)]; !exists {
+			return domain.Asset{}, false, atlas.ErrReferenceMissing
+		}
+	}
+	if s.assetIdentityConflict(asset, "") {
+		return domain.Asset{}, false, atlas.ErrConflict
+	}
+	s.assets[key] = cloneAsset(asset)
+	s.lifecycle[key] = []domain.AssetLifecycleEvent{}
+	return cloneAsset(asset), true, nil
+}
+
+func (s *MemoryAtlasStore) ImportAssetLifecycleEvent(_ context.Context, event domain.AssetLifecycleEvent) (domain.AssetLifecycleEvent, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := atlasMemoryKey(event.OrganizationID, event.AssetID)
+	if _, exists := s.assets[key]; !exists {
+		return domain.AssetLifecycleEvent{}, false, atlas.ErrReferenceMissing
+	}
+	for _, existing := range s.lifecycle[key] {
+		if existing.ID == event.ID {
+			if reflect.DeepEqual(existing, event) {
+				return existing, false, nil
+			}
+			return domain.AssetLifecycleEvent{}, false, atlas.ErrConflict
+		}
+		if existing.Revision == event.Revision {
+			return domain.AssetLifecycleEvent{}, false, atlas.ErrConflict
+		}
+	}
+	s.lifecycle[key] = append(s.lifecycle[key], event)
+	return event, true, nil
 }
 
 func (s *MemoryAtlasStore) modelIdentityConflict(candidate domain.AssetModel, excludingID string) bool {

@@ -77,4 +77,31 @@ func PatternsStore(t testing.TB, subject patterns.Store, organizationID, suffix 
 	if _, err := subject.CreateVersion(ctx, versionTwo); !errors.Is(err, patterns.ErrConflict) {
 		t.Fatalf("expected stale Patterns version conflict, got %v", err)
 	}
+
+	importedID := "patterns-import-" + suffix
+	imported := []patterns.Template{
+		{ID: importedID, OrganizationID: organizationID, RecordType: "example.portable", Name: "Imported " + suffix,
+			Description: "Imported first", Version: 1, Status: patterns.StatusActive, CreatedBy: "system:exchange", CreatedAt: now,
+			Fields: []patterns.Field{{Key: "name", Label: "Name", Type: patterns.FieldText, Required: true, AccessibleLabel: "Name", CSVHeader: "name"}}},
+		{ID: importedID, OrganizationID: organizationID, RecordType: "example.portable", Name: "Imported " + suffix,
+			Description: "Imported second", Version: 2, Status: patterns.StatusActive, CreatedBy: "system:exchange", CreatedAt: now,
+			Fields: []patterns.Field{{Key: "name", Label: "Name", Type: patterns.FieldText, Required: true, AccessibleLabel: "Name", CSVHeader: "name"},
+				{Key: "state", Label: "State", Type: patterns.FieldEnum, Options: []string{"new", "ready"}, AccessibleLabel: "State", CSVHeader: "state"}}},
+	}
+	if err := subject.ImportTemplateHistory(ctx, organizationID, imported); err != nil {
+		t.Fatalf("import Patterns history: %v", err)
+	}
+	if err := subject.ImportTemplateHistory(ctx, organizationID, imported); err != nil {
+		t.Fatalf("replay exact Patterns history: %v", err)
+	}
+	importedLatest, err := subject.GetTemplate(ctx, organizationID, importedID, 0)
+	if err != nil || importedLatest.Version != 2 || len(importedLatest.Fields) != 2 {
+		t.Fatalf("Patterns history import was incomplete: %#v err=%v", importedLatest, err)
+	}
+	changed := append([]patterns.Template(nil), imported...)
+	changed[1] = imported[1]
+	changed[1].Description = "Changed"
+	if err := subject.ImportTemplateHistory(ctx, organizationID, changed); !errors.Is(err, patterns.ErrConflict) {
+		t.Fatalf("expected changed Patterns history conflict, got %v", err)
+	}
 }

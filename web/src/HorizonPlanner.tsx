@@ -1,6 +1,6 @@
 import { type FormEvent, type ReactNode, useEffect, useId, useRef, useState } from 'react'
 import type { Asset } from './AtlasInventory'
-import { ApiRequestError, requestJSON } from './api'
+import { ApiRequestError, isRevision, requestJSON, type Revision } from './api'
 import { buttonClass, inputClass, panelClass, secondaryButtonClass, subpanelClass, tableWrapClass } from './ui'
 
 // Requirement: REQ-HORIZON-001. Feature: lifecycle.planning.
@@ -19,7 +19,7 @@ type HorizonPlan = {
   replacementCostMinor: number
   currency: string
   effectiveFrom: string
-  revision: number
+  revision: Revision
 }
 
 type HorizonPlanVersion = Omit<HorizonPlan, 'id'> & {
@@ -95,7 +95,7 @@ function isPlan(value: unknown): value is HorizonPlan {
     && isSafeNonNegativeInteger(value.replacementCostMinor)
     && typeof value.currency === 'string' && /^[A-Z]{3}$/.test(value.currency)
     && typeof value.effectiveFrom === 'string' && value.effectiveFrom.length > 0
-    && isSafeNonNegativeInteger(value.revision) && value.revision >= 1
+    && isRevision(value.revision)
 }
 
 function isPlanVersion(value: unknown): value is HorizonPlanVersion {
@@ -110,7 +110,7 @@ function isPlanVersion(value: unknown): value is HorizonPlanVersion {
     && isSafeNonNegativeInteger(value.replacementCostMinor)
     && typeof value.currency === 'string' && /^[A-Z]{3}$/.test(value.currency)
     && typeof value.effectiveFrom === 'string' && value.effectiveFrom.length > 0
-    && isSafeNonNegativeInteger(value.revision) && value.revision >= 1
+    && isRevision(value.revision)
     && typeof value.recordedAt === 'string' && value.recordedAt.length > 0
     && typeof value.actorId === 'string' && value.actorId.length > 0
 }

@@ -25,6 +25,7 @@ var (
 	ErrConflict         = errors.New("people record conflicts with existing data")
 	ErrInvalidInput     = errors.New("invalid people input")
 	ErrScopeRequired    = errors.New("directory visibility scope is required")
+	ErrTooLarge         = errors.New("people snapshot exceeds a configured limit")
 )
 
 type RecordStatus string
@@ -327,6 +328,48 @@ type EndAssetAssignmentInput struct {
 	EffectiveTo  time.Time
 }
 
+// ExchangeSnapshot is one bounded, organization-consistent view of every
+// portable People record. Repository adapters own the consistency boundary so
+// Exchange never stitches together independently changing list results.
+type ExchangeSnapshot struct {
+	Sites       []Site
+	Buildings   []Building
+	Rooms       []Room
+	Departments []Department
+	Identities  []Identity
+	Assignments []AssetAssignment
+}
+
+// ExchangeImportOperation is the durable mutation identity reserved by
+// Exchange before it invokes a domain provider.
+type ExchangeImportOperation struct {
+	Token      string
+	OccurredAt time.Time
+}
+
+type ExchangeImportResult struct {
+	Committed bool
+	Created   bool
+}
+
+// ExchangeImporter is an opaque construction-time capability. Ordinary
+// People callers cannot choose source IDs, revisions, timestamps, or history.
+type ExchangeImporter interface {
+	peopleExchangeImporter()
+	ImportSite(context.Context, ExchangeImportOperation, Site) (ExchangeImportResult, error)
+	ImportBuilding(context.Context, ExchangeImportOperation, Building) (ExchangeImportResult, error)
+	ImportRoom(context.Context, ExchangeImportOperation, Room) (ExchangeImportResult, error)
+	ImportDepartment(context.Context, ExchangeImportOperation, Department) (ExchangeImportResult, error)
+	ImportIdentity(context.Context, ExchangeImportOperation, Identity) (ExchangeImportResult, error)
+	ImportAssetAssignment(context.Context, ExchangeImportOperation, AssetAssignment) (ExchangeImportResult, error)
+}
+
+// WriteGate is the service-layer imported-ownership fence. Exchange receives
+// the opaque importer capability that alone bypasses this gate.
+type WriteGate interface {
+	CheckResourceWrite(context.Context, string, string) error
+}
+
 // AssetReader is satisfied by the Atlas repository contract. Keeping this
 // interface local lets Atlas become durable without changing People.
 type AssetReader interface {
@@ -336,6 +379,8 @@ type AssetReader interface {
 // Store is provider-neutral. PostgreSQL is the first durable adapter and a
 // future DynamoDB adapter must pass the same conformance tests.
 type Store interface {
+	ExchangeSnapshot(ctx context.Context, organizationID string, maximum int) (ExchangeSnapshot, error)
+
 	CreateSite(ctx context.Context, site Site) (Site, error)
 	GetSite(ctx context.Context, organizationID, id string) (Site, error)
 	ListSites(ctx context.Context, organizationID string, visibility Visibility) ([]Site, error)
@@ -363,6 +408,8 @@ type Store interface {
 	ListGraphIdentities(ctx context.Context, organizationID string, query GraphIdentityQuery, visibility Visibility) ([]Identity, error)
 
 	CreateAssetAssignment(ctx context.Context, assignment AssetAssignment, replaceActiveRole bool) (AssetAssignment, error)
+	ImportAssetAssignment(ctx context.Context, assignment AssetAssignment) (AssetAssignment, error)
+	GetAssetAssignment(ctx context.Context, organizationID, assignmentID string) (AssetAssignment, error)
 	EndAssetAssignment(ctx context.Context, organizationID, assetID, assignmentID string, effectiveTo time.Time) (AssetAssignment, error)
 	ListAssetAssignments(ctx context.Context, organizationID, assetID string) ([]AssetAssignment, error)
 }

@@ -32,6 +32,16 @@ func (catalogTestReferences) ValidateAssetReferences(context.Context, string, at
 	return nil
 }
 
+type catalogTestWriteGate struct {
+	err   error
+	calls []string
+}
+
+func (g *catalogTestWriteGate) CheckResourceWrite(_ context.Context, recordType, recordID string) error {
+	g.calls = append(g.calls, recordType+"/"+recordID)
+	return g.err
+}
+
 func TestCatalogFoundationExtendsAtlasModelsAndResolvesEffectivePrice(t *testing.T) {
 	now := time.Date(2026, time.August, 12, 15, 0, 0, 0, time.UTC)
 	auditor := &catalogTestAuditor{}
@@ -111,6 +121,20 @@ func TestCatalogFoundationExtendsAtlasModelsAndResolvesEffectivePrice(t *testing
 	paths, err := service.ListUpgradePaths(ctx, current.ID, configuration.ID)
 	if err != nil || len(paths) != 1 || paths[0].ID != path.ID {
 		t.Fatalf("unexpected path list %#v err=%v", paths, err)
+	}
+	snapshot, err := service.Snapshot(ctx)
+	if err != nil || len(snapshot.Configurations) != 1 || len(snapshot.Prices) != 3 || len(snapshot.UpgradePaths) != 1 ||
+		snapshot.Configurations[0].ID != configuration.ID || snapshot.UpgradePaths[0].ID != path.ID {
+		t.Fatalf("unexpected bounded Catalog snapshot %#v err=%v", snapshot, err)
+	}
+	if exact, err := service.GetConfiguration(ctx, configuration.ID); err != nil || exact.ID != configuration.ID {
+		t.Fatalf("get exact configuration %#v err=%v", exact, err)
+	}
+	if exact, err := service.GetPrice(ctx, "price-config-contract"); err != nil || exact.ID != "price-config-contract" {
+		t.Fatalf("get exact price %#v err=%v", exact, err)
+	}
+	if exact, err := service.GetUpgradePath(ctx, path.ID); err != nil || exact.ID != path.ID {
+		t.Fatalf("get exact upgrade path %#v err=%v", exact, err)
 	}
 
 	if len(auditor.events) != 5 {
@@ -232,6 +256,99 @@ func TestCatalogStoreRemainsOrganizationScopedAcrossAtlasModelReaders(t *testing
 	}
 	if _, err := crossOrganization.ListConfigurations(context.Background(), modelOne.ID); !errors.Is(err, catalog.ErrNotFound) {
 		t.Fatalf("expected cross-organization model rejection, got %v", err)
+	}
+}
+
+func TestCatalogExchangeImporterPreservesRevisionAndReplaysDeterministicAudit(t *testing.T) {
+	now := time.Date(2026, time.August, 13, 18, 30, 0, 0, time.UTC)
+	models, err := atlas.NewService(repository.NewMemoryAtlasStore(), catalogTestReferences{}, foundation.NopAuditor{}, atlas.ServiceConfig{
+		OrganizationID: "org-one", Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	createModel(t, models, context.Background(), "model-one", "Portable model")
+	auditor := &catalogTestAuditor{}
+	service, importer, err := catalog.NewServiceWithExchangeImporter(repository.NewMemoryCatalogStore(), models, nil, auditor, catalog.ServiceConfig{
+		OrganizationID: "org-one", Now: func() time.Time { return now.Add(time.Hour) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	operation := catalog.ExchangeImportOperation{Token: "exchange-catalog-import", OccurredAt: now}
+	candidate := catalog.Configuration{ID: "configuration-one", ModelID: "model-one", Name: "Portable", Status: catalog.StatusActive,
+		Specifications: map[string]string{"memory_gb": "64"}, Revision: 7}
+	result, err := importer.ImportConfiguration(context.Background(), operation, candidate)
+	if err != nil || !result.Committed || !result.Created {
+		t.Fatalf("unexpected imported Catalog result %#v err=%v", result, err)
+	}
+	created, err := service.GetConfiguration(context.Background(), candidate.ID)
+	if err != nil || created.Revision != 7 || !created.CreatedAt.Equal(now) || !created.UpdatedAt.Equal(now) {
+		t.Fatalf("Catalog import did not preserve revision/time %#v err=%v", created, err)
+	}
+	replayed, err := importer.ImportConfiguration(context.Background(), operation, candidate)
+	if err != nil || !replayed.Committed || replayed.Created {
+		t.Fatalf("unexpected Catalog replay %#v err=%v", replayed, err)
+	}
+	if len(auditor.events) != 2 || auditor.events[0].ID != auditor.events[1].ID || auditor.events[0].CorrelationID != operation.Token ||
+		!auditor.events[0].OccurredAt.Equal(operation.OccurredAt) || auditor.events[0].ActorID != "system:exchange" {
+		t.Fatalf("Catalog audit replay was not deterministic: %#v", auditor.events)
+	}
+	changed := candidate
+	changed.Name = "Changed"
+	if _, err := importer.ImportConfiguration(context.Background(), operation, changed); !errors.Is(err, catalog.ErrConflict) {
+		t.Fatalf("expected changed stable-ID import conflict, got %v", err)
+	}
+}
+
+func TestCatalogServiceChecksOwnershipForEveryLocalWriteAndExchangeBypassesOnlyThroughImporter(t *testing.T) {
+	now := time.Date(2026, time.August, 13, 20, 0, 0, 0, time.UTC)
+	models, err := atlas.NewService(repository.NewMemoryAtlasStore(), catalogTestReferences{}, foundation.NopAuditor{}, atlas.ServiceConfig{
+		OrganizationID: "org-one", Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	createModel(t, models, context.Background(), "model-one", "Source model")
+	createModel(t, models, context.Background(), "model-two", "Target model")
+	locked := errors.New("resource ownership is locked")
+	gate := &catalogTestWriteGate{err: locked}
+	service, importer, err := catalog.NewServiceWithExchangeImporter(
+		repository.NewMemoryCatalogStore(), models, gate, foundation.NopAuditor{},
+		catalog.ServiceConfig{OrganizationID: "org-one", Now: func() time.Time { return now.Add(time.Hour) }},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.CreateConfiguration(context.Background(), catalog.CreateConfigurationInput{
+		ID: "configuration-one", ModelID: "model-one", Name: "Portable", Status: catalog.StatusActive,
+	}); !errors.Is(err, locked) {
+		t.Fatalf("expected configuration ownership denial, got %v", err)
+	}
+	operation := catalog.ExchangeImportOperation{Token: "exchange-catalog-ownership", OccurredAt: now}
+	configuration := catalog.Configuration{ID: "configuration-one", ModelID: "model-one", Name: "Portable", Status: catalog.StatusActive, Revision: 3}
+	if result, err := importer.ImportConfiguration(context.Background(), operation, configuration); err != nil || !result.Committed || !result.Created {
+		t.Fatalf("Exchange importer did not use its private ownership capability: result=%#v err=%v", result, err)
+	}
+	if _, err := service.RecordPrice(context.Background(), catalog.RecordPriceInput{
+		ID: "price-one", ModelID: "model-one", ConfigurationID: configuration.ID, Kind: catalog.PriceKindList,
+		AmountMinor: 10_000, Currency: "USD", EffectiveFrom: now,
+	}); !errors.Is(err, locked) {
+		t.Fatalf("expected price ownership denial, got %v", err)
+	}
+	if _, err := service.CreateUpgradePath(context.Background(), catalog.CreateUpgradePathInput{
+		ID: "upgrade-one", FromModelID: "model-one", FromConfigurationID: configuration.ID,
+		ToModelID: "model-two", Kind: catalog.UpgradeKindUpgrade, EffectiveFrom: now,
+	}); !errors.Is(err, locked) {
+		t.Fatalf("expected upgrade-path ownership denial, got %v", err)
+	}
+	want := []string{
+		"atlas.catalog-configuration/configuration-one",
+		"atlas.catalog-price/price-one",
+		"atlas.catalog-upgrade-path/upgrade-one",
+	}
+	if strings.Join(gate.calls, ",") != strings.Join(want, ",") {
+		t.Fatalf("unexpected ownership checks %#v", gate.calls)
 	}
 }
 

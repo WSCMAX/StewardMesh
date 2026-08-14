@@ -5,6 +5,7 @@ package repository
 
 import (
 	"context"
+	"reflect"
 	"regexp"
 	"sort"
 	"strings"
@@ -31,6 +32,25 @@ func NewMemoryAtlasCodesStore() *MemoryAtlasCodesStore {
 
 func atlasCodesMemoryKey(organizationID, identifierID string) string {
 	return organizationID + "\x00" + identifierID
+}
+
+func (s *MemoryAtlasCodesStore) SnapshotIdentifiers(_ context.Context, organizationID string, maximum int) ([]atlascodes.Identifier, error) {
+	if strings.TrimSpace(organizationID) == "" || maximum < 1 {
+		return nil, atlascodes.ErrInvalidInput
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	items := make([]atlascodes.Identifier, 0)
+	for _, item := range s.identifiers {
+		if item.OrganizationID == organizationID {
+			items = append(items, cloneAtlasCodesIdentifier(item))
+			if len(items) > maximum {
+				return nil, atlascodes.ErrTooLarge
+			}
+		}
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].ID < items[j].ID })
+	return items, nil
 }
 
 func (s *MemoryAtlasCodesStore) ListIdentifiers(_ context.Context, organizationID, assetID string) ([]atlascodes.Identifier, error) {
@@ -193,6 +213,51 @@ func (s *MemoryAtlasCodesStore) DeactivateIdentifier(
 	item.DeactivatedAt = cloneAtlasCodesTime(&deactivatedAt)
 	s.identifiers[key] = cloneAtlasCodesIdentifier(item)
 	return cloneAtlasCodesIdentifier(item), true, nil
+}
+
+func (s *MemoryAtlasCodesStore) ImportIdentifierChain(_ context.Context, organizationID string, chain atlascodes.IdentifierChain) (atlascodes.IdentifierChain, bool, error) {
+	if strings.TrimSpace(organizationID) == "" || chain.TerminalID == "" || len(chain.Items) == 0 {
+		return atlascodes.IdentifierChain{}, false, atlascodes.ErrInvalidInput
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	allExisting := true
+	for _, item := range chain.Items {
+		if item.OrganizationID != organizationID {
+			return atlascodes.IdentifierChain{}, false, atlascodes.ErrInvalidInput
+		}
+		existing, exists := s.identifiers[atlasCodesMemoryKey(organizationID, item.ID)]
+		if !exists {
+			allExisting = false
+			continue
+		}
+		if !reflect.DeepEqual(existing, item) {
+			return atlascodes.IdentifierChain{}, false, atlascodes.ErrConflict
+		}
+	}
+	if allExisting {
+		return cloneAtlasCodesChain(chain), false, nil
+	}
+	for _, item := range chain.Items {
+		if _, exists := s.identifiers[atlasCodesMemoryKey(organizationID, item.ID)]; exists {
+			return atlascodes.IdentifierChain{}, false, atlascodes.ErrConflict
+		}
+		if item.Status == atlascodes.StatusActive && s.activeAtlasCodesConflict(item, "") {
+			return atlascodes.IdentifierChain{}, false, atlascodes.ErrConflict
+		}
+	}
+	for _, item := range chain.Items {
+		s.identifiers[atlasCodesMemoryKey(organizationID, item.ID)] = cloneAtlasCodesIdentifier(item)
+	}
+	return cloneAtlasCodesChain(chain), true, nil
+}
+
+func cloneAtlasCodesChain(chain atlascodes.IdentifierChain) atlascodes.IdentifierChain {
+	result := atlascodes.IdentifierChain{TerminalID: chain.TerminalID, Items: make([]atlascodes.Identifier, len(chain.Items))}
+	for index, item := range chain.Items {
+		result.Items[index] = cloneAtlasCodesIdentifier(item)
+	}
+	return result
 }
 
 func (s *MemoryAtlasCodesStore) activeAtlasCodesConflict(candidate atlascodes.Identifier, excludingKey string) bool {

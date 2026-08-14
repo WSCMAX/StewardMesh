@@ -4,7 +4,7 @@
 - **Requirements:** `REQ-API-001`, `REQ-ATLAS-CODES-001`, `REQ-SIGNALS-001`, `SEC-GUARD-001`
 - **Roadmap issues:** [#14](https://github.com/WSCMAX/StewardMesh/issues/14), [#60](https://github.com/WSCMAX/StewardMesh/issues/60)
 - **Adapter status:** Implemented and covered by the validation contracts below
-- **Production activation:** Not activated; explicit deployment approval remains required
+- **Production activation:** Active in the standalone dual-listener command
 
 ## Runtime boundary
 
@@ -13,15 +13,19 @@
 is not inferred from request data: `internal/grpcapi/routes.go` is a complete,
 fixed method/path/converter allowlist. Server construction fails if one declared
 RPC has no route or if the allowlist names an undeclared RPC. Production wiring
-for the all-domain adapter in `cmd/stewardmesh-grpc` is intentionally not active:
-the existing Bridge-only command remains the reachable surface until the broader
-listeners and sensitive Guard/Vault exposure receive explicit deployment
-approval. Passing adapter tests does not grant that approval and must not be
-reported as production activation.
-Activation must keep the three public Guard methods on a 64 KiB receive-envelope
-listener and the authenticated domain methods on a separate 34 MiB listener. A
-codec-only limit is not an allocation boundary because grpc-go decompresses a
-request before invoking the codec.
+for the all-domain adapter is active in `cmd/stewardmesh-grpc`. It uses a public
+listener at `STEWARDMESH_GRPC_PUBLIC_ADDR` (default `127.0.0.1:9091`) and a
+protected listener at `STEWARDMESH_GRPC_ADDR` (default `127.0.0.1:9090`). The
+three public Guard methods and the standard unary gRPC health `Check` method are
+registered only on the 64 KiB receive/send-envelope listener. The other 151 RPCs are registered
+only on the authenticated 34 MiB listener. These grpc-go server limits apply
+before codec invocation, which preserves the allocation boundary even though
+grpc-go decompresses requests before invoking the codec.
+
+The public listener intentionally returns `Unimplemented` for health `Watch`
+and `List`. This keeps anonymous clients from holding long-lived health streams
+and exhausting the four public pre-decode permits needed by Guard bootstrap and
+login. Operators should use bounded unary `Check` probes.
 
 Each authenticated call accepts exactly one `authorization: Bearer <opaque
 Guard session>` metadata value of at most 512 bytes. Guard validates protected
@@ -42,17 +46,25 @@ bootstrap/login responses return the new opaque session token for subsequent
 Bearer metadata. All remaining RPCs, including logout, require revalidation on
 every call.
 
-Any production listener using this adapter must remain plaintext only on
-loopback. Non-loopback binding requires a configured TLS certificate/key pair
-and TLS 1.3 or newer. The authenticated adapter's protobuf receive and send
-envelope is 34 MiB, which admits a documented 32 MiB Exchange archive plus
-bounded protobuf framing. The public listener must use 64 KiB for receive and
-send. Both listeners must also bound header bytes, streams per connection, and
-process-wide concurrent RPCs. Existing route and service limits remain
-authoritative: Exchange accepts at most 32 MiB compressed and 64 MiB after
-decompression; Atlas label batches remain bounded; Vault retains its configured
-object limit and the authenticated gRPC envelope; ordinary JSON inputs keep
-their existing smaller limits.
+Plaintext listeners are accepted only on loopback. If either address is
+non-loopback, the command requires a configured certificate/key pair, an HTTPS
+application origin, secure session cookies, and TLS 1.3 or newer. Until initial
+administrator setup is complete, a non-loopback public listener also requires
+the deployment bootstrap token. Both listeners cap header lists at 16 KiB,
+connection setup at five seconds, RPC lifetime at five minutes, keepalive
+behavior, and concurrent streams. Before authentication or protobuf decode, a
+shared process limiter admits at most 12 RPCs while protected and public
+listeners reserve limits of eight and four respectively. Existing route and
+service limits remain authoritative: Exchange accepts at most 32 MiB compressed
+and 64 MiB after decompression; Atlas label batches remain bounded; Vault
+retains its configured object limit and the authenticated gRPC envelope;
+ordinary JSON inputs keep their existing smaller limits.
+
+HTTP and gRPC are separate application processes when both commands are
+deployed. They must use the same PostgreSQL database and Valkey service to share
+Guard sessions, domain state, and cross-process rate state. Memory repositories
+and the `none`/memory cache modes are process-local and are limited to isolated
+development or test runtimes.
 
 ## Special converters
 
@@ -94,6 +106,10 @@ their existing smaller limits.
 - `internal/application/bridge_grpc_test.go` retains state-level REST parity for
   Bridge cursor paging, client/grant creation, revocation, and expired session
   behavior through the all-service runtime.
+- `cmd/stewardmesh-grpc/main_test.go` exercises the production registration
+  split, public unary health checks with streaming health disabled, pre-decode message/header/concurrency limits,
+  protected bearer authentication, Bridge compatibility, TLS 1.3 enforcement,
+  startup policy, graceful cleanup, and in-memory secret scrubbing.
 - `internal/httpapi/server_test.go` covers authentication, permission, browser
   CSRF, bounded reads, and sanitized attempt writes for the Signals delivery
   seam.
@@ -101,9 +117,7 @@ their existing smaller limits.
   ./...`, traceability, and the repository's PostgreSQL provider tests are the
   release gates.
 
-The combined implementation tree passed those local gates after its last code
-change on 2026-08-13. Production activation was not approved and remains
-unchanged; pull-request CI is still pending. Exact integrated results and the
-activation decision belong in the
-[phase-one release record](phase-one-release.md); this document defines the gRPC
-contract and does not turn adapter coverage into deployment activation.
+The all-domain runtime was activated on 2026-08-13 after the listener split and
+command-level controls above were implemented. Pull-request CI remains the
+publication gate. Exact integrated results belong in the
+[phase-one release record](phase-one-release.md).

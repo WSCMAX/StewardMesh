@@ -28,6 +28,47 @@ func NewMemoryThreadsStore() *MemoryThreadsStore {
 	}
 }
 
+func (s *MemoryThreadsStore) Snapshot(_ context.Context, organizationID string) (threads.Snapshot, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	result := threads.Snapshot{
+		Tags: []threads.Tag{}, Goals: []threads.Goal{}, TagRules: []threads.TagRule{}, GoalLinks: []threads.GoalLink{},
+	}
+	for _, item := range s.tags {
+		if item.OrganizationID == organizationID {
+			result.Tags = append(result.Tags, item)
+		}
+	}
+	for _, item := range s.goals {
+		if item.OrganizationID == organizationID {
+			result.Goals = append(result.Goals, item)
+		}
+	}
+	for _, item := range s.tagRules {
+		if item.OrganizationID == organizationID {
+			result.TagRules = append(result.TagRules, item)
+		}
+	}
+	for _, item := range s.goalLinks {
+		if item.OrganizationID == organizationID {
+			result.GoalLinks = append(result.GoalLinks, item)
+		}
+	}
+	sortTags(result.Tags)
+	sortGoals(result.Goals)
+	sort.Slice(result.TagRules, func(i, j int) bool {
+		left, right := result.TagRules[i], result.TagRules[j]
+		return threadsTargetKey(left.OrganizationID, left.TargetType, left.TargetID, left.TagID) <
+			threadsTargetKey(right.OrganizationID, right.TargetType, right.TargetID, right.TagID)
+	})
+	sort.Slice(result.GoalLinks, func(i, j int) bool {
+		left, right := result.GoalLinks[i], result.GoalLinks[j]
+		return threadsTargetKey(left.OrganizationID, left.TargetType, left.TargetID, left.GoalID) <
+			threadsTargetKey(right.OrganizationID, right.TargetType, right.TargetID, right.GoalID)
+	})
+	return result, nil
+}
+
 func threadsRecordKey(organizationID, id string) string {
 	return organizationID + "\x00" + id
 }
@@ -145,6 +186,17 @@ func (s *MemoryThreadsStore) ListTagRules(_ context.Context, organizationID stri
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].TagID < items[j].TagID })
 	return items, nil
+}
+
+func (s *MemoryThreadsStore) CreateTagRule(_ context.Context, rule threads.TagRule) (threads.TagRule, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := threadsTargetKey(rule.OrganizationID, rule.TargetType, rule.TargetID, rule.TagID)
+	if _, exists := s.tagRules[key]; exists {
+		return threads.TagRule{}, threads.ErrConflict
+	}
+	s.tagRules[key] = rule
+	return rule, nil
 }
 
 func (s *MemoryThreadsStore) PutTagRule(_ context.Context, rule threads.TagRule, expectedRevision int64) (threads.TagRule, error) {

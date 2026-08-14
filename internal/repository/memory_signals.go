@@ -29,6 +29,31 @@ func NewMemorySignalsStore() *MemorySignalsStore {
 
 func signalsKey(organizationID, id string) string { return organizationID + "\x00" + id }
 
+func (s *MemorySignalsStore) ExchangeSnapshot(_ context.Context, organizationID string, maximum int) (signals.ExchangeSnapshot, error) {
+	if maximum < 1 {
+		return signals.ExchangeSnapshot{}, signals.ErrInvalidInput
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	result := signals.ExchangeSnapshot{Rules: []signals.Rule{}, Subscriptions: []signals.Subscription{}}
+	for _, item := range s.rules {
+		if item.OrganizationID == organizationID {
+			result.Rules = append(result.Rules, cloneSignalRule(item))
+		}
+	}
+	for _, item := range s.subscriptions {
+		if item.OrganizationID == organizationID {
+			result.Subscriptions = append(result.Subscriptions, item)
+		}
+	}
+	if len(result.Rules)+len(result.Subscriptions) > maximum {
+		return signals.ExchangeSnapshot{}, signals.ErrTooLarge
+	}
+	sort.Slice(result.Rules, func(i, j int) bool { return result.Rules[i].ID < result.Rules[j].ID })
+	sort.Slice(result.Subscriptions, func(i, j int) bool { return result.Subscriptions[i].ID < result.Subscriptions[j].ID })
+	return result, nil
+}
+
 func (s *MemorySignalsStore) ListRules(_ context.Context, organizationID string) ([]signals.Rule, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -95,6 +120,29 @@ func (s *MemorySignalsStore) UpdateRule(_ context.Context, item signals.Rule, ex
 	}
 	s.rules[key] = cloneSignalRule(item)
 	return cloneSignalRule(item), nil
+}
+
+func (s *MemorySignalsStore) ImportRule(_ context.Context, item signals.Rule) (signals.Rule, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := signalsKey(item.OrganizationID, item.ID)
+	if existing, ok := s.rules[key]; ok {
+		return cloneSignalRule(existing), false, nil
+	}
+	count := 0
+	for _, existing := range s.rules {
+		if existing.OrganizationID == item.OrganizationID {
+			count++
+			if strings.EqualFold(existing.Name, item.Name) {
+				return signals.Rule{}, false, signals.ErrConflict
+			}
+		}
+	}
+	if count >= signals.MaximumRules {
+		return signals.Rule{}, false, signals.ErrConflict
+	}
+	s.rules[key] = cloneSignalRule(item)
+	return cloneSignalRule(item), true, nil
 }
 
 func (s *MemorySignalsStore) ListAlerts(_ context.Context, organizationID string, query signals.AlertQuery) ([]signals.Alert, error) {
@@ -192,6 +240,16 @@ func (s *MemorySignalsStore) ListSubscriptions(_ context.Context, organizationID
 	return items, nil
 }
 
+func (s *MemorySignalsStore) GetSubscription(_ context.Context, organizationID, id string) (signals.Subscription, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	item, ok := s.subscriptions[signalsKey(organizationID, id)]
+	if !ok {
+		return signals.Subscription{}, signals.ErrNotFound
+	}
+	return item, nil
+}
+
 func (s *MemorySignalsStore) CreateSubscription(_ context.Context, item signals.Subscription) (signals.Subscription, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -212,6 +270,28 @@ func (s *MemorySignalsStore) CreateSubscription(_ context.Context, item signals.
 	}
 	s.subscriptions[key] = item
 	return item, nil
+}
+
+func (s *MemorySignalsStore) ImportSubscription(_ context.Context, item signals.Subscription) (signals.Subscription, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key, count := signalsKey(item.OrganizationID, item.ID), 0
+	if existing, ok := s.subscriptions[key]; ok {
+		return existing, false, nil
+	}
+	for _, existing := range s.subscriptions {
+		if existing.OrganizationID == item.OrganizationID {
+			count++
+			if existing.RuleID == item.RuleID && existing.TargetKind == item.TargetKind && existing.TargetID == item.TargetID {
+				return signals.Subscription{}, false, signals.ErrConflict
+			}
+		}
+	}
+	if count >= signals.MaximumSubscriptions {
+		return signals.Subscription{}, false, signals.ErrConflict
+	}
+	s.subscriptions[key] = item
+	return item, true, nil
 }
 
 func (s *MemorySignalsStore) DeleteSubscription(_ context.Context, organizationID, id string) (bool, error) {

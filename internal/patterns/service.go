@@ -6,9 +6,11 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/csv"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"regexp"
@@ -36,19 +38,31 @@ type ServiceConfig struct {
 
 type Service struct {
 	store          Store
+	writes         WriteGate
 	auditor        foundation.Auditor
 	organizationID string
 	now            func() time.Time
 	builtIns       map[string]map[int64]Template
 }
 
+type exchangeImporter struct{ service *Service }
+
+type exchangeImportContextKey struct{}
+
+type exchangeImportContext struct{ operation ExchangeImportOperation }
+
 func NewService(store Store, auditor foundation.Auditor, configuration ServiceConfig) (*Service, error) {
+	service, _, err := NewServiceWithExchangeImporter(store, nil, auditor, configuration)
+	return service, err
+}
+
+func NewServiceWithExchangeImporter(store Store, writes WriteGate, auditor foundation.Auditor, configuration ServiceConfig) (*Service, ExchangeImporter, error) {
 	if store == nil || auditor == nil {
-		return nil, fmt.Errorf("Patterns store and auditor are required")
+		return nil, nil, fmt.Errorf("Patterns store and auditor are required")
 	}
 	configuration.OrganizationID = strings.TrimSpace(configuration.OrganizationID)
 	if configuration.OrganizationID == "" {
-		return nil, fmt.Errorf("Patterns organization id is required")
+		return nil, nil, fmt.Errorf("Patterns organization id is required")
 	}
 	if configuration.Now == nil {
 		configuration.Now = func() time.Time { return time.Now().UTC() }
@@ -57,22 +71,116 @@ func NewService(store Store, auditor foundation.Auditor, configuration ServiceCo
 	for _, candidate := range BuiltInTemplates() {
 		fields, err := normalizeFields(candidate.Fields)
 		if err != nil {
-			return nil, fmt.Errorf("invalid built-in Patterns template %q: %w", candidate.ID, err)
+			return nil, nil, fmt.Errorf("invalid built-in Patterns template %q: %w", candidate.ID, err)
 		}
 		candidate.Fields = fields
 		candidate.CreatedAt = time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
 		if candidate.Version < 1 || !candidate.BuiltIn || candidate.Status == "" || !stableIDPattern.MatchString(candidate.ID) || !recordTypePattern.MatchString(candidate.RecordType) {
-			return nil, fmt.Errorf("invalid built-in Patterns template metadata %q", candidate.ID)
+			return nil, nil, fmt.Errorf("invalid built-in Patterns template metadata %q", candidate.ID)
 		}
 		if builtIns[candidate.ID] == nil {
 			builtIns[candidate.ID] = make(map[int64]Template)
 		}
 		if _, duplicate := builtIns[candidate.ID][candidate.Version]; duplicate {
-			return nil, fmt.Errorf("duplicate built-in Patterns template %q version %d", candidate.ID, candidate.Version)
+			return nil, nil, fmt.Errorf("duplicate built-in Patterns template %q version %d", candidate.ID, candidate.Version)
 		}
 		builtIns[candidate.ID][candidate.Version] = candidate
 	}
-	return &Service{store: store, auditor: auditor, organizationID: configuration.OrganizationID, now: configuration.Now, builtIns: builtIns}, nil
+	service := &Service{store: store, writes: writes, auditor: auditor, organizationID: configuration.OrganizationID, now: configuration.Now, builtIns: builtIns}
+	return service, &exchangeImporter{service: service}, nil
+}
+
+func (*exchangeImporter) patternsExchangeImporter() {}
+
+func (s *Service) OwnsExchangeImporter(candidate ExchangeImporter) bool {
+	importer, ok := candidate.(*exchangeImporter)
+	return ok && importer != nil && importer.service == s
+}
+
+// ExchangeTemplates returns every custom template with its complete immutable
+// history. Local operator/timestamp fields are deliberately projected away.
+func (s *Service) ExchangeTemplates(ctx context.Context) ([]ExchangeTemplate, error) {
+	items, err := s.store.ListTemplates(ctx, s.organizationID, ListQuery{IncludeRetired: true, IncludeVersions: true})
+	if err != nil {
+		return nil, err
+	}
+	grouped := make(map[string]*ExchangeTemplate)
+	for _, item := range items {
+		candidate := grouped[item.ID]
+		if candidate == nil {
+			candidate = &ExchangeTemplate{ID: item.ID, RecordType: item.RecordType, Name: item.Name, Versions: []ExchangeTemplateVersion{}}
+			grouped[item.ID] = candidate
+		}
+		candidate.Versions = append(candidate.Versions, ExchangeTemplateVersion{
+			Description: item.Description, Version: item.Version, Status: item.Status, Fields: cloneFields(item.Fields),
+		})
+	}
+	result := make([]ExchangeTemplate, 0, len(grouped))
+	for _, item := range grouped {
+		sort.Slice(item.Versions, func(i, j int) bool { return item.Versions[i].Version < item.Versions[j].Version })
+		normalized, err := normalizeExchangeTemplate(*item)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, normalized)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
+	return result, nil
+}
+
+func (s *Service) ExchangeTemplate(ctx context.Context, id string) (ExchangeTemplate, error) {
+	id = strings.TrimSpace(id)
+	if !stableIDPattern.MatchString(id) {
+		return ExchangeTemplate{}, ErrInvalidInput
+	}
+	items, err := s.ExchangeTemplates(ctx)
+	if err != nil {
+		return ExchangeTemplate{}, err
+	}
+	for _, item := range items {
+		if item.ID == id {
+			return item, nil
+		}
+	}
+	return ExchangeTemplate{}, ErrNotFound
+}
+
+func (i *exchangeImporter) ImportTemplate(ctx context.Context, operation ExchangeImportOperation, candidate ExchangeTemplate) (ExchangeImportResult, error) {
+	operation.Token = strings.TrimSpace(operation.Token)
+	operation.OccurredAt = operation.OccurredAt.UTC()
+	if !stableIDPattern.MatchString(operation.Token) || operation.OccurredAt.IsZero() || operation.OccurredAt.Year() < 2000 || operation.OccurredAt.Year() > 9999 {
+		return ExchangeImportResult{}, ErrInvalidInput
+	}
+	normalized, err := normalizeExchangeTemplate(candidate)
+	if err != nil || !sameExchangeTemplate(normalized, candidate) {
+		return ExchangeImportResult{}, ErrInvalidInput
+	}
+	ctx = context.WithValue(ctx, exchangeImportContextKey{}, exchangeImportContext{operation: operation})
+	existing, err := i.service.ExchangeTemplate(ctx, normalized.ID)
+	if err == nil {
+		if !sameExchangeTemplate(existing, normalized) {
+			return ExchangeImportResult{}, ErrConflict
+		}
+		err = i.service.audit(ctx, "patterns.template.imported", exchangeAuditTemplate(normalized, i.service.organizationID, operation.OccurredAt), map[string]string{
+			"versionCount": strconv.Itoa(len(normalized.Versions)),
+		})
+		return ExchangeImportResult{Committed: true}, err
+	}
+	if !errors.Is(err, ErrNotFound) {
+		return ExchangeImportResult{}, err
+	}
+	history := exchangeHistory(normalized, i.service.organizationID, operation.OccurredAt)
+	err = i.service.store.ImportTemplateHistory(ctx, i.service.organizationID, history)
+	if err != nil {
+		observed, readErr := i.service.ExchangeTemplate(ctx, normalized.ID)
+		if readErr != nil || !sameExchangeTemplate(observed, normalized) {
+			return ExchangeImportResult{}, err
+		}
+	}
+	auditErr := i.service.audit(ctx, "patterns.template.imported", history[len(history)-1], map[string]string{
+		"versionCount": strconv.Itoa(len(normalized.Versions)),
+	})
+	return ExchangeImportResult{Committed: true, Created: true}, errors.Join(err, auditErr)
 }
 
 func (s *Service) ListTemplates(ctx context.Context, query ListQuery) ([]Template, error) {
@@ -198,6 +306,9 @@ func (s *Service) CreateTemplate(ctx context.Context, input CreateTemplateInput)
 	if _, reserved := s.builtIns[id]; reserved {
 		return Template{}, ErrConflict
 	}
+	if err := s.checkWrite(ctx, id); err != nil {
+		return Template{}, err
+	}
 	now := s.now().UTC()
 	created, err := s.store.CreateTemplate(ctx, Template{ID: id, OrganizationID: s.organizationID,
 		RecordType: recordType, Name: name, Description: description, Version: 1, BuiltIn: false,
@@ -225,6 +336,13 @@ func (s *Service) CopyTemplate(ctx context.Context, sourceID string, sourceVersi
 }
 
 func (s *Service) CreateVersion(ctx context.Context, id string, input NewVersionInput) (Template, error) {
+	id = strings.TrimSpace(id)
+	if !stableIDPattern.MatchString(id) {
+		return Template{}, ErrInvalidInput
+	}
+	if err := s.checkWrite(ctx, id); err != nil {
+		return Template{}, err
+	}
 	current, err := s.GetTemplate(ctx, id, 0)
 	if err != nil {
 		return Template{}, err
@@ -637,7 +755,80 @@ func templateID(value string) (string, error) {
 	return hex.EncodeToString(buffer), nil
 }
 
+func normalizeExchangeTemplate(value ExchangeTemplate) (ExchangeTemplate, error) {
+	value.ID = strings.TrimSpace(value.ID)
+	value.RecordType = strings.ToLower(strings.TrimSpace(value.RecordType))
+	value.Name = strings.TrimSpace(value.Name)
+	if !stableIDPattern.MatchString(value.ID) || !recordTypePattern.MatchString(value.RecordType) ||
+		!validText(value.Name, 1, 160) || len(value.Versions) == 0 || len(value.Versions) > MaximumExchangeVersions {
+		return ExchangeTemplate{}, ErrInvalidInput
+	}
+	result := ExchangeTemplate{ID: value.ID, RecordType: value.RecordType, Name: value.Name, Versions: make([]ExchangeTemplateVersion, len(value.Versions))}
+	approximateBytes := len(value.ID) + len(value.RecordType) + len(value.Name)
+	for index, version := range value.Versions {
+		version.Description = strings.TrimSpace(version.Description)
+		fields, err := normalizeFields(version.Fields)
+		if err != nil || version.Version != int64(index+1) || version.Status != StatusActive && version.Status != StatusRetired || !validText(version.Description, 0, 1000) {
+			return ExchangeTemplate{}, ErrInvalidInput
+		}
+		version.Fields = fields
+		approximateBytes += len(version.Description)
+		for _, field := range fields {
+			approximateBytes += len(field.Key) + len(field.Label) + len(field.Help) + len(field.ReferenceType) + len(field.AccessibleLabel) + len(field.CSVHeader) + len(field.CurrencyField)
+			for _, option := range field.Options {
+				approximateBytes += len(option)
+			}
+		}
+		if approximateBytes > MaximumExchangeHistoryBytes {
+			return ExchangeTemplate{}, ErrInvalidInput
+		}
+		result.Versions[index] = version
+	}
+	return result, nil
+}
+
+// ValidateExchangeTemplate applies the owning domain's complete portable
+// history contract without granting any mutation capability.
+func ValidateExchangeTemplate(value ExchangeTemplate) error {
+	normalized, err := normalizeExchangeTemplate(value)
+	if err != nil || !sameExchangeTemplate(normalized, value) {
+		return ErrInvalidInput
+	}
+	return nil
+}
+
+func exchangeHistory(value ExchangeTemplate, organizationID string, occurredAt time.Time) []Template {
+	result := make([]Template, len(value.Versions))
+	for index, version := range value.Versions {
+		result[index] = Template{ID: value.ID, OrganizationID: organizationID, RecordType: value.RecordType,
+			Name: value.Name, Description: version.Description, Version: version.Version, BuiltIn: false,
+			Status: version.Status, Fields: cloneFields(version.Fields), CreatedBy: "system:exchange", CreatedAt: occurredAt}
+	}
+	return result
+}
+
+func exchangeAuditTemplate(value ExchangeTemplate, organizationID string, occurredAt time.Time) Template {
+	history := exchangeHistory(value, organizationID, occurredAt)
+	return history[len(history)-1]
+}
+
+func sameExchangeTemplate(left, right ExchangeTemplate) bool {
+	leftEncoded, leftErr := json.Marshal(left)
+	rightEncoded, rightErr := json.Marshal(right)
+	return leftErr == nil && rightErr == nil && bytes.Equal(leftEncoded, rightEncoded)
+}
+
+func (s *Service) checkWrite(ctx context.Context, id string) error {
+	if _, importing := ctx.Value(exchangeImportContextKey{}).(exchangeImportContext); importing || s.writes == nil {
+		return nil
+	}
+	return s.writes.CheckResourceWrite(ctx, "patterns.template", id)
+}
+
 func actorFromContext(ctx context.Context) string {
+	if _, importing := ctx.Value(exchangeImportContextKey{}).(exchangeImportContext); importing {
+		return "system:exchange"
+	}
 	if scope, ok := foundation.ScopeFromContext(ctx); ok && strings.TrimSpace(scope.ActorID) != "" {
 		return scope.ActorID
 	}
@@ -646,6 +837,11 @@ func actorFromContext(ctx context.Context) string {
 
 func (s *Service) audit(ctx context.Context, action string, template Template, metadata map[string]string) error {
 	scope, ok := foundation.ScopeFromContext(ctx)
+	state, importing := ctx.Value(exchangeImportContextKey{}).(exchangeImportContext)
+	if importing {
+		scope = foundation.Scope{OrganizationID: s.organizationID, ActorID: "system:exchange", CorrelationID: state.operation.Token}
+		ok = true
+	}
 	if !ok || scope.CorrelationID == "" {
 		correlationID, err := foundation.NewCorrelationID()
 		if err != nil {
@@ -660,13 +856,22 @@ func (s *Service) audit(ctx context.Context, action string, template Template, m
 	metadata["requirementId"] = RequirementID
 	metadata["recordType"] = template.RecordType
 	metadata["version"] = strconv.FormatInt(template.Version, 10)
-	eventID, err := foundation.NewCorrelationID()
-	if err != nil {
-		return err
+	eventID := ""
+	occurredAt := s.now().UTC()
+	if importing {
+		digest := sha256.Sum256([]byte(strings.Join([]string{s.organizationID, state.operation.Token, action, "template", template.ID}, "\x00")))
+		eventID = hex.EncodeToString(digest[:])
+		occurredAt = state.operation.OccurredAt
+	} else {
+		var err error
+		eventID, err = foundation.NewCorrelationID()
+		if err != nil {
+			return err
+		}
 	}
 	return s.auditor.Record(ctx, foundation.AuditEvent{ID: eventID, OrganizationID: s.organizationID,
 		ActorID: actorFromContext(ctx), CorrelationID: scope.CorrelationID, Action: action,
-		ResourceType: "template", ResourceID: template.ID, OccurredAt: s.now().UTC(), Metadata: metadata})
+		ResourceType: "template", ResourceID: template.ID, OccurredAt: occurredAt, Metadata: metadata})
 }
 
 func cloneTemplate(template Template) Template {

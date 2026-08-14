@@ -9,9 +9,11 @@ import (
 )
 
 const (
-	RequirementID = "REQ-PATTERNS-001"
-	FeatureID     = "templates.schemas"
-	MaximumFields = 64
+	RequirementID               = "REQ-PATTERNS-001"
+	FeatureID                   = "templates.schemas"
+	MaximumFields               = 64
+	MaximumExchangeVersions     = 128
+	MaximumExchangeHistoryBytes = 100_000
 )
 
 var (
@@ -103,6 +105,49 @@ type NewVersionInput struct {
 	Fields      []Field `json:"fields"`
 }
 
+// ExchangeTemplate is the lossless, organization-neutral representation of
+// one custom template and its immutable version history. Built-in templates
+// are code-owned at both installations and are therefore never emitted here.
+type ExchangeTemplate struct {
+	ID         string                    `json:"id"`
+	RecordType string                    `json:"recordType"`
+	Name       string                    `json:"name"`
+	Versions   []ExchangeTemplateVersion `json:"versions"`
+}
+
+type ExchangeTemplateVersion struct {
+	Description string         `json:"description,omitempty"`
+	Version     int64          `json:"version"`
+	Status      TemplateStatus `json:"status"`
+	Fields      []Field        `json:"fields"`
+}
+
+// ExchangeImportOperation is the deterministic mutation identity reserved by
+// Exchange before it grants a provider permission to write.
+type ExchangeImportOperation struct {
+	Token      string
+	OccurredAt time.Time
+}
+
+type ExchangeImportResult struct {
+	Committed bool
+	Created   bool
+}
+
+// ExchangeImporter is an opaque construction-time capability. It is the only
+// surface allowed to install an arbitrary immutable template history.
+type ExchangeImporter interface {
+	ImportTemplate(context.Context, ExchangeImportOperation, ExchangeTemplate) (ExchangeImportResult, error)
+	patternsExchangeImporter()
+}
+
+// WriteGate fences ordinary edits after Exchange establishes imported
+// ownership. The opaque importer bypasses this gate only for its reserved
+// deterministic operation.
+type WriteGate interface {
+	CheckResourceWrite(context.Context, string, string) error
+}
+
 // ValidationInput and ValidationResult are intentionally provider-neutral so
 // Exchange can validate package rows without depending on REST or PostgreSQL.
 type ValidationInput struct {
@@ -135,4 +180,5 @@ type Store interface {
 	GetTemplate(context.Context, string, string, int64) (Template, error)
 	CreateTemplate(context.Context, Template) (Template, error)
 	CreateVersion(context.Context, Template) (Template, error)
+	ImportTemplateHistory(context.Context, string, []Template) error
 }

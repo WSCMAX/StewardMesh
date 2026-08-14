@@ -1,5 +1,5 @@
 // Package reach implements organization-scoped messaging delivery.
-// Requirement: REQ-REACH-001. Feature: messaging.delivery. GitHub: #12.
+// Requirements: REQ-REACH-001, REQ-EXCHANGE-001. Features: messaging.delivery, migration.packages. GitHub: #9, #12.
 package reach
 
 import (
@@ -29,6 +29,8 @@ var (
 	ErrNotFound            = errors.New("Reach record not found")
 	ErrConflict            = errors.New("Reach record conflicts with existing data")
 	ErrEndpointUnavailable = errors.New("Reach endpoint is unavailable")
+	ErrReferenceMissing    = errors.New("Reach referenced record is missing")
+	ErrTooLarge            = errors.New("Reach Exchange snapshot is too large")
 )
 
 type ProviderKind string
@@ -99,10 +101,11 @@ type CreateProviderInput struct {
 }
 
 type UpdateProviderInput struct {
-	Name     string `json:"name"`
-	Sender   string `json:"sender,omitempty"`
-	Enabled  bool   `json:"enabled"`
-	Revision int64  `json:"revision"`
+	Name       string `json:"name"`
+	Sender     string `json:"sender,omitempty"`
+	EndpointID string `json:"endpointId,omitempty"`
+	Enabled    bool   `json:"enabled"`
+	Revision   int64  `json:"revision"`
 }
 
 type RotateSecretInput struct {
@@ -239,6 +242,43 @@ type ProcessResult struct {
 	Failed    int `json:"failed"`
 }
 
+// ExchangeSnapshot is one bounded, organization-consistent view of Reach's
+// portable configuration. Messages, attempts, provider tests, endpoint
+// routes, and secret references are deliberately absent.
+type ExchangeSnapshot struct {
+	Providers []Provider
+	Templates []Template
+	Groups    []SubscriberGroup
+}
+
+// ExchangeImportOperation is the durable, deterministic mutation identity
+// reserved by Exchange before it invokes the private importer.
+type ExchangeImportOperation struct {
+	Token      string
+	OccurredAt time.Time
+}
+
+type ExchangeImportResult struct {
+	Committed bool
+	Created   bool
+}
+
+// ExchangeImporter is an opaque construction-time capability. It alone may
+// preserve source revisions and timestamps while repairing deterministic
+// import audits after an ambiguous post-commit failure.
+type ExchangeImporter interface {
+	ImportProvider(context.Context, ExchangeImportOperation, Provider) (ExchangeImportResult, error)
+	ImportTemplate(context.Context, ExchangeImportOperation, Template) (ExchangeImportResult, error)
+	ImportGroup(context.Context, ExchangeImportOperation, SubscriberGroup) (ExchangeImportResult, error)
+	reachExchangeImporter()
+}
+
+// WriteGate fences ordinary writes to imported Reach configuration until a
+// Guard ownership claim makes the record local.
+type WriteGate interface {
+	CheckResourceWrite(context.Context, string, string) error
+}
+
 // DeliveryResult is deliberately small and provider-neutral. Transport
 // response bodies and exception messages must never cross this boundary.
 type DeliveryResult struct {
@@ -263,20 +303,24 @@ type SignalSource interface {
 }
 
 type Store interface {
+	ExchangeSnapshot(context.Context, string, int) (ExchangeSnapshot, error)
 	ListProviders(context.Context, string) ([]Provider, error)
 	GetProvider(context.Context, string, string) (Provider, error)
 	CreateProvider(context.Context, Provider) (Provider, error)
 	UpdateProvider(context.Context, Provider, int64) (Provider, error)
+	ImportProvider(context.Context, Provider) (Provider, bool, error)
 
 	ListTemplates(context.Context, string) ([]Template, error)
 	GetTemplate(context.Context, string, string) (Template, error)
 	CreateTemplate(context.Context, Template) (Template, error)
 	UpdateTemplate(context.Context, Template, int64) (Template, error)
+	ImportTemplate(context.Context, Template) (Template, bool, error)
 
 	ListGroups(context.Context, string) ([]SubscriberGroup, error)
 	GetGroup(context.Context, string, string) (SubscriberGroup, error)
 	CreateGroup(context.Context, SubscriberGroup) (SubscriberGroup, error)
 	UpdateGroup(context.Context, SubscriberGroup, int64) (SubscriberGroup, error)
+	ImportGroup(context.Context, SubscriberGroup) (SubscriberGroup, bool, error)
 
 	ListMessages(context.Context, string, int) ([]Message, error)
 	GetMessage(context.Context, string, string) (Message, error)

@@ -5,9 +5,12 @@ package directoryexpansion
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
+	"github.com/maxlemke/stewardmesh/internal/foundation"
 	"github.com/maxlemke/stewardmesh/internal/guard"
+	"github.com/maxlemke/stewardmesh/internal/portabletime"
 )
 
 const (
@@ -67,19 +70,77 @@ func (t *DirectoryTarget) Compensate(ctx context.Context, authentication guard.A
 // GroupTarget owns only normalized group and membership target records. The
 // organization is always provided by the importer and every lookup is scoped.
 type GroupTarget struct {
-	store GroupTargetStore
-	guard *guard.Service
-	now   func() time.Time
+	store          GroupTargetStore
+	exchangeStore  GroupExchangeStore
+	guard          *guard.Service
+	auditor        foundation.Auditor
+	organizationID string
+	now            func() time.Time
 }
+
+type GroupTargetExchangeConfig struct {
+	OrganizationID string
+	Now            func() time.Time
+}
+
+type exchangeImporter struct{ target *GroupTarget }
+
+func (*exchangeImporter) directoryExchangeImporter() {}
 
 func NewGroupTarget(store GroupTargetStore, guardService *guard.Service, now func() time.Time) (*GroupTarget, error) {
 	if store == nil || guardService == nil {
 		return nil, errors.New("group target store and Guard service are required")
 	}
 	if now == nil {
-		now = func() time.Time { return time.Now().UTC() }
+		now = time.Now
 	}
-	return &GroupTarget{store: store, guard: guardService, now: now}, nil
+	clock := now
+	return &GroupTarget{store: store, guard: guardService, now: func() time.Time { return portabletime.Normalize(clock()) }}, nil
+}
+
+// NewGroupTargetWithExchangeImporter constructs the connector target together
+// with the only capability allowed to restore preserved Directory state.
+func NewGroupTargetWithExchangeImporter(store GroupExchangeStore, guardService *guard.Service, auditor foundation.Auditor, config GroupTargetExchangeConfig) (*GroupTarget, ExchangeImporter, error) {
+	if store == nil || guardService == nil || auditor == nil {
+		return nil, nil, errors.New("Directory Exchange store, Guard service, and auditor are required")
+	}
+	config.OrganizationID = strings.TrimSpace(config.OrganizationID)
+	if config.OrganizationID == "" {
+		return nil, nil, errors.New("Directory Exchange organization id is required")
+	}
+	clock := config.Now
+	if clock == nil {
+		clock = time.Now
+	}
+	target := &GroupTarget{store: store, exchangeStore: store, guard: guardService, auditor: auditor,
+		organizationID: config.OrganizationID, now: func() time.Time { return portabletime.Normalize(clock()) }}
+	return target, &exchangeImporter{target: target}, nil
+}
+
+func (t *GroupTarget) OwnsExchangeImporter(candidate ExchangeImporter) bool {
+	importer, ok := candidate.(*exchangeImporter)
+	return ok && importer != nil && importer.target == t
+}
+
+func (t *GroupTarget) ExchangeSnapshot(ctx context.Context, maximum int) (ExchangeSnapshot, error) {
+	if t == nil || t.exchangeStore == nil {
+		return ExchangeSnapshot{}, ErrInvalidInput
+	}
+	return t.exchangeStore.ExchangeSnapshot(ctx, t.organizationID, maximum)
+}
+
+func (t *GroupTarget) GetManagedGroup(ctx context.Context, id string) (ManagedGroup, error) {
+	if t == nil || t.exchangeStore == nil || !isRecordID(strings.TrimSpace(id)) {
+		return ManagedGroup{}, ErrInvalidInput
+	}
+	return t.exchangeStore.GetManagedGroup(ctx, t.organizationID, strings.TrimSpace(id))
+}
+
+func (t *GroupTarget) GetManagedMembership(ctx context.Context, id string) (ManagedMembership, error) {
+	if t == nil || t.exchangeStore == nil || !isRecordID(strings.TrimSpace(id)) {
+		return ManagedMembership{}, ErrInvalidInput
+	}
+	return t.exchangeStore.GetManagedMembership(ctx, t.organizationID, strings.TrimSpace(id))
 }
 
 func (t *GroupTarget) Preview(ctx context.Context, organizationID string, system SourceSystem, record Record, mapping *Mapping) (TargetPlan, error) {
@@ -97,6 +158,13 @@ func (t *GroupTarget) previewGroup(ctx context.Context, organizationID string, s
 	targetID := stableManagedID(string(RecordGroup), organizationID, system.ID, record.SourceRecordID)
 	if mapping != nil {
 		targetID = mapping.TargetID
+	} else {
+		discovered, err := t.store.GetManagedGroupBySource(ctx, organizationID, system.ID, record.SourceRecordID)
+		if err == nil {
+			targetID = discovered.ID
+		} else if !errors.Is(err, ErrNotFound) {
+			return TargetPlan{}, groupTargetStoreError("group source could not be read", err)
+		}
 	}
 	desired := groupDigest(record)
 	group, err := t.store.GetManagedGroup(ctx, organizationID, targetID)
@@ -116,6 +184,13 @@ func (t *GroupTarget) previewMembership(ctx context.Context, organizationID stri
 	targetID := stableManagedID(string(RecordMembership), organizationID, system.ID, record.SourceRecordID)
 	if mapping != nil {
 		targetID = mapping.TargetID
+	} else {
+		discovered, err := t.store.GetManagedMembershipBySource(ctx, organizationID, system.ID, record.SourceRecordID)
+		if err == nil {
+			targetID = discovered.ID
+		} else if !errors.Is(err, ErrNotFound) {
+			return TargetPlan{}, groupTargetStoreError("membership source could not be read", err)
+		}
 	}
 	desired := membershipDigest(record)
 	membership, err := t.store.GetManagedMembership(ctx, organizationID, targetID)
@@ -180,7 +255,8 @@ func (t *GroupTarget) applyGroup(ctx context.Context, authentication guard.Authe
 		if currentDigest != item.ObservedTargetDigest || existing.Revision != item.ExpectedRevision {
 			return TargetResult{}, conflictError("group changed after preview")
 		}
-		updated := managedGroup(item, system, existing.CreatedAt, existing.Revision+1, t.now())
+		updated := managedGroup(item, system, existing.CreatedAt, existing.Revision+1,
+			reconciledManagedTimestamp(existing.CreatedAt, existing.UpdatedAt, t.now()))
 		updated, err = t.store.ReconcileManagedGroup(ctx, updated, existing.Revision)
 		if err != nil {
 			return TargetResult{}, groupTargetStoreError("group could not be persisted", err)
@@ -227,7 +303,11 @@ func (t *GroupTarget) applyMembership(ctx context.Context, authentication guard.
 		if currentDigest != item.ObservedTargetDigest || existing.Revision != item.ExpectedRevision {
 			return TargetResult{}, conflictError("membership changed after preview")
 		}
-		updated := managedMembership(item, system, existing.CreatedAt, existing.Revision+1, t.now())
+		updated, err := t.managedMembershipForApply(ctx, item, system, &existing, existing.CreatedAt, existing.Revision+1,
+			reconciledManagedTimestamp(existing.CreatedAt, existing.UpdatedAt, t.now()))
+		if err != nil {
+			return TargetResult{}, err
+		}
 		updated, err = t.store.ReconcileManagedMembership(ctx, updated, existing.Revision)
 		if err != nil {
 			return TargetResult{}, groupTargetStoreError("membership could not be persisted", err)
@@ -243,7 +323,11 @@ func (t *GroupTarget) applyMembership(ctx context.Context, authentication guard.
 	if item.Action != ActionCreate {
 		return TargetResult{}, conflictError("membership no longer exists")
 	}
-	created, err := t.store.CreateManagedMembership(ctx, managedMembership(item, system, t.now(), 1, t.now()))
+	desired, err := t.managedMembershipForApply(ctx, item, system, nil, t.now(), 1, t.now())
+	if err != nil {
+		return TargetResult{}, err
+	}
+	created, err := t.store.CreateManagedMembership(ctx, desired)
 	if err != nil {
 		return TargetResult{}, groupTargetStoreError("membership could not be persisted", err)
 	}
@@ -322,6 +406,43 @@ func managedMembership(item Item, system SourceSystem, createdAt time.Time, revi
 		MemberID: stableManagedID(memberIDKind, item.OrganizationID, system.ID, item.Record.MemberSourceID), MemberSourceID: item.Record.MemberSourceID,
 		MemberKind: item.Record.MemberKind, MemberDisplayName: item.Record.DisplayName, Status: item.Record.Status,
 		Metadata: cloneMetadata(item.Record.NormalizedMetadata), Revision: revision, CreatedAt: createdAt, UpdatedAt: updatedAt}
+}
+
+func (t *GroupTarget) managedMembershipForApply(ctx context.Context, item Item, system SourceSystem, existing *ManagedMembership,
+	createdAt time.Time, revision uint64, updatedAt time.Time,
+) (ManagedMembership, error) {
+	membership := managedMembership(item, system, createdAt, revision, updatedAt)
+	if existing != nil && existing.GroupSourceID == item.Record.GroupSourceID {
+		membership.GroupID = existing.GroupID
+	} else {
+		group, err := t.store.GetManagedGroupBySource(ctx, item.OrganizationID, system.ID, item.Record.GroupSourceID)
+		if err == nil {
+			membership.GroupID = group.ID
+		} else if !errors.Is(err, ErrNotFound) {
+			return ManagedMembership{}, groupTargetStoreError("membership parent source could not be read", err)
+		}
+	}
+	if existing != nil && existing.MemberKind == item.Record.MemberKind && existing.MemberSourceID == item.Record.MemberSourceID {
+		membership.MemberID = existing.MemberID
+	} else if item.Record.MemberKind == MemberGroup {
+		member, err := t.store.GetManagedGroupBySource(ctx, item.OrganizationID, system.ID, item.Record.MemberSourceID)
+		if err == nil {
+			membership.MemberID = member.ID
+		} else if !errors.Is(err, ErrNotFound) {
+			return ManagedMembership{}, groupTargetStoreError("membership member-group source could not be read", err)
+		}
+	}
+	return membership, nil
+}
+
+func reconciledManagedTimestamp(createdAt, previousUpdatedAt, candidate time.Time) time.Time {
+	if candidate.Before(createdAt) {
+		candidate = createdAt
+	}
+	if candidate.Before(previousUpdatedAt) {
+		candidate = previousUpdatedAt
+	}
+	return candidate
 }
 
 func groupDigest(record Record) string {

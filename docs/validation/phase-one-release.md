@@ -131,22 +131,28 @@ traces.
 ## gRPC deployment decision
 
 The all-domain adapter covers all 16 services and 154 RPCs in the checked-in
-descriptor. Production activation is **NOT APPROVED IN THIS PULL REQUEST**
-because no explicit deployment approval was provided. The current standalone
-command therefore continues to expose only the approved Bridge administration
-surface. Adapter and transport tests passing are not described as activation.
-
-If activation is approved, record the reviewed wiring and validation for:
+descriptor. Production activation is **APPROVED AND IMPLEMENTED FOR PHASE ONE**
+under `REQ-API-001`, `SEC-MCP-001`, and issue #14's REST/gRPC domain-parity
+acceptance criterion. The standalone command now exposes the complete fixed
+adapter through the reviewed dual-listener boundary:
 
 1. a separate public Guard listener containing only bootstrap status,
-   bootstrap, and local authentication with a 64 KiB envelope;
+   bootstrap, local authentication, and unary gRPC health Check with a 64 KiB
+   envelope;
 2. a separate authenticated listener for protected methods with the bounded
    34 MiB envelope needed by Exchange/Vault;
-3. header, per-connection stream, and process-wide concurrency limits; and
-4. loopback-only plaintext plus TLS 1.3 or newer for non-loopback binding.
+3. 16 KiB header lists, per-connection stream limits, five-minute RPC
+   deadlines, and shared plus listener-specific pre-decode concurrency limits;
+4. loopback-only plaintext plus TLS 1.3 or newer, HTTPS application origin, and
+   secure-cookie policy for non-loopback binding; and
+5. public unary health state tied to listener startup/shutdown, health
+   Watch/List disabled to preserve Guard capacity, bounded graceful
+   cleanup, remote-bootstrap fail-closed policy, and copied-secret scrubbing.
 
-If approval is not granted for this pull request, leave production activation
-unchanged and state that limitation plainly in the pull request.
+Command-level tests validate the registration split, authenticated Foundation
+and Bridge calls, public message/header limits, concurrency admission before
+authentication, TLS 1.3, health transitions, and cleanup. The non-root gRPC
+container target is built independently by CI.
 
 ## Final sign-off
 
@@ -160,7 +166,7 @@ unchanged and state that limitation plainly in the pull request.
   their signed commit
 - **All required local gates passed:** **PASS**
 - **All required browser rows passed:** **PASS**
-- **Production gRPC activation decision recorded:** **PASS — NOT APPROVED;
-  BRIDGE-ONLY PRODUCTION SURFACE UNCHANGED**
+- **Production gRPC activation decision recorded:** **PASS — ALL-DOMAIN
+  DUAL-LISTENER RUNTIME ACTIVE**
 - **Pull request checks passed:** **PENDING**
 - **Final release decision:** **LOCAL PASS; PUBLICATION/CI PENDING**

@@ -41,7 +41,9 @@ const (
 var (
 	ErrInvalidInput     = errors.New("invalid directory import input")
 	ErrNotFound         = errors.New("directory import not found")
+	ErrReferenceMissing = errors.New("directory import reference is missing")
 	ErrConflict         = errors.New("directory import conflict")
+	ErrTooLarge         = errors.New("directory import exceeds a configured limit")
 	ErrBusy             = errors.New("directory import is already being processed")
 	ErrNotRetryable     = errors.New("directory import has no retryable failures")
 	ErrConnectorMissing = errors.New("directory source system is not configured")
@@ -199,10 +201,12 @@ func validGraphContractIDs(values []string) bool {
 
 type GroupTargetStore interface {
 	GetManagedGroup(context.Context, string, string) (ManagedGroup, error)
+	GetManagedGroupBySource(context.Context, string, string, string) (ManagedGroup, error)
 	CreateManagedGroup(context.Context, ManagedGroup) (ManagedGroup, error)
 	ReconcileManagedGroup(context.Context, ManagedGroup, uint64) (ManagedGroup, error)
 	DeleteManagedGroup(context.Context, string, string, uint64) error
 	GetManagedMembership(context.Context, string, string) (ManagedMembership, error)
+	GetManagedMembershipBySource(context.Context, string, string, string) (ManagedMembership, error)
 	CreateManagedMembership(context.Context, ManagedMembership) (ManagedMembership, error)
 	ReconcileManagedMembership(context.Context, ManagedMembership, uint64) (ManagedMembership, error)
 	DeleteManagedMembership(context.Context, string, string, uint64) error
@@ -210,6 +214,45 @@ type GroupTargetStore interface {
 	ListManagedMemberships(context.Context, string) ([]ManagedMembership, error)
 	ListGraphManagedGroups(context.Context, string, ManagedGroupGraphQuery) ([]ManagedGroup, error)
 	ListGraphManagedMemberships(context.Context, string, ManagedMembershipGraphQuery) ([]ManagedMembership, error)
+}
+
+// ExchangeSnapshot is one bounded, organization-consistent view of every
+// portable managed group and membership. Repository adapters own the
+// consistency boundary so Exchange never stitches together independently
+// changing list results.
+type ExchangeSnapshot struct {
+	Groups      []ManagedGroup
+	Memberships []ManagedMembership
+}
+
+// ExchangeImportOperation is the deterministic mutation identity reserved by
+// Exchange before it invokes Directory's private importer capability.
+type ExchangeImportOperation struct {
+	Token      string
+	OccurredAt time.Time
+}
+
+type ExchangeImportResult struct {
+	Committed bool
+	Created   bool
+}
+
+// ExchangeImporter is an opaque construction-time capability. Connector
+// reconciliation keeps its existing source-owned semantics while ordinary
+// callers cannot choose revisions, source timestamps, or managed provenance.
+type ExchangeImporter interface {
+	directoryExchangeImporter()
+	ImportManagedGroup(context.Context, ExchangeImportOperation, ManagedGroup) (ExchangeImportResult, error)
+	ImportManagedMembership(context.Context, ExchangeImportOperation, ManagedMembership) (ExchangeImportResult, error)
+}
+
+// GroupExchangeStore extends the normal connector target store with an atomic,
+// exact-replay import seam and a bounded consistent snapshot.
+type GroupExchangeStore interface {
+	GroupTargetStore
+	ExchangeSnapshot(context.Context, string, int) (ExchangeSnapshot, error)
+	ImportManagedGroup(context.Context, ManagedGroup) (ManagedGroup, bool, error)
+	ImportManagedMembership(context.Context, ManagedMembership) (ManagedMembership, bool, error)
 }
 
 type Page struct {

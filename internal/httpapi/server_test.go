@@ -2997,3 +2997,12 @@ func authenticatedRequest(method, path string, body io.Reader, session testSessi
 	}
 	return req
 }
+
+func TestSignalsOwnershipLockUsesLockedResponse(t *testing.T) {
+	request := httptest.NewRequest(http.MethodPut, "/api/v1/signals/rules/imported-rule", nil)
+	response := httptest.NewRecorder()
+	writeSignalsError(response, request, guard.ErrResourceWriteLocked)
+	if response.Code != http.StatusLocked || !strings.Contains(response.Body.String(), `"code":"ownership_locked"`) {
+		t.Fatalf("unexpected Signals ownership response %d: %s", response.Code, response.Body.String())
+	}
+}

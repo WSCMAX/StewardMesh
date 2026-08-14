@@ -472,6 +472,68 @@ func decodeStrictJSON(contents []byte, target any) error {
 	return nil
 }
 
+func canonicalJSON(payload []byte) ([]byte, error) {
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return nil, err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return nil, errors.New("trailing JSON content")
+	}
+	return json.Marshal(value)
+}
+
+func canonicalJSONEqual(payload []byte, value any) bool {
+	if len(payload) == 0 || containsJSONWhitespaceOutsideStrings(payload) {
+		return false
+	}
+	canonicalPayload, err := canonicalJSON(payload)
+	if err != nil {
+		return false
+	}
+	encodedValue, err := json.Marshal(value)
+	if err != nil {
+		return false
+	}
+	canonicalValue, err := canonicalJSON(encodedValue)
+	if err != nil {
+		return false
+	}
+	return bytes.Equal(canonicalPayload, canonicalValue)
+}
+
+func containsJSONWhitespaceOutsideStrings(payload []byte) bool {
+	inString := false
+	escaped := false
+	for _, character := range payload {
+		switch {
+		case inString:
+			if escaped {
+				escaped = false
+				continue
+			}
+			if character == '\\' {
+				escaped = true
+				continue
+			}
+			if character == '"' {
+				inString = false
+			}
+		default:
+			if character == '"' {
+				inString = true
+				continue
+			}
+			if character == ' ' || character == '\n' || character == '\r' || character == '\t' {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func archiveErrorCode(err error) string {
 	switch {
 	case errors.Is(err, ErrTooLarge):

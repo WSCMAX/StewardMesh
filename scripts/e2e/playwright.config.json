@@ -3,7 +3,11 @@
     "browserName": "chromium",
     "isolated": true,
     "launchOptions": {
-      "headless": true
+      "headless": true,
+      "args": [
+        "--no-sandbox",
+        "--disable-setuid-sandbox"
+      ]
     },
     "contextOptions": {
       "viewport": {

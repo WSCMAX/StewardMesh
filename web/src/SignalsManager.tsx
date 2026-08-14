@@ -1,5 +1,5 @@
 import { type FormEvent, useCallback, useEffect, useRef, useState } from 'react'
-import { ApiRequestError, requestJSON } from './api'
+import { ApiRequestError, isRevision, requestJSON, type Revision } from './api'
 import { buttonClass, dangerButtonClass, inputClass, labelClass, panelClass, secondaryButtonClass, StatusBadge, subpanelClass } from './ui'
 
 // Requirement: REQ-SIGNALS-001. Feature: alerts.rules. GitHub: #11.
@@ -17,7 +17,7 @@ type SignalRule = {
   thresholdDays: number[]
   fiscalPeriod?: string
   scenario?: string
-  revision: number
+  revision: Revision
 }
 
 type SignalAlert = {
@@ -39,7 +39,7 @@ type SignalAlert = {
   firstDetectedAt: string
   lastObservedAt: string
   resolvedAt?: string
-  revision: number
+  revision: Revision
 }
 
 type SignalSubscription = {
@@ -78,7 +78,7 @@ function isSignalRule(value: unknown): value is SignalRule {
     && conditions.includes(value.condition as Condition) && severities.includes(value.severity as Severity)
     && typeof value.enabled === 'boolean' && Array.isArray(value.thresholdDays)
     && value.thresholdDays.length <= 8 && value.thresholdDays.every((day) => Number.isInteger(day) && Number(day) >= 0 && Number(day) <= 3660)
-    && Number.isInteger(value.revision) && Number(value.revision) > 0
+    && isRevision(value.revision)
 }
 
 function isSignalAlert(value: unknown): value is SignalAlert {
@@ -94,7 +94,7 @@ function isSignalAlert(value: unknown): value is SignalAlert {
     && (value.dueAt === undefined || isDateTime(value.dueAt))
     && (value.acknowledgedAt === undefined || isDateTime(value.acknowledgedAt))
     && (value.resolvedAt === undefined || isDateTime(value.resolvedAt))
-    && Number.isInteger(value.revision) && Number(value.revision) > 0
+    && isRevision(value.revision)
 }
 
 function isSignalSubscription(value: unknown): value is SignalSubscription {

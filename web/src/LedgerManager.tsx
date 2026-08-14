@@ -1,15 +1,15 @@
 import { type FormEvent, type ReactNode, useEffect, useId, useRef, useState } from 'react'
-import { ApiRequestError, requestJSON } from './api'
+import { ApiRequestError, isRevision, requestJSON, type Revision } from './api'
 import { buttonClass, compactInputClass, inputClass, panelClass, secondaryButtonClass, subpanelClass, tableWrapClass } from './ui'
 
 // Requirement: REQ-LEDGER-001. Feature: procurement.finance.
 
 type Vendor = { id: string; name: string; status: string; externalId?: string }
-type PurchaseOrder = { id: string; number: string; vendorId: string; status: string; currency: string; totalMinor: number; assetIds: string[]; receiptDocumentIds: string[]; revision: number }
-type Contract = { id: string; name: string; vendorId: string; operationalStatus: string; financialStatus: string; currency: string; ceilingMinor: number; startsOn: string; endsOn: string; renewsOn?: string; revision: number }
+type PurchaseOrder = { id: string; number: string; vendorId: string; status: string; currency: string; totalMinor: number; assetIds: string[]; receiptDocumentIds: string[]; revision: Revision }
+type Contract = { id: string; name: string; vendorId: string; operationalStatus: string; financialStatus: string; currency: string; ceilingMinor: number; startsOn: string; endsOn: string; renewsOn?: string; revision: Revision }
 type Commitment = { id: string; contractId: string; kind: string; description: string; currency: string; amountMinor: number; fiscalPeriod: string; scenario: string }
 type Budget = { id: string; name: string; fiscalPeriod: string; scenario: string; currency: string; allocatedMinor: number }
-type CostRecord = { id: string; description: string; kind: string; currency: string; amountMinor: number; fiscalPeriod: string; scenario: string; externalReference?: string; revision: number }
+type CostRecord = { id: string; description: string; kind: string; currency: string; amountMinor: number; fiscalPeriod: string; scenario: string; externalReference?: string; revision: Revision }
 type LedgerSnapshot = { vendors: Vendor[]; purchaseOrders: PurchaseOrder[]; contracts: Contract[]; commitments: Commitment[]; budgets: Budget[]; costs: CostRecord[] }
 type BudgetVariance = { fiscalPeriod: string; scenario: string; currency: string; allocatedMinor: number; recognizedMinor: number; varianceMinor: number; overBudget: boolean; amountsByKindMinor: Record<string, number> }
 type LedgerManagerProps = { csrfToken: string; permissions: readonly string[]; onOpenHelp?: () => void }
@@ -32,11 +32,11 @@ function parseSnapshot(value: unknown): LedgerSnapshot {
   const budgets = value.budgets
   const costs = value.costs
   if (!validArray(vendors, (item) => validBase(item) && typeof item.name === 'string' && typeof item.status === 'string')
-    || !validArray(purchaseOrders, (item) => validBase(item) && typeof item.number === 'string' && typeof item.status === 'string' && validMoney(item.totalMinor) && typeof item.revision === 'number')
-    || !validArray(contracts, (item) => validBase(item) && typeof item.name === 'string' && typeof item.operationalStatus === 'string' && typeof item.financialStatus === 'string' && validMoney(item.ceilingMinor) && typeof item.revision === 'number')
+    || !validArray(purchaseOrders, (item) => validBase(item) && typeof item.number === 'string' && typeof item.status === 'string' && validMoney(item.totalMinor) && isRevision(item.revision))
+    || !validArray(contracts, (item) => validBase(item) && typeof item.name === 'string' && typeof item.operationalStatus === 'string' && typeof item.financialStatus === 'string' && validMoney(item.ceilingMinor) && isRevision(item.revision))
     || !validArray(commitments, (item) => validBase(item) && typeof item.description === 'string' && typeof item.kind === 'string' && validMoney(item.amountMinor))
     || !validArray(budgets, (item) => validBase(item) && typeof item.name === 'string' && validMoney(item.allocatedMinor))
-    || !validArray(costs, (item) => validBase(item) && typeof item.description === 'string' && typeof item.kind === 'string' && validMoney(item.amountMinor))) {
+    || !validArray(costs, (item) => validBase(item) && typeof item.description === 'string' && typeof item.kind === 'string' && validMoney(item.amountMinor) && isRevision(item.revision))) {
     throw new Error('invalid Ledger response')
   }
   return { vendors: vendors as Vendor[], purchaseOrders: purchaseOrders as PurchaseOrder[], contracts: contracts as Contract[], commitments: commitments as Commitment[], budgets: budgets as Budget[], costs: costs as CostRecord[] }

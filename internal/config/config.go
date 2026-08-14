@@ -150,11 +150,11 @@ func FromEnv() Config {
 	seedSynthetic, seedSyntheticErr := envBool("STEWARDMESH_SEED_SYNTHETIC", false)
 	grouperAllowPrivate, grouperPrivateErr := envBool("STEWARDMESH_GROUPER_ALLOW_PRIVATE_NETWORK", false)
 	grouperTimeout, grouperTimeoutErr := envDuration("STEWARDMESH_GROUPER_TIMEOUT", directoryexpansion.DefaultGrouperTimeout)
-	grouperPageSize, grouperPageErr := envInt64("STEWARDMESH_GROUPER_PAGE_SIZE", directoryexpansion.DefaultGrouperPageSize)
+	grouperPageSize, grouperPageErr := envInt("STEWARDMESH_GROUPER_PAGE_SIZE", directoryexpansion.DefaultGrouperPageSize)
 	grouperResponseBytes, grouperResponseErr := envInt64("STEWARDMESH_GROUPER_MAXIMUM_RESPONSE_BYTES", directoryexpansion.DefaultGrouperResponseBytes)
 	peopleSoftAllowPrivate, peopleSoftPrivateErr := envBool("STEWARDMESH_PEOPLESOFT_ALLOW_PRIVATE_NETWORK", false)
 	peopleSoftTimeout, peopleSoftTimeoutErr := envDuration("STEWARDMESH_PEOPLESOFT_TIMEOUT", directoryexpansion.DefaultPeopleSoftTimeout)
-	peopleSoftMaximumRows, peopleSoftRowsErr := envInt64("STEWARDMESH_PEOPLESOFT_MAXIMUM_ROWS", directoryexpansion.DefaultPeopleSoftMaximumRows)
+	peopleSoftMaximumRows, peopleSoftRowsErr := envInt("STEWARDMESH_PEOPLESOFT_MAXIMUM_ROWS", directoryexpansion.DefaultPeopleSoftMaximumRows)
 	peopleSoftResponseBytes, peopleSoftResponseErr := envInt64("STEWARDMESH_PEOPLESOFT_MAXIMUM_RESPONSE_BYTES", directoryexpansion.DefaultPeopleSoftResponseBytes)
 	grouperURL := strings.TrimSpace(os.Getenv("STEWARDMESH_GROUPER_URL"))
 	grouperSourceSystemID := strings.TrimSpace(os.Getenv("STEWARDMESH_GROUPER_SOURCE_SYSTEM_ID"))
@@ -233,7 +233,7 @@ func FromEnv() Config {
 		GrouperPassword:             os.Getenv("STEWARDMESH_GROUPER_PASSWORD"),
 		GrouperBearerToken:          os.Getenv("STEWARDMESH_GROUPER_BEARER_TOKEN"),
 		GrouperConfigRevision:       grouperRevision,
-		GrouperPageSize:             int(grouperPageSize),
+		GrouperPageSize:             grouperPageSize,
 		GrouperMaximumResponseBytes: grouperResponseBytes,
 		GrouperTimeout:              grouperTimeout,
 		GrouperAllowPrivateNetwork:  grouperAllowPrivate,
@@ -248,7 +248,7 @@ func FromEnv() Config {
 		PeopleSoftBuildingQuery:     os.Getenv("STEWARDMESH_PEOPLESOFT_BUILDING_QUERY"),
 		PeopleSoftDepartmentQuery:   os.Getenv("STEWARDMESH_PEOPLESOFT_DEPARTMENT_QUERY"),
 		PeopleSoftFieldMappingsJSON: os.Getenv("STEWARDMESH_PEOPLESOFT_FIELD_MAPPINGS_JSON"),
-		PeopleSoftMaximumRows:       int(peopleSoftMaximumRows),
+		PeopleSoftMaximumRows:       peopleSoftMaximumRows,
 		PeopleSoftResponseBytes:     peopleSoftResponseBytes,
 		PeopleSoftTimeout:           peopleSoftTimeout,
 		PeopleSoftAllowPrivate:      peopleSoftAllowPrivate,
@@ -705,6 +705,18 @@ func envInt64(key string, fallback int64) (int64, error) {
 		return 0, fmt.Errorf("%s must be an integer", key)
 	}
 	return parsed, nil
+}
+
+func envInt(key string, fallback int) (int, error) {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.ParseInt(value, 10, strconv.IntSize)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be an integer", key)
+	}
+	return int(parsed), nil
 }
 
 func isLoopbackHost(host string) bool {

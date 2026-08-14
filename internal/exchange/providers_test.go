@@ -1,6 +1,6 @@
 package exchange_test
 
-// Requirements: REQ-EXCHANGE-001, REQ-PATTERNS-001, REQ-STACK-001. Features: migration.packages, templates.schemas, software.licenses. GitHub: #9, #8, #7.
+// Requirements: REQ-EXCHANGE-001, REQ-ATLAS-CATALOG-001, REQ-PATTERNS-001, REQ-STACK-001. Features: migration.packages, inventory.catalog, templates.schemas, software.licenses. GitHub: #9, #8, #7.
 
 import (
 	"archive/zip"
@@ -17,6 +17,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/maxlemke/stewardmesh/internal/atlas"
+	"github.com/maxlemke/stewardmesh/internal/catalog"
+	"github.com/maxlemke/stewardmesh/internal/domain"
 	"github.com/maxlemke/stewardmesh/internal/exchange"
 	"github.com/maxlemke/stewardmesh/internal/foundation"
 	"github.com/maxlemke/stewardmesh/internal/guard"
@@ -29,6 +32,110 @@ import (
 type exchangeStackFixture struct {
 	*stack.Service
 	importer stack.ExchangeImporter
+}
+
+type catalogExchangeModels struct{ models map[string]domain.AssetModel }
+
+func (r catalogExchangeModels) GetModel(_ context.Context, id string) (domain.AssetModel, error) {
+	model, exists := r.models[id]
+	if !exists {
+		return domain.AssetModel{}, atlas.ErrNotFound
+	}
+	return model, nil
+}
+
+func TestCatalogProviderRoundTripPreservesPortableFieldsAndDependencies(t *testing.T) {
+	now := time.Date(2026, time.August, 13, 18, 30, 0, 0, time.UTC)
+	models := catalogExchangeModels{models: map[string]domain.AssetModel{
+		"model-one": {ID: "model-one", OrganizationID: "source-org", Status: "active"},
+		"model-two": {ID: "model-two", OrganizationID: "source-org", Status: "active"},
+	}}
+	sourceService, sourceImporter, err := catalog.NewServiceWithExchangeImporter(repository.NewMemoryCatalogStore(), models, nil, foundation.NopAuditor{}, catalog.ServiceConfig{OrganizationID: "source-org", Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	configuration, err := sourceService.CreateConfiguration(context.Background(), catalog.CreateConfigurationInput{
+		ID: "configuration-one", ModelID: "model-one", Name: "Portable", SKU: "SKU-1", Status: catalog.StatusActive,
+		Specifications: map[string]string{"memory_gb": "64"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	price, err := sourceService.RecordPrice(context.Background(), catalog.RecordPriceInput{
+		ID: "price-one", ModelID: "model-one", ConfigurationID: configuration.ID, Kind: catalog.PriceKindQuote,
+		AmountMinor: 100, Currency: "USD", EffectiveFrom: now, SourceReference: "quote-one",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, err := sourceService.CreateUpgradePath(context.Background(), catalog.CreateUpgradePathInput{
+		ID: "path-one", FromModelID: "model-one", FromConfigurationID: configuration.ID, ToModelID: "model-two",
+		Kind: catalog.UpgradeKindSuccessor, EffectiveFrom: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceProvider, err := exchange.NewCatalogProvider(sourceService, sourceImporter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := sourceProvider.Types(), []string{"atlas.catalog-configuration", "atlas.catalog-price", "atlas.catalog-upgrade-path"}; !slices.Equal(got, want) {
+		t.Fatalf("unexpected Catalog provider registry %#v", got)
+	}
+	records, err := sourceProvider.ListRecords(context.Background())
+	if err != nil || len(records) != 3 {
+		t.Fatalf("unexpected Catalog records %#v err=%v", records, err)
+	}
+	for _, record := range records {
+		if bytes.Contains(record.Payload, []byte("organizationId")) || bytes.Contains(record.Payload, []byte("createdAt")) {
+			t.Fatalf("Catalog payload leaked deployment state: %s", record.Payload)
+		}
+	}
+	if got := records[1].Dependencies; !slices.Equal(got, []exchange.Reference{{Type: "atlas.catalog-configuration", ID: configuration.ID}, {Type: "atlas.model", ID: "model-one"}}) {
+		t.Fatalf("unexpected price dependencies %#v", got)
+	}
+	if got := records[2].Dependencies; !slices.Equal(got, []exchange.Reference{{Type: "atlas.catalog-configuration", ID: configuration.ID}, {Type: "atlas.model", ID: "model-one"}, {Type: "atlas.model", ID: "model-two"}}) {
+		t.Fatalf("unexpected path dependencies %#v", got)
+	}
+
+	targetModels := catalogExchangeModels{models: map[string]domain.AssetModel{
+		"model-one": {ID: "model-one", OrganizationID: "target-org", Status: "active"},
+		"model-two": {ID: "model-two", OrganizationID: "target-org", Status: "active"},
+	}}
+	targetService, targetImporter, err := catalog.NewServiceWithExchangeImporter(repository.NewMemoryCatalogStore(), targetModels, nil, foundation.NopAuditor{}, catalog.ServiceConfig{OrganizationID: "target-org", Now: func() time.Time { return now.Add(time.Hour) }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetProvider, err := exchange.NewCatalogProvider(targetService, targetImporter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := exchange.NewCatalogProvider(sourceService, targetImporter); err == nil {
+		t.Fatal("expected Catalog provider to reject an importer capability owned by another service")
+	}
+	noncanonical := records[0]
+	noncanonical.ID = "configuration-noncanonical"
+	noncanonical.Payload = []byte(`{"modelId":"model-one","name":" Portable ","sku":"SKU-1","status":"active","specifications":"{\"Memory_GB\":\"64\"}"}`)
+	if _, err := targetProvider.ImportRecord(context.Background(), exchange.ProviderImportOperation{
+		Token: "catalog-import-noncanonical", OccurredAt: now, ExpectedCreated: true,
+	}, "source", noncanonical, nil); !errors.Is(err, exchange.ErrInvalidInput) {
+		t.Fatalf("expected noncanonical Catalog payload rejection, got %v", err)
+	}
+	for index, record := range records {
+		result, err := targetProvider.ImportRecord(context.Background(), exchange.ProviderImportOperation{Token: fmt.Sprintf("catalog-import-%d", index), OccurredAt: now, ExpectedCreated: true}, "source", record, nil)
+		if err != nil || !result.Committed || !result.Created {
+			t.Fatalf("import Catalog record %s: %#v err=%v", record.ID, result, err)
+		}
+		if exact, err := targetProvider.ImportRecordExists(context.Background(), record, nil); err != nil || !exact {
+			t.Fatalf("Catalog exact comparison %s exact=%t err=%v", record.ID, exact, err)
+		}
+	}
+	if exact, _ := targetService.GetPrice(context.Background(), price.ID); exact.SourceReference != price.SourceReference || exact.Revision != price.Revision {
+		t.Fatalf("Catalog price did not round trip: %#v", exact)
+	}
+	if exact, _ := targetService.GetUpgradePath(context.Background(), path.ID); exact.ToModelID != path.ToModelID || exact.Revision != path.Revision {
+		t.Fatalf("Catalog path did not round trip: %#v", exact)
+	}
 }
 
 func newExchangeStackService(store stack.Store, references stack.ReferenceValidator, auditor foundation.Auditor, configuration stack.ServiceConfig) (*exchangeStackFixture, error) {
@@ -50,7 +157,7 @@ func newExchangeStackProvider(t *testing.T, fixture *exchangeStackFixture) *exch
 
 func TestStackProviderRoundTripPreservesEarliestProvenance(t *testing.T) {
 	ctx := context.Background()
-	now := time.Date(2026, time.August, 13, 15, 0, 0, 0, time.UTC)
+	now := time.Date(2026, time.August, 13, 15, 0, 0, 123_456_789, time.UTC)
 	sourceStack, err := newExchangeStackService(repository.NewMemoryStackStore(), allowExchangeStackReferences{}, foundation.NopAuditor{}, stack.ServiceConfig{
 		OrganizationID: "stack-source", Now: func() time.Time { return now },
 	})

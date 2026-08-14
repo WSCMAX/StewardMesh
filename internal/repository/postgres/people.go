@@ -1,6 +1,6 @@
 package postgres
 
-// Requirements: REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-008. Features: identity.directory, integrations.protocols, threads.relationships.
+// Requirements: REQ-PEOPLE-001, REQ-EXCHANGE-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-008. Features: identity.directory, migration.packages, integrations.protocols, threads.relationships.
 
 import (
 	"context"
@@ -26,6 +26,114 @@ func NewPeopleStore(database *sql.DB) (*PeopleStore, error) {
 		return nil, errors.New("database is required")
 	}
 	return &PeopleStore{database: database}, nil
+}
+
+func (s *PeopleStore) ExchangeSnapshot(ctx context.Context, organizationID string, maximum int) (people.ExchangeSnapshot, error) {
+	if organizationID == "" || maximum < 1 {
+		return people.ExchangeSnapshot{}, people.ErrInvalidInput
+	}
+	transaction, err := s.database.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	if err != nil {
+		return people.ExchangeSnapshot{}, fmt.Errorf("begin People Exchange snapshot: %w", err)
+	}
+	defer transaction.Rollback()
+	result := people.ExchangeSnapshot{}
+	remaining := maximum
+	result.Sites, err = queryPeopleExchangeRows(ctx, transaction, `
+		SELECT id, organization_id, name, normalized_name, address_line1, address_line2,
+		       address_city, address_region, address_postal_code, address_country,
+		       status, revision, created_at, updated_at
+		FROM people_sites WHERE organization_id = $1 ORDER BY id LIMIT $2
+	`, organizationID, remaining+1, scanPeopleSite)
+	if err != nil {
+		return people.ExchangeSnapshot{}, fmt.Errorf("list People Exchange sites: %w", err)
+	}
+	if len(result.Sites) > remaining {
+		return people.ExchangeSnapshot{}, people.ErrTooLarge
+	}
+	remaining -= len(result.Sites)
+	result.Buildings, err = queryPeopleExchangeRows(ctx, transaction, `
+		SELECT id, organization_id, site_id, name, normalized_name, status, revision, created_at, updated_at
+		FROM people_buildings WHERE organization_id = $1 ORDER BY id LIMIT $2
+	`, organizationID, remaining+1, scanPeopleBuilding)
+	if err != nil {
+		return people.ExchangeSnapshot{}, fmt.Errorf("list People Exchange buildings: %w", err)
+	}
+	if len(result.Buildings) > remaining {
+		return people.ExchangeSnapshot{}, people.ErrTooLarge
+	}
+	remaining -= len(result.Buildings)
+	result.Rooms, err = queryPeopleExchangeRows(ctx, transaction, `
+		SELECT id, organization_id, site_id, building_id, room_number, normalized_number,
+		       name, status, revision, created_at, updated_at
+		FROM people_rooms WHERE organization_id = $1 ORDER BY id LIMIT $2
+	`, organizationID, remaining+1, scanPeopleRoom)
+	if err != nil {
+		return people.ExchangeSnapshot{}, fmt.Errorf("list People Exchange rooms: %w", err)
+	}
+	if len(result.Rooms) > remaining {
+		return people.ExchangeSnapshot{}, people.ErrTooLarge
+	}
+	remaining -= len(result.Rooms)
+	result.Departments, err = queryPeopleExchangeRows(ctx, transaction, `
+		SELECT id, organization_id, name, normalized_name, COALESCE(site_id, ''), status, revision, created_at, updated_at
+		FROM people_departments WHERE organization_id = $1 ORDER BY id LIMIT $2
+	`, organizationID, remaining+1, scanPeopleDepartment)
+	if err != nil {
+		return people.ExchangeSnapshot{}, fmt.Errorf("list People Exchange departments: %w", err)
+	}
+	if len(result.Departments) > remaining {
+		return people.ExchangeSnapshot{}, people.ErrTooLarge
+	}
+	remaining -= len(result.Departments)
+	result.Identities, err = queryPeopleExchangeRows(ctx, transaction, `
+		SELECT id, organization_id, kind, display_name, normalized_name, email, normalized_email,
+		       COALESCE(department_id, ''), COALESCE(site_id, ''), status, provider, provider_subject,
+		       revision, created_at, updated_at
+		FROM people_identities WHERE organization_id = $1 ORDER BY id LIMIT $2
+	`, organizationID, remaining+1, scanPeopleIdentity)
+	if err != nil {
+		return people.ExchangeSnapshot{}, fmt.Errorf("list People Exchange identities: %w", err)
+	}
+	if len(result.Identities) > remaining {
+		return people.ExchangeSnapshot{}, people.ErrTooLarge
+	}
+	remaining -= len(result.Identities)
+	result.Assignments, err = queryPeopleExchangeRows(ctx, transaction, `
+		SELECT id, organization_id, asset_id, assignee_kind, COALESCE(identity_id, department_id),
+		       role, effective_from, effective_to, created_by, created_at
+		FROM people_asset_assignments WHERE organization_id = $1 ORDER BY id LIMIT $2
+	`, organizationID, remaining+1, scanPeopleAssignment)
+	if err != nil {
+		return people.ExchangeSnapshot{}, fmt.Errorf("list People Exchange assignments: %w", err)
+	}
+	if len(result.Assignments) > remaining {
+		return people.ExchangeSnapshot{}, people.ErrTooLarge
+	}
+	if err := transaction.Commit(); err != nil {
+		return people.ExchangeSnapshot{}, fmt.Errorf("complete People Exchange snapshot: %w", err)
+	}
+	return result, nil
+}
+
+func queryPeopleExchangeRows[T any](ctx context.Context, transaction *sql.Tx, query, organizationID string, limit int, scan func(peopleRowScanner) (T, error)) ([]T, error) {
+	rows, err := transaction.QueryContext(ctx, query, organizationID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make([]T, 0)
+	for rows.Next() {
+		item, scanErr := scan(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		result = append(result, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 func (s *PeopleStore) CreateSite(ctx context.Context, site people.Site) (people.Site, error) {
@@ -965,6 +1073,47 @@ func (s *PeopleStore) CreateAssetAssignment(ctx context.Context, assignment peop
 		return people.AssetAssignment{}, fmt.Errorf("commit asset assignment: %w", err)
 	}
 	return created, nil
+}
+
+func (s *PeopleStore) ImportAssetAssignment(ctx context.Context, assignment people.AssetAssignment) (people.AssetAssignment, error) {
+	var identityID any
+	var departmentID any
+	if assignment.AssigneeKind == people.AssigneeIdentity {
+		identityID = assignment.AssigneeID
+	} else {
+		departmentID = assignment.AssigneeID
+	}
+	row := s.database.QueryRowContext(ctx, `
+		INSERT INTO people_asset_assignments (
+			id, organization_id, asset_id, assignee_kind, identity_id, department_id,
+			role, effective_from, effective_to, created_by, created_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		RETURNING id, organization_id, asset_id, assignee_kind, COALESCE(identity_id, department_id),
+		          role, effective_from, effective_to, created_by, created_at
+	`, assignment.ID, assignment.OrganizationID, assignment.AssetID, assignment.AssigneeKind,
+		identityID, departmentID, assignment.Role, assignment.EffectiveFrom, assignment.EffectiveTo,
+		assignment.CreatedBy, assignment.CreatedAt)
+	created, err := scanPeopleAssignment(row)
+	if err != nil {
+		return people.AssetAssignment{}, mapPeopleStoreError("import asset assignment", err)
+	}
+	return created, nil
+}
+
+func (s *PeopleStore) GetAssetAssignment(ctx context.Context, organizationID, assignmentID string) (people.AssetAssignment, error) {
+	assignment, err := scanPeopleAssignment(s.database.QueryRowContext(ctx, `
+		SELECT id, organization_id, asset_id, assignee_kind, COALESCE(identity_id, department_id),
+		       role, effective_from, effective_to, created_by, created_at
+		FROM people_asset_assignments
+		WHERE organization_id = $1 AND id = $2
+	`, organizationID, assignmentID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return people.AssetAssignment{}, people.ErrNotFound
+	}
+	if err != nil {
+		return people.AssetAssignment{}, fmt.Errorf("get asset assignment: %w", err)
+	}
+	return assignment, nil
 }
 
 func (s *PeopleStore) EndAssetAssignment(ctx context.Context, organizationID, assetID, assignmentID string, effectiveTo time.Time) (people.AssetAssignment, error) {

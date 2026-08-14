@@ -321,8 +321,12 @@ func responseSingularValue(field protoreflect.FieldDescriptor, value any) (proto
 
 func enumNumber(descriptor protoreflect.EnumDescriptor, value any) (protoreflect.EnumNumber, error) {
 	if number, err := int64Value(value); err == nil {
-		if descriptor.Values().ByNumber(protoreflect.EnumNumber(number)) != nil {
-			return protoreflect.EnumNumber(number), nil
+		if number < math.MinInt32 || number > math.MaxInt32 {
+			return 0, fmt.Errorf("enum value overflows int32")
+		}
+		enumNumber := protoreflect.EnumNumber(number)
+		if descriptor.Values().ByNumber(enumNumber) != nil {
+			return enumNumber, nil
 		}
 	}
 	text, ok := value.(string)

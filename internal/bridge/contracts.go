@@ -1,7 +1,8 @@
 // Package bridge exposes StewardMesh through bounded, authenticated integration
 // protocols. It deliberately keeps OAuth state and MCP confirmations behind a
 // provider-neutral store so neither transport owns authorization truth.
-// Requirements: REQ-API-001, SEC-MCP-001. Feature: integrations.protocols. GitHub: #14.
+// Requirements: REQ-API-001, SEC-MCP-001, REQ-EXCHANGE-001.
+// Features: integrations.protocols, migration.packages. GitHub: #9, #14.
 package bridge
 
 import (
@@ -39,6 +40,7 @@ var (
 	ErrReplay             = errors.New("Bridge credential was already used")
 	ErrRateLimited        = errors.New("Bridge request rate limited")
 	ErrConfirmationNeeded = errors.New("Bridge write confirmation is required")
+	ErrTooLarge           = errors.New("Bridge record collection exceeds its configured limit")
 )
 
 type Scope string
@@ -72,6 +74,26 @@ type CreateClientInput struct {
 	Name          string   `json:"name"`
 	RedirectURIs  []string `json:"redirectUris"`
 	AllowedScopes []Scope  `json:"allowedScopes"`
+}
+
+// ExchangeImportOperation is the deterministic mutation identity issued only
+// after Exchange has durably reserved an import and its Guard ownership lock.
+type ExchangeImportOperation struct {
+	Token      string
+	OccurredAt time.Time
+}
+
+type ExchangeImportResult struct {
+	Committed bool
+	Created   bool
+}
+
+// ExchangeImporter is an opaque, construction-time capability. It can retain
+// a portable client's stable ID and active/revoked revision without exposing
+// a public path around Bridge validation, Guard ownership, or OAuth policy.
+type ExchangeImporter interface {
+	ImportClient(context.Context, ExchangeImportOperation, int64, Client) (ExchangeImportResult, error)
+	bridgeExchangeImporter()
 }
 
 // PageRequest is the common, bounded administration-list contract. Cursors
@@ -193,7 +215,13 @@ type RateWindow struct {
 type Store interface {
 	CreateClient(ctx context.Context, client Client) (Client, error)
 	ListClients(ctx context.Context, organizationID string, page PageRequest) ([]Client, error)
+	// ListExchangeClients returns one bounded, internally consistent snapshot
+	// for package construction; it never includes any OAuth transaction state.
+	ListExchangeClients(ctx context.Context, organizationID string, limit int) ([]Client, error)
 	GetClient(ctx context.Context, organizationID, clientID string) (Client, error)
+	// ImportExchangeClient atomically creates the exact public-client state or
+	// reports an idempotent exact replay. A same-ID difference is a conflict.
+	ImportExchangeClient(ctx context.Context, client Client) (Client, bool, error)
 	RevokeClient(ctx context.Context, organizationID, clientID string, revokedAt time.Time) (Client, error)
 
 	CreateAuthorizationRequest(ctx context.Context, request AuthorizationRequest) error

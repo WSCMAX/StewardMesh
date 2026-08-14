@@ -1,7 +1,8 @@
 package httpapi
 
 // OAuth 2.1 and Bridge administration HTTP endpoints.
-// Requirements: REQ-API-001, SEC-MCP-001. Feature: integrations.protocols. GitHub: #14.
+// Requirements: REQ-API-001, SEC-MCP-001, REQ-EXCHANGE-001.
+// Features: integrations.protocols, migration.packages. GitHub: #9, #14.
 
 import (
 	"errors"
@@ -286,6 +287,8 @@ func writeBridgeError(w http.ResponseWriter, r *http.Request, err error) {
 		writeError(w, r, http.StatusUnauthorized, "authentication_failed", "Bridge authentication failed")
 	case errors.Is(err, bridge.ErrPermissionDenied):
 		writeError(w, r, http.StatusForbidden, "permission_denied", "Bridge permission is required")
+	case errors.Is(err, guard.ErrResourceWriteLocked):
+		writeError(w, r, http.StatusLocked, "ownership_locked", "claim local ownership before changing this imported Bridge client")
 	case errors.Is(err, bridge.ErrNotFound):
 		writeError(w, r, http.StatusNotFound, "not_found", "the Bridge record was not found")
 	case errors.Is(err, bridge.ErrConflict), errors.Is(err, bridge.ErrReplay):

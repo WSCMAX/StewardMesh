@@ -20,9 +20,11 @@ const (
 )
 
 var (
-	ErrInvalidInput = errors.New("invalid Signals input")
-	ErrNotFound     = errors.New("Signals record not found")
-	ErrConflict     = errors.New("Signals record conflicts with existing data")
+	ErrInvalidInput     = errors.New("invalid Signals input")
+	ErrNotFound         = errors.New("Signals record not found")
+	ErrConflict         = errors.New("Signals record conflicts with existing data")
+	ErrTooLarge         = errors.New("Signals snapshot exceeds the configured bound")
+	ErrReferenceMissing = errors.New("Signals referenced record is missing")
 )
 
 type Condition string
@@ -164,7 +166,9 @@ type Subscription struct {
 	TargetID       string    `json:"targetId"`
 	Enabled        bool      `json:"enabled"`
 	CreatedBy      string    `json:"createdBy"`
+	Revision       int64     `json:"revision"`
 	CreatedAt      time.Time `json:"createdAt"`
+	UpdatedAt      time.Time `json:"updatedAt"`
 }
 
 type CreateSubscriptionInput struct {
@@ -189,6 +193,50 @@ type SubscriptionTarget struct {
 // to organizationID and return only enabled, fully configured targets.
 type SubscriptionTargetCatalog interface {
 	ListSubscriptionTargets(context.Context, string) ([]SubscriptionTarget, error)
+}
+
+// SubscriptionTargetReferenceCatalog verifies that a durable target record
+// exists even when it is intentionally inert after import. It is separate from
+// the operational catalog so ordinary subscription creation still requires an
+// enabled, fully configured delivery target.
+type SubscriptionTargetReferenceCatalog interface {
+	SubscriptionTargetReferenceExists(context.Context, string, string, string) (bool, error)
+}
+
+// ExchangeSnapshot is one bounded, organization-consistent view of the
+// portable Signals source records. Derived alerts, histories, and deliveries
+// are deliberately absent.
+type ExchangeSnapshot struct {
+	Rules         []Rule
+	Subscriptions []Subscription
+}
+
+// ExchangeImportOperation is the deterministic mutation identity reserved by
+// Exchange after durable intent and imported ownership have been established.
+type ExchangeImportOperation struct {
+	Token      string
+	OccurredAt time.Time
+}
+
+type ExchangeImportResult struct {
+	Committed bool
+	Created   bool
+}
+
+// ExchangeImporter is an opaque construction-time capability. It is the only
+// supported way to preserve source revisions and timestamps while repairing a
+// deterministic import audit on replay.
+type ExchangeImporter interface {
+	ImportRule(context.Context, ExchangeImportOperation, Rule) (ExchangeImportResult, error)
+	ImportSubscription(context.Context, ExchangeImportOperation, Subscription) (ExchangeImportResult, error)
+	signalsExchangeImporter()
+}
+
+// WriteGate fences ordinary writes to records owned by an imported source.
+// The opaque Exchange importer bypasses it only after Exchange has reserved
+// durable intent and ownership.
+type WriteGate interface {
+	CheckResourceWrite(context.Context, string, string) error
 }
 
 // Delivery is the durable, provider-neutral Reach handoff. Signals stores only
@@ -222,10 +270,12 @@ type Evaluator interface {
 }
 
 type Store interface {
+	ExchangeSnapshot(context.Context, string, int) (ExchangeSnapshot, error)
 	ListRules(context.Context, string) ([]Rule, error)
 	GetRule(context.Context, string, string) (Rule, error)
 	CreateRule(context.Context, Rule) (Rule, error)
 	UpdateRule(context.Context, Rule, int64) (Rule, error)
+	ImportRule(context.Context, Rule) (Rule, bool, error)
 
 	ListAlerts(context.Context, string, AlertQuery) ([]Alert, error)
 	GetAlert(context.Context, string, string) (Alert, error)
@@ -235,8 +285,10 @@ type Store interface {
 	ListAlertHistory(context.Context, string, string) ([]AlertHistory, error)
 
 	ListSubscriptions(context.Context, string) ([]Subscription, error)
+	GetSubscription(context.Context, string, string) (Subscription, error)
 	CreateSubscription(context.Context, Subscription) (Subscription, error)
 	DeleteSubscription(context.Context, string, string) (bool, error)
+	ImportSubscription(context.Context, Subscription) (Subscription, bool, error)
 
 	CreateDelivery(context.Context, Delivery) (Delivery, bool, error)
 	ListPendingDeliveries(context.Context, string, time.Time, int) ([]Delivery, error)

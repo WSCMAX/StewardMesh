@@ -1,6 +1,6 @@
 package postgres
 
-// Requirements: REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-005, REQ-DIRECTORY-EXPANSION-008. Features: integrations.protocols, threads.relationships.
+// Requirements: REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-005, REQ-DIRECTORY-EXPANSION-008, REQ-EXCHANGE-001. Features: integrations.protocols, threads.relationships, migration.packages.
 
 import (
 	"context"
@@ -19,6 +19,7 @@ type DirectoryImportStore struct{ database *sql.DB }
 
 var _ directoryexpansion.Store = (*DirectoryImportStore)(nil)
 var _ directoryexpansion.GroupTargetStore = (*DirectoryImportStore)(nil)
+var _ directoryexpansion.GroupExchangeStore = (*DirectoryImportStore)(nil)
 
 func NewDirectoryImportStore(database *sql.DB) (*DirectoryImportStore, error) {
 	if database == nil {
@@ -32,6 +33,11 @@ const managedMembershipColumns = `id,organization_id,source_system_id,source_rec
 
 func (s *DirectoryImportStore) GetManagedGroup(ctx context.Context, organizationID, id string) (directoryexpansion.ManagedGroup, error) {
 	return scanManagedGroup(s.database.QueryRowContext(ctx, `SELECT `+managedGroupColumns+` FROM directory_managed_groups WHERE organization_id=$1 AND id=$2`, organizationID, id))
+}
+
+func (s *DirectoryImportStore) GetManagedGroupBySource(ctx context.Context, organizationID, sourceSystemID, sourceRecordID string) (directoryexpansion.ManagedGroup, error) {
+	return scanManagedGroup(s.database.QueryRowContext(ctx, `SELECT `+managedGroupColumns+` FROM directory_managed_groups
+		WHERE organization_id=$1 AND source_system_id=$2 AND source_record_id=$3`, organizationID, sourceSystemID, sourceRecordID))
 }
 
 func (s *DirectoryImportStore) CreateManagedGroup(ctx context.Context, group directoryexpansion.ManagedGroup) (directoryexpansion.ManagedGroup, error) {
@@ -68,18 +74,35 @@ func (s *DirectoryImportStore) ReconcileManagedGroup(ctx context.Context, group 
 }
 
 func (s *DirectoryImportStore) DeleteManagedGroup(ctx context.Context, organizationID, id string, expectedRevision uint64) error {
-	result, err := s.database.ExecContext(ctx, `DELETE FROM directory_managed_groups WHERE organization_id=$1 AND id=$2 AND revision=$3`, organizationID, id, expectedRevision)
+	tx, err := s.database.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin managed group delete: %w", err)
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `DELETE FROM directory_managed_groups WHERE organization_id=$1 AND id=$2 AND revision=$3`, organizationID, id, expectedRevision)
 	if err != nil {
 		return translateDirectoryWrite("delete managed group", err)
 	}
 	if rows, _ := result.RowsAffected(); rows != 1 {
 		return directoryexpansion.ErrConflict
 	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM directory_managed_memberships
+		WHERE organization_id=$1 AND member_kind=$2 AND member_id=$3`, organizationID, directoryexpansion.MemberGroup, id); err != nil {
+		return translateDirectoryWrite("delete nested managed group memberships", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit managed group delete: %w", err)
+	}
 	return nil
 }
 
 func (s *DirectoryImportStore) GetManagedMembership(ctx context.Context, organizationID, id string) (directoryexpansion.ManagedMembership, error) {
 	return scanManagedMembership(s.database.QueryRowContext(ctx, `SELECT `+managedMembershipColumns+` FROM directory_managed_memberships WHERE organization_id=$1 AND id=$2`, organizationID, id))
+}
+
+func (s *DirectoryImportStore) GetManagedMembershipBySource(ctx context.Context, organizationID, sourceSystemID, sourceRecordID string) (directoryexpansion.ManagedMembership, error) {
+	return scanManagedMembership(s.database.QueryRowContext(ctx, `SELECT `+managedMembershipColumns+` FROM directory_managed_memberships
+		WHERE organization_id=$1 AND source_system_id=$2 AND source_record_id=$3`, organizationID, sourceSystemID, sourceRecordID))
 }
 
 func (s *DirectoryImportStore) CreateManagedMembership(ctx context.Context, membership directoryexpansion.ManagedMembership) (directoryexpansion.ManagedMembership, error) {
@@ -175,6 +198,153 @@ func (s *DirectoryImportStore) ListManagedMemberships(ctx context.Context, organ
 		return nil, fmt.Errorf("iterate managed memberships: %w", err)
 	}
 	return memberships, nil
+}
+
+func (s *DirectoryImportStore) ExchangeSnapshot(ctx context.Context, organizationID string, maximum int) (directoryexpansion.ExchangeSnapshot, error) {
+	if strings.TrimSpace(organizationID) == "" || maximum < 1 {
+		return directoryexpansion.ExchangeSnapshot{}, directoryexpansion.ErrInvalidInput
+	}
+	tx, err := s.database.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	if err != nil {
+		return directoryexpansion.ExchangeSnapshot{}, fmt.Errorf("begin Directory Exchange snapshot: %w", err)
+	}
+	defer tx.Rollback()
+	var count int
+	if err := tx.QueryRowContext(ctx, `SELECT
+		(SELECT count(*) FROM directory_managed_groups WHERE organization_id=$1) +
+		(SELECT count(*) FROM directory_managed_memberships WHERE organization_id=$1)`, organizationID).Scan(&count); err != nil {
+		return directoryexpansion.ExchangeSnapshot{}, fmt.Errorf("count Directory Exchange snapshot: %w", err)
+	}
+	if count > maximum {
+		return directoryexpansion.ExchangeSnapshot{}, directoryexpansion.ErrTooLarge
+	}
+	result := directoryexpansion.ExchangeSnapshot{Groups: []directoryexpansion.ManagedGroup{}, Memberships: []directoryexpansion.ManagedMembership{}}
+	groupRows, err := tx.QueryContext(ctx, `SELECT `+managedGroupColumns+` FROM directory_managed_groups WHERE organization_id=$1 ORDER BY id`, organizationID)
+	if err != nil {
+		return directoryexpansion.ExchangeSnapshot{}, fmt.Errorf("list Directory Exchange groups: %w", err)
+	}
+	for groupRows.Next() {
+		group, scanErr := scanManagedGroup(groupRows)
+		if scanErr != nil {
+			groupRows.Close()
+			return directoryexpansion.ExchangeSnapshot{}, scanErr
+		}
+		result.Groups = append(result.Groups, group)
+	}
+	if err := groupRows.Err(); err != nil {
+		groupRows.Close()
+		return directoryexpansion.ExchangeSnapshot{}, fmt.Errorf("iterate Directory Exchange groups: %w", err)
+	}
+	groupRows.Close()
+	membershipRows, err := tx.QueryContext(ctx, `SELECT `+managedMembershipColumns+` FROM directory_managed_memberships WHERE organization_id=$1 ORDER BY id`, organizationID)
+	if err != nil {
+		return directoryexpansion.ExchangeSnapshot{}, fmt.Errorf("list Directory Exchange memberships: %w", err)
+	}
+	for membershipRows.Next() {
+		membership, scanErr := scanManagedMembership(membershipRows)
+		if scanErr != nil {
+			membershipRows.Close()
+			return directoryexpansion.ExchangeSnapshot{}, scanErr
+		}
+		result.Memberships = append(result.Memberships, membership)
+	}
+	if err := membershipRows.Err(); err != nil {
+		membershipRows.Close()
+		return directoryexpansion.ExchangeSnapshot{}, fmt.Errorf("iterate Directory Exchange memberships: %w", err)
+	}
+	membershipRows.Close()
+	if err := tx.Commit(); err != nil {
+		return directoryexpansion.ExchangeSnapshot{}, fmt.Errorf("commit Directory Exchange snapshot: %w", err)
+	}
+	return result, nil
+}
+
+func (s *DirectoryImportStore) ImportManagedGroup(ctx context.Context, candidate directoryexpansion.ManagedGroup) (directoryexpansion.ManagedGroup, bool, error) {
+	metadata, err := marshalDirectoryMetadata(candidate.Metadata)
+	if err != nil {
+		return directoryexpansion.ManagedGroup{}, false, fmt.Errorf("encode imported managed group metadata: %w", err)
+	}
+	created, err := scanManagedGroup(s.database.QueryRowContext(ctx, `INSERT INTO directory_managed_groups
+		(id,organization_id,source_system_id,source_record_id,name,display_name,description,status,metadata,revision,created_at,updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+		ON CONFLICT (organization_id,id) DO NOTHING RETURNING `+managedGroupColumns, candidate.ID, candidate.OrganizationID, candidate.SourceSystemID,
+		candidate.SourceRecordID, candidate.Name, candidate.DisplayName, candidate.Description, candidate.Status, metadata,
+		candidate.Revision, candidate.CreatedAt, candidate.UpdatedAt))
+	if err == nil {
+		return created, true, nil
+	}
+	if !errors.Is(err, directoryexpansion.ErrNotFound) {
+		// A different record may already own this provider/source tuple. That
+		// conflict is not an idempotent replay of the requested resource ID.
+		return directoryexpansion.ManagedGroup{}, false, translateDirectoryWrite("import managed group", err)
+	}
+	existing, readErr := s.GetManagedGroup(ctx, candidate.OrganizationID, candidate.ID)
+	if readErr != nil {
+		return directoryexpansion.ManagedGroup{}, false, readErr
+	}
+	return existing, false, nil
+}
+
+func (s *DirectoryImportStore) ImportManagedMembership(ctx context.Context, candidate directoryexpansion.ManagedMembership) (directoryexpansion.ManagedMembership, bool, error) {
+	metadata, err := marshalDirectoryMetadata(candidate.Metadata)
+	if err != nil {
+		return directoryexpansion.ManagedMembership{}, false, fmt.Errorf("encode imported managed membership metadata: %w", err)
+	}
+	tx, err := s.database.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	if err != nil {
+		return directoryexpansion.ManagedMembership{}, false, fmt.Errorf("begin managed membership import: %w", err)
+	}
+	defer tx.Rollback()
+	var parentSourceSystemID, parentSourceRecordID string
+	err = tx.QueryRowContext(ctx, `SELECT source_system_id,source_record_id FROM directory_managed_groups
+		WHERE organization_id=$1 AND id=$2`, candidate.OrganizationID, candidate.GroupID).Scan(&parentSourceSystemID, &parentSourceRecordID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return directoryexpansion.ManagedMembership{}, false, directoryexpansion.ErrReferenceMissing
+	}
+	if err != nil {
+		return directoryexpansion.ManagedMembership{}, false, fmt.Errorf("validate managed membership parent: %w", err)
+	}
+	if parentSourceSystemID != candidate.SourceSystemID || parentSourceRecordID != candidate.GroupSourceID {
+		return directoryexpansion.ManagedMembership{}, false, directoryexpansion.ErrConflict
+	}
+	if candidate.MemberKind == directoryexpansion.MemberGroup {
+		var memberSourceSystemID, memberSourceRecordID string
+		err = tx.QueryRowContext(ctx, `SELECT source_system_id,source_record_id FROM directory_managed_groups
+			WHERE organization_id=$1 AND id=$2`, candidate.OrganizationID, candidate.MemberID).Scan(&memberSourceSystemID, &memberSourceRecordID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return directoryexpansion.ManagedMembership{}, false, directoryexpansion.ErrReferenceMissing
+		}
+		if err != nil {
+			return directoryexpansion.ManagedMembership{}, false, fmt.Errorf("validate managed membership member group: %w", err)
+		}
+		if memberSourceSystemID != candidate.SourceSystemID || memberSourceRecordID != candidate.MemberSourceID {
+			return directoryexpansion.ManagedMembership{}, false, directoryexpansion.ErrConflict
+		}
+	}
+	created, err := scanManagedMembership(tx.QueryRowContext(ctx, `INSERT INTO directory_managed_memberships
+		(id,organization_id,source_system_id,source_record_id,group_id,group_source_id,member_id,member_source_id,member_kind,member_display_name,status,metadata,revision,created_at,updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+		ON CONFLICT (organization_id,id) DO NOTHING RETURNING `+managedMembershipColumns, candidate.ID, candidate.OrganizationID,
+		candidate.SourceSystemID, candidate.SourceRecordID, candidate.GroupID, candidate.GroupSourceID, candidate.MemberID,
+		candidate.MemberSourceID, candidate.MemberKind, candidate.MemberDisplayName, candidate.Status, metadata,
+		candidate.Revision, candidate.CreatedAt, candidate.UpdatedAt))
+	if err == nil {
+		if err := tx.Commit(); err != nil {
+			return directoryexpansion.ManagedMembership{}, false, fmt.Errorf("commit managed membership import: %w", err)
+		}
+		return created, true, nil
+	}
+	if !errors.Is(err, directoryexpansion.ErrNotFound) {
+		return directoryexpansion.ManagedMembership{}, false, translateDirectoryWrite("import managed membership", err)
+	}
+	existing, readErr := scanManagedMembership(tx.QueryRowContext(ctx, `SELECT `+managedMembershipColumns+` FROM directory_managed_memberships WHERE organization_id=$1 AND id=$2`, candidate.OrganizationID, candidate.ID))
+	if readErr != nil {
+		return directoryexpansion.ManagedMembership{}, false, readErr
+	}
+	if err := tx.Commit(); err != nil {
+		return directoryexpansion.ManagedMembership{}, false, fmt.Errorf("commit managed membership replay: %w", err)
+	}
+	return existing, false, nil
 }
 
 func (s *DirectoryImportStore) ListGraphManagedGroups(ctx context.Context, organizationID string, filter directoryexpansion.ManagedGroupGraphQuery) ([]directoryexpansion.ManagedGroup, error) {

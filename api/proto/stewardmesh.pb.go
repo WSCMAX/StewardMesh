@@ -19502,6 +19502,8 @@ type SignalSubscription struct {
 	Enabled       bool                   `protobuf:"varint,6,opt,name=enabled,proto3" json:"enabled,omitempty"`
 	CreatedBy     string                 `protobuf:"bytes,7,opt,name=created_by,json=createdBy,proto3" json:"created_by,omitempty"`
 	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	Revision      int64                  `protobuf:"varint,9,opt,name=revision,proto3" json:"revision,omitempty"`
+	UpdatedAt     *timestamppb.Timestamp `protobuf:"bytes,10,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -19588,6 +19590,20 @@ func (x *SignalSubscription) GetCreatedBy() string {
 func (x *SignalSubscription) GetCreatedAt() *timestamppb.Timestamp {
 	if x != nil {
 		return x.CreatedAt
+	}
+	return nil
+}
+
+func (x *SignalSubscription) GetRevision() int64 {
+	if x != nil {
+		return x.Revision
+	}
+	return 0
+}
+
+func (x *SignalSubscription) GetUpdatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.UpdatedAt
 	}
 	return nil
 }
@@ -21715,8 +21731,10 @@ type ReachProvider struct {
 	OrganizationId string                 `protobuf:"bytes,2,opt,name=organization_id,json=organizationId,proto3" json:"organization_id,omitempty"`
 	Name           string                 `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`
 	Kind           string                 `protobuf:"bytes,4,opt,name=kind,proto3" json:"kind,omitempty"`
-	EndpointId     string                 `protobuf:"bytes,5,opt,name=endpoint_id,json=endpointId,proto3" json:"endpoint_id,omitempty"`
-	Sender         string                 `protobuf:"bytes,6,opt,name=sender,proto3" json:"sender,omitempty"`
+	// Empty only for a safely inert imported provider. A local owner must select
+	// a deployment-approved endpoint before the provider can be enabled.
+	EndpointId string `protobuf:"bytes,5,opt,name=endpoint_id,json=endpointId,proto3" json:"endpoint_id,omitempty"`
+	Sender     string `protobuf:"bytes,6,opt,name=sender,proto3" json:"sender,omitempty"`
 	// True indicates an external reference exists. Its identifier and resolved
 	// secret are intentionally omitted.
 	SecretConfigured bool                   `protobuf:"varint,7,opt,name=secret_configured,json=secretConfigured,proto3" json:"secret_configured,omitempty"`
@@ -21949,12 +21967,15 @@ func (x *CreateReachProviderRequest) GetEnabled() bool {
 }
 
 type UpdateReachProviderRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ProviderId    string                 `protobuf:"bytes,1,opt,name=provider_id,json=providerId,proto3" json:"provider_id,omitempty"`
-	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	Sender        string                 `protobuf:"bytes,3,opt,name=sender,proto3" json:"sender,omitempty"`
-	Enabled       bool                   `protobuf:"varint,4,opt,name=enabled,proto3" json:"enabled,omitempty"`
-	Revision      int64                  `protobuf:"varint,5,opt,name=revision,proto3" json:"revision,omitempty"`
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	ProviderId string                 `protobuf:"bytes,1,opt,name=provider_id,json=providerId,proto3" json:"provider_id,omitempty"`
+	Name       string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Sender     string                 `protobuf:"bytes,3,opt,name=sender,proto3" json:"sender,omitempty"`
+	Enabled    bool                   `protobuf:"varint,4,opt,name=enabled,proto3" json:"enabled,omitempty"`
+	Revision   int64                  `protobuf:"varint,5,opt,name=revision,proto3" json:"revision,omitempty"`
+	// Optional deployment-approved route selection. Provider secrets remain
+	// exclusive to RotateProviderSecret and its explicit confirmation.
+	EndpointId    string `protobuf:"bytes,6,opt,name=endpoint_id,json=endpointId,proto3" json:"endpoint_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -22022,6 +22043,13 @@ func (x *UpdateReachProviderRequest) GetRevision() int64 {
 		return x.Revision
 	}
 	return 0
+}
+
+func (x *UpdateReachProviderRequest) GetEndpointId() string {
+	if x != nil {
+		return x.EndpointId
+	}
+	return ""
 }
 
 type RotateReachProviderSecretRequest struct {
@@ -26068,7 +26096,7 @@ const file_stewardmesh_proto_rawDesc = "" +
 	"\vtarget_kind\x18\x01 \x01(\tR\n" +
 	"targetKind\x12\x1b\n" +
 	"\ttarget_id\x18\x02 \x01(\tR\btargetId\x12\x14\n" +
-	"\x05label\x18\x03 \x01(\tR\x05label\"\x98\x02\n" +
+	"\x05label\x18\x03 \x01(\tR\x05label\"\xef\x02\n" +
 	"\x12SignalSubscription\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12'\n" +
 	"\x0forganization_id\x18\x02 \x01(\tR\x0eorganizationId\x12\x17\n" +
@@ -26080,7 +26108,11 @@ const file_stewardmesh_proto_rawDesc = "" +
 	"\n" +
 	"created_by\x18\a \x01(\tR\tcreatedBy\x129\n" +
 	"\n" +
-	"created_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\x88\x01\n" +
+	"created_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12\x1a\n" +
+	"\brevision\x18\t \x01(\x03R\brevision\x129\n" +
+	"\n" +
+	"updated_at\x18\n" +
+	" \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"\x88\x01\n" +
 	"\x1fCreateSignalSubscriptionRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x17\n" +
 	"\arule_id\x18\x02 \x01(\tR\x06ruleId\x12\x1f\n" +
@@ -26287,14 +26319,16 @@ const file_stewardmesh_proto_rawDesc = "" +
 	"secret_ref\x18\x06 \x01(\tR\tsecretRef\x12\x1d\n" +
 	"\aenabled\x18\a \x01(\bH\x00R\aenabled\x88\x01\x01B\n" +
 	"\n" +
-	"\b_enabled\"\x9f\x01\n" +
+	"\b_enabled\"\xc0\x01\n" +
 	"\x1aUpdateReachProviderRequest\x12\x1f\n" +
 	"\vprovider_id\x18\x01 \x01(\tR\n" +
 	"providerId\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x16\n" +
 	"\x06sender\x18\x03 \x01(\tR\x06sender\x12\x18\n" +
 	"\aenabled\x18\x04 \x01(\bR\aenabled\x12\x1a\n" +
-	"\brevision\x18\x05 \x01(\x03R\brevision\"\x98\x01\n" +
+	"\brevision\x18\x05 \x01(\x03R\brevision\x12\x1f\n" +
+	"\vendpoint_id\x18\x06 \x01(\tR\n" +
+	"endpointId\"\x98\x01\n" +
 	" RotateReachProviderSecretRequest\x12\x1f\n" +
 	"\vprovider_id\x18\x01 \x01(\tR\n" +
 	"providerId\x12\x1d\n" +
@@ -27489,378 +27523,379 @@ var file_stewardmesh_proto_depIdxs = []int32{
 	264, // 284: stewardmesh.v1.ListSignalSubscriptionsResponse.items:type_name -> stewardmesh.v1.SignalSubscription
 	263, // 285: stewardmesh.v1.ListSignalSubscriptionTargetsResponse.items:type_name -> stewardmesh.v1.SignalSubscriptionTarget
 	345, // 286: stewardmesh.v1.SignalSubscription.created_at:type_name -> google.protobuf.Timestamp
-	345, // 287: stewardmesh.v1.SignalDelivery.next_attempt_at:type_name -> google.protobuf.Timestamp
-	345, // 288: stewardmesh.v1.SignalDelivery.created_at:type_name -> google.protobuf.Timestamp
-	345, // 289: stewardmesh.v1.SignalDelivery.updated_at:type_name -> google.protobuf.Timestamp
-	345, // 290: stewardmesh.v1.ListPendingSignalDeliveriesRequest.as_of:type_name -> google.protobuf.Timestamp
-	268, // 291: stewardmesh.v1.ListPendingSignalDeliveriesResponse.items:type_name -> stewardmesh.v1.SignalDelivery
-	345, // 292: stewardmesh.v1.ExchangeOwnershipMetadata.claimed_at:type_name -> google.protobuf.Timestamp
-	274, // 293: stewardmesh.v1.ExchangeRecord.dependencies:type_name -> stewardmesh.v1.ExchangeReference
-	276, // 294: stewardmesh.v1.ExchangeRecord.provenance:type_name -> stewardmesh.v1.ExchangeProvenance
-	277, // 295: stewardmesh.v1.ExchangeRecord.ownership:type_name -> stewardmesh.v1.ExchangeOwnershipMetadata
-	278, // 296: stewardmesh.v1.ExchangeRecord.file:type_name -> stewardmesh.v1.ExchangeFileMetadata
-	346, // 297: stewardmesh.v1.ExchangeRecord.payload:type_name -> google.protobuf.Struct
-	345, // 298: stewardmesh.v1.ExchangeManifest.exported_at:type_name -> google.protobuf.Timestamp
-	279, // 299: stewardmesh.v1.ExchangeManifest.records:type_name -> stewardmesh.v1.ExchangeRecord
-	275, // 300: stewardmesh.v1.ExchangeManifest.schemas:type_name -> stewardmesh.v1.ExchangeSchemaReference
-	274, // 301: stewardmesh.v1.ExchangeRecordDescriptor.dependencies:type_name -> stewardmesh.v1.ExchangeReference
-	281, // 302: stewardmesh.v1.ListExchangeRecordsResponse.items:type_name -> stewardmesh.v1.ExchangeRecordDescriptor
-	290, // 303: stewardmesh.v1.ListExchangePackagesResponse.items:type_name -> stewardmesh.v1.ExchangePackage
-	274, // 304: stewardmesh.v1.ExportExchangePackageRequest.selection:type_name -> stewardmesh.v1.ExchangeReference
-	274, // 305: stewardmesh.v1.ExchangeRecordOutcome.missing_dependencies:type_name -> stewardmesh.v1.ExchangeReference
-	289, // 306: stewardmesh.v1.ExchangePackage.records:type_name -> stewardmesh.v1.ExchangeRecordOutcome
-	345, // 307: stewardmesh.v1.ExchangePackage.created_at:type_name -> google.protobuf.Timestamp
-	345, // 308: stewardmesh.v1.ExchangePackage.updated_at:type_name -> google.protobuf.Timestamp
-	290, // 309: stewardmesh.v1.ImportExchangePackageResponse.package:type_name -> stewardmesh.v1.ExchangePackage
-	294, // 310: stewardmesh.v1.ListReachEndpointsResponse.items:type_name -> stewardmesh.v1.ReachEndpoint
-	297, // 311: stewardmesh.v1.ListReachProvidersResponse.items:type_name -> stewardmesh.v1.ReachProvider
-	345, // 312: stewardmesh.v1.ReachProvider.created_at:type_name -> google.protobuf.Timestamp
-	345, // 313: stewardmesh.v1.ReachProvider.updated_at:type_name -> google.protobuf.Timestamp
-	304, // 314: stewardmesh.v1.ListReachProviderTestsResponse.items:type_name -> stewardmesh.v1.ReachProviderTest
-	345, // 315: stewardmesh.v1.ReachProviderTest.tested_at:type_name -> google.protobuf.Timestamp
-	307, // 316: stewardmesh.v1.ListReachTemplatesResponse.items:type_name -> stewardmesh.v1.ReachTemplate
-	345, // 317: stewardmesh.v1.ReachTemplate.created_at:type_name -> google.protobuf.Timestamp
-	345, // 318: stewardmesh.v1.ReachTemplate.updated_at:type_name -> google.protobuf.Timestamp
-	313, // 319: stewardmesh.v1.ListReachGroupsResponse.items:type_name -> stewardmesh.v1.ReachSubscriberGroup
-	310, // 320: stewardmesh.v1.ReachSubscriberGroup.recipients:type_name -> stewardmesh.v1.ReachRecipient
-	345, // 321: stewardmesh.v1.ReachSubscriberGroup.created_at:type_name -> google.protobuf.Timestamp
-	345, // 322: stewardmesh.v1.ReachSubscriberGroup.updated_at:type_name -> google.protobuf.Timestamp
-	310, // 323: stewardmesh.v1.CreateReachGroupRequest.recipients:type_name -> stewardmesh.v1.ReachRecipient
-	310, // 324: stewardmesh.v1.UpdateReachGroupRequest.recipients:type_name -> stewardmesh.v1.ReachRecipient
-	318, // 325: stewardmesh.v1.ListReachMessagesResponse.items:type_name -> stewardmesh.v1.ReachMessage
-	310, // 326: stewardmesh.v1.ReachMessage.recipients:type_name -> stewardmesh.v1.ReachRecipient
-	345, // 327: stewardmesh.v1.ReachMessage.next_attempt_at:type_name -> google.protobuf.Timestamp
-	345, // 328: stewardmesh.v1.ReachMessage.created_at:type_name -> google.protobuf.Timestamp
-	345, // 329: stewardmesh.v1.ReachMessage.updated_at:type_name -> google.protobuf.Timestamp
-	344, // 330: stewardmesh.v1.SendReachMessageRequest.variables:type_name -> stewardmesh.v1.SendReachMessageRequest.VariablesEntry
-	323, // 331: stewardmesh.v1.ListReachMessageAttemptsResponse.items:type_name -> stewardmesh.v1.ReachDeliveryAttempt
-	345, // 332: stewardmesh.v1.ReachDeliveryAttempt.next_attempt_at:type_name -> google.protobuf.Timestamp
-	345, // 333: stewardmesh.v1.ReachDeliveryAttempt.occurred_at:type_name -> google.protobuf.Timestamp
-	330, // 334: stewardmesh.v1.ListBridgeClientsResponse.items:type_name -> stewardmesh.v1.BridgeClient
-	21,  // 335: stewardmesh.v1.CreateBridgeClientRequest.allowed_scopes:type_name -> stewardmesh.v1.BridgeScope
-	21,  // 336: stewardmesh.v1.BridgeClient.allowed_scopes:type_name -> stewardmesh.v1.BridgeScope
-	345, // 337: stewardmesh.v1.BridgeClient.created_at:type_name -> google.protobuf.Timestamp
-	345, // 338: stewardmesh.v1.BridgeClient.revoked_at:type_name -> google.protobuf.Timestamp
-	334, // 339: stewardmesh.v1.ListBridgeGrantsResponse.items:type_name -> stewardmesh.v1.BridgeGrant
-	21,  // 340: stewardmesh.v1.BridgeGrant.scopes:type_name -> stewardmesh.v1.BridgeScope
-	345, // 341: stewardmesh.v1.BridgeGrant.access_expires_at:type_name -> google.protobuf.Timestamp
-	345, // 342: stewardmesh.v1.BridgeGrant.refresh_expires_at:type_name -> google.protobuf.Timestamp
-	345, // 343: stewardmesh.v1.BridgeGrant.created_at:type_name -> google.protobuf.Timestamp
-	345, // 344: stewardmesh.v1.BridgeGrant.last_used_at:type_name -> google.protobuf.Timestamp
-	345, // 345: stewardmesh.v1.BridgeGrant.revoked_at:type_name -> google.protobuf.Timestamp
-	22,  // 346: stewardmesh.v1.FoundationService.GetOrganization:input_type -> stewardmesh.v1.GetOrganizationRequest
-	326, // 347: stewardmesh.v1.BridgeService.ListClients:input_type -> stewardmesh.v1.ListBridgeClientsRequest
-	328, // 348: stewardmesh.v1.BridgeService.CreateClient:input_type -> stewardmesh.v1.CreateBridgeClientRequest
-	329, // 349: stewardmesh.v1.BridgeService.RevokeClient:input_type -> stewardmesh.v1.RevokeBridgeClientRequest
-	331, // 350: stewardmesh.v1.BridgeService.ListGrants:input_type -> stewardmesh.v1.ListBridgeGrantsRequest
-	333, // 351: stewardmesh.v1.BridgeService.RevokeGrant:input_type -> stewardmesh.v1.RevokeBridgeGrantRequest
-	24,  // 352: stewardmesh.v1.PatternsService.ListTemplates:input_type -> stewardmesh.v1.ListPatternsTemplatesRequest
-	28,  // 353: stewardmesh.v1.PatternsService.CreateTemplate:input_type -> stewardmesh.v1.CreatePatternsTemplateRequest
-	26,  // 354: stewardmesh.v1.PatternsService.GetTemplate:input_type -> stewardmesh.v1.GetPatternsTemplateRequest
-	27,  // 355: stewardmesh.v1.PatternsService.GetTemplateSchema:input_type -> stewardmesh.v1.GetPatternsTemplateSchemaRequest
-	29,  // 356: stewardmesh.v1.PatternsService.CopyTemplate:input_type -> stewardmesh.v1.CopyPatternsTemplateRequest
-	30,  // 357: stewardmesh.v1.PatternsService.CreateTemplateVersion:input_type -> stewardmesh.v1.CreatePatternsTemplateVersionRequest
-	31,  // 358: stewardmesh.v1.PatternsService.ValidateRecord:input_type -> stewardmesh.v1.ValidatePatternsRecordRequest
-	32,  // 359: stewardmesh.v1.PatternsService.ExportCSVTemplate:input_type -> stewardmesh.v1.ExportPatternsCSVTemplateRequest
-	39,  // 360: stewardmesh.v1.GuardService.GetBootstrapStatus:input_type -> stewardmesh.v1.GetBootstrapStatusRequest
-	41,  // 361: stewardmesh.v1.GuardService.BootstrapAdministrator:input_type -> stewardmesh.v1.BootstrapAdministratorRequest
-	42,  // 362: stewardmesh.v1.GuardService.AuthenticateLocal:input_type -> stewardmesh.v1.AuthenticateLocalRequest
-	43,  // 363: stewardmesh.v1.GuardService.GetSession:input_type -> stewardmesh.v1.GetSessionRequest
-	44,  // 364: stewardmesh.v1.GuardService.Logout:input_type -> stewardmesh.v1.LogoutRequest
-	50,  // 365: stewardmesh.v1.GuardService.ListGuardAccess:input_type -> stewardmesh.v1.ListGuardAccessRequest
-	55,  // 366: stewardmesh.v1.GuardService.CreateRole:input_type -> stewardmesh.v1.CreateRoleRequest
-	57,  // 367: stewardmesh.v1.GuardService.CreateRoleAssignment:input_type -> stewardmesh.v1.CreateRoleAssignmentRequest
-	58,  // 368: stewardmesh.v1.GuardService.DeleteRoleAssignment:input_type -> stewardmesh.v1.DeleteRoleAssignmentRequest
-	60,  // 369: stewardmesh.v1.GuardService.ListResourceOwnership:input_type -> stewardmesh.v1.ListResourceOwnershipRequest
-	63,  // 370: stewardmesh.v1.GuardService.RegisterResourceOwnership:input_type -> stewardmesh.v1.RegisterResourceOwnershipRequest
-	64,  // 371: stewardmesh.v1.GuardService.ClaimResourceOwnership:input_type -> stewardmesh.v1.ClaimResourceOwnershipRequest
-	66,  // 372: stewardmesh.v1.AssetService.ListAssetModels:input_type -> stewardmesh.v1.ListAssetModelsRequest
-	69,  // 373: stewardmesh.v1.AssetService.GetAssetModel:input_type -> stewardmesh.v1.GetAssetModelRequest
-	70,  // 374: stewardmesh.v1.AssetService.GetAssetModelInventory:input_type -> stewardmesh.v1.GetAssetModelInventoryRequest
-	73,  // 375: stewardmesh.v1.AssetService.ResolveAssetModel:input_type -> stewardmesh.v1.ResolveAssetModelRequest
-	68,  // 376: stewardmesh.v1.AssetService.CreateAssetModel:input_type -> stewardmesh.v1.CreateAssetModelRequest
-	74,  // 377: stewardmesh.v1.AssetService.UpdateAssetModel:input_type -> stewardmesh.v1.UpdateAssetModelRequest
-	75,  // 378: stewardmesh.v1.AssetService.RetireAssetModel:input_type -> stewardmesh.v1.RetireAssetModelRequest
-	65,  // 379: stewardmesh.v1.AssetService.ListAssets:input_type -> stewardmesh.v1.ListAssetsRequest
-	80,  // 380: stewardmesh.v1.AssetService.GetAsset:input_type -> stewardmesh.v1.GetAssetRequest
-	77,  // 381: stewardmesh.v1.AssetService.CreateAsset:input_type -> stewardmesh.v1.CreateAssetRequest
-	78,  // 382: stewardmesh.v1.AssetService.CreateAssetsFromModel:input_type -> stewardmesh.v1.CreateAssetsFromModelRequest
-	81,  // 383: stewardmesh.v1.AssetService.UpdateAsset:input_type -> stewardmesh.v1.UpdateAssetRequest
-	82,  // 384: stewardmesh.v1.AssetService.ListAssetLifecycle:input_type -> stewardmesh.v1.ListAssetLifecycleRequest
-	84,  // 385: stewardmesh.v1.AssetService.ResolveAssetIdentifier:input_type -> stewardmesh.v1.ResolveAssetIdentifierRequest
-	85,  // 386: stewardmesh.v1.AssetService.ListAssetIdentifiers:input_type -> stewardmesh.v1.ListAssetIdentifiersRequest
-	87,  // 387: stewardmesh.v1.AssetService.CreateAssetIdentifier:input_type -> stewardmesh.v1.CreateAssetIdentifierRequest
-	89,  // 388: stewardmesh.v1.AssetService.ReplaceAssetIdentifier:input_type -> stewardmesh.v1.ReplaceAssetIdentifierRequest
-	91,  // 389: stewardmesh.v1.AssetService.DeactivateAssetIdentifier:input_type -> stewardmesh.v1.DeactivateAssetIdentifierRequest
-	93,  // 390: stewardmesh.v1.AssetService.ListAssetLabelTemplates:input_type -> stewardmesh.v1.ListAssetLabelTemplatesRequest
-	96,  // 391: stewardmesh.v1.AssetService.GenerateAssetLabelBatch:input_type -> stewardmesh.v1.GenerateAssetLabelBatchRequest
-	103, // 392: stewardmesh.v1.PeopleService.ListSites:input_type -> stewardmesh.v1.ListSitesRequest
-	105, // 393: stewardmesh.v1.PeopleService.CreateSite:input_type -> stewardmesh.v1.CreateSiteRequest
-	108, // 394: stewardmesh.v1.PeopleService.ListBuildings:input_type -> stewardmesh.v1.ListBuildingsRequest
-	110, // 395: stewardmesh.v1.PeopleService.CreateBuilding:input_type -> stewardmesh.v1.CreateBuildingRequest
-	112, // 396: stewardmesh.v1.PeopleService.ListRooms:input_type -> stewardmesh.v1.ListRoomsRequest
-	114, // 397: stewardmesh.v1.PeopleService.CreateRoom:input_type -> stewardmesh.v1.CreateRoomRequest
-	132, // 398: stewardmesh.v1.PeopleService.ListDepartments:input_type -> stewardmesh.v1.ListDepartmentsRequest
-	134, // 399: stewardmesh.v1.PeopleService.CreateDepartment:input_type -> stewardmesh.v1.CreateDepartmentRequest
-	136, // 400: stewardmesh.v1.PeopleService.SearchIdentities:input_type -> stewardmesh.v1.SearchIdentitiesRequest
-	138, // 401: stewardmesh.v1.PeopleService.CreateIdentity:input_type -> stewardmesh.v1.CreateIdentityRequest
-	144, // 402: stewardmesh.v1.PeopleService.ListAssetAssignments:input_type -> stewardmesh.v1.ListAssetAssignmentsRequest
-	146, // 403: stewardmesh.v1.PeopleService.CreateAssetAssignment:input_type -> stewardmesh.v1.CreateAssetAssignmentRequest
-	147, // 404: stewardmesh.v1.PeopleService.EndAssetAssignment:input_type -> stewardmesh.v1.EndAssetAssignmentRequest
-	140, // 405: stewardmesh.v1.RelationshipGraphService.GetRelationshipGraph:input_type -> stewardmesh.v1.GetRelationshipGraphRequest
-	116, // 406: stewardmesh.v1.DirectoryImportService.ListDirectoryImportSources:input_type -> stewardmesh.v1.ListDirectoryImportSourcesRequest
-	119, // 407: stewardmesh.v1.DirectoryImportService.ListDirectoryImports:input_type -> stewardmesh.v1.ListDirectoryImportsRequest
-	121, // 408: stewardmesh.v1.DirectoryImportService.GetDirectoryImport:input_type -> stewardmesh.v1.GetDirectoryImportRequest
-	122, // 409: stewardmesh.v1.DirectoryImportService.PreviewDirectoryImport:input_type -> stewardmesh.v1.PreviewDirectoryImportRequest
-	123, // 410: stewardmesh.v1.DirectoryImportService.ApplyDirectoryImport:input_type -> stewardmesh.v1.ApplyDirectoryImportRequest
-	124, // 411: stewardmesh.v1.DirectoryImportService.RetryDirectoryImport:input_type -> stewardmesh.v1.RetryDirectoryImportRequest
-	149, // 412: stewardmesh.v1.ThreadsService.ListTags:input_type -> stewardmesh.v1.ListTagsRequest
-	151, // 413: stewardmesh.v1.ThreadsService.GetTag:input_type -> stewardmesh.v1.GetTagRequest
-	152, // 414: stewardmesh.v1.ThreadsService.CreateTag:input_type -> stewardmesh.v1.CreateTagRequest
-	153, // 415: stewardmesh.v1.ThreadsService.UpdateTag:input_type -> stewardmesh.v1.UpdateTagRequest
-	155, // 416: stewardmesh.v1.ThreadsService.ListGoals:input_type -> stewardmesh.v1.ListGoalsRequest
-	157, // 417: stewardmesh.v1.ThreadsService.GetGoal:input_type -> stewardmesh.v1.GetGoalRequest
-	158, // 418: stewardmesh.v1.ThreadsService.CreateGoal:input_type -> stewardmesh.v1.CreateGoalRequest
-	159, // 419: stewardmesh.v1.ThreadsService.UpdateGoal:input_type -> stewardmesh.v1.UpdateGoalRequest
-	161, // 420: stewardmesh.v1.ThreadsService.ListEffectiveTags:input_type -> stewardmesh.v1.ListEffectiveTagsRequest
-	164, // 421: stewardmesh.v1.ThreadsService.SetTagRule:input_type -> stewardmesh.v1.SetTagRuleRequest
-	166, // 422: stewardmesh.v1.ThreadsService.DeleteTagRule:input_type -> stewardmesh.v1.DeleteTagRuleRequest
-	168, // 423: stewardmesh.v1.ThreadsService.ListGoalLinks:input_type -> stewardmesh.v1.ListGoalLinksRequest
-	170, // 424: stewardmesh.v1.ThreadsService.LinkGoal:input_type -> stewardmesh.v1.LinkGoalRequest
-	172, // 425: stewardmesh.v1.ThreadsService.UnlinkGoal:input_type -> stewardmesh.v1.UnlinkGoalRequest
-	174, // 426: stewardmesh.v1.VaultService.ListBlobs:input_type -> stewardmesh.v1.ListBlobsRequest
-	176, // 427: stewardmesh.v1.VaultService.GetBlob:input_type -> stewardmesh.v1.GetBlobRequest
-	177, // 428: stewardmesh.v1.VaultService.CreateBlob:input_type -> stewardmesh.v1.CreateBlobRequest
-	179, // 429: stewardmesh.v1.VaultService.DownloadBlob:input_type -> stewardmesh.v1.DownloadBlobRequest
-	181, // 430: stewardmesh.v1.VaultService.AuthorizeDownload:input_type -> stewardmesh.v1.AuthorizeBlobDownloadRequest
-	185, // 431: stewardmesh.v1.HorizonService.ListPlans:input_type -> stewardmesh.v1.ListHorizonPlansRequest
-	187, // 432: stewardmesh.v1.HorizonService.CreatePlan:input_type -> stewardmesh.v1.CreateHorizonPlanRequest
-	188, // 433: stewardmesh.v1.HorizonService.UpdatePlan:input_type -> stewardmesh.v1.UpdateHorizonPlanRequest
-	189, // 434: stewardmesh.v1.HorizonService.ListPlanHistory:input_type -> stewardmesh.v1.ListHorizonPlanHistoryRequest
-	191, // 435: stewardmesh.v1.HorizonService.GetForecast:input_type -> stewardmesh.v1.GetHorizonForecastRequest
-	194, // 436: stewardmesh.v1.HorizonService.ExportCSV:input_type -> stewardmesh.v1.ExportHorizonCSVRequest
-	196, // 437: stewardmesh.v1.LedgerService.GetSnapshot:input_type -> stewardmesh.v1.GetLedgerSnapshotRequest
-	198, // 438: stewardmesh.v1.LedgerService.CreateVendor:input_type -> stewardmesh.v1.CreateLedgerVendorRequest
-	200, // 439: stewardmesh.v1.LedgerService.CreatePurchaseOrder:input_type -> stewardmesh.v1.CreateLedgerPurchaseOrderRequest
-	201, // 440: stewardmesh.v1.LedgerService.UpdatePurchaseOrderStatus:input_type -> stewardmesh.v1.UpdateLedgerPurchaseOrderStatusRequest
-	203, // 441: stewardmesh.v1.LedgerService.CreateContract:input_type -> stewardmesh.v1.CreateLedgerContractRequest
-	204, // 442: stewardmesh.v1.LedgerService.UpdateContractStatus:input_type -> stewardmesh.v1.UpdateLedgerContractStatusRequest
-	206, // 443: stewardmesh.v1.LedgerService.CreateCommitment:input_type -> stewardmesh.v1.CreateLedgerCommitmentRequest
-	208, // 444: stewardmesh.v1.LedgerService.CreateBudget:input_type -> stewardmesh.v1.CreateLedgerBudgetRequest
-	210, // 445: stewardmesh.v1.LedgerService.ReconcileCost:input_type -> stewardmesh.v1.ReconcileLedgerCostRequest
-	213, // 446: stewardmesh.v1.LedgerService.GetBudgetVariance:input_type -> stewardmesh.v1.GetLedgerBudgetVarianceRequest
-	215, // 447: stewardmesh.v1.LedgerService.ExportCSV:input_type -> stewardmesh.v1.ExportLedgerCSVRequest
-	217, // 448: stewardmesh.v1.StackService.GetSnapshot:input_type -> stewardmesh.v1.GetStackSnapshotRequest
-	235, // 449: stewardmesh.v1.StackService.GetAnalytics:input_type -> stewardmesh.v1.GetStackAnalyticsRequest
-	219, // 450: stewardmesh.v1.StackService.CreateProduct:input_type -> stewardmesh.v1.CreateStackProductRequest
-	220, // 451: stewardmesh.v1.StackService.UpdateProductStatus:input_type -> stewardmesh.v1.UpdateStackProductStatusRequest
-	222, // 452: stewardmesh.v1.StackService.CreateVersion:input_type -> stewardmesh.v1.CreateStackVersionRequest
-	223, // 453: stewardmesh.v1.StackService.UpdateVersionStatus:input_type -> stewardmesh.v1.UpdateStackVersionStatusRequest
-	225, // 454: stewardmesh.v1.StackService.RecordInstallation:input_type -> stewardmesh.v1.RecordStackInstallationRequest
-	226, // 455: stewardmesh.v1.StackService.UpdateInstallationState:input_type -> stewardmesh.v1.UpdateStackInstallationStateRequest
-	228, // 456: stewardmesh.v1.StackService.CreateLicense:input_type -> stewardmesh.v1.CreateStackLicenseRequest
-	229, // 457: stewardmesh.v1.StackService.UpdateLicenseEntitlement:input_type -> stewardmesh.v1.UpdateStackLicenseEntitlementRequest
-	231, // 458: stewardmesh.v1.StackService.CreateAssignment:input_type -> stewardmesh.v1.CreateStackAssignmentRequest
-	232, // 459: stewardmesh.v1.StackService.UpdateAssignmentUsage:input_type -> stewardmesh.v1.UpdateStackAssignmentUsageRequest
-	233, // 460: stewardmesh.v1.StackService.EndAssignment:input_type -> stewardmesh.v1.EndStackAssignmentRequest
-	239, // 461: stewardmesh.v1.StackService.ExportRecords:input_type -> stewardmesh.v1.ExportStackRecordsRequest
-	241, // 462: stewardmesh.v1.StackService.ImportRecords:input_type -> stewardmesh.v1.ImportStackRecordsRequest
-	244, // 463: stewardmesh.v1.SignalsService.ListRules:input_type -> stewardmesh.v1.ListSignalRulesRequest
-	247, // 464: stewardmesh.v1.SignalsService.CreateRule:input_type -> stewardmesh.v1.CreateSignalRuleRequest
-	248, // 465: stewardmesh.v1.SignalsService.UpdateRule:input_type -> stewardmesh.v1.UpdateSignalRuleRequest
-	249, // 466: stewardmesh.v1.SignalsService.ListAlerts:input_type -> stewardmesh.v1.ListSignalAlertsRequest
-	252, // 467: stewardmesh.v1.SignalsService.ListAlertHistory:input_type -> stewardmesh.v1.ListSignalAlertHistoryRequest
-	255, // 468: stewardmesh.v1.SignalsService.Evaluate:input_type -> stewardmesh.v1.EvaluateSignalsRequest
-	257, // 469: stewardmesh.v1.SignalsService.AcknowledgeAlert:input_type -> stewardmesh.v1.AcknowledgeSignalAlertRequest
-	258, // 470: stewardmesh.v1.SignalsService.AssignAlert:input_type -> stewardmesh.v1.AssignSignalAlertRequest
-	259, // 471: stewardmesh.v1.SignalsService.ListSubscriptions:input_type -> stewardmesh.v1.ListSignalSubscriptionsRequest
-	261, // 472: stewardmesh.v1.SignalsService.ListSubscriptionTargets:input_type -> stewardmesh.v1.ListSignalSubscriptionTargetsRequest
-	265, // 473: stewardmesh.v1.SignalsService.CreateSubscription:input_type -> stewardmesh.v1.CreateSignalSubscriptionRequest
-	266, // 474: stewardmesh.v1.SignalsService.DeleteSubscription:input_type -> stewardmesh.v1.DeleteSignalSubscriptionRequest
-	269, // 475: stewardmesh.v1.SignalsService.ListPendingDeliveries:input_type -> stewardmesh.v1.ListPendingSignalDeliveriesRequest
-	271, // 476: stewardmesh.v1.SignalsService.RecordDeliveryAttempt:input_type -> stewardmesh.v1.RecordSignalDeliveryAttemptRequest
-	272, // 477: stewardmesh.v1.SignalsService.ExportCSV:input_type -> stewardmesh.v1.ExportSignalsCSVRequest
-	282, // 478: stewardmesh.v1.ExchangeService.ListExchangeRecords:input_type -> stewardmesh.v1.ListExchangeRecordsRequest
-	284, // 479: stewardmesh.v1.ExchangeService.ListExchangePackages:input_type -> stewardmesh.v1.ListExchangePackagesRequest
-	286, // 480: stewardmesh.v1.ExchangeService.ExportExchangePackage:input_type -> stewardmesh.v1.ExportExchangePackageRequest
-	288, // 481: stewardmesh.v1.ExchangeService.ImportExchangePackage:input_type -> stewardmesh.v1.ImportExchangePackageRequest
-	292, // 482: stewardmesh.v1.ReachService.ListEndpoints:input_type -> stewardmesh.v1.ListReachEndpointsRequest
-	295, // 483: stewardmesh.v1.ReachService.ListProviders:input_type -> stewardmesh.v1.ListReachProvidersRequest
-	298, // 484: stewardmesh.v1.ReachService.CreateProvider:input_type -> stewardmesh.v1.CreateReachProviderRequest
-	299, // 485: stewardmesh.v1.ReachService.UpdateProvider:input_type -> stewardmesh.v1.UpdateReachProviderRequest
-	300, // 486: stewardmesh.v1.ReachService.RotateProviderSecret:input_type -> stewardmesh.v1.RotateReachProviderSecretRequest
-	301, // 487: stewardmesh.v1.ReachService.TestProvider:input_type -> stewardmesh.v1.TestReachProviderRequest
-	302, // 488: stewardmesh.v1.ReachService.ListProviderTests:input_type -> stewardmesh.v1.ListReachProviderTestsRequest
-	305, // 489: stewardmesh.v1.ReachService.ListTemplates:input_type -> stewardmesh.v1.ListReachTemplatesRequest
-	308, // 490: stewardmesh.v1.ReachService.CreateTemplate:input_type -> stewardmesh.v1.CreateReachTemplateRequest
-	309, // 491: stewardmesh.v1.ReachService.UpdateTemplate:input_type -> stewardmesh.v1.UpdateReachTemplateRequest
-	311, // 492: stewardmesh.v1.ReachService.ListGroups:input_type -> stewardmesh.v1.ListReachGroupsRequest
-	314, // 493: stewardmesh.v1.ReachService.CreateGroup:input_type -> stewardmesh.v1.CreateReachGroupRequest
-	315, // 494: stewardmesh.v1.ReachService.UpdateGroup:input_type -> stewardmesh.v1.UpdateReachGroupRequest
-	316, // 495: stewardmesh.v1.ReachService.ListMessages:input_type -> stewardmesh.v1.ListReachMessagesRequest
-	319, // 496: stewardmesh.v1.ReachService.SendMessage:input_type -> stewardmesh.v1.SendReachMessageRequest
-	320, // 497: stewardmesh.v1.ReachService.RetryMessage:input_type -> stewardmesh.v1.RetryReachMessageRequest
-	321, // 498: stewardmesh.v1.ReachService.ListMessageAttempts:input_type -> stewardmesh.v1.ListReachMessageAttemptsRequest
-	324, // 499: stewardmesh.v1.ReachService.ProcessSignals:input_type -> stewardmesh.v1.ProcessReachSignalsRequest
-	23,  // 500: stewardmesh.v1.FoundationService.GetOrganization:output_type -> stewardmesh.v1.Organization
-	327, // 501: stewardmesh.v1.BridgeService.ListClients:output_type -> stewardmesh.v1.ListBridgeClientsResponse
-	330, // 502: stewardmesh.v1.BridgeService.CreateClient:output_type -> stewardmesh.v1.BridgeClient
-	330, // 503: stewardmesh.v1.BridgeService.RevokeClient:output_type -> stewardmesh.v1.BridgeClient
-	332, // 504: stewardmesh.v1.BridgeService.ListGrants:output_type -> stewardmesh.v1.ListBridgeGrantsResponse
-	334, // 505: stewardmesh.v1.BridgeService.RevokeGrant:output_type -> stewardmesh.v1.BridgeGrant
-	25,  // 506: stewardmesh.v1.PatternsService.ListTemplates:output_type -> stewardmesh.v1.ListPatternsTemplatesResponse
-	34,  // 507: stewardmesh.v1.PatternsService.CreateTemplate:output_type -> stewardmesh.v1.PatternsTemplate
-	34,  // 508: stewardmesh.v1.PatternsService.GetTemplate:output_type -> stewardmesh.v1.PatternsTemplate
-	34,  // 509: stewardmesh.v1.PatternsService.GetTemplateSchema:output_type -> stewardmesh.v1.PatternsTemplate
-	34,  // 510: stewardmesh.v1.PatternsService.CopyTemplate:output_type -> stewardmesh.v1.PatternsTemplate
-	34,  // 511: stewardmesh.v1.PatternsService.CreateTemplateVersion:output_type -> stewardmesh.v1.PatternsTemplate
-	38,  // 512: stewardmesh.v1.PatternsService.ValidateRecord:output_type -> stewardmesh.v1.PatternsValidationResult
-	33,  // 513: stewardmesh.v1.PatternsService.ExportCSVTemplate:output_type -> stewardmesh.v1.ExportPatternsCSVTemplateResponse
-	40,  // 514: stewardmesh.v1.GuardService.GetBootstrapStatus:output_type -> stewardmesh.v1.BootstrapStatus
-	46,  // 515: stewardmesh.v1.GuardService.BootstrapAdministrator:output_type -> stewardmesh.v1.AuthenticationSession
-	46,  // 516: stewardmesh.v1.GuardService.AuthenticateLocal:output_type -> stewardmesh.v1.AuthenticationSession
-	46,  // 517: stewardmesh.v1.GuardService.GetSession:output_type -> stewardmesh.v1.AuthenticationSession
-	45,  // 518: stewardmesh.v1.GuardService.Logout:output_type -> stewardmesh.v1.LogoutResponse
-	51,  // 519: stewardmesh.v1.GuardService.ListGuardAccess:output_type -> stewardmesh.v1.ListGuardAccessResponse
-	53,  // 520: stewardmesh.v1.GuardService.CreateRole:output_type -> stewardmesh.v1.GuardRole
-	56,  // 521: stewardmesh.v1.GuardService.CreateRoleAssignment:output_type -> stewardmesh.v1.GuardRoleAssignment
-	59,  // 522: stewardmesh.v1.GuardService.DeleteRoleAssignment:output_type -> stewardmesh.v1.DeleteRoleAssignmentResponse
-	61,  // 523: stewardmesh.v1.GuardService.ListResourceOwnership:output_type -> stewardmesh.v1.ListResourceOwnershipResponse
-	62,  // 524: stewardmesh.v1.GuardService.RegisterResourceOwnership:output_type -> stewardmesh.v1.GuardResourceOwnership
-	62,  // 525: stewardmesh.v1.GuardService.ClaimResourceOwnership:output_type -> stewardmesh.v1.GuardResourceOwnership
-	67,  // 526: stewardmesh.v1.AssetService.ListAssetModels:output_type -> stewardmesh.v1.ListAssetModelsResponse
-	101, // 527: stewardmesh.v1.AssetService.GetAssetModel:output_type -> stewardmesh.v1.AssetModel
-	72,  // 528: stewardmesh.v1.AssetService.GetAssetModelInventory:output_type -> stewardmesh.v1.AssetModelInventory
-	101, // 529: stewardmesh.v1.AssetService.ResolveAssetModel:output_type -> stewardmesh.v1.AssetModel
-	101, // 530: stewardmesh.v1.AssetService.CreateAssetModel:output_type -> stewardmesh.v1.AssetModel
-	101, // 531: stewardmesh.v1.AssetService.UpdateAssetModel:output_type -> stewardmesh.v1.AssetModel
-	101, // 532: stewardmesh.v1.AssetService.RetireAssetModel:output_type -> stewardmesh.v1.AssetModel
-	76,  // 533: stewardmesh.v1.AssetService.ListAssets:output_type -> stewardmesh.v1.ListAssetsResponse
-	99,  // 534: stewardmesh.v1.AssetService.GetAsset:output_type -> stewardmesh.v1.Asset
-	99,  // 535: stewardmesh.v1.AssetService.CreateAsset:output_type -> stewardmesh.v1.Asset
-	79,  // 536: stewardmesh.v1.AssetService.CreateAssetsFromModel:output_type -> stewardmesh.v1.CreateAssetsFromModelResponse
-	99,  // 537: stewardmesh.v1.AssetService.UpdateAsset:output_type -> stewardmesh.v1.Asset
-	83,  // 538: stewardmesh.v1.AssetService.ListAssetLifecycle:output_type -> stewardmesh.v1.ListAssetLifecycleResponse
-	98,  // 539: stewardmesh.v1.AssetService.ResolveAssetIdentifier:output_type -> stewardmesh.v1.AssetIdentifier
-	86,  // 540: stewardmesh.v1.AssetService.ListAssetIdentifiers:output_type -> stewardmesh.v1.ListAssetIdentifiersResponse
-	88,  // 541: stewardmesh.v1.AssetService.CreateAssetIdentifier:output_type -> stewardmesh.v1.CreateAssetIdentifierResponse
-	90,  // 542: stewardmesh.v1.AssetService.ReplaceAssetIdentifier:output_type -> stewardmesh.v1.ReplaceAssetIdentifierResponse
-	92,  // 543: stewardmesh.v1.AssetService.DeactivateAssetIdentifier:output_type -> stewardmesh.v1.DeactivateAssetIdentifierResponse
-	94,  // 544: stewardmesh.v1.AssetService.ListAssetLabelTemplates:output_type -> stewardmesh.v1.ListAssetLabelTemplatesResponse
-	97,  // 545: stewardmesh.v1.AssetService.GenerateAssetLabelBatch:output_type -> stewardmesh.v1.AssetLabelArtifact
-	104, // 546: stewardmesh.v1.PeopleService.ListSites:output_type -> stewardmesh.v1.ListSitesResponse
-	106, // 547: stewardmesh.v1.PeopleService.CreateSite:output_type -> stewardmesh.v1.Site
-	109, // 548: stewardmesh.v1.PeopleService.ListBuildings:output_type -> stewardmesh.v1.ListBuildingsResponse
-	111, // 549: stewardmesh.v1.PeopleService.CreateBuilding:output_type -> stewardmesh.v1.Building
-	113, // 550: stewardmesh.v1.PeopleService.ListRooms:output_type -> stewardmesh.v1.ListRoomsResponse
-	115, // 551: stewardmesh.v1.PeopleService.CreateRoom:output_type -> stewardmesh.v1.Room
-	133, // 552: stewardmesh.v1.PeopleService.ListDepartments:output_type -> stewardmesh.v1.ListDepartmentsResponse
-	135, // 553: stewardmesh.v1.PeopleService.CreateDepartment:output_type -> stewardmesh.v1.Department
-	137, // 554: stewardmesh.v1.PeopleService.SearchIdentities:output_type -> stewardmesh.v1.SearchIdentitiesResponse
-	139, // 555: stewardmesh.v1.PeopleService.CreateIdentity:output_type -> stewardmesh.v1.DirectoryIdentity
-	145, // 556: stewardmesh.v1.PeopleService.ListAssetAssignments:output_type -> stewardmesh.v1.ListAssetAssignmentsResponse
-	148, // 557: stewardmesh.v1.PeopleService.CreateAssetAssignment:output_type -> stewardmesh.v1.AssetAssignment
-	148, // 558: stewardmesh.v1.PeopleService.EndAssetAssignment:output_type -> stewardmesh.v1.AssetAssignment
-	141, // 559: stewardmesh.v1.RelationshipGraphService.GetRelationshipGraph:output_type -> stewardmesh.v1.RelationshipGraph
-	118, // 560: stewardmesh.v1.DirectoryImportService.ListDirectoryImportSources:output_type -> stewardmesh.v1.ListDirectoryImportSourcesResponse
-	120, // 561: stewardmesh.v1.DirectoryImportService.ListDirectoryImports:output_type -> stewardmesh.v1.ListDirectoryImportsResponse
-	130, // 562: stewardmesh.v1.DirectoryImportService.GetDirectoryImport:output_type -> stewardmesh.v1.DirectoryImportBatchDetail
-	131, // 563: stewardmesh.v1.DirectoryImportService.PreviewDirectoryImport:output_type -> stewardmesh.v1.DirectoryImportOperationResult
-	131, // 564: stewardmesh.v1.DirectoryImportService.ApplyDirectoryImport:output_type -> stewardmesh.v1.DirectoryImportOperationResult
-	131, // 565: stewardmesh.v1.DirectoryImportService.RetryDirectoryImport:output_type -> stewardmesh.v1.DirectoryImportOperationResult
-	150, // 566: stewardmesh.v1.ThreadsService.ListTags:output_type -> stewardmesh.v1.ListTagsResponse
-	154, // 567: stewardmesh.v1.ThreadsService.GetTag:output_type -> stewardmesh.v1.Tag
-	154, // 568: stewardmesh.v1.ThreadsService.CreateTag:output_type -> stewardmesh.v1.Tag
-	154, // 569: stewardmesh.v1.ThreadsService.UpdateTag:output_type -> stewardmesh.v1.Tag
-	156, // 570: stewardmesh.v1.ThreadsService.ListGoals:output_type -> stewardmesh.v1.ListGoalsResponse
-	160, // 571: stewardmesh.v1.ThreadsService.GetGoal:output_type -> stewardmesh.v1.Goal
-	160, // 572: stewardmesh.v1.ThreadsService.CreateGoal:output_type -> stewardmesh.v1.Goal
-	160, // 573: stewardmesh.v1.ThreadsService.UpdateGoal:output_type -> stewardmesh.v1.Goal
-	162, // 574: stewardmesh.v1.ThreadsService.ListEffectiveTags:output_type -> stewardmesh.v1.ListEffectiveTagsResponse
-	165, // 575: stewardmesh.v1.ThreadsService.SetTagRule:output_type -> stewardmesh.v1.TagRule
-	167, // 576: stewardmesh.v1.ThreadsService.DeleteTagRule:output_type -> stewardmesh.v1.DeleteTagRuleResponse
-	169, // 577: stewardmesh.v1.ThreadsService.ListGoalLinks:output_type -> stewardmesh.v1.ListGoalLinksResponse
-	171, // 578: stewardmesh.v1.ThreadsService.LinkGoal:output_type -> stewardmesh.v1.GoalLink
-	173, // 579: stewardmesh.v1.ThreadsService.UnlinkGoal:output_type -> stewardmesh.v1.UnlinkGoalResponse
-	175, // 580: stewardmesh.v1.VaultService.ListBlobs:output_type -> stewardmesh.v1.ListBlobsResponse
-	178, // 581: stewardmesh.v1.VaultService.GetBlob:output_type -> stewardmesh.v1.VaultBlob
-	178, // 582: stewardmesh.v1.VaultService.CreateBlob:output_type -> stewardmesh.v1.VaultBlob
-	180, // 583: stewardmesh.v1.VaultService.DownloadBlob:output_type -> stewardmesh.v1.VaultBlobContent
-	182, // 584: stewardmesh.v1.VaultService.AuthorizeDownload:output_type -> stewardmesh.v1.VaultDownloadAuthorization
-	186, // 585: stewardmesh.v1.HorizonService.ListPlans:output_type -> stewardmesh.v1.ListHorizonPlansResponse
-	183, // 586: stewardmesh.v1.HorizonService.CreatePlan:output_type -> stewardmesh.v1.HorizonPlan
-	183, // 587: stewardmesh.v1.HorizonService.UpdatePlan:output_type -> stewardmesh.v1.HorizonPlan
-	190, // 588: stewardmesh.v1.HorizonService.ListPlanHistory:output_type -> stewardmesh.v1.ListHorizonPlanHistoryResponse
-	193, // 589: stewardmesh.v1.HorizonService.GetForecast:output_type -> stewardmesh.v1.HorizonForecast
-	195, // 590: stewardmesh.v1.HorizonService.ExportCSV:output_type -> stewardmesh.v1.ExportHorizonCSVResponse
-	212, // 591: stewardmesh.v1.LedgerService.GetSnapshot:output_type -> stewardmesh.v1.LedgerSnapshot
-	197, // 592: stewardmesh.v1.LedgerService.CreateVendor:output_type -> stewardmesh.v1.LedgerVendor
-	199, // 593: stewardmesh.v1.LedgerService.CreatePurchaseOrder:output_type -> stewardmesh.v1.LedgerPurchaseOrder
-	199, // 594: stewardmesh.v1.LedgerService.UpdatePurchaseOrderStatus:output_type -> stewardmesh.v1.LedgerPurchaseOrder
-	202, // 595: stewardmesh.v1.LedgerService.CreateContract:output_type -> stewardmesh.v1.LedgerContract
-	202, // 596: stewardmesh.v1.LedgerService.UpdateContractStatus:output_type -> stewardmesh.v1.LedgerContract
-	205, // 597: stewardmesh.v1.LedgerService.CreateCommitment:output_type -> stewardmesh.v1.LedgerCommitment
-	207, // 598: stewardmesh.v1.LedgerService.CreateBudget:output_type -> stewardmesh.v1.LedgerBudget
-	211, // 599: stewardmesh.v1.LedgerService.ReconcileCost:output_type -> stewardmesh.v1.ReconcileLedgerCostResponse
-	214, // 600: stewardmesh.v1.LedgerService.GetBudgetVariance:output_type -> stewardmesh.v1.LedgerBudgetVariance
-	216, // 601: stewardmesh.v1.LedgerService.ExportCSV:output_type -> stewardmesh.v1.ExportLedgerCSVResponse
-	234, // 602: stewardmesh.v1.StackService.GetSnapshot:output_type -> stewardmesh.v1.StackSnapshot
-	237, // 603: stewardmesh.v1.StackService.GetAnalytics:output_type -> stewardmesh.v1.StackAnalytics
-	218, // 604: stewardmesh.v1.StackService.CreateProduct:output_type -> stewardmesh.v1.StackProduct
-	218, // 605: stewardmesh.v1.StackService.UpdateProductStatus:output_type -> stewardmesh.v1.StackProduct
-	221, // 606: stewardmesh.v1.StackService.CreateVersion:output_type -> stewardmesh.v1.StackVersion
-	221, // 607: stewardmesh.v1.StackService.UpdateVersionStatus:output_type -> stewardmesh.v1.StackVersion
-	224, // 608: stewardmesh.v1.StackService.RecordInstallation:output_type -> stewardmesh.v1.StackInstallation
-	224, // 609: stewardmesh.v1.StackService.UpdateInstallationState:output_type -> stewardmesh.v1.StackInstallation
-	227, // 610: stewardmesh.v1.StackService.CreateLicense:output_type -> stewardmesh.v1.StackLicense
-	227, // 611: stewardmesh.v1.StackService.UpdateLicenseEntitlement:output_type -> stewardmesh.v1.StackLicense
-	230, // 612: stewardmesh.v1.StackService.CreateAssignment:output_type -> stewardmesh.v1.StackAssignment
-	230, // 613: stewardmesh.v1.StackService.UpdateAssignmentUsage:output_type -> stewardmesh.v1.StackAssignment
-	230, // 614: stewardmesh.v1.StackService.EndAssignment:output_type -> stewardmesh.v1.StackAssignment
-	240, // 615: stewardmesh.v1.StackService.ExportRecords:output_type -> stewardmesh.v1.ExportStackRecordsResponse
-	242, // 616: stewardmesh.v1.StackService.ImportRecords:output_type -> stewardmesh.v1.StackImportResult
-	245, // 617: stewardmesh.v1.SignalsService.ListRules:output_type -> stewardmesh.v1.ListSignalRulesResponse
-	246, // 618: stewardmesh.v1.SignalsService.CreateRule:output_type -> stewardmesh.v1.SignalRule
-	246, // 619: stewardmesh.v1.SignalsService.UpdateRule:output_type -> stewardmesh.v1.SignalRule
-	250, // 620: stewardmesh.v1.SignalsService.ListAlerts:output_type -> stewardmesh.v1.ListSignalAlertsResponse
-	253, // 621: stewardmesh.v1.SignalsService.ListAlertHistory:output_type -> stewardmesh.v1.ListSignalAlertHistoryResponse
-	256, // 622: stewardmesh.v1.SignalsService.Evaluate:output_type -> stewardmesh.v1.SignalEvaluationResult
-	251, // 623: stewardmesh.v1.SignalsService.AcknowledgeAlert:output_type -> stewardmesh.v1.SignalAlert
-	251, // 624: stewardmesh.v1.SignalsService.AssignAlert:output_type -> stewardmesh.v1.SignalAlert
-	260, // 625: stewardmesh.v1.SignalsService.ListSubscriptions:output_type -> stewardmesh.v1.ListSignalSubscriptionsResponse
-	262, // 626: stewardmesh.v1.SignalsService.ListSubscriptionTargets:output_type -> stewardmesh.v1.ListSignalSubscriptionTargetsResponse
-	264, // 627: stewardmesh.v1.SignalsService.CreateSubscription:output_type -> stewardmesh.v1.SignalSubscription
-	267, // 628: stewardmesh.v1.SignalsService.DeleteSubscription:output_type -> stewardmesh.v1.DeleteSignalSubscriptionResponse
-	270, // 629: stewardmesh.v1.SignalsService.ListPendingDeliveries:output_type -> stewardmesh.v1.ListPendingSignalDeliveriesResponse
-	268, // 630: stewardmesh.v1.SignalsService.RecordDeliveryAttempt:output_type -> stewardmesh.v1.SignalDelivery
-	273, // 631: stewardmesh.v1.SignalsService.ExportCSV:output_type -> stewardmesh.v1.ExportSignalsCSVResponse
-	283, // 632: stewardmesh.v1.ExchangeService.ListExchangeRecords:output_type -> stewardmesh.v1.ListExchangeRecordsResponse
-	285, // 633: stewardmesh.v1.ExchangeService.ListExchangePackages:output_type -> stewardmesh.v1.ListExchangePackagesResponse
-	287, // 634: stewardmesh.v1.ExchangeService.ExportExchangePackage:output_type -> stewardmesh.v1.ExchangeExportArtifact
-	291, // 635: stewardmesh.v1.ExchangeService.ImportExchangePackage:output_type -> stewardmesh.v1.ImportExchangePackageResponse
-	293, // 636: stewardmesh.v1.ReachService.ListEndpoints:output_type -> stewardmesh.v1.ListReachEndpointsResponse
-	296, // 637: stewardmesh.v1.ReachService.ListProviders:output_type -> stewardmesh.v1.ListReachProvidersResponse
-	297, // 638: stewardmesh.v1.ReachService.CreateProvider:output_type -> stewardmesh.v1.ReachProvider
-	297, // 639: stewardmesh.v1.ReachService.UpdateProvider:output_type -> stewardmesh.v1.ReachProvider
-	297, // 640: stewardmesh.v1.ReachService.RotateProviderSecret:output_type -> stewardmesh.v1.ReachProvider
-	304, // 641: stewardmesh.v1.ReachService.TestProvider:output_type -> stewardmesh.v1.ReachProviderTest
-	303, // 642: stewardmesh.v1.ReachService.ListProviderTests:output_type -> stewardmesh.v1.ListReachProviderTestsResponse
-	306, // 643: stewardmesh.v1.ReachService.ListTemplates:output_type -> stewardmesh.v1.ListReachTemplatesResponse
-	307, // 644: stewardmesh.v1.ReachService.CreateTemplate:output_type -> stewardmesh.v1.ReachTemplate
-	307, // 645: stewardmesh.v1.ReachService.UpdateTemplate:output_type -> stewardmesh.v1.ReachTemplate
-	312, // 646: stewardmesh.v1.ReachService.ListGroups:output_type -> stewardmesh.v1.ListReachGroupsResponse
-	313, // 647: stewardmesh.v1.ReachService.CreateGroup:output_type -> stewardmesh.v1.ReachSubscriberGroup
-	313, // 648: stewardmesh.v1.ReachService.UpdateGroup:output_type -> stewardmesh.v1.ReachSubscriberGroup
-	317, // 649: stewardmesh.v1.ReachService.ListMessages:output_type -> stewardmesh.v1.ListReachMessagesResponse
-	318, // 650: stewardmesh.v1.ReachService.SendMessage:output_type -> stewardmesh.v1.ReachMessage
-	318, // 651: stewardmesh.v1.ReachService.RetryMessage:output_type -> stewardmesh.v1.ReachMessage
-	322, // 652: stewardmesh.v1.ReachService.ListMessageAttempts:output_type -> stewardmesh.v1.ListReachMessageAttemptsResponse
-	325, // 653: stewardmesh.v1.ReachService.ProcessSignals:output_type -> stewardmesh.v1.ReachProcessResult
-	500, // [500:654] is the sub-list for method output_type
-	346, // [346:500] is the sub-list for method input_type
-	346, // [346:346] is the sub-list for extension type_name
-	346, // [346:346] is the sub-list for extension extendee
-	0,   // [0:346] is the sub-list for field type_name
+	345, // 287: stewardmesh.v1.SignalSubscription.updated_at:type_name -> google.protobuf.Timestamp
+	345, // 288: stewardmesh.v1.SignalDelivery.next_attempt_at:type_name -> google.protobuf.Timestamp
+	345, // 289: stewardmesh.v1.SignalDelivery.created_at:type_name -> google.protobuf.Timestamp
+	345, // 290: stewardmesh.v1.SignalDelivery.updated_at:type_name -> google.protobuf.Timestamp
+	345, // 291: stewardmesh.v1.ListPendingSignalDeliveriesRequest.as_of:type_name -> google.protobuf.Timestamp
+	268, // 292: stewardmesh.v1.ListPendingSignalDeliveriesResponse.items:type_name -> stewardmesh.v1.SignalDelivery
+	345, // 293: stewardmesh.v1.ExchangeOwnershipMetadata.claimed_at:type_name -> google.protobuf.Timestamp
+	274, // 294: stewardmesh.v1.ExchangeRecord.dependencies:type_name -> stewardmesh.v1.ExchangeReference
+	276, // 295: stewardmesh.v1.ExchangeRecord.provenance:type_name -> stewardmesh.v1.ExchangeProvenance
+	277, // 296: stewardmesh.v1.ExchangeRecord.ownership:type_name -> stewardmesh.v1.ExchangeOwnershipMetadata
+	278, // 297: stewardmesh.v1.ExchangeRecord.file:type_name -> stewardmesh.v1.ExchangeFileMetadata
+	346, // 298: stewardmesh.v1.ExchangeRecord.payload:type_name -> google.protobuf.Struct
+	345, // 299: stewardmesh.v1.ExchangeManifest.exported_at:type_name -> google.protobuf.Timestamp
+	279, // 300: stewardmesh.v1.ExchangeManifest.records:type_name -> stewardmesh.v1.ExchangeRecord
+	275, // 301: stewardmesh.v1.ExchangeManifest.schemas:type_name -> stewardmesh.v1.ExchangeSchemaReference
+	274, // 302: stewardmesh.v1.ExchangeRecordDescriptor.dependencies:type_name -> stewardmesh.v1.ExchangeReference
+	281, // 303: stewardmesh.v1.ListExchangeRecordsResponse.items:type_name -> stewardmesh.v1.ExchangeRecordDescriptor
+	290, // 304: stewardmesh.v1.ListExchangePackagesResponse.items:type_name -> stewardmesh.v1.ExchangePackage
+	274, // 305: stewardmesh.v1.ExportExchangePackageRequest.selection:type_name -> stewardmesh.v1.ExchangeReference
+	274, // 306: stewardmesh.v1.ExchangeRecordOutcome.missing_dependencies:type_name -> stewardmesh.v1.ExchangeReference
+	289, // 307: stewardmesh.v1.ExchangePackage.records:type_name -> stewardmesh.v1.ExchangeRecordOutcome
+	345, // 308: stewardmesh.v1.ExchangePackage.created_at:type_name -> google.protobuf.Timestamp
+	345, // 309: stewardmesh.v1.ExchangePackage.updated_at:type_name -> google.protobuf.Timestamp
+	290, // 310: stewardmesh.v1.ImportExchangePackageResponse.package:type_name -> stewardmesh.v1.ExchangePackage
+	294, // 311: stewardmesh.v1.ListReachEndpointsResponse.items:type_name -> stewardmesh.v1.ReachEndpoint
+	297, // 312: stewardmesh.v1.ListReachProvidersResponse.items:type_name -> stewardmesh.v1.ReachProvider
+	345, // 313: stewardmesh.v1.ReachProvider.created_at:type_name -> google.protobuf.Timestamp
+	345, // 314: stewardmesh.v1.ReachProvider.updated_at:type_name -> google.protobuf.Timestamp
+	304, // 315: stewardmesh.v1.ListReachProviderTestsResponse.items:type_name -> stewardmesh.v1.ReachProviderTest
+	345, // 316: stewardmesh.v1.ReachProviderTest.tested_at:type_name -> google.protobuf.Timestamp
+	307, // 317: stewardmesh.v1.ListReachTemplatesResponse.items:type_name -> stewardmesh.v1.ReachTemplate
+	345, // 318: stewardmesh.v1.ReachTemplate.created_at:type_name -> google.protobuf.Timestamp
+	345, // 319: stewardmesh.v1.ReachTemplate.updated_at:type_name -> google.protobuf.Timestamp
+	313, // 320: stewardmesh.v1.ListReachGroupsResponse.items:type_name -> stewardmesh.v1.ReachSubscriberGroup
+	310, // 321: stewardmesh.v1.ReachSubscriberGroup.recipients:type_name -> stewardmesh.v1.ReachRecipient
+	345, // 322: stewardmesh.v1.ReachSubscriberGroup.created_at:type_name -> google.protobuf.Timestamp
+	345, // 323: stewardmesh.v1.ReachSubscriberGroup.updated_at:type_name -> google.protobuf.Timestamp
+	310, // 324: stewardmesh.v1.CreateReachGroupRequest.recipients:type_name -> stewardmesh.v1.ReachRecipient
+	310, // 325: stewardmesh.v1.UpdateReachGroupRequest.recipients:type_name -> stewardmesh.v1.ReachRecipient
+	318, // 326: stewardmesh.v1.ListReachMessagesResponse.items:type_name -> stewardmesh.v1.ReachMessage
+	310, // 327: stewardmesh.v1.ReachMessage.recipients:type_name -> stewardmesh.v1.ReachRecipient
+	345, // 328: stewardmesh.v1.ReachMessage.next_attempt_at:type_name -> google.protobuf.Timestamp
+	345, // 329: stewardmesh.v1.ReachMessage.created_at:type_name -> google.protobuf.Timestamp
+	345, // 330: stewardmesh.v1.ReachMessage.updated_at:type_name -> google.protobuf.Timestamp
+	344, // 331: stewardmesh.v1.SendReachMessageRequest.variables:type_name -> stewardmesh.v1.SendReachMessageRequest.VariablesEntry
+	323, // 332: stewardmesh.v1.ListReachMessageAttemptsResponse.items:type_name -> stewardmesh.v1.ReachDeliveryAttempt
+	345, // 333: stewardmesh.v1.ReachDeliveryAttempt.next_attempt_at:type_name -> google.protobuf.Timestamp
+	345, // 334: stewardmesh.v1.ReachDeliveryAttempt.occurred_at:type_name -> google.protobuf.Timestamp
+	330, // 335: stewardmesh.v1.ListBridgeClientsResponse.items:type_name -> stewardmesh.v1.BridgeClient
+	21,  // 336: stewardmesh.v1.CreateBridgeClientRequest.allowed_scopes:type_name -> stewardmesh.v1.BridgeScope
+	21,  // 337: stewardmesh.v1.BridgeClient.allowed_scopes:type_name -> stewardmesh.v1.BridgeScope
+	345, // 338: stewardmesh.v1.BridgeClient.created_at:type_name -> google.protobuf.Timestamp
+	345, // 339: stewardmesh.v1.BridgeClient.revoked_at:type_name -> google.protobuf.Timestamp
+	334, // 340: stewardmesh.v1.ListBridgeGrantsResponse.items:type_name -> stewardmesh.v1.BridgeGrant
+	21,  // 341: stewardmesh.v1.BridgeGrant.scopes:type_name -> stewardmesh.v1.BridgeScope
+	345, // 342: stewardmesh.v1.BridgeGrant.access_expires_at:type_name -> google.protobuf.Timestamp
+	345, // 343: stewardmesh.v1.BridgeGrant.refresh_expires_at:type_name -> google.protobuf.Timestamp
+	345, // 344: stewardmesh.v1.BridgeGrant.created_at:type_name -> google.protobuf.Timestamp
+	345, // 345: stewardmesh.v1.BridgeGrant.last_used_at:type_name -> google.protobuf.Timestamp
+	345, // 346: stewardmesh.v1.BridgeGrant.revoked_at:type_name -> google.protobuf.Timestamp
+	22,  // 347: stewardmesh.v1.FoundationService.GetOrganization:input_type -> stewardmesh.v1.GetOrganizationRequest
+	326, // 348: stewardmesh.v1.BridgeService.ListClients:input_type -> stewardmesh.v1.ListBridgeClientsRequest
+	328, // 349: stewardmesh.v1.BridgeService.CreateClient:input_type -> stewardmesh.v1.CreateBridgeClientRequest
+	329, // 350: stewardmesh.v1.BridgeService.RevokeClient:input_type -> stewardmesh.v1.RevokeBridgeClientRequest
+	331, // 351: stewardmesh.v1.BridgeService.ListGrants:input_type -> stewardmesh.v1.ListBridgeGrantsRequest
+	333, // 352: stewardmesh.v1.BridgeService.RevokeGrant:input_type -> stewardmesh.v1.RevokeBridgeGrantRequest
+	24,  // 353: stewardmesh.v1.PatternsService.ListTemplates:input_type -> stewardmesh.v1.ListPatternsTemplatesRequest
+	28,  // 354: stewardmesh.v1.PatternsService.CreateTemplate:input_type -> stewardmesh.v1.CreatePatternsTemplateRequest
+	26,  // 355: stewardmesh.v1.PatternsService.GetTemplate:input_type -> stewardmesh.v1.GetPatternsTemplateRequest
+	27,  // 356: stewardmesh.v1.PatternsService.GetTemplateSchema:input_type -> stewardmesh.v1.GetPatternsTemplateSchemaRequest
+	29,  // 357: stewardmesh.v1.PatternsService.CopyTemplate:input_type -> stewardmesh.v1.CopyPatternsTemplateRequest
+	30,  // 358: stewardmesh.v1.PatternsService.CreateTemplateVersion:input_type -> stewardmesh.v1.CreatePatternsTemplateVersionRequest
+	31,  // 359: stewardmesh.v1.PatternsService.ValidateRecord:input_type -> stewardmesh.v1.ValidatePatternsRecordRequest
+	32,  // 360: stewardmesh.v1.PatternsService.ExportCSVTemplate:input_type -> stewardmesh.v1.ExportPatternsCSVTemplateRequest
+	39,  // 361: stewardmesh.v1.GuardService.GetBootstrapStatus:input_type -> stewardmesh.v1.GetBootstrapStatusRequest
+	41,  // 362: stewardmesh.v1.GuardService.BootstrapAdministrator:input_type -> stewardmesh.v1.BootstrapAdministratorRequest
+	42,  // 363: stewardmesh.v1.GuardService.AuthenticateLocal:input_type -> stewardmesh.v1.AuthenticateLocalRequest
+	43,  // 364: stewardmesh.v1.GuardService.GetSession:input_type -> stewardmesh.v1.GetSessionRequest
+	44,  // 365: stewardmesh.v1.GuardService.Logout:input_type -> stewardmesh.v1.LogoutRequest
+	50,  // 366: stewardmesh.v1.GuardService.ListGuardAccess:input_type -> stewardmesh.v1.ListGuardAccessRequest
+	55,  // 367: stewardmesh.v1.GuardService.CreateRole:input_type -> stewardmesh.v1.CreateRoleRequest
+	57,  // 368: stewardmesh.v1.GuardService.CreateRoleAssignment:input_type -> stewardmesh.v1.CreateRoleAssignmentRequest
+	58,  // 369: stewardmesh.v1.GuardService.DeleteRoleAssignment:input_type -> stewardmesh.v1.DeleteRoleAssignmentRequest
+	60,  // 370: stewardmesh.v1.GuardService.ListResourceOwnership:input_type -> stewardmesh.v1.ListResourceOwnershipRequest
+	63,  // 371: stewardmesh.v1.GuardService.RegisterResourceOwnership:input_type -> stewardmesh.v1.RegisterResourceOwnershipRequest
+	64,  // 372: stewardmesh.v1.GuardService.ClaimResourceOwnership:input_type -> stewardmesh.v1.ClaimResourceOwnershipRequest
+	66,  // 373: stewardmesh.v1.AssetService.ListAssetModels:input_type -> stewardmesh.v1.ListAssetModelsRequest
+	69,  // 374: stewardmesh.v1.AssetService.GetAssetModel:input_type -> stewardmesh.v1.GetAssetModelRequest
+	70,  // 375: stewardmesh.v1.AssetService.GetAssetModelInventory:input_type -> stewardmesh.v1.GetAssetModelInventoryRequest
+	73,  // 376: stewardmesh.v1.AssetService.ResolveAssetModel:input_type -> stewardmesh.v1.ResolveAssetModelRequest
+	68,  // 377: stewardmesh.v1.AssetService.CreateAssetModel:input_type -> stewardmesh.v1.CreateAssetModelRequest
+	74,  // 378: stewardmesh.v1.AssetService.UpdateAssetModel:input_type -> stewardmesh.v1.UpdateAssetModelRequest
+	75,  // 379: stewardmesh.v1.AssetService.RetireAssetModel:input_type -> stewardmesh.v1.RetireAssetModelRequest
+	65,  // 380: stewardmesh.v1.AssetService.ListAssets:input_type -> stewardmesh.v1.ListAssetsRequest
+	80,  // 381: stewardmesh.v1.AssetService.GetAsset:input_type -> stewardmesh.v1.GetAssetRequest
+	77,  // 382: stewardmesh.v1.AssetService.CreateAsset:input_type -> stewardmesh.v1.CreateAssetRequest
+	78,  // 383: stewardmesh.v1.AssetService.CreateAssetsFromModel:input_type -> stewardmesh.v1.CreateAssetsFromModelRequest
+	81,  // 384: stewardmesh.v1.AssetService.UpdateAsset:input_type -> stewardmesh.v1.UpdateAssetRequest
+	82,  // 385: stewardmesh.v1.AssetService.ListAssetLifecycle:input_type -> stewardmesh.v1.ListAssetLifecycleRequest
+	84,  // 386: stewardmesh.v1.AssetService.ResolveAssetIdentifier:input_type -> stewardmesh.v1.ResolveAssetIdentifierRequest
+	85,  // 387: stewardmesh.v1.AssetService.ListAssetIdentifiers:input_type -> stewardmesh.v1.ListAssetIdentifiersRequest
+	87,  // 388: stewardmesh.v1.AssetService.CreateAssetIdentifier:input_type -> stewardmesh.v1.CreateAssetIdentifierRequest
+	89,  // 389: stewardmesh.v1.AssetService.ReplaceAssetIdentifier:input_type -> stewardmesh.v1.ReplaceAssetIdentifierRequest
+	91,  // 390: stewardmesh.v1.AssetService.DeactivateAssetIdentifier:input_type -> stewardmesh.v1.DeactivateAssetIdentifierRequest
+	93,  // 391: stewardmesh.v1.AssetService.ListAssetLabelTemplates:input_type -> stewardmesh.v1.ListAssetLabelTemplatesRequest
+	96,  // 392: stewardmesh.v1.AssetService.GenerateAssetLabelBatch:input_type -> stewardmesh.v1.GenerateAssetLabelBatchRequest
+	103, // 393: stewardmesh.v1.PeopleService.ListSites:input_type -> stewardmesh.v1.ListSitesRequest
+	105, // 394: stewardmesh.v1.PeopleService.CreateSite:input_type -> stewardmesh.v1.CreateSiteRequest
+	108, // 395: stewardmesh.v1.PeopleService.ListBuildings:input_type -> stewardmesh.v1.ListBuildingsRequest
+	110, // 396: stewardmesh.v1.PeopleService.CreateBuilding:input_type -> stewardmesh.v1.CreateBuildingRequest
+	112, // 397: stewardmesh.v1.PeopleService.ListRooms:input_type -> stewardmesh.v1.ListRoomsRequest
+	114, // 398: stewardmesh.v1.PeopleService.CreateRoom:input_type -> stewardmesh.v1.CreateRoomRequest
+	132, // 399: stewardmesh.v1.PeopleService.ListDepartments:input_type -> stewardmesh.v1.ListDepartmentsRequest
+	134, // 400: stewardmesh.v1.PeopleService.CreateDepartment:input_type -> stewardmesh.v1.CreateDepartmentRequest
+	136, // 401: stewardmesh.v1.PeopleService.SearchIdentities:input_type -> stewardmesh.v1.SearchIdentitiesRequest
+	138, // 402: stewardmesh.v1.PeopleService.CreateIdentity:input_type -> stewardmesh.v1.CreateIdentityRequest
+	144, // 403: stewardmesh.v1.PeopleService.ListAssetAssignments:input_type -> stewardmesh.v1.ListAssetAssignmentsRequest
+	146, // 404: stewardmesh.v1.PeopleService.CreateAssetAssignment:input_type -> stewardmesh.v1.CreateAssetAssignmentRequest
+	147, // 405: stewardmesh.v1.PeopleService.EndAssetAssignment:input_type -> stewardmesh.v1.EndAssetAssignmentRequest
+	140, // 406: stewardmesh.v1.RelationshipGraphService.GetRelationshipGraph:input_type -> stewardmesh.v1.GetRelationshipGraphRequest
+	116, // 407: stewardmesh.v1.DirectoryImportService.ListDirectoryImportSources:input_type -> stewardmesh.v1.ListDirectoryImportSourcesRequest
+	119, // 408: stewardmesh.v1.DirectoryImportService.ListDirectoryImports:input_type -> stewardmesh.v1.ListDirectoryImportsRequest
+	121, // 409: stewardmesh.v1.DirectoryImportService.GetDirectoryImport:input_type -> stewardmesh.v1.GetDirectoryImportRequest
+	122, // 410: stewardmesh.v1.DirectoryImportService.PreviewDirectoryImport:input_type -> stewardmesh.v1.PreviewDirectoryImportRequest
+	123, // 411: stewardmesh.v1.DirectoryImportService.ApplyDirectoryImport:input_type -> stewardmesh.v1.ApplyDirectoryImportRequest
+	124, // 412: stewardmesh.v1.DirectoryImportService.RetryDirectoryImport:input_type -> stewardmesh.v1.RetryDirectoryImportRequest
+	149, // 413: stewardmesh.v1.ThreadsService.ListTags:input_type -> stewardmesh.v1.ListTagsRequest
+	151, // 414: stewardmesh.v1.ThreadsService.GetTag:input_type -> stewardmesh.v1.GetTagRequest
+	152, // 415: stewardmesh.v1.ThreadsService.CreateTag:input_type -> stewardmesh.v1.CreateTagRequest
+	153, // 416: stewardmesh.v1.ThreadsService.UpdateTag:input_type -> stewardmesh.v1.UpdateTagRequest
+	155, // 417: stewardmesh.v1.ThreadsService.ListGoals:input_type -> stewardmesh.v1.ListGoalsRequest
+	157, // 418: stewardmesh.v1.ThreadsService.GetGoal:input_type -> stewardmesh.v1.GetGoalRequest
+	158, // 419: stewardmesh.v1.ThreadsService.CreateGoal:input_type -> stewardmesh.v1.CreateGoalRequest
+	159, // 420: stewardmesh.v1.ThreadsService.UpdateGoal:input_type -> stewardmesh.v1.UpdateGoalRequest
+	161, // 421: stewardmesh.v1.ThreadsService.ListEffectiveTags:input_type -> stewardmesh.v1.ListEffectiveTagsRequest
+	164, // 422: stewardmesh.v1.ThreadsService.SetTagRule:input_type -> stewardmesh.v1.SetTagRuleRequest
+	166, // 423: stewardmesh.v1.ThreadsService.DeleteTagRule:input_type -> stewardmesh.v1.DeleteTagRuleRequest
+	168, // 424: stewardmesh.v1.ThreadsService.ListGoalLinks:input_type -> stewardmesh.v1.ListGoalLinksRequest
+	170, // 425: stewardmesh.v1.ThreadsService.LinkGoal:input_type -> stewardmesh.v1.LinkGoalRequest
+	172, // 426: stewardmesh.v1.ThreadsService.UnlinkGoal:input_type -> stewardmesh.v1.UnlinkGoalRequest
+	174, // 427: stewardmesh.v1.VaultService.ListBlobs:input_type -> stewardmesh.v1.ListBlobsRequest
+	176, // 428: stewardmesh.v1.VaultService.GetBlob:input_type -> stewardmesh.v1.GetBlobRequest
+	177, // 429: stewardmesh.v1.VaultService.CreateBlob:input_type -> stewardmesh.v1.CreateBlobRequest
+	179, // 430: stewardmesh.v1.VaultService.DownloadBlob:input_type -> stewardmesh.v1.DownloadBlobRequest
+	181, // 431: stewardmesh.v1.VaultService.AuthorizeDownload:input_type -> stewardmesh.v1.AuthorizeBlobDownloadRequest
+	185, // 432: stewardmesh.v1.HorizonService.ListPlans:input_type -> stewardmesh.v1.ListHorizonPlansRequest
+	187, // 433: stewardmesh.v1.HorizonService.CreatePlan:input_type -> stewardmesh.v1.CreateHorizonPlanRequest
+	188, // 434: stewardmesh.v1.HorizonService.UpdatePlan:input_type -> stewardmesh.v1.UpdateHorizonPlanRequest
+	189, // 435: stewardmesh.v1.HorizonService.ListPlanHistory:input_type -> stewardmesh.v1.ListHorizonPlanHistoryRequest
+	191, // 436: stewardmesh.v1.HorizonService.GetForecast:input_type -> stewardmesh.v1.GetHorizonForecastRequest
+	194, // 437: stewardmesh.v1.HorizonService.ExportCSV:input_type -> stewardmesh.v1.ExportHorizonCSVRequest
+	196, // 438: stewardmesh.v1.LedgerService.GetSnapshot:input_type -> stewardmesh.v1.GetLedgerSnapshotRequest
+	198, // 439: stewardmesh.v1.LedgerService.CreateVendor:input_type -> stewardmesh.v1.CreateLedgerVendorRequest
+	200, // 440: stewardmesh.v1.LedgerService.CreatePurchaseOrder:input_type -> stewardmesh.v1.CreateLedgerPurchaseOrderRequest
+	201, // 441: stewardmesh.v1.LedgerService.UpdatePurchaseOrderStatus:input_type -> stewardmesh.v1.UpdateLedgerPurchaseOrderStatusRequest
+	203, // 442: stewardmesh.v1.LedgerService.CreateContract:input_type -> stewardmesh.v1.CreateLedgerContractRequest
+	204, // 443: stewardmesh.v1.LedgerService.UpdateContractStatus:input_type -> stewardmesh.v1.UpdateLedgerContractStatusRequest
+	206, // 444: stewardmesh.v1.LedgerService.CreateCommitment:input_type -> stewardmesh.v1.CreateLedgerCommitmentRequest
+	208, // 445: stewardmesh.v1.LedgerService.CreateBudget:input_type -> stewardmesh.v1.CreateLedgerBudgetRequest
+	210, // 446: stewardmesh.v1.LedgerService.ReconcileCost:input_type -> stewardmesh.v1.ReconcileLedgerCostRequest
+	213, // 447: stewardmesh.v1.LedgerService.GetBudgetVariance:input_type -> stewardmesh.v1.GetLedgerBudgetVarianceRequest
+	215, // 448: stewardmesh.v1.LedgerService.ExportCSV:input_type -> stewardmesh.v1.ExportLedgerCSVRequest
+	217, // 449: stewardmesh.v1.StackService.GetSnapshot:input_type -> stewardmesh.v1.GetStackSnapshotRequest
+	235, // 450: stewardmesh.v1.StackService.GetAnalytics:input_type -> stewardmesh.v1.GetStackAnalyticsRequest
+	219, // 451: stewardmesh.v1.StackService.CreateProduct:input_type -> stewardmesh.v1.CreateStackProductRequest
+	220, // 452: stewardmesh.v1.StackService.UpdateProductStatus:input_type -> stewardmesh.v1.UpdateStackProductStatusRequest
+	222, // 453: stewardmesh.v1.StackService.CreateVersion:input_type -> stewardmesh.v1.CreateStackVersionRequest
+	223, // 454: stewardmesh.v1.StackService.UpdateVersionStatus:input_type -> stewardmesh.v1.UpdateStackVersionStatusRequest
+	225, // 455: stewardmesh.v1.StackService.RecordInstallation:input_type -> stewardmesh.v1.RecordStackInstallationRequest
+	226, // 456: stewardmesh.v1.StackService.UpdateInstallationState:input_type -> stewardmesh.v1.UpdateStackInstallationStateRequest
+	228, // 457: stewardmesh.v1.StackService.CreateLicense:input_type -> stewardmesh.v1.CreateStackLicenseRequest
+	229, // 458: stewardmesh.v1.StackService.UpdateLicenseEntitlement:input_type -> stewardmesh.v1.UpdateStackLicenseEntitlementRequest
+	231, // 459: stewardmesh.v1.StackService.CreateAssignment:input_type -> stewardmesh.v1.CreateStackAssignmentRequest
+	232, // 460: stewardmesh.v1.StackService.UpdateAssignmentUsage:input_type -> stewardmesh.v1.UpdateStackAssignmentUsageRequest
+	233, // 461: stewardmesh.v1.StackService.EndAssignment:input_type -> stewardmesh.v1.EndStackAssignmentRequest
+	239, // 462: stewardmesh.v1.StackService.ExportRecords:input_type -> stewardmesh.v1.ExportStackRecordsRequest
+	241, // 463: stewardmesh.v1.StackService.ImportRecords:input_type -> stewardmesh.v1.ImportStackRecordsRequest
+	244, // 464: stewardmesh.v1.SignalsService.ListRules:input_type -> stewardmesh.v1.ListSignalRulesRequest
+	247, // 465: stewardmesh.v1.SignalsService.CreateRule:input_type -> stewardmesh.v1.CreateSignalRuleRequest
+	248, // 466: stewardmesh.v1.SignalsService.UpdateRule:input_type -> stewardmesh.v1.UpdateSignalRuleRequest
+	249, // 467: stewardmesh.v1.SignalsService.ListAlerts:input_type -> stewardmesh.v1.ListSignalAlertsRequest
+	252, // 468: stewardmesh.v1.SignalsService.ListAlertHistory:input_type -> stewardmesh.v1.ListSignalAlertHistoryRequest
+	255, // 469: stewardmesh.v1.SignalsService.Evaluate:input_type -> stewardmesh.v1.EvaluateSignalsRequest
+	257, // 470: stewardmesh.v1.SignalsService.AcknowledgeAlert:input_type -> stewardmesh.v1.AcknowledgeSignalAlertRequest
+	258, // 471: stewardmesh.v1.SignalsService.AssignAlert:input_type -> stewardmesh.v1.AssignSignalAlertRequest
+	259, // 472: stewardmesh.v1.SignalsService.ListSubscriptions:input_type -> stewardmesh.v1.ListSignalSubscriptionsRequest
+	261, // 473: stewardmesh.v1.SignalsService.ListSubscriptionTargets:input_type -> stewardmesh.v1.ListSignalSubscriptionTargetsRequest
+	265, // 474: stewardmesh.v1.SignalsService.CreateSubscription:input_type -> stewardmesh.v1.CreateSignalSubscriptionRequest
+	266, // 475: stewardmesh.v1.SignalsService.DeleteSubscription:input_type -> stewardmesh.v1.DeleteSignalSubscriptionRequest
+	269, // 476: stewardmesh.v1.SignalsService.ListPendingDeliveries:input_type -> stewardmesh.v1.ListPendingSignalDeliveriesRequest
+	271, // 477: stewardmesh.v1.SignalsService.RecordDeliveryAttempt:input_type -> stewardmesh.v1.RecordSignalDeliveryAttemptRequest
+	272, // 478: stewardmesh.v1.SignalsService.ExportCSV:input_type -> stewardmesh.v1.ExportSignalsCSVRequest
+	282, // 479: stewardmesh.v1.ExchangeService.ListExchangeRecords:input_type -> stewardmesh.v1.ListExchangeRecordsRequest
+	284, // 480: stewardmesh.v1.ExchangeService.ListExchangePackages:input_type -> stewardmesh.v1.ListExchangePackagesRequest
+	286, // 481: stewardmesh.v1.ExchangeService.ExportExchangePackage:input_type -> stewardmesh.v1.ExportExchangePackageRequest
+	288, // 482: stewardmesh.v1.ExchangeService.ImportExchangePackage:input_type -> stewardmesh.v1.ImportExchangePackageRequest
+	292, // 483: stewardmesh.v1.ReachService.ListEndpoints:input_type -> stewardmesh.v1.ListReachEndpointsRequest
+	295, // 484: stewardmesh.v1.ReachService.ListProviders:input_type -> stewardmesh.v1.ListReachProvidersRequest
+	298, // 485: stewardmesh.v1.ReachService.CreateProvider:input_type -> stewardmesh.v1.CreateReachProviderRequest
+	299, // 486: stewardmesh.v1.ReachService.UpdateProvider:input_type -> stewardmesh.v1.UpdateReachProviderRequest
+	300, // 487: stewardmesh.v1.ReachService.RotateProviderSecret:input_type -> stewardmesh.v1.RotateReachProviderSecretRequest
+	301, // 488: stewardmesh.v1.ReachService.TestProvider:input_type -> stewardmesh.v1.TestReachProviderRequest
+	302, // 489: stewardmesh.v1.ReachService.ListProviderTests:input_type -> stewardmesh.v1.ListReachProviderTestsRequest
+	305, // 490: stewardmesh.v1.ReachService.ListTemplates:input_type -> stewardmesh.v1.ListReachTemplatesRequest
+	308, // 491: stewardmesh.v1.ReachService.CreateTemplate:input_type -> stewardmesh.v1.CreateReachTemplateRequest
+	309, // 492: stewardmesh.v1.ReachService.UpdateTemplate:input_type -> stewardmesh.v1.UpdateReachTemplateRequest
+	311, // 493: stewardmesh.v1.ReachService.ListGroups:input_type -> stewardmesh.v1.ListReachGroupsRequest
+	314, // 494: stewardmesh.v1.ReachService.CreateGroup:input_type -> stewardmesh.v1.CreateReachGroupRequest
+	315, // 495: stewardmesh.v1.ReachService.UpdateGroup:input_type -> stewardmesh.v1.UpdateReachGroupRequest
+	316, // 496: stewardmesh.v1.ReachService.ListMessages:input_type -> stewardmesh.v1.ListReachMessagesRequest
+	319, // 497: stewardmesh.v1.ReachService.SendMessage:input_type -> stewardmesh.v1.SendReachMessageRequest
+	320, // 498: stewardmesh.v1.ReachService.RetryMessage:input_type -> stewardmesh.v1.RetryReachMessageRequest
+	321, // 499: stewardmesh.v1.ReachService.ListMessageAttempts:input_type -> stewardmesh.v1.ListReachMessageAttemptsRequest
+	324, // 500: stewardmesh.v1.ReachService.ProcessSignals:input_type -> stewardmesh.v1.ProcessReachSignalsRequest
+	23,  // 501: stewardmesh.v1.FoundationService.GetOrganization:output_type -> stewardmesh.v1.Organization
+	327, // 502: stewardmesh.v1.BridgeService.ListClients:output_type -> stewardmesh.v1.ListBridgeClientsResponse
+	330, // 503: stewardmesh.v1.BridgeService.CreateClient:output_type -> stewardmesh.v1.BridgeClient
+	330, // 504: stewardmesh.v1.BridgeService.RevokeClient:output_type -> stewardmesh.v1.BridgeClient
+	332, // 505: stewardmesh.v1.BridgeService.ListGrants:output_type -> stewardmesh.v1.ListBridgeGrantsResponse
+	334, // 506: stewardmesh.v1.BridgeService.RevokeGrant:output_type -> stewardmesh.v1.BridgeGrant
+	25,  // 507: stewardmesh.v1.PatternsService.ListTemplates:output_type -> stewardmesh.v1.ListPatternsTemplatesResponse
+	34,  // 508: stewardmesh.v1.PatternsService.CreateTemplate:output_type -> stewardmesh.v1.PatternsTemplate
+	34,  // 509: stewardmesh.v1.PatternsService.GetTemplate:output_type -> stewardmesh.v1.PatternsTemplate
+	34,  // 510: stewardmesh.v1.PatternsService.GetTemplateSchema:output_type -> stewardmesh.v1.PatternsTemplate
+	34,  // 511: stewardmesh.v1.PatternsService.CopyTemplate:output_type -> stewardmesh.v1.PatternsTemplate
+	34,  // 512: stewardmesh.v1.PatternsService.CreateTemplateVersion:output_type -> stewardmesh.v1.PatternsTemplate
+	38,  // 513: stewardmesh.v1.PatternsService.ValidateRecord:output_type -> stewardmesh.v1.PatternsValidationResult
+	33,  // 514: stewardmesh.v1.PatternsService.ExportCSVTemplate:output_type -> stewardmesh.v1.ExportPatternsCSVTemplateResponse
+	40,  // 515: stewardmesh.v1.GuardService.GetBootstrapStatus:output_type -> stewardmesh.v1.BootstrapStatus
+	46,  // 516: stewardmesh.v1.GuardService.BootstrapAdministrator:output_type -> stewardmesh.v1.AuthenticationSession
+	46,  // 517: stewardmesh.v1.GuardService.AuthenticateLocal:output_type -> stewardmesh.v1.AuthenticationSession
+	46,  // 518: stewardmesh.v1.GuardService.GetSession:output_type -> stewardmesh.v1.AuthenticationSession
+	45,  // 519: stewardmesh.v1.GuardService.Logout:output_type -> stewardmesh.v1.LogoutResponse
+	51,  // 520: stewardmesh.v1.GuardService.ListGuardAccess:output_type -> stewardmesh.v1.ListGuardAccessResponse
+	53,  // 521: stewardmesh.v1.GuardService.CreateRole:output_type -> stewardmesh.v1.GuardRole
+	56,  // 522: stewardmesh.v1.GuardService.CreateRoleAssignment:output_type -> stewardmesh.v1.GuardRoleAssignment
+	59,  // 523: stewardmesh.v1.GuardService.DeleteRoleAssignment:output_type -> stewardmesh.v1.DeleteRoleAssignmentResponse
+	61,  // 524: stewardmesh.v1.GuardService.ListResourceOwnership:output_type -> stewardmesh.v1.ListResourceOwnershipResponse
+	62,  // 525: stewardmesh.v1.GuardService.RegisterResourceOwnership:output_type -> stewardmesh.v1.GuardResourceOwnership
+	62,  // 526: stewardmesh.v1.GuardService.ClaimResourceOwnership:output_type -> stewardmesh.v1.GuardResourceOwnership
+	67,  // 527: stewardmesh.v1.AssetService.ListAssetModels:output_type -> stewardmesh.v1.ListAssetModelsResponse
+	101, // 528: stewardmesh.v1.AssetService.GetAssetModel:output_type -> stewardmesh.v1.AssetModel
+	72,  // 529: stewardmesh.v1.AssetService.GetAssetModelInventory:output_type -> stewardmesh.v1.AssetModelInventory
+	101, // 530: stewardmesh.v1.AssetService.ResolveAssetModel:output_type -> stewardmesh.v1.AssetModel
+	101, // 531: stewardmesh.v1.AssetService.CreateAssetModel:output_type -> stewardmesh.v1.AssetModel
+	101, // 532: stewardmesh.v1.AssetService.UpdateAssetModel:output_type -> stewardmesh.v1.AssetModel
+	101, // 533: stewardmesh.v1.AssetService.RetireAssetModel:output_type -> stewardmesh.v1.AssetModel
+	76,  // 534: stewardmesh.v1.AssetService.ListAssets:output_type -> stewardmesh.v1.ListAssetsResponse
+	99,  // 535: stewardmesh.v1.AssetService.GetAsset:output_type -> stewardmesh.v1.Asset
+	99,  // 536: stewardmesh.v1.AssetService.CreateAsset:output_type -> stewardmesh.v1.Asset
+	79,  // 537: stewardmesh.v1.AssetService.CreateAssetsFromModel:output_type -> stewardmesh.v1.CreateAssetsFromModelResponse
+	99,  // 538: stewardmesh.v1.AssetService.UpdateAsset:output_type -> stewardmesh.v1.Asset
+	83,  // 539: stewardmesh.v1.AssetService.ListAssetLifecycle:output_type -> stewardmesh.v1.ListAssetLifecycleResponse
+	98,  // 540: stewardmesh.v1.AssetService.ResolveAssetIdentifier:output_type -> stewardmesh.v1.AssetIdentifier
+	86,  // 541: stewardmesh.v1.AssetService.ListAssetIdentifiers:output_type -> stewardmesh.v1.ListAssetIdentifiersResponse
+	88,  // 542: stewardmesh.v1.AssetService.CreateAssetIdentifier:output_type -> stewardmesh.v1.CreateAssetIdentifierResponse
+	90,  // 543: stewardmesh.v1.AssetService.ReplaceAssetIdentifier:output_type -> stewardmesh.v1.ReplaceAssetIdentifierResponse
+	92,  // 544: stewardmesh.v1.AssetService.DeactivateAssetIdentifier:output_type -> stewardmesh.v1.DeactivateAssetIdentifierResponse
+	94,  // 545: stewardmesh.v1.AssetService.ListAssetLabelTemplates:output_type -> stewardmesh.v1.ListAssetLabelTemplatesResponse
+	97,  // 546: stewardmesh.v1.AssetService.GenerateAssetLabelBatch:output_type -> stewardmesh.v1.AssetLabelArtifact
+	104, // 547: stewardmesh.v1.PeopleService.ListSites:output_type -> stewardmesh.v1.ListSitesResponse
+	106, // 548: stewardmesh.v1.PeopleService.CreateSite:output_type -> stewardmesh.v1.Site
+	109, // 549: stewardmesh.v1.PeopleService.ListBuildings:output_type -> stewardmesh.v1.ListBuildingsResponse
+	111, // 550: stewardmesh.v1.PeopleService.CreateBuilding:output_type -> stewardmesh.v1.Building
+	113, // 551: stewardmesh.v1.PeopleService.ListRooms:output_type -> stewardmesh.v1.ListRoomsResponse
+	115, // 552: stewardmesh.v1.PeopleService.CreateRoom:output_type -> stewardmesh.v1.Room
+	133, // 553: stewardmesh.v1.PeopleService.ListDepartments:output_type -> stewardmesh.v1.ListDepartmentsResponse
+	135, // 554: stewardmesh.v1.PeopleService.CreateDepartment:output_type -> stewardmesh.v1.Department
+	137, // 555: stewardmesh.v1.PeopleService.SearchIdentities:output_type -> stewardmesh.v1.SearchIdentitiesResponse
+	139, // 556: stewardmesh.v1.PeopleService.CreateIdentity:output_type -> stewardmesh.v1.DirectoryIdentity
+	145, // 557: stewardmesh.v1.PeopleService.ListAssetAssignments:output_type -> stewardmesh.v1.ListAssetAssignmentsResponse
+	148, // 558: stewardmesh.v1.PeopleService.CreateAssetAssignment:output_type -> stewardmesh.v1.AssetAssignment
+	148, // 559: stewardmesh.v1.PeopleService.EndAssetAssignment:output_type -> stewardmesh.v1.AssetAssignment
+	141, // 560: stewardmesh.v1.RelationshipGraphService.GetRelationshipGraph:output_type -> stewardmesh.v1.RelationshipGraph
+	118, // 561: stewardmesh.v1.DirectoryImportService.ListDirectoryImportSources:output_type -> stewardmesh.v1.ListDirectoryImportSourcesResponse
+	120, // 562: stewardmesh.v1.DirectoryImportService.ListDirectoryImports:output_type -> stewardmesh.v1.ListDirectoryImportsResponse
+	130, // 563: stewardmesh.v1.DirectoryImportService.GetDirectoryImport:output_type -> stewardmesh.v1.DirectoryImportBatchDetail
+	131, // 564: stewardmesh.v1.DirectoryImportService.PreviewDirectoryImport:output_type -> stewardmesh.v1.DirectoryImportOperationResult
+	131, // 565: stewardmesh.v1.DirectoryImportService.ApplyDirectoryImport:output_type -> stewardmesh.v1.DirectoryImportOperationResult
+	131, // 566: stewardmesh.v1.DirectoryImportService.RetryDirectoryImport:output_type -> stewardmesh.v1.DirectoryImportOperationResult
+	150, // 567: stewardmesh.v1.ThreadsService.ListTags:output_type -> stewardmesh.v1.ListTagsResponse
+	154, // 568: stewardmesh.v1.ThreadsService.GetTag:output_type -> stewardmesh.v1.Tag
+	154, // 569: stewardmesh.v1.ThreadsService.CreateTag:output_type -> stewardmesh.v1.Tag
+	154, // 570: stewardmesh.v1.ThreadsService.UpdateTag:output_type -> stewardmesh.v1.Tag
+	156, // 571: stewardmesh.v1.ThreadsService.ListGoals:output_type -> stewardmesh.v1.ListGoalsResponse
+	160, // 572: stewardmesh.v1.ThreadsService.GetGoal:output_type -> stewardmesh.v1.Goal
+	160, // 573: stewardmesh.v1.ThreadsService.CreateGoal:output_type -> stewardmesh.v1.Goal
+	160, // 574: stewardmesh.v1.ThreadsService.UpdateGoal:output_type -> stewardmesh.v1.Goal
+	162, // 575: stewardmesh.v1.ThreadsService.ListEffectiveTags:output_type -> stewardmesh.v1.ListEffectiveTagsResponse
+	165, // 576: stewardmesh.v1.ThreadsService.SetTagRule:output_type -> stewardmesh.v1.TagRule
+	167, // 577: stewardmesh.v1.ThreadsService.DeleteTagRule:output_type -> stewardmesh.v1.DeleteTagRuleResponse
+	169, // 578: stewardmesh.v1.ThreadsService.ListGoalLinks:output_type -> stewardmesh.v1.ListGoalLinksResponse
+	171, // 579: stewardmesh.v1.ThreadsService.LinkGoal:output_type -> stewardmesh.v1.GoalLink
+	173, // 580: stewardmesh.v1.ThreadsService.UnlinkGoal:output_type -> stewardmesh.v1.UnlinkGoalResponse
+	175, // 581: stewardmesh.v1.VaultService.ListBlobs:output_type -> stewardmesh.v1.ListBlobsResponse
+	178, // 582: stewardmesh.v1.VaultService.GetBlob:output_type -> stewardmesh.v1.VaultBlob
+	178, // 583: stewardmesh.v1.VaultService.CreateBlob:output_type -> stewardmesh.v1.VaultBlob
+	180, // 584: stewardmesh.v1.VaultService.DownloadBlob:output_type -> stewardmesh.v1.VaultBlobContent
+	182, // 585: stewardmesh.v1.VaultService.AuthorizeDownload:output_type -> stewardmesh.v1.VaultDownloadAuthorization
+	186, // 586: stewardmesh.v1.HorizonService.ListPlans:output_type -> stewardmesh.v1.ListHorizonPlansResponse
+	183, // 587: stewardmesh.v1.HorizonService.CreatePlan:output_type -> stewardmesh.v1.HorizonPlan
+	183, // 588: stewardmesh.v1.HorizonService.UpdatePlan:output_type -> stewardmesh.v1.HorizonPlan
+	190, // 589: stewardmesh.v1.HorizonService.ListPlanHistory:output_type -> stewardmesh.v1.ListHorizonPlanHistoryResponse
+	193, // 590: stewardmesh.v1.HorizonService.GetForecast:output_type -> stewardmesh.v1.HorizonForecast
+	195, // 591: stewardmesh.v1.HorizonService.ExportCSV:output_type -> stewardmesh.v1.ExportHorizonCSVResponse
+	212, // 592: stewardmesh.v1.LedgerService.GetSnapshot:output_type -> stewardmesh.v1.LedgerSnapshot
+	197, // 593: stewardmesh.v1.LedgerService.CreateVendor:output_type -> stewardmesh.v1.LedgerVendor
+	199, // 594: stewardmesh.v1.LedgerService.CreatePurchaseOrder:output_type -> stewardmesh.v1.LedgerPurchaseOrder
+	199, // 595: stewardmesh.v1.LedgerService.UpdatePurchaseOrderStatus:output_type -> stewardmesh.v1.LedgerPurchaseOrder
+	202, // 596: stewardmesh.v1.LedgerService.CreateContract:output_type -> stewardmesh.v1.LedgerContract
+	202, // 597: stewardmesh.v1.LedgerService.UpdateContractStatus:output_type -> stewardmesh.v1.LedgerContract
+	205, // 598: stewardmesh.v1.LedgerService.CreateCommitment:output_type -> stewardmesh.v1.LedgerCommitment
+	207, // 599: stewardmesh.v1.LedgerService.CreateBudget:output_type -> stewardmesh.v1.LedgerBudget
+	211, // 600: stewardmesh.v1.LedgerService.ReconcileCost:output_type -> stewardmesh.v1.ReconcileLedgerCostResponse
+	214, // 601: stewardmesh.v1.LedgerService.GetBudgetVariance:output_type -> stewardmesh.v1.LedgerBudgetVariance
+	216, // 602: stewardmesh.v1.LedgerService.ExportCSV:output_type -> stewardmesh.v1.ExportLedgerCSVResponse
+	234, // 603: stewardmesh.v1.StackService.GetSnapshot:output_type -> stewardmesh.v1.StackSnapshot
+	237, // 604: stewardmesh.v1.StackService.GetAnalytics:output_type -> stewardmesh.v1.StackAnalytics
+	218, // 605: stewardmesh.v1.StackService.CreateProduct:output_type -> stewardmesh.v1.StackProduct
+	218, // 606: stewardmesh.v1.StackService.UpdateProductStatus:output_type -> stewardmesh.v1.StackProduct
+	221, // 607: stewardmesh.v1.StackService.CreateVersion:output_type -> stewardmesh.v1.StackVersion
+	221, // 608: stewardmesh.v1.StackService.UpdateVersionStatus:output_type -> stewardmesh.v1.StackVersion
+	224, // 609: stewardmesh.v1.StackService.RecordInstallation:output_type -> stewardmesh.v1.StackInstallation
+	224, // 610: stewardmesh.v1.StackService.UpdateInstallationState:output_type -> stewardmesh.v1.StackInstallation
+	227, // 611: stewardmesh.v1.StackService.CreateLicense:output_type -> stewardmesh.v1.StackLicense
+	227, // 612: stewardmesh.v1.StackService.UpdateLicenseEntitlement:output_type -> stewardmesh.v1.StackLicense
+	230, // 613: stewardmesh.v1.StackService.CreateAssignment:output_type -> stewardmesh.v1.StackAssignment
+	230, // 614: stewardmesh.v1.StackService.UpdateAssignmentUsage:output_type -> stewardmesh.v1.StackAssignment
+	230, // 615: stewardmesh.v1.StackService.EndAssignment:output_type -> stewardmesh.v1.StackAssignment
+	240, // 616: stewardmesh.v1.StackService.ExportRecords:output_type -> stewardmesh.v1.ExportStackRecordsResponse
+	242, // 617: stewardmesh.v1.StackService.ImportRecords:output_type -> stewardmesh.v1.StackImportResult
+	245, // 618: stewardmesh.v1.SignalsService.ListRules:output_type -> stewardmesh.v1.ListSignalRulesResponse
+	246, // 619: stewardmesh.v1.SignalsService.CreateRule:output_type -> stewardmesh.v1.SignalRule
+	246, // 620: stewardmesh.v1.SignalsService.UpdateRule:output_type -> stewardmesh.v1.SignalRule
+	250, // 621: stewardmesh.v1.SignalsService.ListAlerts:output_type -> stewardmesh.v1.ListSignalAlertsResponse
+	253, // 622: stewardmesh.v1.SignalsService.ListAlertHistory:output_type -> stewardmesh.v1.ListSignalAlertHistoryResponse
+	256, // 623: stewardmesh.v1.SignalsService.Evaluate:output_type -> stewardmesh.v1.SignalEvaluationResult
+	251, // 624: stewardmesh.v1.SignalsService.AcknowledgeAlert:output_type -> stewardmesh.v1.SignalAlert
+	251, // 625: stewardmesh.v1.SignalsService.AssignAlert:output_type -> stewardmesh.v1.SignalAlert
+	260, // 626: stewardmesh.v1.SignalsService.ListSubscriptions:output_type -> stewardmesh.v1.ListSignalSubscriptionsResponse
+	262, // 627: stewardmesh.v1.SignalsService.ListSubscriptionTargets:output_type -> stewardmesh.v1.ListSignalSubscriptionTargetsResponse
+	264, // 628: stewardmesh.v1.SignalsService.CreateSubscription:output_type -> stewardmesh.v1.SignalSubscription
+	267, // 629: stewardmesh.v1.SignalsService.DeleteSubscription:output_type -> stewardmesh.v1.DeleteSignalSubscriptionResponse
+	270, // 630: stewardmesh.v1.SignalsService.ListPendingDeliveries:output_type -> stewardmesh.v1.ListPendingSignalDeliveriesResponse
+	268, // 631: stewardmesh.v1.SignalsService.RecordDeliveryAttempt:output_type -> stewardmesh.v1.SignalDelivery
+	273, // 632: stewardmesh.v1.SignalsService.ExportCSV:output_type -> stewardmesh.v1.ExportSignalsCSVResponse
+	283, // 633: stewardmesh.v1.ExchangeService.ListExchangeRecords:output_type -> stewardmesh.v1.ListExchangeRecordsResponse
+	285, // 634: stewardmesh.v1.ExchangeService.ListExchangePackages:output_type -> stewardmesh.v1.ListExchangePackagesResponse
+	287, // 635: stewardmesh.v1.ExchangeService.ExportExchangePackage:output_type -> stewardmesh.v1.ExchangeExportArtifact
+	291, // 636: stewardmesh.v1.ExchangeService.ImportExchangePackage:output_type -> stewardmesh.v1.ImportExchangePackageResponse
+	293, // 637: stewardmesh.v1.ReachService.ListEndpoints:output_type -> stewardmesh.v1.ListReachEndpointsResponse
+	296, // 638: stewardmesh.v1.ReachService.ListProviders:output_type -> stewardmesh.v1.ListReachProvidersResponse
+	297, // 639: stewardmesh.v1.ReachService.CreateProvider:output_type -> stewardmesh.v1.ReachProvider
+	297, // 640: stewardmesh.v1.ReachService.UpdateProvider:output_type -> stewardmesh.v1.ReachProvider
+	297, // 641: stewardmesh.v1.ReachService.RotateProviderSecret:output_type -> stewardmesh.v1.ReachProvider
+	304, // 642: stewardmesh.v1.ReachService.TestProvider:output_type -> stewardmesh.v1.ReachProviderTest
+	303, // 643: stewardmesh.v1.ReachService.ListProviderTests:output_type -> stewardmesh.v1.ListReachProviderTestsResponse
+	306, // 644: stewardmesh.v1.ReachService.ListTemplates:output_type -> stewardmesh.v1.ListReachTemplatesResponse
+	307, // 645: stewardmesh.v1.ReachService.CreateTemplate:output_type -> stewardmesh.v1.ReachTemplate
+	307, // 646: stewardmesh.v1.ReachService.UpdateTemplate:output_type -> stewardmesh.v1.ReachTemplate
+	312, // 647: stewardmesh.v1.ReachService.ListGroups:output_type -> stewardmesh.v1.ListReachGroupsResponse
+	313, // 648: stewardmesh.v1.ReachService.CreateGroup:output_type -> stewardmesh.v1.ReachSubscriberGroup
+	313, // 649: stewardmesh.v1.ReachService.UpdateGroup:output_type -> stewardmesh.v1.ReachSubscriberGroup
+	317, // 650: stewardmesh.v1.ReachService.ListMessages:output_type -> stewardmesh.v1.ListReachMessagesResponse
+	318, // 651: stewardmesh.v1.ReachService.SendMessage:output_type -> stewardmesh.v1.ReachMessage
+	318, // 652: stewardmesh.v1.ReachService.RetryMessage:output_type -> stewardmesh.v1.ReachMessage
+	322, // 653: stewardmesh.v1.ReachService.ListMessageAttempts:output_type -> stewardmesh.v1.ListReachMessageAttemptsResponse
+	325, // 654: stewardmesh.v1.ReachService.ProcessSignals:output_type -> stewardmesh.v1.ReachProcessResult
+	501, // [501:655] is the sub-list for method output_type
+	347, // [347:501] is the sub-list for method input_type
+	347, // [347:347] is the sub-list for extension type_name
+	347, // [347:347] is the sub-list for extension extendee
+	0,   // [0:347] is the sub-list for field type_name
 }
 
 func init() { file_stewardmesh_proto_init() }

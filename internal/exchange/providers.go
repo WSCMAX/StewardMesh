@@ -335,6 +335,23 @@ func projectStackPayload(recordType string, payload []byte) ([]byte, error) {
 		}
 		projected[field], _ = json.Marshal(instant.UTC().Format("2006-01-02"))
 	}
+	for _, field := range stackPortableInstantFields(recordType) {
+		raw, ok := projected[field]
+		if !ok {
+			continue
+		}
+		var value string
+		if err := json.Unmarshal(raw, &value); err != nil {
+			return nil, stack.ErrInvalidInput
+		}
+		if _, err := parsePortableInstant(value, 1970); err != nil {
+			return nil, stack.ErrInvalidInput
+		}
+		canonical, err := json.Marshal(value)
+		if err != nil || !bytes.Equal(canonical, raw) {
+			return nil, stack.ErrInvalidInput
+		}
+	}
 	if raw, ok := projected["documentIds"]; ok {
 		var ids []string
 		if err := json.Unmarshal(raw, &ids); err != nil {
@@ -359,6 +376,19 @@ func restoreStackPayload(record Record) ([]byte, error) {
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		return nil, stack.ErrInvalidInput
 	}
+	for _, field := range stackPortableInstantFields(record.Type) {
+		value, ok := value[field]
+		if !ok {
+			continue
+		}
+		instant, ok := value.(string)
+		if !ok {
+			return nil, stack.ErrInvalidInput
+		}
+		if _, err := parsePortableInstant(instant, 1970); err != nil {
+			return nil, stack.ErrInvalidInput
+		}
+	}
 	value["id"], value["revision"] = record.ID, record.Revision
 	value["sourceSystemId"], value["sourceRecordId"] = record.Provenance.SourceSystemID, record.Provenance.SourceRecordID
 	for _, field := range []string{"releasedOn", "startsOn", "expiresOn"} {
@@ -380,6 +410,17 @@ func restoreStackPayload(record Record) ([]byte, error) {
 		return nil, stack.ErrInvalidInput
 	}
 	return result, nil
+}
+
+func stackPortableInstantFields(recordType string) []string {
+	switch recordType {
+	case "stack.installation":
+		return []string{"installedAt", "lastUsedAt", "removedAt"}
+	case "stack.assignment":
+		return []string{"assignedAt", "lastUsedAt", "endedAt"}
+	default:
+		return nil
+	}
 }
 
 func parseStackReference(value string) (Reference, error) {

@@ -1,7 +1,8 @@
 # Bridge — REST, gRPC, OAuth, and MCP
 
 - **Canonical ID:** `integrations.protocols`
-- **Requirements:** `REQ-API-001`, `SEC-MCP-001`
+- **Requirements:** `REQ-API-001`, `SEC-MCP-001`, `REQ-EXCHANGE-001`
+- **Exchange integration:** `migration.packages`
 - **Roadmap issue:** [#14](https://github.com/WSCMAX/StewardMesh/issues/14)
 - **Protocol/SDK:** MCP `2026-07-28`; official Go SDK `github.com/modelcontextprotocol/go-sdk` `v1.7.0`
 
@@ -14,6 +15,16 @@ Bridge never accepts SQL, shell commands, filesystem paths, arbitrary URLs, dyna
 ## OAuth 2.1 profile
 
 Remote MCP clients are pre-registered public clients. Each has one through ten exact redirect URIs and an allowlist drawn from `mcp:resources`, `assets:read`, `directory:read`, `signals:read`, and `signals:acknowledge`. Redirects require HTTPS except exact loopback HTTP development URIs. Wildcards, fragments, userinfo, open redirects, and client secrets are prohibited.
+
+Public client configuration is portable through Exchange as
+`bridge.oauth-client`. The payload contains only the stable client ID, name,
+exact redirect URI allowlist, allowed scopes, and optional revocation instant;
+revision 1 means active and revision 2 means revoked. It never includes a
+secret, credential or token hash, grant, authorization request/code, consent
+transaction, confirmation, rate window, organization ID, or creator identity.
+Import applies the same exact redirect and scope validation as registration,
+and imported clients remain readable but cannot be revoked until an
+administrator claims local ownership in Guard.
 
 Authorization uses the code flow with mandatory S256 PKCE. The authorization request binds client, exact redirect, actor, organization, resource audience, scopes, state, and code challenge for ten minutes. Consent shows the client and exact scopes to the signed-in actor. An approved server-generated code expires after two minutes and is consumed atomically once. The token endpoint requires the same client, redirect, resource, and verifier. Access tokens expire after 15 minutes; refresh tokens expire after eight hours and rotate atomically on every use. Only SHA-256 credential hashes are persisted. Client, grant, and token revocation take effect on the next request.
 
@@ -40,14 +51,13 @@ Every resource read and tool call emits `bridge.mcp.operation` with bounded acto
 
 The all-domain gRPC adapter covers all 16 domain services and all 154 unary
 RPCs declared by the checked-in descriptor, not only Bridge administration.
-Production registration remains approval-gated, so the standalone command
-continues to expose only Bridge administration in this change. A fixed
-route/converter registry invokes the existing in-process
-REST application, so Guard permissions, organization and resource scope,
-ownership locks, validation, hard limits, auditing, repositories, and stable
-errors stay on one implementation path. Descriptor coverage fails if a declared
-method is missing from runtime registration. CSV, Exchange archives, Vault
-objects, and Atlas label artifacts have explicit bounded byte converters.
+The standalone command registers all of them through a fixed route/converter
+registry that invokes the existing in-process REST application, so Guard
+permissions, organization and resource scope, ownership locks, validation, hard
+limits, auditing, repositories, and stable errors stay on one implementation
+path. Descriptor coverage fails if a declared method is missing from runtime
+registration. CSV, Exchange archives, Vault objects, and Atlas label artifacts
+have explicit bounded byte converters.
 
 | Operation | REST | gRPC | Parity |
 | --- | --- | --- | --- |
@@ -56,7 +66,7 @@ objects, and Atlas label artifacts have explicit bounded byte converters.
 | OAuth metadata, authorize, token, revoke, consent redirect | Well-known, `/oauth/*`, consent API | Not exposed | Intentionally HTTP/browser protocol operations |
 | MCP remote and local transports | `/mcp`, stdio command | Not exposed | MCP owns its wire protocol; wrapping JSON-RPC in gRPC would not add parity |
 
-The checked-in OpenAPI and generated Go protobuf/gRPC bindings are validated in CI. `go run ./cmd/stewardmesh-grpc` currently starts the approved Bridge administration listener on `127.0.0.1:9090`; all-domain activation is a separate security-reviewed deployment step. In the all-domain adapter, except for Guard bootstrap status, bootstrap, and local authentication, each RPC requires exactly one current opaque Guard session as `authorization: Bearer <session>` metadata and revalidates it before decoding. Client cookies, origins, and CSRF metadata are ignored; browser CSRF state and values are not exposed or rotated. Activation must isolate those three public methods on a 64 KiB listener from the authenticated 34 MiB listener that accommodates the bounded 32 MiB Exchange archive plus framing, because codec validation runs after grpc-go decompression. Both listeners must bound header bytes, streams per connection, and total in-process RPC concurrency while route-specific limits remain authoritative. The existing command's non-loopback address still fails closed unless certificate/key files configure TLS 1.3 or newer. OAuth/browser redirects and MCP keep their native protocols. See the [runtime parity validation](../validation/grpc-runtime-parity.md).
+The checked-in OpenAPI and generated Go protobuf/gRPC bindings are validated in CI. `go run ./cmd/stewardmesh-grpc` starts a protected all-domain listener on `127.0.0.1:9090` and a public listener on `127.0.0.1:9091`. The public listener registers only Guard bootstrap status, bootstrap, local authentication, and the standard unary gRPC health Check with a 64 KiB envelope; anonymous long-lived health Watch and service List calls are unavailable so they cannot retain Guard capacity. The protected listener registers the other 151 RPCs with a 34 MiB envelope that accommodates the bounded 32 MiB Exchange archive plus framing. Each protected RPC requires exactly one current opaque Guard session as `authorization: Bearer <session>` metadata and revalidates it before decoding. Client cookies, origins, and CSRF metadata are ignored; browser CSRF state and values are not exposed or rotated. Both listeners enforce 16 KiB headers, bounded streams per connection, a five-minute maximum RPC lifetime, and bounded public/protected/process-wide concurrency before decoding while route-specific limits remain authoritative. Plaintext fails closed off loopback; non-loopback binding requires certificate/key files, an HTTPS application origin, secure session cookies, and TLS 1.3 or newer. A remote public listener also requires the deployment bootstrap token until administrator setup is complete. OAuth/browser redirects and MCP keep their native protocols. See the [runtime parity validation](../validation/grpc-runtime-parity.md).
 
 Client and retained-grant administration uses stable ID cursors, a default page of 25, and a hard page limit of 100 in the service, memory/PostgreSQL adapters, REST, gRPC, OpenAPI, protobuf, and Workspace. The UI exposes keyboard-operable continuation controls instead of loading unbounded grant history. PostgreSQL serializes the active-client capacity check per organization within the creation transaction, so concurrent registrations cannot exceed 50.
 

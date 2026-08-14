@@ -20,6 +20,7 @@ var (
 	ErrConflict          = errors.New("Ledger record conflicts with existing data")
 	ErrReferenceMissing  = errors.New("Ledger reference does not exist")
 	ErrInvalidTransition = errors.New("invalid Ledger status transition")
+	ErrTooLarge          = errors.New("Ledger snapshot exceeds a configured limit")
 )
 
 type Vendor struct {
@@ -239,6 +240,37 @@ type ReconcileResult struct {
 	Created bool       `json:"created"`
 }
 
+// ExchangeImportOperation is the deterministic mutation identity reserved by
+// Exchange before it invokes Ledger's private importer capability.
+type ExchangeImportOperation struct {
+	Token      string
+	OccurredAt time.Time
+}
+
+type ExchangeImportResult struct {
+	Committed bool
+	Created   bool
+}
+
+// ExchangeImporter is an opaque construction-time capability. It is the only
+// Ledger surface that can preserve source revisions and timestamps while
+// repairing the exact deterministic audit event after an ambiguous commit.
+type ExchangeImporter interface {
+	ImportVendor(context.Context, ExchangeImportOperation, Vendor) (ExchangeImportResult, error)
+	ImportPurchaseOrder(context.Context, ExchangeImportOperation, PurchaseOrder) (ExchangeImportResult, error)
+	ImportContract(context.Context, ExchangeImportOperation, Contract) (ExchangeImportResult, error)
+	ImportCommitment(context.Context, ExchangeImportOperation, Commitment) (ExchangeImportResult, error)
+	ImportBudget(context.Context, ExchangeImportOperation, Budget) (ExchangeImportResult, error)
+	ImportCost(context.Context, ExchangeImportOperation, CostRecord) (ExchangeImportResult, error)
+	ledgerExchangeImporter()
+}
+
+// WriteGate fences ordinary service mutations of imported Ledger resources.
+// Exchange alone receives the opaque importer capability that bypasses it.
+type WriteGate interface {
+	CheckResourceWrite(context.Context, string, string) error
+}
+
 type ReferenceValidator interface {
 	ValidateAssets(ctx context.Context, assetIDs []string) error
 	ValidateDocuments(ctx context.Context, documentIDs []string) error
@@ -247,6 +279,7 @@ type ReferenceValidator interface {
 
 type Store interface {
 	Snapshot(ctx context.Context, organizationID string) (Snapshot, error)
+	ExchangeSnapshot(ctx context.Context, organizationID string, maximum int) (Snapshot, error)
 	GetVendor(ctx context.Context, organizationID, id string) (Vendor, error)
 	CreateVendor(ctx context.Context, vendor Vendor) (Vendor, error)
 	GetPurchaseOrder(ctx context.Context, organizationID, id string) (PurchaseOrder, error)
@@ -255,8 +288,11 @@ type Store interface {
 	GetContract(ctx context.Context, organizationID, id string) (Contract, error)
 	CreateContract(ctx context.Context, contract Contract) (Contract, error)
 	UpdateContract(ctx context.Context, contract Contract, expectedRevision int64) (Contract, error)
+	GetCommitment(ctx context.Context, organizationID, id string) (Commitment, error)
 	CreateCommitment(ctx context.Context, commitment Commitment) (Commitment, error)
+	GetBudget(ctx context.Context, organizationID, id string) (Budget, error)
 	CreateBudget(ctx context.Context, budget Budget) (Budget, error)
+	GetCost(ctx context.Context, organizationID, id string) (CostRecord, error)
 	GetCostBySource(ctx context.Context, organizationID, sourceSystemID, sourceRecordID string) (CostRecord, error)
 	CreateCost(ctx context.Context, cost CostRecord) (CostRecord, error)
 	UpdateCost(ctx context.Context, cost CostRecord, expectedRevision int64) (CostRecord, error)

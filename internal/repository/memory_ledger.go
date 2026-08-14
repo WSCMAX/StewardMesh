@@ -38,6 +38,10 @@ func ledgerSourceKey(organizationID, sourceSystemID, sourceRecordID string) stri
 func (s *MemoryLedgerStore) Snapshot(_ context.Context, organizationID string) (ledger.Snapshot, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	return s.snapshot(organizationID), nil
+}
+
+func (s *MemoryLedgerStore) snapshot(organizationID string) ledger.Snapshot {
 	result := ledger.Snapshot{
 		Vendors: []ledger.Vendor{}, PurchaseOrders: []ledger.PurchaseOrder{}, Contracts: []ledger.Contract{},
 		Commitments: []ledger.Commitment{}, Budgets: []ledger.Budget{}, Costs: []ledger.CostRecord{},
@@ -83,6 +87,20 @@ func (s *MemoryLedgerStore) Snapshot(_ context.Context, organizationID string) (
 		return result.Budgets[i].FiscalPeriod < result.Budgets[j].FiscalPeriod
 	})
 	sort.Slice(result.Costs, func(i, j int) bool { return result.Costs[i].CreatedAt.Before(result.Costs[j].CreatedAt) })
+	return result
+}
+
+func (s *MemoryLedgerStore) ExchangeSnapshot(ctx context.Context, organizationID string, maximum int) (ledger.Snapshot, error) {
+	if organizationID == "" || maximum < 1 {
+		return ledger.Snapshot{}, ledger.ErrInvalidInput
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	result := s.snapshot(organizationID)
+	count := len(result.Vendors) + len(result.PurchaseOrders) + len(result.Contracts) + len(result.Commitments) + len(result.Budgets) + len(result.Costs)
+	if count > maximum {
+		return ledger.Snapshot{}, ledger.ErrTooLarge
+	}
 	return result, nil
 }
 
@@ -200,6 +218,16 @@ func (s *MemoryLedgerStore) CreateCommitment(_ context.Context, item ledger.Comm
 	return item, nil
 }
 
+func (s *MemoryLedgerStore) GetCommitment(_ context.Context, organizationID, id string) (ledger.Commitment, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	item, ok := s.commitments[ledgerKey(organizationID, id)]
+	if !ok {
+		return ledger.Commitment{}, ledger.ErrNotFound
+	}
+	return item, nil
+}
+
 func (s *MemoryLedgerStore) CreateBudget(_ context.Context, item ledger.Budget) (ledger.Budget, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -213,6 +241,26 @@ func (s *MemoryLedgerStore) CreateBudget(_ context.Context, item ledger.Budget) 
 		}
 	}
 	s.budgets[key] = item
+	return item, nil
+}
+
+func (s *MemoryLedgerStore) GetBudget(_ context.Context, organizationID, id string) (ledger.Budget, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	item, ok := s.budgets[ledgerKey(organizationID, id)]
+	if !ok {
+		return ledger.Budget{}, ledger.ErrNotFound
+	}
+	return item, nil
+}
+
+func (s *MemoryLedgerStore) GetCost(_ context.Context, organizationID, id string) (ledger.CostRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	item, ok := s.costs[ledgerKey(organizationID, id)]
+	if !ok {
+		return ledger.CostRecord{}, ledger.ErrNotFound
+	}
 	return item, nil
 }
 

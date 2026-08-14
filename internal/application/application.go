@@ -1,7 +1,7 @@
 // Package application constructs StewardMesh's transport-neutral HTTP
 // application and owns the lifecycle of its shared runtime dependencies.
-// Requirements: REQ-API-001, REQ-FOUNDATION-001, REQ-ATLAS-001, REQ-ATLAS-CODES-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005, REQ-DIRECTORY-EXPANSION-006, REQ-DIRECTORY-EXPANSION-007, REQ-DIRECTORY-EXPANSION-008, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-STACK-001, REQ-HORIZON-001, REQ-SIGNALS-001, REQ-REACH-001, REQ-EXCHANGE-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001.
-// Features: integrations.protocols, threads.relationships, migration.packages.
+// Requirements: REQ-API-001, REQ-FOUNDATION-001, REQ-ATLAS-001, REQ-ATLAS-CATALOG-001, REQ-ATLAS-CODES-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005, REQ-DIRECTORY-EXPANSION-006, REQ-DIRECTORY-EXPANSION-007, REQ-DIRECTORY-EXPANSION-008, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-STACK-001, REQ-HORIZON-001, REQ-SIGNALS-001, REQ-REACH-001, REQ-EXCHANGE-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001.
+// Features: integrations.protocols, inventory.catalog, threads.relationships, migration.packages.
 package application
 
 import (
@@ -19,6 +19,7 @@ import (
 	"github.com/maxlemke/stewardmesh/internal/bootstrap"
 	"github.com/maxlemke/stewardmesh/internal/bridge"
 	"github.com/maxlemke/stewardmesh/internal/cache"
+	"github.com/maxlemke/stewardmesh/internal/catalog"
 	"github.com/maxlemke/stewardmesh/internal/config"
 	"github.com/maxlemke/stewardmesh/internal/directoryexpansion"
 	"github.com/maxlemke/stewardmesh/internal/directoryexpansion/entra"
@@ -60,6 +61,9 @@ type Application struct {
 	bridge          *bridge.Service
 	guard           *guard.Service
 	vault           *storage.Service
+	catalog         *catalog.Service
+	horizon         *horizon.Service
+	patterns        *patterns.Service
 	organization    bootstrap.Organization
 	closeCache      func() error
 	closeFoundation func() error
@@ -173,25 +177,30 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 		return fail(fmt.Errorf("initialize Guard: %w", err))
 	}
 	application.guard = guardService
-	atlasService, err := atlas.NewService(runtime.assetStore, peopleAssetReferenceValidator{store: runtime.peopleStore}, runtime.auditor, atlas.ServiceConfig{
+	atlasService, atlasImporter, err := atlas.NewServiceWithExchangeImporter(runtime.assetStore, peopleAssetReferenceValidator{store: runtime.peopleStore}, atlasWriteGate{guard: guardService}, runtime.auditor, atlas.ServiceConfig{
 		OrganizationID: cfg.OrganizationID,
 	})
 	if err != nil {
 		return fail(fmt.Errorf("initialize Atlas: %w", err))
 	}
-	atlasCodesService, err := atlascodes.NewService(runtime.atlasCodesStore, atlasService, runtime.auditor, atlascodes.ServiceConfig{
+	catalogService, catalogImporter, err := catalog.NewServiceWithExchangeImporter(runtime.catalogStore, atlasService, catalogWriteGate{guard: guardService}, runtime.auditor, catalog.ServiceConfig{OrganizationID: cfg.OrganizationID})
+	if err != nil {
+		return fail(fmt.Errorf("initialize Atlas Catalog: %w", err))
+	}
+	application.catalog = catalogService
+	atlasCodesService, atlasCodesImporter, err := atlascodes.NewServiceWithExchangeImporter(runtime.atlasCodesStore, atlasService, atlasWriteGate{guard: guardService}, runtime.auditor, atlascodes.ServiceConfig{
 		OrganizationID: cfg.OrganizationID,
 	})
 	if err != nil {
 		return fail(fmt.Errorf("initialize Atlas Codes: %w", err))
 	}
-	threadsService, err := threads.NewService(runtime.threadsStore, threadsTargetValidator{atlas: atlasService}, runtime.auditor, threads.ServiceConfig{
+	threadsService, threadsImporter, err := threads.NewServiceWithExchangeImporter(runtime.threadsStore, threadsTargetValidator{atlas: atlasService}, threadsWriteGate{guard: guardService}, runtime.auditor, threads.ServiceConfig{
 		OrganizationID: cfg.OrganizationID,
 	})
 	if err != nil {
 		return fail(fmt.Errorf("initialize Threads: %w", err))
 	}
-	peopleService, err := people.NewService(runtime.peopleStore, atlasService, runtime.auditor, people.ServiceConfig{
+	peopleService, peopleImporter, err := people.NewServiceWithExchangeImporter(runtime.peopleStore, atlasService, peopleWriteGate{guard: guardService}, runtime.auditor, people.ServiceConfig{
 		OrganizationID: cfg.OrganizationID,
 	})
 	if err != nil {
@@ -247,7 +256,8 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 	if err != nil {
 		return fail(fmt.Errorf("initialize directory People target: %w", err))
 	}
-	groupTarget, err := directoryexpansion.NewGroupTarget(runtime.directoryImportStore, guardService, nil)
+	groupTarget, directoryImporter, err := directoryexpansion.NewGroupTargetWithExchangeImporter(runtime.directoryImportStore, guardService, runtime.auditor,
+		directoryexpansion.GroupTargetExchangeConfig{OrganizationID: cfg.OrganizationID})
 	if err != nil {
 		return fail(fmt.Errorf("initialize directory group target: %w", err))
 	}
@@ -262,8 +272,18 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 		return fail(fmt.Errorf("initialize directory imports: %w", err))
 	}
 	if cfg.SeedSynthetic {
+		// Synthetic demo seeding is an explicit, demo-organization-only startup
+		// operation performed by a system actor rather than a Guard account. Keep
+		// its unfenced People service private to this block; all application and
+		// HTTP writes continue through the Guard-fenced service above.
+		syntheticPeopleService, syntheticPeopleErr := people.NewService(runtime.peopleStore, atlasService, runtime.auditor, people.ServiceConfig{
+			OrganizationID: cfg.OrganizationID,
+		})
+		if syntheticPeopleErr != nil {
+			return fail(fmt.Errorf("initialize synthetic demo People service: %w", syntheticPeopleErr))
+		}
 		if _, err := (directoryexpansion.SyntheticSeeder{
-			Enabled: cfg.SeedSynthetic, OrganizationID: cfg.OrganizationID, People: peopleService, Directory: directoryService, Auditor: runtime.auditor,
+			Enabled: cfg.SeedSynthetic, OrganizationID: cfg.OrganizationID, People: syntheticPeopleService, Directory: directoryService, Auditor: runtime.auditor,
 		}).Seed(ctx); err != nil {
 			return fail(fmt.Errorf("seed synthetic demo data: %w", err))
 		}
@@ -272,9 +292,9 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 	if err != nil {
 		return fail(fmt.Errorf("initialize directory graph: %w", err))
 	}
-	ledgerService, err := ledger.NewService(runtime.ledgerStore, ledgerReferenceValidator{
+	ledgerService, ledgerImporter, err := ledger.NewServiceWithExchangeImporter(runtime.ledgerStore, ledgerReferenceValidator{
 		atlas: atlasService, vault: vaultService, people: runtime.peopleStore, organizationID: cfg.OrganizationID,
-	}, runtime.auditor, ledger.ServiceConfig{OrganizationID: cfg.OrganizationID})
+	}, ledgerWriteGate{guard: guardService}, runtime.auditor, ledger.ServiceConfig{OrganizationID: cfg.OrganizationID})
 	if err != nil {
 		return fail(fmt.Errorf("initialize Ledger: %w", err))
 	}
@@ -285,10 +305,14 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 	if err != nil {
 		return fail(fmt.Errorf("initialize Stack: %w", err))
 	}
-	horizonService, err := horizon.NewService(runtime.horizonStore, atlasService, ledgerService, threadsService, runtime.auditor, horizon.ServiceConfig{OrganizationID: cfg.OrganizationID})
+	horizonService, horizonImporter, err := horizon.NewServiceWithExchangeImporter(
+		runtime.horizonStore, atlasService, ledgerService, threadsService, horizonWriteGate{guard: guardService}, runtime.auditor,
+		horizon.ServiceConfig{OrganizationID: cfg.OrganizationID},
+	)
 	if err != nil {
 		return fail(fmt.Errorf("initialize Horizon: %w", err))
 	}
+	application.horizon = horizonService
 	reachEndpoints := append([]reach.Endpoint(nil), options.ReachEndpoints...)
 	if options.ReachEndpoints == nil {
 		reachEndpoints, err = reach.LoadEndpointsFile(cfg.ReachEndpointsFile)
@@ -304,9 +328,10 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 	if err != nil {
 		return fail(fmt.Errorf("initialize Reach subscription target catalog: %w", err))
 	}
-	signalsService, err := signals.NewService(runtime.signalsStore, signalsEvaluator{ledger: ledgerService, stack: stackService, horizon: horizonService}, runtime.auditor, signals.ServiceConfig{
-		OrganizationID:      cfg.OrganizationID,
-		SubscriptionTargets: signalTargets,
+	signalsService, signalsImporter, err := signals.NewServiceWithExchangeImporter(runtime.signalsStore, signalsEvaluator{ledger: ledgerService, stack: stackService, horizon: horizonService}, signalsWriteGate{guard: guardService}, runtime.auditor, signals.ServiceConfig{
+		OrganizationID:               cfg.OrganizationID,
+		SubscriptionTargets:          signalTargets,
+		SubscriptionTargetReferences: signalTargets,
 	})
 	if err != nil {
 		return fail(fmt.Errorf("initialize Signals: %w", err))
@@ -325,17 +350,35 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 			return fail(fmt.Errorf("initialize Reach transports: %w", err))
 		}
 	}
-	reachService, err := reach.NewService(runtime.reachStore, reachEndpointCatalog, reachTransports, reachSecrets, signalsService, runtime.auditor, reach.ServiceConfig{OrganizationID: cfg.OrganizationID})
+	reachService, reachImporter, err := reach.NewServiceWithExchangeImporter(runtime.reachStore, reachEndpointCatalog, reachTransports, reachSecrets, signalsService, reachWriteGate{guard: guardService}, runtime.auditor, reach.ServiceConfig{OrganizationID: cfg.OrganizationID})
 	if err != nil {
 		return fail(fmt.Errorf("initialize Reach: %w", err))
 	}
-	patternsService, err := patterns.NewService(runtime.patternsStore, runtime.auditor, patterns.ServiceConfig{OrganizationID: cfg.OrganizationID})
+	patternsService, patternsImporter, err := patterns.NewServiceWithExchangeImporter(runtime.patternsStore, guardWriteGate{guard: guardService}, runtime.auditor, patterns.ServiceConfig{OrganizationID: cfg.OrganizationID})
 	if err != nil {
 		return fail(fmt.Errorf("initialize Patterns: %w", err))
 	}
+	application.patterns = patternsService
 	atlasLabelsService, err := atlascodes.NewLabelService(atlasCodesService, atlasService, patternsService, atlascodes.DefaultLabelRenderers(), nil)
 	if err != nil {
 		return fail(fmt.Errorf("initialize Atlas Codes labels: %w", err))
+	}
+	bridgeService, bridgeImporter, err := bridge.NewServiceWithExchangeImporter(runtime.bridgeStore, guardService, atlasService, peopleService, signalsService, runtime.auditor, runtime.organization, bridge.ServiceConfig{
+		OrganizationID: cfg.OrganizationID,
+		Issuer:         strings.TrimRight(cfg.AllowedOrigin, "/"),
+		ResourceURI:    strings.TrimRight(cfg.AllowedOrigin, "/") + "/mcp",
+	})
+	if err != nil {
+		return fail(fmt.Errorf("initialize Bridge: %w", err))
+	}
+	application.bridge = bridgeService
+	atlasExchangeProvider, err := exchange.NewAtlasProvider(atlasService, atlasImporter)
+	if err != nil {
+		return fail(fmt.Errorf("initialize Exchange Atlas provider: %w", err))
+	}
+	atlasCodesExchangeProvider, err := exchange.NewAtlasCodesProvider(atlasCodesService, atlasCodesImporter)
+	if err != nil {
+		return fail(fmt.Errorf("initialize Exchange Atlas Codes provider: %w", err))
 	}
 	stackExchangeProvider, err := exchange.NewStackProvider(stackService, stackImporter)
 	if err != nil {
@@ -345,24 +388,64 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 	if err != nil {
 		return fail(fmt.Errorf("initialize Exchange Vault provider: %w", err))
 	}
+	catalogExchangeProvider, err := exchange.NewCatalogProvider(catalogService, catalogImporter)
+	if err != nil {
+		return fail(fmt.Errorf("initialize Exchange Atlas Catalog provider: %w", err))
+	}
+	horizonExchangeProvider, err := exchange.NewHorizonProvider(horizonService, horizonImporter)
+	if err != nil {
+		return fail(fmt.Errorf("initialize Exchange Horizon provider: %w", err))
+	}
+	peopleExchangeProvider, err := exchange.NewPeopleProvider(peopleService, peopleImporter)
+	if err != nil {
+		return fail(fmt.Errorf("initialize Exchange People provider: %w", err))
+	}
+	threadsExchangeProvider, err := exchange.NewThreadsProvider(threadsService, threadsImporter)
+	if err != nil {
+		return fail(fmt.Errorf("initialize Exchange Threads provider: %w", err))
+	}
+	patternsExchangeProvider, err := exchange.NewPatternsProvider(patternsService, patternsImporter)
+	if err != nil {
+		return fail(fmt.Errorf("initialize Exchange Patterns provider: %w", err))
+	}
+	ledgerExchangeProvider, err := exchange.NewLedgerProvider(ledgerService, ledgerImporter)
+	if err != nil {
+		return fail(fmt.Errorf("initialize Exchange Ledger provider: %w", err))
+	}
+	bridgeExchangeProvider, err := exchange.NewBridgeProvider(bridgeService, bridgeImporter)
+	if err != nil {
+		return fail(fmt.Errorf("initialize Exchange Bridge provider: %w", err))
+	}
+	signalsExchangeProvider, err := exchange.NewSignalsProvider(signalsService, signalsImporter)
+	if err != nil {
+		return fail(fmt.Errorf("initialize Exchange Signals provider: %w", err))
+	}
+	reachExchangeProvider, err := exchange.NewReachProvider(reachService, reachImporter)
+	if err != nil {
+		return fail(fmt.Errorf("initialize Exchange Reach provider: %w", err))
+	}
+	directoryExchangeProvider, err := exchange.NewDirectoryProvider(groupTarget, directoryImporter)
+	if err != nil {
+		return fail(fmt.Errorf("initialize Exchange Directory provider: %w", err))
+	}
+	exchangeProviders := []exchange.Provider{
+		atlasExchangeProvider, atlasCodesExchangeProvider, catalogExchangeProvider,
+		peopleExchangeProvider, threadsExchangeProvider, ledgerExchangeProvider,
+		horizonExchangeProvider, patternsExchangeProvider, signalsExchangeProvider,
+		reachExchangeProvider, directoryExchangeProvider, bridgeExchangeProvider,
+		stackExchangeProvider, vaultExchangeProvider,
+	}
+	if err := exchange.ValidatePortableProviders(exchangeProviders...); err != nil {
+		return fail(fmt.Errorf("validate Exchange portable provider registry: %w", err))
+	}
 	exchangeService, err := exchange.NewService(runtime.exchangeStore, runtime.auditor, guardService, exchange.ServiceConfig{
 		OrganizationID: cfg.OrganizationID,
 		SourceSystemID: cfg.ExchangeSourceSystemID,
 		Schemas:        patternsService,
-	}, stackExchangeProvider, vaultExchangeProvider)
+	}, exchangeProviders...)
 	if err != nil {
 		return fail(fmt.Errorf("initialize Exchange: %w", err))
 	}
-	bridgeService, err := bridge.NewService(runtime.bridgeStore, guardService, atlasService, peopleService, signalsService, runtime.auditor, runtime.organization, bridge.ServiceConfig{
-		OrganizationID: cfg.OrganizationID,
-		Issuer:         strings.TrimRight(cfg.AllowedOrigin, "/"),
-		ResourceURI:    strings.TrimRight(cfg.AllowedOrigin, "/") + "/mcp",
-	})
-	if err != nil {
-		return fail(fmt.Errorf("initialize Bridge: %w", err))
-	}
-	application.bridge = bridgeService
-
 	application.handler = httpapi.NewServer(httpapi.Dependencies{
 		Atlas:               atlasService,
 		AtlasCodes:          atlasCodesService,
@@ -423,6 +506,36 @@ func (a *Application) Vault() *storage.Service {
 	return a.vault
 }
 
+// Catalog returns the organization-scoped Atlas Catalog service for internal
+// integration providers. Browser and external transports remain responsible
+// for explicit Guard authorization before exposing Catalog management.
+func (a *Application) Catalog() *catalog.Service {
+	if a == nil {
+		return nil
+	}
+	return a.catalog
+}
+
+// Horizon returns the organization-scoped lifecycle planning service for
+// internal transport integrations. Ordinary writes remain fenced by Guard at
+// the service boundary after an Exchange import.
+func (a *Application) Horizon() *horizon.Service {
+	if a == nil {
+		return nil
+	}
+	return a.horizon
+}
+
+// Patterns returns the organization-scoped template service for internal
+// integration tests and transport adapters. Ordinary custom-template writes
+// remain fenced after Exchange imports.
+func (a *Application) Patterns() *patterns.Service {
+	if a == nil {
+		return nil
+	}
+	return a.patterns
+}
+
 // Guard returns the authoritative session service for non-browser transports.
 // Domain authorization remains in the shared HTTP handlers.
 func (a *Application) Guard() *guard.Service {
@@ -454,6 +567,7 @@ func (a *Application) Close() error {
 type foundationRuntime struct {
 	organization         bootstrap.Organization
 	assetStore           atlas.Store
+	catalogStore         catalog.Store
 	atlasCodesStore      atlascodes.Store
 	threadsStore         threads.Store
 	storageStore         storage.MetadataStore
@@ -474,7 +588,7 @@ type foundationRuntime struct {
 
 type directoryStore interface {
 	directoryexpansion.Store
-	directoryexpansion.GroupTargetStore
+	directoryexpansion.GroupExchangeStore
 }
 
 func initializeAttemptLimiter(ctx context.Context, cfg config.Config) (guard.AttemptLimiter, func() error, error) {
@@ -531,6 +645,7 @@ func initializeFoundation(ctx context.Context, cfg config.Config, runMigrations 
 	var (
 		organizations        repository.OrganizationRepository
 		assetStore           atlas.Store
+		catalogStore         catalog.Store
 		atlasCodesStore      atlascodes.Store
 		threadsStore         threads.Store
 		storageStore         storage.MetadataStore
@@ -557,6 +672,7 @@ func initializeFoundation(ctx context.Context, cfg config.Config, runMigrations 
 		directoryImportStore = repository.NewMemoryDirectoryImportStore()
 		exchangeStore = repository.NewMemoryExchangeStore()
 		assetStore = repository.NewMemoryAtlasStoreWithPeople(memoryPeopleStore)
+		catalogStore = repository.NewMemoryCatalogStore()
 		atlasCodesStore = repository.NewMemoryAtlasCodesStore()
 		threadsStore = repository.NewMemoryThreadsStore()
 		storageStore = repository.NewMemoryStorageStore()
@@ -610,6 +726,11 @@ func initializeFoundation(ctx context.Context, cfg config.Config, runMigrations 
 			return foundationRuntime{}, err
 		}
 		assetStore, err = postgresrepository.NewAtlasStore(database)
+		if err != nil {
+			_ = database.Close()
+			return foundationRuntime{}, err
+		}
+		catalogStore, err = postgresrepository.NewCatalogStore(database)
 		if err != nil {
 			_ = database.Close()
 			return foundationRuntime{}, err
@@ -713,6 +834,7 @@ func initializeFoundation(ctx context.Context, cfg config.Config, runMigrations 
 	return foundationRuntime{
 		organization:         organization,
 		assetStore:           assetStore,
+		catalogStore:         catalogStore,
 		atlasCodesStore:      atlasCodesStore,
 		threadsStore:         threadsStore,
 		storageStore:         storageStore,
@@ -745,6 +867,71 @@ func initializeBlobStore(ctx context.Context, cfg config.Config) (storage.Object
 
 type threadsTargetValidator struct {
 	atlas *atlas.Service
+}
+
+type guardWriteGate struct{ guard *guard.Service }
+
+func (g guardWriteGate) CheckResourceWrite(ctx context.Context, resourceType, resourceID string) error {
+	if g.guard == nil {
+		return errors.New("Guard service is required")
+	}
+	scope, ok := foundation.ScopeFromContext(ctx)
+	if !ok || strings.TrimSpace(scope.ActorID) == "" {
+		return guard.ErrPermissionDenied
+	}
+	authentication, err := g.guard.AuthenticateAccount(ctx, scope.ActorID)
+	if err != nil {
+		return err
+	}
+	return g.guard.CheckResourceWrite(ctx, authentication, resourceType, resourceID)
+}
+
+type atlasWriteGate struct{ guard *guard.Service }
+
+func (g atlasWriteGate) CheckResourceWrite(ctx context.Context, resourceType, resourceID string) error {
+	return (guardWriteGate{guard: g.guard}).CheckResourceWrite(ctx, resourceType, resourceID)
+}
+
+type catalogWriteGate struct{ guard *guard.Service }
+
+func (g catalogWriteGate) CheckResourceWrite(ctx context.Context, resourceType, resourceID string) error {
+	return (guardWriteGate{guard: g.guard}).CheckResourceWrite(ctx, resourceType, resourceID)
+}
+
+type peopleWriteGate struct{ guard *guard.Service }
+
+func (g peopleWriteGate) CheckResourceWrite(ctx context.Context, resourceType, resourceID string) error {
+	return (guardWriteGate{guard: g.guard}).CheckResourceWrite(ctx, resourceType, resourceID)
+}
+
+type threadsWriteGate struct{ guard *guard.Service }
+
+func (g threadsWriteGate) CheckResourceWrite(ctx context.Context, resourceType, resourceID string) error {
+	return (guardWriteGate{guard: g.guard}).CheckResourceWrite(ctx, resourceType, resourceID)
+}
+
+type horizonWriteGate struct{ guard *guard.Service }
+
+func (g horizonWriteGate) CheckResourceWrite(ctx context.Context, resourceType, resourceID string) error {
+	return (guardWriteGate{guard: g.guard}).CheckResourceWrite(ctx, resourceType, resourceID)
+}
+
+type signalsWriteGate struct{ guard *guard.Service }
+
+func (g signalsWriteGate) CheckResourceWrite(ctx context.Context, resourceType, resourceID string) error {
+	return (guardWriteGate{guard: g.guard}).CheckResourceWrite(ctx, resourceType, resourceID)
+}
+
+type ledgerWriteGate struct{ guard *guard.Service }
+
+func (g ledgerWriteGate) CheckResourceWrite(ctx context.Context, resourceType, resourceID string) error {
+	return (guardWriteGate{guard: g.guard}).CheckResourceWrite(ctx, resourceType, resourceID)
+}
+
+type reachWriteGate struct{ guard *guard.Service }
+
+func (g reachWriteGate) CheckResourceWrite(ctx context.Context, resourceType, resourceID string) error {
+	return (guardWriteGate{guard: g.guard}).CheckResourceWrite(ctx, resourceType, resourceID)
 }
 
 type ledgerReferenceValidator struct {

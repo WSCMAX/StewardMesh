@@ -1,7 +1,7 @@
 package postgres
 
-// PostgreSQL Bridge adapter. Requirements: REQ-API-001, SEC-MCP-001.
-// Feature: integrations.protocols. GitHub: #14.
+// PostgreSQL Bridge adapter. Requirements: REQ-API-001, SEC-MCP-001, REQ-EXCHANGE-001.
+// Features: integrations.protocols, migration.packages. GitHub: #9, #14.
 
 import (
 	"context"
@@ -93,9 +93,106 @@ func (s *BridgeStore) ListClients(ctx context.Context, organizationID string, pa
 	return items, rows.Err()
 }
 
+func (s *BridgeStore) ListExchangeClients(ctx context.Context, organizationID string, limit int) ([]bridge.Client, error) {
+	if limit < 1 {
+		return nil, bridge.ErrInvalidInput
+	}
+	tx, err := s.database.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	if err != nil {
+		return nil, fmt.Errorf("begin Bridge Exchange client snapshot: %w", err)
+	}
+	defer tx.Rollback()
+	rows, err := tx.QueryContext(ctx, `SELECT `+bridgeClientColumns+` FROM bridge_oauth_clients WHERE organization_id=$1 ORDER BY id LIMIT $2`, organizationID, limit+1)
+	if err != nil {
+		return nil, fmt.Errorf("list Bridge Exchange clients: %w", err)
+	}
+	items := make([]bridge.Client, 0)
+	for rows.Next() {
+		item, scanErr := scanBridgeClient(rows)
+		if scanErr != nil {
+			rows.Close()
+			return nil, fmt.Errorf("scan Bridge Exchange client: %w", scanErr)
+		}
+		items = append(items, item)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("close Bridge Exchange client snapshot: %w", err)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate Bridge Exchange clients: %w", err)
+	}
+	if len(items) > limit {
+		return nil, bridge.ErrTooLarge
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit Bridge Exchange client snapshot: %w", err)
+	}
+	return items, nil
+}
+
 func (s *BridgeStore) GetClient(ctx context.Context, organizationID, clientID string) (bridge.Client, error) {
 	client, err := scanBridgeClient(s.database.QueryRowContext(ctx, `SELECT `+bridgeClientColumns+` FROM bridge_oauth_clients WHERE organization_id=$1 AND id=$2`, organizationID, clientID))
 	return client, bridgeReadError("get Bridge OAuth client", err)
+}
+
+func (s *BridgeStore) ImportExchangeClient(ctx context.Context, client bridge.Client) (bridge.Client, bool, error) {
+	redirects, err := json.Marshal(client.RedirectURIs)
+	if err != nil {
+		return bridge.Client{}, false, bridge.ErrInvalidInput
+	}
+	tx, err := s.database.BeginTx(ctx, nil)
+	if err != nil {
+		return bridge.Client{}, false, fmt.Errorf("begin Bridge Exchange client import: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 1414))`, client.OrganizationID); err != nil {
+		return bridge.Client{}, false, fmt.Errorf("lock Bridge Exchange client import: %w", err)
+	}
+	existing, err := scanBridgeClient(tx.QueryRowContext(ctx, `SELECT `+bridgeClientColumns+` FROM bridge_oauth_clients WHERE organization_id=$1 AND id=$2`, client.OrganizationID, client.ID))
+	if err == nil {
+		if !sameBridgeExchangeClient(existing, client) {
+			return bridge.Client{}, false, bridge.ErrConflict
+		}
+		if err := tx.Commit(); err != nil {
+			return bridge.Client{}, false, fmt.Errorf("commit Bridge Exchange client replay: %w", err)
+		}
+		return existing, false, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return bridge.Client{}, false, bridgeReadError("inspect Bridge Exchange client", err)
+	}
+	created, err := scanBridgeClient(tx.QueryRowContext(ctx, `INSERT INTO bridge_oauth_clients (organization_id,id,name,redirect_uris,allowed_scopes,created_by,created_at,revoked_at)
+		SELECT $1,$2,$3,$4::jsonb,$5,$6,$7,$8 WHERE $8::timestamptz IS NOT NULL OR
+			(SELECT count(*) FROM bridge_oauth_clients WHERE organization_id=$1 AND revoked_at IS NULL) < $9
+		RETURNING `+bridgeClientColumns, client.OrganizationID, client.ID, client.Name, string(redirects), scopeStrings(client.AllowedScopes), client.CreatedBy, client.CreatedAt, client.RevokedAt, bridge.MaximumClients))
+	if errors.Is(err, sql.ErrNoRows) {
+		return bridge.Client{}, false, bridge.ErrConflict
+	}
+	if err := bridgeWriteError("import Bridge Exchange client", err); err != nil {
+		return bridge.Client{}, false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return bridge.Client{}, false, fmt.Errorf("commit Bridge Exchange client import: %w", err)
+	}
+	return created, true, nil
+}
+
+func sameBridgeExchangeClient(left, right bridge.Client) bool {
+	if left.ID != right.ID || left.OrganizationID != right.OrganizationID || left.Name != right.Name || left.CreatedBy != right.CreatedBy ||
+		!left.CreatedAt.Equal(right.CreatedAt) || len(left.RedirectURIs) != len(right.RedirectURIs) || len(left.AllowedScopes) != len(right.AllowedScopes) {
+		return false
+	}
+	for index := range left.RedirectURIs {
+		if left.RedirectURIs[index] != right.RedirectURIs[index] {
+			return false
+		}
+	}
+	for index := range left.AllowedScopes {
+		if left.AllowedScopes[index] != right.AllowedScopes[index] {
+			return false
+		}
+	}
+	return left.RevokedAt == nil && right.RevokedAt == nil || left.RevokedAt != nil && right.RevokedAt != nil && left.RevokedAt.Equal(*right.RevokedAt)
 }
 
 func (s *BridgeStore) RevokeClient(ctx context.Context, organizationID, clientID string, revokedAt time.Time) (bridge.Client, error) {

@@ -382,7 +382,7 @@ func (s *MemoryPeopleStore) ListGraphLocations(_ context.Context, organizationID
 		room       *people.Room
 		department *people.Department
 	}
-	candidates := make([]candidate, 0, min(query.Limit, people.MaximumGraphIdentityLimit))
+	candidates := make([]candidate, 0, people.MaximumGraphIdentityLimit)
 	if query.Kind == "" || query.Kind == people.GraphLocationSite {
 		for _, item := range s.sites {
 			if item.OrganizationID != organizationID || item.Status != people.StatusActive || !visibility.All && !setContains(visibleSites, item.ID) {
@@ -686,7 +686,7 @@ func (s *MemoryPeopleStore) ListGraphIdentities(_ context.Context, organizationI
 	siteIDs := stringSet(query.SiteIDs)
 	hasSelector := len(identityIDs)+len(departmentIDs)+len(siteIDs) > 0
 	search := strings.ToLower(query.LabelSearch)
-	result := make([]people.Identity, 0, min(query.Limit, people.MaximumGraphIdentityLimit))
+	result := make([]people.Identity, 0, people.MaximumGraphIdentityLimit)
 	for _, identity := range s.identities {
 		if identity.OrganizationID != organizationID || identity.Status != people.StatusActive {
 			continue

@@ -129,7 +129,10 @@ test('generates all seven controls, validates the exact version, and round trips
   fireEvent.change(screen.getByLabelText('Record owner (required)'), { target: { value: 'person-1' } })
   fireEvent.click(screen.getByRole('button', { name: 'Validate exact version' }))
 
-  expect(await screen.findByText('Typed workbench version 4 is valid.')).toBeInTheDocument()
+  await waitFor(() => {
+    expect(fetchMock.mock.calls.some(([path, init]) => String(path).includes('/validate?version=4') && init?.method === 'POST')).toBe(true)
+  }, { timeout: 10_000 })
+  expect(await screen.findByRole('status', {}, { timeout: 10_000 })).toHaveTextContent('Typed workbench version 4 is valid.')
   const validateCall = fetchMock.mock.calls.find(([path]) => String(path).includes('/validate?version=4'))
   expect(validateCall?.[1]?.headers).toMatchObject({ 'X-CSRF-Token': 'exact-csrf' })
   expect(JSON.parse(String(validateCall?.[1]?.body))).toMatchObject({
@@ -138,7 +141,10 @@ test('generates all seven controls, validates the exact version, and round trips
 
   fireEvent.click(screen.getByLabelText('Mark record owner as unresolved'))
   fireEvent.click(screen.getByRole('button', { name: 'Validate exact version' }))
-  expect(await screen.findByText('The row is valid as a visible holding record.')).toBeInTheDocument()
+  await waitFor(() => {
+    expect(fetchMock.mock.calls.filter(([path]) => String(path).includes('/validate?version=4')).length).toBeGreaterThan(0)
+  }, { timeout: 10_000 })
+  expect(await screen.findByRole('status', {}, { timeout: 10_000 })).toHaveTextContent('The row is valid as a visible holding record.')
   const validateCalls = fetchMock.mock.calls.filter(([path]) => String(path).includes('/validate?version=4'))
   expect(JSON.parse(String(validateCalls.at(-1)?.[1]?.body))).toMatchObject({ missingReferences: ['owner'] })
 

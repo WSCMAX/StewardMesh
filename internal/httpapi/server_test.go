@@ -904,7 +904,7 @@ func TestOIDCAuthorizationCodeFlowCreatesJITSession(t *testing.T) {
 		t.Fatalf("unexpected OpenID Connect start response %d %#v", startRes.Code, startRes.Header())
 	}
 	transactionCookie := findCookie(t, startRes.Result().Cookies(), localOIDCTransactionName)
-	if !transactionCookie.HttpOnly || transactionCookie.Secure || transactionCookie.SameSite != http.SameSiteLaxMode || transactionCookie.Value == "" {
+	if !transactionCookie.HttpOnly || !transactionCookie.Secure || transactionCookie.SameSite != http.SameSiteLaxMode || transactionCookie.Value == "" {
 		t.Fatalf("unexpected OpenID Connect transaction cookie %#v", transactionCookie)
 	}
 	callback := httptest.NewRequest(http.MethodGet, "/api/v1/auth/oidc/callback?code=authorization-code&state="+url.QueryEscape(authenticator.state), nil)
@@ -1071,7 +1071,7 @@ func TestBootstrapSessionAndOrganizationCorrelation(t *testing.T) {
 		t.Fatalf("unexpected bootstrap status %#v", status)
 	}
 	session := bootstrapAdministrator(t, handler)
-	if !session.cookie.HttpOnly || session.cookie.Secure || session.cookie.SameSite != http.SameSiteLaxMode {
+	if !session.cookie.HttpOnly || !session.cookie.Secure || session.cookie.SameSite != http.SameSiteLaxMode {
 		t.Fatalf("unexpected local session cookie %#v", session.cookie)
 	}
 	req := authenticatedRequest(http.MethodGet, "/api/v1/organization", nil, session)

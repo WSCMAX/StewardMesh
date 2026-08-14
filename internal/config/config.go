@@ -344,8 +344,8 @@ func (c Config) Validate() error {
 		if origin.Scheme == "https" && !c.SessionCookieSecure {
 			return errors.New("STEWARDMESH_SESSION_COOKIE_SECURE must be true for an HTTPS origin")
 		}
-		if origin.Scheme == "http" && c.SessionCookieSecure {
-			return errors.New("STEWARDMESH_SESSION_COOKIE_SECURE must be false for an HTTP development origin")
+		if origin.Scheme == "http" && !c.SessionCookieSecure && !isLoopbackHost(origin.Hostname()) {
+			return errors.New("STEWARDMESH_SESSION_COOKIE_SECURE must be true for a non-loopback HTTP origin")
 		}
 	}
 	if err := c.validateSAML(); err != nil {

@@ -1752,7 +1752,7 @@ func (s *Server) oidcStart(w http.ResponseWriter, r *http.Request) {
 		Expires:  expiresAt,
 		MaxAge:   max(1, int(time.Until(expiresAt).Seconds())),
 		HttpOnly: true,
-		Secure:   s.sessionCookieSecure,
+		Secure:   true,
 		SameSite: http.SameSiteLaxMode,
 	})
 	http.Redirect(w, r, authorizationURL, http.StatusSeeOther)
@@ -3474,7 +3474,7 @@ func (s *Server) setSessionCookie(w http.ResponseWriter, credentials guard.Sessi
 		Expires:  credentials.Authentication.Session.ExpiresAt,
 		MaxAge:   int(time.Until(credentials.Authentication.Session.ExpiresAt).Seconds()),
 		HttpOnly: true,
-		Secure:   s.sessionCookieSecure,
+		Secure:   true,
 		SameSite: http.SameSiteLaxMode,
 	})
 }
@@ -3541,7 +3541,7 @@ func (s *Server) clearSessionCookie(w http.ResponseWriter) {
 		Expires:  time.Unix(1, 0).UTC(),
 		MaxAge:   -1,
 		HttpOnly: true,
-		Secure:   s.sessionCookieSecure,
+		Secure:   true,
 		SameSite: http.SameSiteLaxMode,
 	})
 }
@@ -3568,7 +3568,7 @@ func (s *Server) clearOIDCTransactionCookie(w http.ResponseWriter) {
 		Expires:  time.Unix(1, 0).UTC(),
 		MaxAge:   -1,
 		HttpOnly: true,
-		Secure:   s.sessionCookieSecure,
+		Secure:   true,
 		SameSite: http.SameSiteLaxMode,
 	})
 }

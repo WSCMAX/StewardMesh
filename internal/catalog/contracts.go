@@ -91,6 +91,15 @@ type UpgradePath struct {
 	CreatedAt           time.Time   `json:"createdAt"`
 }
 
+// Snapshot is the bounded, organization-scoped durable Catalog state used by
+// Exchange and repository conformance tests. Callers must still enforce the
+// Exchange package-wide record limit.
+type Snapshot struct {
+	Configurations []Configuration `json:"configurations"`
+	Prices         []Price         `json:"prices"`
+	UpgradePaths   []UpgradePath   `json:"upgradePaths"`
+}
+
 type CreateConfigurationInput struct {
 	ID             string            `json:"id,omitempty"`
 	ModelID        string            `json:"modelId"`
@@ -130,22 +139,53 @@ type ResolvePriceInput struct {
 	Kind            PriceKind
 }
 
+// ExchangeImportOperation is the deterministic, bounded mutation identity
+// issued by Exchange after it has reserved durable intent and ownership.
+type ExchangeImportOperation struct {
+	Token      string
+	OccurredAt time.Time
+}
+
+type ExchangeImportResult struct {
+	Committed bool
+	Created   bool
+}
+
+// ExchangeImporter is an opaque construction-time capability. Ordinary
+// Catalog callers cannot select source revisions or deterministic audit IDs.
+type ExchangeImporter interface {
+	ImportConfiguration(context.Context, ExchangeImportOperation, Configuration) (ExchangeImportResult, error)
+	ImportPrice(context.Context, ExchangeImportOperation, Price) (ExchangeImportResult, error)
+	ImportUpgradePath(context.Context, ExchangeImportOperation, UpgradePath) (ExchangeImportResult, error)
+}
+
 // ModelReader keeps Atlas Models authoritative while Catalog validates stable
 // model references without reading provider tables directly.
 type ModelReader interface {
 	GetModel(ctx context.Context, id string) (domain.AssetModel, error)
 }
 
+// WriteGate is the service-layer imported-ownership fence. Transports and
+// background jobs pass the authenticated operation context; Exchange alone
+// receives a construction-time importer capability that bypasses this gate.
+type WriteGate interface {
+	CheckResourceWrite(context.Context, string, string) error
+}
+
 // Store is the provider-neutral catalog extension persistence boundary. Price
 // records and upgrade paths are append-only in the foundation slice.
 type Store interface {
+	Snapshot(ctx context.Context, organizationID string) (Snapshot, error)
+
 	ListConfigurations(ctx context.Context, organizationID, modelID string) ([]Configuration, error)
 	GetConfiguration(ctx context.Context, organizationID, configurationID string) (Configuration, error)
 	CreateConfiguration(ctx context.Context, configuration Configuration) (Configuration, error)
 
 	ListPrices(ctx context.Context, organizationID, modelID, configurationID string) ([]Price, error)
+	GetPrice(ctx context.Context, organizationID, priceID string) (Price, error)
 	CreatePrice(ctx context.Context, price Price) (Price, error)
 
 	ListUpgradePaths(ctx context.Context, organizationID, fromModelID, fromConfigurationID string) ([]UpgradePath, error)
+	GetUpgradePath(ctx context.Context, organizationID, pathID string) (UpgradePath, error)
 	CreateUpgradePath(ctx context.Context, path UpgradePath) (UpgradePath, error)
 }

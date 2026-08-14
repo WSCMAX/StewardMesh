@@ -57,6 +57,23 @@ Ledger never accepts an organization ID from the client. Repository queries incl
 
 Audit events contain stable record IDs, status/category metadata, fiscal period, scenario, currency, revision, and `REQ-LEDGER-001`. They exclude vendor names, descriptions, invoice references, document contents, and money values.
 
+## Exchange portability
+
+Exchange owns six typed Ledger record families: vendors, purchase orders,
+contracts, commitments, budgets, and costs. Version-2 Patterns projections
+preserve stable IDs, arbitrary positive revisions, source timestamps, exact
+minor-unit values and currency, current states, evidence and domain
+relationships, and a cost's earliest source identity. PostgreSQL exports one
+bounded repeatable-read snapshot; memory exports use the same organization and
+count boundary.
+
+Imports call an opaque capability returned only with the owning Ledger service.
+Exact retries are idempotent, changed reuse conflicts, and an ambiguous
+post-commit audit failure is repaired with the same organization-scoped event
+identity. Organization IDs stay destination-owned. Imported Ledger resources
+are Guard write-locked, and every ordinary create, status change, or cost
+reconciliation checks that ownership fence before mutation.
+
 ## APIs
 
 - `GET /api/v1/ledger`
@@ -88,6 +105,9 @@ Automated coverage includes:
 - source reconciliation create, replay, and update behavior
 - fiscal-period variance, over-budget state, mixed-currency rejection, and CSV export
 - memory/PostgreSQL provider contract behavior and organization isolation
+- all six lossless Exchange projections, strict DTO/dependency validation,
+  arbitrary revision preservation, deterministic audit repair, bounded
+  repeatable-read PostgreSQL export, and imported-resource write fencing
 - REST authentication, CSRF, status, reconciliation, variance, and export behavior
 - React runtime response validation, financial forms, narrow table containment, and automated accessibility checks
 

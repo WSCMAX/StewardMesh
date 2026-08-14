@@ -6,16 +6,16 @@ import (
 )
 
 // Requirements: REQ-FOUNDATION-001, SEC-GUARD-001, REQ-PEOPLE-001,
-// REQ-DIRECTORY-EXPANSION-001, REQ-ATLAS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001,
-// REQ-HORIZON-001, REQ-ATLAS-CODES-001, REQ-ATLAS-MODELS-001, REQ-ATLAS-CATALOG-001.
-// Features: lifecycle.planning, inventory.identifiers, inventory.models, inventory.catalog.
+// REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-005, REQ-ATLAS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001,
+// REQ-HORIZON-001, REQ-ATLAS-CODES-001, REQ-ATLAS-MODELS-001, REQ-ATLAS-CATALOG-001, REQ-PATTERNS-001, REQ-STACK-001, REQ-SIGNALS-001, REQ-REACH-001, REQ-EXCHANGE-001.
+// Features: lifecycle.planning, inventory.identifiers, inventory.models, inventory.catalog, templates.schemas, software.licenses, alerts.rules, messaging.delivery, migration.packages.
 func TestEmbeddedMigrationsAreOrderedAndChecksummed(t *testing.T) {
 	migrations, err := loadMigrations()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(migrations) != 26 {
-		t.Fatalf("expected 26 platform migrations, got %d", len(migrations))
+	if len(migrations) != 39 {
+		t.Fatalf("expected 39 platform migrations, got %d", len(migrations))
 	}
 	for index, migration := range migrations {
 		expectedVersion := int64(index + 1)
@@ -24,6 +24,257 @@ func TestEmbeddedMigrationsAreOrderedAndChecksummed(t *testing.T) {
 		}
 		if len(migration.checksum) != 64 {
 			t.Fatalf("expected SHA-256 checksum for migration %d", migration.version)
+		}
+	}
+}
+
+func TestDirectoryExchangeMigrationScopesStableIDsByOrganization(t *testing.T) {
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents := migrations[38].contents
+	for _, expected := range []string{
+		"REQ-DIRECTORY-EXPANSION-005", "REQ-EXCHANGE-001", "directory_managed_groups_pkey",
+		"directory_managed_memberships_pkey", "PRIMARY KEY (organization_id, id)",
+		"DROP CONSTRAINT directory_managed_groups_organization_id_id_key",
+		"DROP CONSTRAINT directory_managed_memberships_organization_id_id_key",
+		"ADD CONSTRAINT directory_managed_memberships_organization_id_group_id_fkey",
+	} {
+		if !strings.Contains(contents, expected) {
+			t.Fatalf("Directory Exchange organization-key migration is missing %q", expected)
+		}
+	}
+}
+
+func TestExchangePatternsMigrationPreservesLegacyReceiptsWhileAddingOnePointOne(t *testing.T) {
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents := migrations[34].contents
+	for _, expected := range []string{
+		"REQ-PATTERNS-001", "REQ-EXCHANGE-001", "ADD COLUMN progress", "jsonb_array_length(progress) <= 10000",
+		"DROP CONSTRAINT exchange_packages_check4", "DROP CONSTRAINT exchange_packages_check6",
+		"exchange_packages_records_counts_check", "exchange_packages_terminal_progress_check",
+		"exchange_packages_nonterminal_holding_check", "exchange_packages_schema_version_check",
+		"schema_version IN ('1.0', '1.1')", "Existing 1.0 rows",
+	} {
+		if !strings.Contains(contents, expected) {
+			t.Fatalf("Exchange Patterns migration is missing %q", expected)
+		}
+	}
+}
+
+func TestReachDeliveryClaimMigrationPrecedesExternalSideEffects(t *testing.T) {
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var contents string
+	for _, migration := range migrations {
+		if migration.version == 36 {
+			contents = migration.contents
+		}
+	}
+	for _, expected := range []string{"REQ-REACH-001", "claim_token", "claimed_at", "reach_messages_claim_pair", "reach_messages_claim_recovery_idx"} {
+		if !strings.Contains(contents, expected) {
+			t.Fatalf("Reach claim migration is missing %q", expected)
+		}
+	}
+}
+
+func TestSignalsSubscriptionPortabilityMigrationPreservesExistingRows(t *testing.T) {
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents := migrations[36].contents
+	for _, expected := range []string{"REQ-SIGNALS-001", "REQ-EXCHANGE-001", "ADD COLUMN revision", "UPDATE signal_subscriptions SET updated_at = created_at", "updated_at >= created_at"} {
+		if !strings.Contains(contents, expected) {
+			t.Fatalf("Signals subscription portability migration is missing %q", expected)
+		}
+	}
+}
+
+func TestReachExchangeMigrationMakesImportedProvidersInert(t *testing.T) {
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents := migrations[37].contents
+	for _, expected := range []string{
+		"REQ-REACH-001", "REQ-EXCHANGE-001", "ALTER COLUMN endpoint_id DROP NOT NULL", "ALTER COLUMN secret_ref DROP NOT NULL",
+		"reach_providers_endpoint_id_optional_check", "reach_providers_secret_ref_optional_check", "reach_providers_enabled_configuration_check",
+	} {
+		if !strings.Contains(contents, expected) {
+			t.Fatalf("Reach Exchange inert-provider migration is missing %q", expected)
+		}
+	}
+}
+
+func TestSignalsMigrationAddsDurableRulesAlertsHistoryAndDeliveryQueue(t *testing.T) {
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents := migrations[30].contents
+	for _, expected := range []string{
+		"REQ-SIGNALS-001", "alerts.rules", "GitHub: #11", "CREATE TABLE signal_rules",
+		"forecast_over_budget", "CREATE TABLE signal_alerts", "deduplication_key",
+		"CREATE TABLE signal_alert_history", "CREATE TABLE signal_subscriptions",
+		"CREATE TABLE signal_deliveries", "signals.read", "signals.write",
+	} {
+		if !strings.Contains(contents, expected) {
+			t.Fatalf("Signals migration is missing %q", expected)
+		}
+	}
+}
+
+func TestGrouperMigrationAddsDurableNormalizedGroupGraph(t *testing.T) {
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents := migrations[29].contents
+	for _, expected := range []string{
+		"REQ-DIRECTORY-EXPANSION-005", "integrations.protocols", "CREATE TABLE directory_managed_groups",
+		"CREATE TABLE directory_managed_memberships", "source_system_id", "source_record_id",
+		"kind IN ('identity', 'group', 'membership')", "member_kind IN ('subject', 'group')",
+		"REFERENCES directory_managed_groups", "ON DELETE CASCADE",
+	} {
+		if !strings.Contains(contents, expected) {
+			t.Fatalf("Grouper directory graph migration is missing %q", expected)
+		}
+	}
+}
+
+func TestExchangeMigrationAddsBoundedPackageReceiptsWithoutExpandingRoles(t *testing.T) {
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents := migrations[31].contents
+	if migrations[31].checksum != "628bf882c9632690c5d365cc8c9272011fc114b2b22469947d414f7b670bd0a2" {
+		t.Fatalf("applied Exchange migration 0032 changed: %s", migrations[31].checksum)
+	}
+	for _, expected := range []string{
+		"REQ-EXCHANGE-001", "migration.packages", "GitHub: #9", "CREATE TABLE exchange_packages",
+		"archive_sha256", "size_bytes BETWEEN 1 AND 33554432", "jsonb_array_length(records) <= 10000",
+		"status IN ('processing', 'completed', 'holding', 'failed')",
+		"status <> 'processing' OR (created_count = 0", "status <> 'failed' OR (created_count = 0",
+		"exchange_packages_history_idx",
+	} {
+		if !strings.Contains(contents, expected) {
+			t.Fatalf("Exchange migration is missing %q", expected)
+		}
+	}
+	for _, forbidden := range []string{"guard_policy_bundle_permissions", "migration.read", "migration.write"} {
+		if strings.Contains(contents, forbidden) {
+			t.Fatalf("Exchange migration must not silently expand deployed role permissions with %q", forbidden)
+		}
+	}
+	if strings.Contains(contents, "progress JSONB") {
+		t.Fatal("immutable migration 0032 must not contain recovery state added by a later release")
+	}
+}
+
+func TestReachMigrationAddsProviderSafeMessagingAndAdministratorPermissions(t *testing.T) {
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents := migrations[32].contents
+	for _, expected := range []string{
+		"REQ-REACH-001", "messaging.delivery", "GitHub: #12", "CREATE TABLE reach_providers", "secret_ref",
+		"CREATE TABLE reach_templates", "CREATE TABLE reach_subscriber_groups", "CREATE TABLE reach_messages",
+		"CREATE TABLE reach_delivery_attempts", "CREATE TABLE reach_provider_tests", "messaging.read", "messaging.write",
+	} {
+		if !strings.Contains(contents, expected) {
+			t.Fatalf("Reach migration is missing %q", expected)
+		}
+	}
+}
+
+func TestBridgeMigrationStoresOnlyCredentialHashesAndBoundedOAuthState(t *testing.T) {
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var contents string
+	for _, migration := range migrations {
+		if migration.version == 34 {
+			contents = migration.contents
+		}
+	}
+	for _, expected := range []string{"SEC-MCP-001", "integrations.protocols", "GitHub: #14", "CREATE TABLE bridge_oauth_clients", "access_token_hash", "refresh_token_hash", "CREATE TABLE bridge_mcp_confirmations", "token_hash", "CREATE TABLE bridge_rate_windows"} {
+		if !strings.Contains(contents, expected) {
+			t.Fatalf("Bridge migration is missing %q", expected)
+		}
+	}
+	for _, forbidden := range []string{"access_token TEXT", "refresh_token TEXT", "client_secret"} {
+		if strings.Contains(contents, forbidden) {
+			t.Fatalf("Bridge migration must not persist %q", forbidden)
+		}
+	}
+}
+
+func TestDirectoryImportMigrationAddsDurablePlansAttemptsMappingsAndLeases(t *testing.T) {
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents := migrations[27].contents
+	for _, expected := range []string{
+		"REQ-DIRECTORY-EXPANSION-002", "integrations.protocols", "GitHub: #25",
+		"CREATE TABLE directory_import_items", "CREATE TABLE directory_import_attempts",
+		"CREATE TABLE directory_import_mappings", "idempotency_hash", "lease_token",
+		"integrations.read", "integrations.write", "lower(btrim(r.name)) = 'administrator'",
+	} {
+		if !strings.Contains(contents, expected) {
+			t.Fatalf("directory import migration is missing %q", expected)
+		}
+	}
+}
+
+func TestStackMigrationAddsSoftwareEntitlementsAndAdministratorPermissions(t *testing.T) {
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var contents string
+	for _, migration := range migrations {
+		if migration.version == 29 {
+			contents = migration.contents
+			break
+		}
+	}
+	if contents == "" {
+		t.Fatal("Stack migration 0029 is missing")
+	}
+	for _, expected := range []string{
+		"REQ-STACK-001", "software.licenses", "GitHub: #7", "CREATE TABLE stack_products", "CREATE TABLE stack_versions",
+		"CREATE TABLE stack_installations", "stack_installations_active_unique", "CREATE TABLE stack_licenses", "document_ids JSONB",
+		"CREATE TABLE stack_assignments", "stack_assignments_active_unique", "'software.read'", "'software.write'", "r.source = 'builtin'",
+	} {
+		if !strings.Contains(contents, expected) {
+			t.Fatalf("Stack migration is missing %q", expected)
+		}
+	}
+}
+
+func TestPatternsMigrationAddsImmutableOrganizationScopedTemplateVersions(t *testing.T) {
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents := migrations[26].contents
+	for _, expected := range []string{
+		"REQ-PATTERNS-001", "templates.schemas", "GitHub: #8", "CREATE TABLE pattern_template_versions",
+		"PRIMARY KEY (organization_id, id, version)", "fields JSONB", "pattern_template_name_unique",
+	} {
+		if !strings.Contains(contents, expected) {
+			t.Fatalf("Patterns migration is missing %q", expected)
 		}
 	}
 }

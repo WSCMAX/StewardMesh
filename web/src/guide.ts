@@ -1,8 +1,8 @@
 import { documentationHref } from './documentation'
 
-// Requirements: REQ-WORKSPACE-001, REQ-HORIZON-001, A11Y-001, DOC-001, DOC-002. Features: experience.workspace, lifecycle.planning, experience.help.
+// Requirements: REQ-WORKSPACE-001, REQ-HORIZON-001, REQ-STACK-001, REQ-PATTERNS-001, REQ-SIGNALS-001, REQ-REACH-001, REQ-EXCHANGE-001, A11Y-001, DOC-001, DOC-002. Features: experience.workspace, lifecycle.planning, software.licenses, templates.schemas, alerts.rules, messaging.delivery, migration.packages, experience.help.
 
-export type GuideTopicID = 'workspace' | 'atlas' | 'horizon' | 'ledger' | 'threads' | 'vault' | 'people' | 'guard' | 'guide'
+export type GuideTopicID = 'workspace' | 'atlas' | 'horizon' | 'ledger' | 'stack' | 'signals' | 'reach' | 'threads' | 'vault' | 'exchange' | 'people' | 'bridge' | 'guard' | 'guide'
 export type GuideView = 'help' | 'walkthrough' | 'accessibility' | 'report'
 export type WalkthroughStatus = 'new' | 'completed' | 'skipped'
 
@@ -22,10 +22,15 @@ export const guideTopics: GuideTopic[] = [
   { id: 'atlas', name: 'Atlas', descriptor: 'Asset inventory', summary: 'Register, search, filter, update, and inspect organization-owned assets and their lifecycle history.', example: 'Add a server, assign its location and department, then advance its lifecycle status when it is retired.', docsUrl: documentationHref('atlas'), anchor: 'guide-atlas', permission: 'assets.read' },
   { id: 'horizon', name: 'Horizon', descriptor: 'Lifecycle planning', summary: 'Set effective-dated asset replacement assumptions, compare planning scenarios, and forecast needs using Atlas inventory, Ledger costs, and Threads dimensions.', example: 'Plan a server refresh, then group replacement needs by fiscal year, site, department, effective tag, linked goal, or asset class.', docsUrl: documentationHref('horizon'), anchor: 'guide-horizon', permission: 'planning.read' },
   { id: 'ledger', name: 'Ledger', descriptor: 'Procurement and budgets', summary: 'Track vendors, purchase orders, contracts, commitments, budgets, reconciled costs, and variance in exact minor units.', example: 'Create a fiscal-year budget, reconcile a billed invoice, and review the resulting over-budget or remaining amount.', docsUrl: documentationHref('ledger'), anchor: 'guide-ledger', permission: 'finance.read' },
+  { id: 'stack', name: 'Stack', descriptor: 'Software and licenses', summary: 'Associate installed versions with Atlas assets, record purchased entitlements, assign seats, and review explicit compliance conditions.', example: 'Add a product and version, associate it with an asset, record its device entitlement, then review expiration and assignment coverage.', docsUrl: documentationHref('stack'), anchor: 'guide-stack', permission: 'software.read' },
+  { id: 'signals', name: 'Signals', descriptor: 'Alerts and action queue', summary: 'Evaluate operational and financial rules, then acknowledge, assign, export, and route deduplicated alerts without exposing delivery credentials.', example: 'Evaluate the default renewal thresholds, acknowledge a contract alert, assign it to a configured group, and export the current queue.', docsUrl: documentationHref('signals'), anchor: 'guide-signals', permission: 'signals.read' },
+  { id: 'reach', name: 'Reach', descriptor: 'Message delivery', summary: 'Deliver email, Teams, and webhook notifications through deployment-approved adapters while credentials and provider response bodies remain outside the UI.', example: 'Configure a provider using an external secret reference, create a plain-text template and subscriber group, confirm a test, then inspect sanitized attempt history.', docsUrl: documentationHref('reach'), anchor: 'guide-reach', permission: 'messaging.read' },
   { id: 'threads', name: 'Threads', descriptor: 'Tags and strategic goals', summary: 'Connect assets to hierarchical tags and goals while keeping inherited, explicit, and suppressed values visible.', example: 'Apply a child tag to an asset and inspect the parent tag provenance before linking the asset to a strategic goal.', docsUrl: documentationHref('threads'), anchor: 'guide-threads', permission: 'goals.read' },
   { id: 'vault', name: 'Vault', descriptor: 'Private files and evidence', summary: 'Store checksummed evidence with ownership and provenance, then authorize downloads only when needed.', example: 'Upload a purchase receipt with its source identity and relate it to the asset or financial record it supports.', docsUrl: documentationHref('vault'), anchor: 'guide-vault', permission: 'storage.read' },
+  { id: 'exchange', name: 'Exchange', descriptor: 'Migration packages', summary: 'Move selected records in bounded, compressed packages while preserving dependencies, provenance, checksums, and ownership boundaries.', example: 'Select a Stack product and its dependencies, export a metadata-only package, then import it and review created, unchanged, or holding outcomes.', docsUrl: documentationHref('exchange'), anchor: 'guide-exchange', permission: 'integrations.read' },
   { id: 'people', name: 'People', descriptor: 'Users and departments', summary: 'Organize sites, buildings, rooms, departments, identities, and effective-dated asset assignments.', example: 'Create a site and room, add a person, then record that person as the asset’s primary steward.', docsUrl: documentationHref('people'), anchor: 'guide-people', permission: 'directory.read' },
-  { id: 'guard', name: 'Guard', descriptor: 'Authentication and authorization', summary: 'Manage secure sign-in, roles, policy bundles, scoped assignments, ownership, and audit boundaries.', example: 'Create a custom read-only role and assign it at the organization, site, department, or resource scope.', docsUrl: documentationHref('guard'), anchor: 'guide-guard', permission: 'guard.manage' },
+  { id: 'bridge', name: 'Bridge', descriptor: 'MCP and OAuth clients', summary: 'Register exact OAuth redirects, approve granular scopes, and revoke MCP client access.', example: 'Register a public client with S256 PKCE, approve read-only inventory scope, and later revoke its grant.', docsUrl: documentationHref('bridge'), anchor: 'guide-bridge', permission: 'integrations.read' },
+  { id: 'guard', name: 'Guard', descriptor: 'Access and record schemas', summary: 'Manage secure sign-in, roles, scoped ownership, and Patterns templates that generate exact-version forms and bounded CSV rows.', example: 'Choose a built-in Patterns version, validate a generated record form, then prepare one formula-safe CSV row.', docsUrl: documentationHref('guard'), anchor: 'guide-guard', permission: 'guard.manage' },
   { id: 'guide', name: 'Guide', descriptor: 'Help and walkthroughs', summary: 'Open contextual help, replay a role-aware walkthrough, inspect branding accessibility, or prepare a sanitized issue report.', example: 'Select a module here, open its local documentation, and prepare a report without exposing session or identity data.', docsUrl: documentationHref('guide') },
 ]
 
@@ -196,6 +201,44 @@ function safeLine(value: string, fallback: string, maximum = 128) {
   return safe || fallback
 }
 
+const reportComponentNames = new Set(guideTopics.map((topic) => topic.name))
+const reportCorrelationPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
+const reportVersionPattern = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$/
+const reportBrowserPattern = /^(?:(?:Edge|Firefox|Chrome|Safari) [0-9]{1,4}|Other browser)$/
+const reportSystems = new Set(['Windows', 'Android', 'iOS', 'macOS', 'Linux', 'Other system'])
+
+function safeReportComponent(value: string) {
+  return reportComponentNames.has(value) ? value : 'Workspace'
+}
+
+function safeReportVersion(value: string) {
+  return reportVersionPattern.test(value) ? value : 'development'
+}
+
+function safeReportCorrelation(value: string) {
+  return reportCorrelationPattern.test(value) ? value : 'Unavailable'
+}
+
+function safeReportBrowser(value: string) {
+  return reportBrowserPattern.test(value) ? value : 'Other browser'
+}
+
+function safeReportSystem(value: string) {
+  return reportSystems.has(value) ? value : 'Other system'
+}
+
+function safeReportViewport(value: string) {
+  const match = /^(\d{1,5})x(\d{1,5})$/.exec(value)
+  if (!match || Number(match[1]) > 10000 || Number(match[2]) > 10000) return '0x0'
+  return value
+}
+
+function safeReportPage(value: string) {
+  const pathname = value.split(/[?#]/, 1)[0]
+  if (!pathname.startsWith('/') || pathname.startsWith('//') || pathname.includes('@')) return '/'
+  return safeLine(pathname, '/', 256)
+}
+
 export function detectBrowser(userAgent: string) {
   const candidates = [
     ['Edge', /Edg\/(\d+)/],
@@ -224,15 +267,14 @@ export function collectIssueContext(component: string, version: string, correlat
   const userAgent = typeof navigator === 'undefined' ? '' : navigator.userAgent
   const width = typeof window === 'undefined' ? 0 : Math.max(0, Math.min(10000, Math.round(window.innerWidth)))
   const height = typeof window === 'undefined' ? 0 : Math.max(0, Math.min(10000, Math.round(window.innerHeight)))
-  const safeCorrelation = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(correlationId) ? correlationId : 'Unavailable'
   return {
-    page: safeLine(page, '/'),
-    component: safeLine(component, 'Workspace'),
-    version: safeLine(version, 'development'),
+    page: safeReportPage(page),
+    component: safeReportComponent(component),
+    version: safeReportVersion(version),
     browser: detectBrowser(userAgent),
     viewport: `${width}x${height}`,
     system: detectSystem(userAgent),
-    correlationId: safeCorrelation,
+    correlationId: safeReportCorrelation(correlationId),
   }
 }
 
@@ -243,20 +285,20 @@ export function buildIssueReportUrl(baseUrl: string, context: IssueContext) {
   const body = [
     '## StewardMesh context',
     '',
-    `- Page: ${safeLine(context.page, '/')}`,
-    `- Component: ${safeLine(context.component, 'Workspace')}`,
-    `- Version: ${safeLine(context.version, 'development')}`,
-    `- Browser: ${safeLine(context.browser, 'Other browser')}`,
-    `- Viewport: ${safeLine(context.viewport, '0x0')}`,
-    `- System: ${safeLine(context.system, 'Other system')}`,
-    `- Correlation ID: ${safeLine(context.correlationId, 'Unavailable')}`,
+    `- Page: ${safeReportPage(context.page)}`,
+    `- Component: ${safeReportComponent(context.component)}`,
+    `- Version: ${safeReportVersion(context.version)}`,
+    `- Browser: ${safeReportBrowser(context.browser)}`,
+    `- Viewport: ${safeReportViewport(context.viewport)}`,
+    `- System: ${safeReportSystem(context.system)}`,
+    `- Correlation ID: ${safeReportCorrelation(context.correlationId)}`,
     '',
     '## Before submitting',
     '',
     '- Describe what you expected and what happened.',
     '- Remove names, emails, asset details, files, credentials, cookies, tokens, and private URLs.',
   ].join('\n')
-  url.searchParams.set('title', `[Guide] ${safeLine(context.component, 'Workspace')} issue`)
+  url.searchParams.set('title', `[Guide] ${safeReportComponent(context.component)} issue`)
   url.searchParams.set('body', body)
   return relative ? `${url.pathname}${url.search}` : url.toString()
 }

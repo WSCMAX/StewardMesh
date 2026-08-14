@@ -1,6 +1,123 @@
 {
   "entries": [
     {
+      "requirementId": "REQ-API-001",
+      "featureId": "integrations.protocols",
+      "artifacts": {
+        "documentation": [
+          ".env.example",
+          "docs/features/bridge.md",
+          "docs/features/dictionary.md",
+          "docs/requirements/initial.md",
+          "docs/validation/bridge-security-review.md",
+          "docs/validation/grpc-runtime-parity.md"
+        ],
+        "api": [
+          "api/openapi/openapi.yaml",
+          "api/proto/stewardmesh.proto",
+          "api/proto/stewardmesh.pb.go",
+          "api/proto/stewardmesh_grpc.pb.go"
+        ],
+        "code": [
+          "cmd/stewardmesh-grpc/main.go",
+          "deploy/Dockerfile",
+          "internal/application/application.go",
+          "internal/bridge/contracts.go",
+          "internal/bridge/service.go",
+          "internal/bridgegrpc/server.go",
+          "internal/exchange/providers_bridge.go",
+          "internal/grpcapi/codec.go",
+          "internal/grpcapi/routes.go",
+          "internal/grpcapi/server.go",
+          "internal/grpcapi/transport_codec.go",
+          "internal/httpapi/bridge.go",
+          "internal/httpapi/transport_auth.go",
+          "internal/repository/memory_bridge.go",
+          "internal/repository/postgres/bridge.go"
+        ],
+        "schema": [
+          "internal/repository/postgres/migrations/0034_bridge_mcp.sql"
+        ],
+        "tests": [
+          "cmd/stewardmesh-grpc/main_test.go",
+          "internal/application/bridge_grpc_test.go",
+          "internal/application/grpc_runtime_test.go",
+          "internal/application/bridge_rate_test.go",
+          "internal/application/bridge_test.go",
+          "internal/bridge/security_test.go",
+          "internal/exchange/providers_bridge_test.go",
+          "internal/grpcapi/codec_test.go",
+          "internal/grpcapi/routes_test.go",
+          "internal/grpcapi/server_test.go",
+          "internal/repository/contracttest/bridge.go",
+          "internal/repository/postgres/bridge_exchange_integration_test.go",
+          "internal/repository/postgres/postgres_integration_test.go",
+          "web/src/BridgeManager.test.tsx"
+        ],
+        "ui": [
+          "web/src/BridgeManager.tsx",
+          "web/src/documentation.ts"
+        ]
+      }
+    },
+    {
+      "requirementId": "SEC-MCP-001",
+      "featureId": "integrations.protocols",
+      "artifacts": {
+        "documentation": [
+          ".env.example",
+          "docs/features/bridge.md",
+          "docs/features/dictionary.md",
+          "docs/requirements/initial.md",
+          "docs/validation/bridge-security-review.md",
+          "docs/validation/grpc-runtime-parity.md"
+        ],
+        "api": [
+          "api/openapi/openapi.yaml",
+          "api/proto/stewardmesh.proto",
+          "api/proto/stewardmesh.pb.go",
+          "api/proto/stewardmesh_grpc.pb.go"
+        ],
+        "code": [
+          "cmd/stewardmesh-grpc/main.go",
+          "cmd/stewardmesh-mcp/main.go",
+          "deploy/Dockerfile",
+          "internal/bridge/canonical.go",
+          "internal/bridge/contracts.go",
+          "internal/bridge/mcp.go",
+          "internal/bridge/service.go",
+          "internal/bridgegrpc/server.go",
+          "internal/exchange/providers_bridge.go",
+          "internal/grpcapi/server.go",
+          "internal/guard/service.go",
+          "internal/httpapi/bridge.go",
+          "internal/repository/memory_bridge.go",
+          "internal/repository/postgres/bridge.go"
+        ],
+        "schema": [
+          "internal/repository/postgres/migrations/0034_bridge_mcp.sql"
+        ],
+        "tests": [
+          "cmd/stewardmesh-grpc/main_test.go",
+          "internal/application/bridge_grpc_test.go",
+          "internal/application/bridge_rate_test.go",
+          "internal/application/bridge_test.go",
+          "internal/bridge/security_test.go",
+          "internal/exchange/providers_bridge_test.go",
+          "internal/repository/contracttest/bridge.go",
+          "internal/repository/memory_bridge_test.go",
+          "internal/repository/postgres/bridge_exchange_integration_test.go",
+          "internal/repository/postgres/migrate_test.go",
+          "internal/repository/postgres/postgres_integration_test.go",
+          "web/src/BridgeManager.test.tsx"
+        ],
+        "ui": [
+          "web/src/BridgeManager.tsx",
+          "web/src/documentation.ts"
+        ]
+      }
+    },
+    {
       "requirementId": "REQ-FOUNDATION-001",
       "featureId": "platform.foundation",
       "artifacts": {
@@ -14,6 +131,7 @@
           "api/proto/stewardmesh.proto"
         ],
         "code": [
+          "cmd/stewardmesh/main.go",
           "internal/application/application.go",
           "internal/bootstrap/organization.go",
           "internal/config/config.go",
@@ -47,12 +165,15 @@
       "artifacts": {
         "documentation": [
           "docs/features/dictionary.md",
+          "docs/features/guide.md",
+          "docs/features/people.md",
           "docs/features/workspace.md",
           "docs/requirements/initial.md"
         ],
         "api": [
           "api/openapi/openapi.yaml",
           "internal/httpapi/server.go",
+          "web/src/api.ts",
           "web/src/WorkspaceShell.tsx"
         ],
         "code": [
@@ -60,6 +181,7 @@
           "web/src/App.tsx",
           "web/src/GuideExperience.tsx",
           "web/src/PeopleDirectory.tsx",
+          "web/src/RelatedRecordWorkflow.tsx",
           "web/src/WorkspaceShell.tsx",
           "web/src/guide.ts",
           "web/src/workspaceAccess.ts"
@@ -72,14 +194,21 @@
         "tests": [
           "internal/httpapi/server_test.go",
           "web/src/App.test.tsx",
+          "web/src/api.test.ts",
           "web/src/GuideExperience.test.tsx",
           "web/src/PeopleDirectory.test.tsx",
+          "web/src/RelatedRecordWorkflow.test.tsx",
+          "web/src/WorkspaceAccessibility.test.tsx",
           "web/src/WorkspaceShell.test.tsx",
+          "web/src/guide.test.ts",
+          "web/src/test-setup.ts",
           "web/src/workspaceAccess.test.ts"
         ],
         "ui": [
           "web/src/App.tsx",
+          "web/src/GuideExperience.tsx",
           "web/src/PeopleDirectory.tsx",
+          "web/src/RelatedRecordWorkflow.tsx",
           "web/src/WorkspaceShell.tsx"
         ]
       }
@@ -100,7 +229,9 @@
         "code": [
           "internal/application/application.go",
           "internal/atlas/contracts.go",
+          "internal/atlas/exchange.go",
           "internal/atlas/service.go",
+          "internal/exchange/providers_atlas.go",
           "internal/httpapi/server.go",
           "internal/repository/memory_atlas.go",
           "internal/repository/postgres/atlas.go"
@@ -109,7 +240,10 @@
           "internal/repository/postgres/migrations/0011_atlas_assets.sql"
         ],
         "tests": [
+          "internal/application/application_test.go",
+          "internal/atlas/exchange_test.go",
           "internal/atlas/service_test.go",
+          "internal/exchange/providers_atlas_test.go",
           "internal/httpapi/server_test.go",
           "internal/repository/contracttest/atlas.go",
           "internal/repository/memory_atlas_test.go",
@@ -136,16 +270,22 @@
           "docs/requirements/initial.md"
         ],
         "code": [
+          "internal/application/application.go",
           "internal/catalog/contracts.go",
           "internal/catalog/service.go",
-          "internal/repository/memory_catalog.go"
+          "internal/exchange/providers_catalog.go",
+          "internal/repository/memory_catalog.go",
+          "internal/repository/postgres/catalog.go"
         ],
         "schema": [
           "internal/repository/postgres/migrations/0024_atlas_product_catalog.sql"
         ],
         "tests": [
+          "internal/application/application_test.go",
           "internal/catalog/service_test.go",
+          "internal/exchange/providers_test.go",
           "internal/repository/postgres/migrate_test.go",
+          "internal/repository/postgres/postgres_integration_test.go",
           "internal/traceability/verify_test.go"
         ]
       }
@@ -157,7 +297,10 @@
         "documentation": [
           "docs/features/atlas-codes.md",
           "docs/features/dictionary.md",
-          "docs/requirements/initial.md"
+          "docs/requirements/initial.md",
+          "docs/validation/atlas-codes-label-printing.md",
+          "docs/validation/atlas-codes-release.md",
+          "docs/validation/grpc-runtime-parity.md"
         ],
         "api": [
           "api/openapi/openapi.yaml",
@@ -166,9 +309,16 @@
         "code": [
           "internal/application/application.go",
           "internal/atlascodes/contracts.go",
+          "internal/atlascodes/exchange.go",
+          "internal/atlascodes/labels.go",
+          "internal/atlascodes/rate_limiter.go",
           "internal/atlascodes/service.go",
+          "internal/exchange/providers_atlas.go",
           "internal/httpapi/server.go",
+          "internal/grpcapi/server.go",
+          "internal/httpapi/transport_auth.go",
           "internal/foundation/contracts.go",
+          "internal/patterns/builtin.go",
           "internal/repository/memory_atlascodes.go",
           "internal/repository/postgres/audit.go",
           "internal/repository/postgres/atlascodes.go"
@@ -178,18 +328,91 @@
           "internal/repository/postgres/migrations/0022_atlas_codes_audit_provenance.sql"
         ],
         "tests": [
+          "internal/application/application_test.go",
+          "internal/atlascodes/labels_test.go",
+          "internal/atlascodes/rate_limiter_test.go",
           "internal/atlascodes/service_test.go",
+          "internal/exchange/providers_atlas_test.go",
           "internal/httpapi/server_test.go",
+          "internal/application/grpc_runtime_test.go",
           "internal/repository/contracttest/atlascodes.go",
           "internal/repository/memory_atlascodes_test.go",
           "internal/repository/postgres/migrate_test.go",
           "internal/repository/postgres/postgres_integration_test.go",
           "web/src/AtlasInventory.test.tsx",
-          "web/src/AtlasIdentifiers.test.tsx"
+          "web/src/AtlasIdentifiers.test.tsx",
+          "web/src/AtlasLabelPrint.test.tsx",
+          "web/src/AtlasScanner.test.tsx"
         ],
         "ui": [
           "web/src/AtlasInventory.tsx",
-          "web/src/AtlasIdentifiers.tsx"
+          "web/src/AtlasIdentifiers.tsx",
+          "web/src/AtlasLabelPrint.tsx",
+          "web/src/AtlasScanner.tsx"
+        ]
+      }
+    },
+    {
+      "requirementId": "REQ-PATTERNS-001",
+      "featureId": "templates.schemas",
+      "artifacts": {
+        "documentation": [
+          "README.md",
+          "docs/features/dictionary.md",
+          "docs/features/exchange.md",
+          "docs/features/patterns.md",
+          "docs/requirements/initial.md",
+          "docs/validation/exchange-security-review.md"
+        ],
+        "api": [
+          "api/openapi/openapi.yaml",
+          "api/proto/stewardmesh.proto"
+        ],
+        "code": [
+          "internal/application/application.go",
+          "internal/exchange/archive.go",
+          "internal/exchange/contracts.go",
+          "internal/exchange/providers.go",
+          "internal/exchange/providers_atlas.go",
+          "internal/exchange/providers_bridge.go",
+          "internal/exchange/providers_patterns.go",
+          "internal/exchange/registry.go",
+          "internal/exchange/service.go",
+          "internal/httpapi/server.go",
+          "internal/patterns/builtin.go",
+          "internal/patterns/contracts.go",
+          "internal/patterns/service.go",
+          "internal/repository/memory_patterns.go",
+          "internal/repository/postgres/patterns.go"
+        ],
+        "schema": [
+          "internal/repository/postgres/migrations/0027_patterns_templates.sql",
+          "internal/repository/postgres/migrations/0035_exchange_patterns_schema.sql"
+        ],
+        "tests": [
+          "internal/application/application_test.go",
+          "internal/exchange/archive_test.go",
+          "internal/exchange/providers_test.go",
+          "internal/exchange/providers_bridge_test.go",
+          "internal/exchange/providers_patterns_test.go",
+          "internal/exchange/registry_test.go",
+          "internal/exchange/service_test.go",
+          "internal/httpapi/server_test.go",
+          "internal/patterns/exchange_test.go",
+          "internal/patterns/service_test.go",
+          "internal/repository/contracttest/patterns.go",
+          "internal/repository/memory_patterns_test.go",
+          "internal/repository/postgres/migrate_test.go",
+          "internal/repository/postgres/postgres_integration_test.go",
+          "web/src/PatternsManager.test.tsx",
+          "web/src/ExchangeManager.test.tsx",
+          "web/src/patternCsv.test.ts"
+        ],
+        "ui": [
+          "web/src/App.tsx",
+          "web/src/ExchangeManager.tsx",
+          "web/src/PatternsManager.tsx",
+          "web/src/patternCsv.ts"
         ]
       }
     },
@@ -208,6 +431,7 @@
         ],
         "code": [
           "internal/application/application.go",
+          "internal/exchange/providers_horizon.go",
           "internal/horizon/contracts.go",
           "internal/horizon/service.go",
           "internal/httpapi/server.go",
@@ -220,10 +444,14 @@
           "internal/repository/postgres/migrations/0020_horizon_exact_money_boundary.sql"
         ],
         "tests": [
+          "internal/application/application_test.go",
+          "internal/exchange/providers_horizon_test.go",
+          "internal/horizon/exchange_test.go",
           "internal/horizon/service_test.go",
           "internal/httpapi/server_test.go",
           "internal/repository/contracttest/horizon.go",
           "internal/repository/memory_horizon_test.go",
+          "internal/repository/postgres/horizon_exchange_integration_test.go",
           "internal/repository/postgres/migrate_test.go",
           "internal/repository/postgres/postgres_integration_test.go",
           "web/src/HorizonPlanner.test.tsx"
@@ -251,8 +479,11 @@
         ],
         "code": [
           "internal/atlas/contracts.go",
+          "internal/atlas/exchange.go",
           "internal/atlas/service.go",
           "internal/domain/models.go",
+          "internal/exchange/providers_atlas.go",
+          "internal/exchange/providers_bridge.go",
           "internal/httpapi/server.go",
           "internal/repository/memory_atlas.go",
           "internal/repository/postgres/atlas.go"
@@ -263,11 +494,15 @@
           "internal/repository/postgres/migrations/0026_atlas_model_default_provenance.sql"
         ],
         "tests": [
+          "internal/atlas/exchange_test.go",
           "internal/atlas/service_test.go",
+          "internal/exchange/providers_atlas_test.go",
+          "internal/exchange/providers_bridge_test.go",
           "internal/httpapi/server_test.go",
           "internal/repository/contracttest/atlas.go",
           "internal/repository/memory_atlas_test.go",
           "internal/repository/postgres/migrate_test.go",
+          "internal/repository/postgres/postgres_integration_test.go",
           "web/src/AtlasInventory.test.tsx"
         ],
         "ui": [
@@ -290,10 +525,12 @@
         ],
         "code": [
           "internal/application/application.go",
+          "internal/exchange/providers_threads.go",
           "internal/httpapi/server.go",
           "internal/repository/memory_threads.go",
           "internal/repository/postgres/threads.go",
           "internal/threads/contracts.go",
+          "internal/threads/exchange.go",
           "internal/threads/service.go"
         ],
         "schema": [
@@ -301,11 +538,14 @@
           "internal/repository/postgres/migrations/0013_threads_administrator_permission.sql"
         ],
         "tests": [
+          "internal/exchange/providers_threads_test.go",
           "internal/httpapi/server_test.go",
           "internal/repository/contracttest/threads.go",
           "internal/repository/memory_threads_test.go",
           "internal/repository/postgres/migrate_test.go",
           "internal/repository/postgres/postgres_integration_test.go",
+          "internal/repository/postgres/threads_exchange_integration_test.go",
+          "internal/threads/exchange_test.go",
           "internal/threads/service_test.go",
           "web/src/ThreadsManager.test.tsx"
         ],
@@ -379,7 +619,9 @@
           "internal/guard/contracts.go",
           "internal/httpapi/server.go",
           "internal/ledger/contracts.go",
+          "internal/ledger/exchange.go",
           "internal/ledger/service.go",
+          "internal/exchange/providers_ledger.go",
           "internal/repository/memory_ledger.go",
           "internal/repository/postgres/ledger.go"
         ],
@@ -389,16 +631,289 @@
         ],
         "tests": [
           "internal/httpapi/server_test.go",
+          "internal/application/application_test.go",
+          "internal/exchange/providers_ledger_test.go",
+          "internal/ledger/exchange_test.go",
           "internal/ledger/service_test.go",
           "internal/repository/contracttest/ledger.go",
           "internal/repository/memory_ledger_test.go",
           "internal/repository/postgres/migrate_test.go",
+          "internal/repository/postgres/ledger_exchange_integration_test.go",
           "internal/repository/postgres/postgres_integration_test.go",
           "web/src/LedgerManager.test.tsx"
         ],
         "ui": [
           "web/src/App.tsx",
           "web/src/LedgerManager.tsx"
+        ]
+      }
+    },
+    {
+      "requirementId": "REQ-STACK-001",
+      "featureId": "software.licenses",
+      "artifacts": {
+        "documentation": [
+          "docs/features/dictionary.md",
+          "docs/features/stack.md",
+          "docs/requirements/initial.md"
+        ],
+        "api": [
+          "api/openapi/openapi.yaml",
+          "api/proto/stewardmesh.proto"
+        ],
+        "code": [
+          "internal/application/application.go",
+          "internal/exchange/providers.go",
+          "internal/exchange/service.go",
+          "internal/guard/contracts.go",
+          "internal/httpapi/server.go",
+          "internal/repository/memory_stack.go",
+          "internal/repository/postgres/stack.go",
+          "internal/stack/contracts.go",
+          "internal/stack/service.go"
+        ],
+        "schema": [
+          "internal/repository/postgres/migrations/0029_stack_software_licenses.sql"
+        ],
+        "tests": [
+          "internal/exchange/providers_test.go",
+          "internal/httpapi/server_test.go",
+          "internal/repository/contracttest/stack.go",
+          "internal/repository/memory_stack_test.go",
+          "internal/repository/postgres/migrate_test.go",
+          "internal/repository/postgres/postgres_integration_test.go",
+          "internal/stack/service_test.go",
+          "web/src/StackManager.test.tsx"
+        ],
+        "ui": [
+          "web/src/App.tsx",
+          "web/src/StackManager.tsx"
+        ]
+      }
+    },
+    {
+      "requirementId": "REQ-SIGNALS-001",
+      "featureId": "alerts.rules",
+      "artifacts": {
+        "documentation": [
+          "README.md",
+          "docs/features/dictionary.md",
+          "docs/features/signals.md",
+          "docs/requirements/initial.md",
+          "docs/validation/grpc-runtime-parity.md"
+        ],
+        "api": [
+          "api/openapi/openapi.yaml",
+          "api/proto/stewardmesh.proto"
+        ],
+        "code": [
+          "internal/application/application.go",
+          "internal/application/signals_evaluator.go",
+          "internal/exchange/providers_signals.go",
+          "internal/guard/contracts.go",
+          "internal/httpapi/server.go",
+          "internal/httpapi/signals.go",
+          "internal/grpcapi/routes.go",
+          "internal/reach/subscription_targets.go",
+          "internal/repository/memory_signals.go",
+          "internal/repository/postgres/signals.go",
+          "internal/signals/contracts.go",
+          "internal/signals/exchange.go",
+          "internal/signals/service.go"
+        ],
+        "schema": [
+          "internal/repository/postgres/migrations/0031_signals_alert_rules.sql",
+          "internal/repository/postgres/migrations/0037_signals_subscription_portability.sql"
+        ],
+        "tests": [
+          "internal/application/signals_evaluator_test.go",
+          "internal/application/grpc_runtime_test.go",
+          "internal/httpapi/server_test.go",
+          "internal/repository/contracttest/signals.go",
+          "internal/repository/memory_signals_test.go",
+          "internal/repository/postgres/migrate_test.go",
+          "internal/repository/postgres/postgres_integration_test.go",
+          "internal/exchange/providers_signals_test.go",
+          "internal/signals/exchange_test.go",
+          "internal/signals/service_test.go",
+          "web/src/SignalsManager.test.tsx"
+        ],
+        "ui": [
+          "web/src/App.tsx",
+          "web/src/SignalsManager.tsx",
+          "web/src/WorkspaceShell.tsx",
+          "web/src/documentation.ts",
+          "web/src/guide.ts"
+        ]
+      }
+    },
+    {
+      "requirementId": "REQ-EXCHANGE-001",
+      "featureId": "migration.packages",
+      "artifacts": {
+      "documentation": [
+        "docs/features/dictionary.md",
+        "docs/features/bridge.md",
+        "docs/features/exchange.md",
+          "docs/features/reach.md",
+          "docs/requirements/initial.md",
+          "docs/validation/exchange-release.md",
+          "docs/validation/exchange-security-review.md"
+        ],
+        "api": [
+          "api/openapi/openapi.yaml",
+          "api/proto/stewardmesh.proto",
+          "internal/httpapi/exchange.go"
+        ],
+      "code": [
+        "internal/application/application.go",
+        "internal/bridge/contracts.go",
+        "internal/bridge/service.go",
+		"internal/directoryexpansion/exchange.go",
+        "internal/exchange/archive.go",
+          "internal/exchange/contracts.go",
+          "internal/exchange/providers.go",
+        "internal/exchange/providers_atlas.go",
+        "internal/exchange/providers_bridge.go",
+        "internal/exchange/providers_catalog.go",
+		"internal/exchange/providers_directory.go",
+          "internal/exchange/providers_horizon.go",
+          "internal/exchange/providers_ledger.go",
+          "internal/exchange/providers_patterns.go",
+        "internal/exchange/providers_people.go",
+          "internal/exchange/providers_reach.go",
+          "internal/exchange/providers_threads.go",
+          "internal/exchange/registry.go",
+          "internal/exchange/service.go",
+        "internal/httpapi/server.go",
+        "internal/httpapi/bridge.go",
+          "internal/people/exchange.go",
+          "internal/reach/contracts.go",
+          "internal/reach/exchange.go",
+          "internal/reach/service.go",
+        "internal/repository/memory_exchange.go",
+        "internal/repository/memory_bridge.go",
+		"internal/repository/directory_import.go",
+          "internal/repository/memory_people.go",
+          "internal/repository/memory_reach.go",
+        "internal/repository/postgres/exchange.go",
+        "internal/repository/postgres/bridge.go",
+		"internal/repository/postgres/directory_import.go",
+          "internal/repository/postgres/people.go",
+          "internal/repository/postgres/reach.go",
+          "internal/stack/service.go",
+          "internal/storage/service.go"
+        ],
+        "schema": [
+          "api/openapi/openapi.yaml",
+          "api/proto/stewardmesh.proto",
+        "internal/repository/postgres/migrations/0032_exchange_packages.sql",
+        "internal/repository/postgres/migrations/0034_bridge_mcp.sql",
+          "internal/repository/postgres/migrations/0035_exchange_patterns_schema.sql",
+		  "internal/repository/postgres/migrations/0038_reach_exchange_inert_providers.sql",
+		  "internal/repository/postgres/migrations/0039_directory_exchange_organization_keys.sql"
+        ],
+        "tests": [
+          "internal/application/application_test.go",
+          "internal/exchange/archive_test.go",
+        "internal/exchange/providers_atlas_test.go",
+        "internal/exchange/providers_bridge_test.go",
+		"internal/exchange/providers_directory_test.go",
+          "internal/exchange/providers_test.go",
+          "internal/exchange/providers_horizon_test.go",
+          "internal/exchange/providers_ledger_test.go",
+          "internal/exchange/providers_patterns_test.go",
+          "internal/exchange/providers_people_test.go",
+          "internal/exchange/providers_reach_test.go",
+          "internal/exchange/providers_threads_test.go",
+          "internal/exchange/registry_test.go",
+          "internal/exchange/service_test.go",
+          "internal/httpapi/exchange_test.go",
+        "internal/repository/contracttest/exchange.go",
+        "internal/repository/contracttest/bridge.go",
+          "internal/repository/memory_exchange_test.go",
+          "internal/repository/postgres/horizon_exchange_integration_test.go",
+          "internal/repository/postgres/bridge_exchange_integration_test.go",
+		  "internal/repository/postgres/directory_exchange_integration_test.go",
+		  "internal/directoryexpansion/exchange_test.go",
+          "internal/repository/postgres/ledger_exchange_integration_test.go",
+          "internal/repository/postgres/people_exchange_integration_test.go",
+          "internal/repository/postgres/reach_exchange_integration_test.go",
+          "internal/repository/postgres/threads_exchange_integration_test.go",
+          "internal/repository/postgres/migrate_test.go",
+          "internal/repository/postgres/postgres_integration_test.go",
+          "internal/reach/exchange_test.go",
+          "web/src/GuardAccessManager.test.tsx",
+          "web/src/ExchangeManager.test.tsx",
+          "web/src/ReachManager.test.tsx"
+        ],
+        "ui": [
+          "web/src/App.tsx",
+          "web/src/ExchangeManager.tsx",
+          "web/src/GuardAccessManager.tsx",
+          "web/src/ReachManager.tsx",
+          "web/src/WorkspaceShell.tsx",
+          "web/src/guide.ts"
+        ]
+      }
+    },
+    {
+      "requirementId": "REQ-REACH-001",
+      "featureId": "messaging.delivery",
+      "artifacts": {
+        "documentation": [
+          "README.md",
+          "docs/features/dictionary.md",
+          "docs/features/reach.md",
+          "docs/requirements/initial.md"
+        ],
+        "api": [
+          "api/openapi/openapi.yaml",
+          "api/proto/stewardmesh.proto"
+        ],
+        "code": [
+          "internal/application/application.go",
+          "internal/config/config.go",
+          "internal/guard/contracts.go",
+          "internal/httpapi/reach.go",
+          "internal/httpapi/server.go",
+          "internal/reach/contracts.go",
+          "internal/reach/exchange.go",
+          "internal/reach/http_transport.go",
+          "internal/reach/runtime.go",
+          "internal/reach/service.go",
+          "internal/reach/smtp_transport.go",
+          "internal/exchange/providers_reach.go",
+          "internal/repository/memory_reach.go",
+          "internal/repository/postgres/reach.go"
+        ],
+        "schema": [
+          ".env.example",
+          "internal/repository/postgres/migrations/0033_reach_messaging.sql",
+          "internal/repository/postgres/migrations/0036_reach_delivery_claims.sql",
+          "internal/repository/postgres/migrations/0038_reach_exchange_inert_providers.sql"
+        ],
+        "tests": [
+          "internal/httpapi/server_test.go",
+          "internal/exchange/providers_reach_test.go",
+          "internal/reach/exchange_test.go",
+          "internal/reach/http_transport_test.go",
+          "internal/reach/runtime_test.go",
+          "internal/reach/service_test.go",
+          "internal/reach/smtp_transport_test.go",
+          "internal/repository/contracttest/reach.go",
+          "internal/repository/memory_reach_test.go",
+          "internal/repository/postgres/migrate_test.go",
+          "internal/repository/postgres/postgres_integration_test.go",
+          "internal/repository/postgres/reach_exchange_integration_test.go",
+          "web/src/ReachManager.test.tsx"
+        ],
+        "ui": [
+          "web/src/App.tsx",
+          "web/src/ReachManager.tsx",
+          "web/src/WorkspaceShell.tsx",
+          "web/src/documentation.ts",
+          "web/src/guide.ts"
         ]
       }
     },
@@ -504,8 +1019,10 @@
           "api/proto/stewardmesh.proto"
         ],
         "code": [
+          "internal/exchange/providers_people.go",
           "internal/httpapi/server.go",
           "internal/people/contracts.go",
+          "internal/people/exchange.go",
           "internal/people/service.go",
           "internal/repository/memory_people.go",
           "internal/repository/postgres/people.go"
@@ -514,10 +1031,13 @@
           "internal/repository/postgres/migrations/0005_people_directory.sql"
         ],
         "tests": [
+          "internal/exchange/providers_people_test.go",
           "internal/httpapi/server_test.go",
+          "internal/people/exchange_test.go",
           "internal/people/service_test.go",
           "internal/repository/contracttest/people.go",
           "internal/repository/memory_people_test.go",
+          "internal/repository/postgres/people_exchange_integration_test.go",
           "internal/repository/postgres/postgres_integration_test.go",
           "web/src/PeopleDirectory.test.tsx"
         ],
@@ -560,6 +1080,366 @@
         ],
         "ui": [
           "web/src/PeopleDirectory.tsx"
+        ]
+      }
+    },
+    {
+      "requirementId": "REQ-DIRECTORY-EXPANSION-002",
+      "featureId": "integrations.protocols",
+      "artifacts": {
+        "documentation": [
+          "docs/features/dictionary.md",
+          "docs/features/directory-expansion.md",
+          "docs/requirements/initial.md"
+        ],
+        "api": [
+          "api/openapi/openapi.yaml",
+          "api/proto/stewardmesh.proto"
+        ],
+        "code": [
+          "internal/application/application.go",
+          "internal/directoryexpansion/connectors.go",
+          "internal/directoryexpansion/contracts.go",
+          "internal/directoryexpansion/importer.go",
+          "internal/directoryexpansion/people_target.go",
+          "internal/guard/contracts.go",
+          "internal/guard/service.go",
+          "internal/httpapi/server.go",
+          "internal/people/contracts.go",
+          "internal/repository/directory_import.go",
+          "internal/repository/memory_people.go",
+          "internal/repository/postgres/directory_import.go",
+          "internal/repository/postgres/people.go"
+        ],
+        "schema": [
+          "internal/repository/postgres/migrations/0028_directory_import_reconciliation.sql"
+        ],
+        "tests": [
+          "internal/directoryexpansion/contracts_test.go",
+          "internal/httpapi/server_test.go",
+          "internal/repository/contracttest/directory_import.go",
+          "internal/repository/contracttest/people.go",
+          "internal/repository/memory_directory_import_test.go",
+          "internal/repository/postgres/migrate_test.go",
+          "internal/repository/postgres/postgres_integration_test.go",
+          "web/src/DirectoryImportManager.test.tsx"
+        ],
+        "ui": [
+          "web/src/DirectoryImportManager.tsx"
+        ]
+      }
+    },
+    {
+      "requirementId": "REQ-DIRECTORY-EXPANSION-003",
+      "featureId": "identity.directory",
+      "artifacts": {
+        "documentation": [
+          ".env.example",
+          "docs/features/dictionary.md",
+          "docs/features/directory-expansion.md",
+          "docs/requirements/initial.md"
+        ],
+        "api": [
+          "api/openapi/openapi.yaml",
+          "api/proto/stewardmesh.proto",
+          "internal/httpapi/server.go"
+        ],
+        "code": [
+          "internal/application/application.go",
+          "internal/config/config.go",
+          "internal/directoryexpansion/connectors.go",
+          "internal/directoryexpansion/contracts.go",
+          "internal/directoryexpansion/entra/connector.go",
+          "internal/directoryexpansion/importer.go",
+          "internal/repository/directory_import.go"
+        ],
+        "schema": [
+          ".env.example"
+        ],
+        "tests": [
+          "internal/application/application_test.go",
+          "internal/config/config_test.go",
+          "internal/directoryexpansion/entra/connector_test.go",
+          "internal/httpapi/server_test.go",
+          "internal/repository/contracttest/directory_import.go",
+          "internal/repository/memory_directory_import_test.go",
+          "internal/repository/postgres/postgres_integration_test.go",
+          "web/src/DirectoryImportManager.test.tsx"
+        ],
+        "ui": [
+          "web/src/DirectoryImportManager.tsx",
+          "web/src/PeopleDirectory.tsx"
+        ]
+      }
+    },
+    {
+      "requirementId": "REQ-DIRECTORY-EXPANSION-004",
+      "featureId": "identity.directory",
+      "artifacts": {
+        "documentation": [
+          ".env.example",
+          "README.md",
+          "docs/features/dictionary.md",
+          "docs/features/directory-expansion.md",
+		  "docs/features/exchange.md",
+          "docs/requirements/initial.md"
+        ],
+        "api": [
+          "api/openapi/openapi.yaml",
+          "api/proto/stewardmesh.proto"
+        ],
+        "code": [
+          "cmd/stewardmesh/main.go",
+          "internal/application/application.go",
+          "internal/config/config.go",
+          "internal/directoryexpansion/contracts.go",
+          "internal/directoryexpansion/group_target.go",
+          "internal/directoryexpansion/importer.go",
+          "internal/directoryexpansion/managed_graph.go",
+          "internal/directoryexpansion/sailpoint/connector.go",
+          "internal/repository/directory_import.go"
+        ],
+        "schema": [
+          ".env.example"
+        ],
+        "tests": [
+          "internal/application/application_test.go",
+          "internal/config/config_test.go",
+          "internal/directoryexpansion/contracts_test.go",
+          "internal/directoryexpansion/sailpoint/connector_test.go",
+          "web/src/DirectoryImportManager.test.tsx"
+        ],
+        "ui": [
+          "web/src/DirectoryImportManager.tsx",
+          "web/src/PeopleDirectory.tsx"
+        ]
+      }
+    },
+    {
+      "requirementId": "REQ-DIRECTORY-EXPANSION-005",
+      "featureId": "integrations.protocols",
+      "artifacts": {
+        "documentation": [
+          "README.md",
+          "docs/features/dictionary.md",
+          "docs/features/directory-expansion.md",
+          "docs/requirements/initial.md"
+        ],
+        "api": [
+          "api/openapi/openapi.yaml",
+          "api/proto/stewardmesh.proto"
+        ],
+        "code": [
+          "cmd/grouper-fixture/main.go",
+          "internal/application/application.go",
+          "internal/config/config.go",
+          "internal/directoryexpansion/group_target.go",
+		  "internal/directoryexpansion/exchange.go",
+          "internal/directoryexpansion/grouper.go",
+          "internal/directoryexpansion/managed_graph.go",
+          "internal/grouperfixture/server.go",
+		  "internal/exchange/providers_directory.go",
+          "internal/repository/directory_import.go",
+          "internal/repository/postgres/directory_import.go"
+        ],
+        "schema": [
+          ".env.example",
+          "deploy/docker-compose.yml",
+		  "internal/repository/postgres/migrations/0030_grouper_directory_graph.sql",
+		  "internal/repository/postgres/migrations/0039_directory_exchange_organization_keys.sql"
+        ],
+        "tests": [
+          "internal/application/application_test.go",
+          "internal/config/config_test.go",
+		  "internal/directoryexpansion/exchange_test.go",
+          "internal/directoryexpansion/grouper_test.go",
+		  "internal/exchange/providers_directory_test.go",
+          "internal/grouperfixture/server_test.go",
+          "internal/httpapi/server_test.go",
+          "internal/repository/contracttest/directory_groups.go",
+          "internal/repository/memory_directory_import_test.go",
+          "internal/repository/postgres/migrate_test.go",
+		  "internal/repository/postgres/directory_exchange_integration_test.go",
+          "internal/repository/postgres/postgres_integration_test.go",
+          "web/src/documentation.test.ts"
+        ],
+        "ui": [
+          "web/src/documentation.ts"
+        ]
+      }
+    },
+    {
+      "requirementId": "REQ-DIRECTORY-EXPANSION-006",
+      "featureId": "integrations.protocols",
+      "artifacts": {
+        "documentation": [
+          ".env.example",
+          "README.md",
+          "docs/features/dictionary.md",
+          "docs/features/directory-expansion.md",
+          "docs/requirements/initial.md",
+          "web/src/documentation.ts"
+        ],
+        "api": [
+          "api/openapi/openapi.yaml",
+          "api/proto/stewardmesh.proto"
+        ],
+        "code": [
+          "cmd/stewardmesh/main.go",
+          "internal/application/application.go",
+          "internal/config/config.go",
+          "internal/directoryexpansion/contracts.go",
+          "internal/directoryexpansion/group_target.go",
+          "internal/directoryexpansion/importer.go",
+          "internal/directoryexpansion/managed_graph.go",
+          "internal/directoryexpansion/peoplesoft.go",
+          "internal/repository/directory_import.go",
+          "internal/repository/postgres/directory_import.go"
+        ],
+        "schema": [
+          ".env.example",
+          "internal/repository/postgres/migrations/0028_directory_import_reconciliation.sql",
+          "internal/repository/postgres/migrations/0030_grouper_directory_graph.sql"
+        ],
+        "tests": [
+          "internal/application/application_test.go",
+          "internal/config/config_test.go",
+          "internal/directoryexpansion/peoplesoft_test.go",
+          "internal/httpapi/server_test.go",
+          "internal/repository/contracttest/directory_groups.go",
+          "internal/repository/contracttest/directory_import.go",
+          "internal/repository/memory_directory_import_test.go",
+          "internal/repository/postgres/postgres_integration_test.go",
+          "web/src/DirectoryImportManager.test.tsx",
+          "web/src/documentation.test.ts"
+        ],
+        "ui": [
+          "web/src/DirectoryImportManager.tsx",
+          "web/src/documentation.ts"
+        ]
+      }
+    },
+    {
+      "requirementId": "REQ-DIRECTORY-EXPANSION-007",
+      "featureId": "platform.foundation",
+      "artifacts": {
+        "documentation": [
+          ".env.example",
+          "README.md",
+          "docs/features/dictionary.md",
+          "docs/features/directory-expansion.md",
+          "docs/requirements/initial.md"
+        ],
+        "api": [
+          "api/openapi/openapi.yaml"
+        ],
+        "code": [
+          "cmd/stewardmesh/main.go",
+          "internal/application/application.go",
+          "internal/config/config.go",
+          "internal/directoryexpansion/importer.go",
+          "internal/directoryexpansion/synthetic.go"
+        ],
+        "schema": [
+          ".env.example",
+          "deploy/docker-compose.yml"
+        ],
+        "tests": [
+          ".github/workflows/ci.yml",
+          "cmd/stewardmesh/main_test.go",
+          "internal/application/application_test.go",
+          "internal/config/config_test.go",
+          "internal/directoryexpansion/contracts_test.go",
+          "internal/directoryexpansion/synthetic_test.go",
+          "web/src/documentation.test.ts"
+        ],
+        "ui": [
+          "web/src/documentation.ts"
+        ]
+      }
+    },
+    {
+      "requirementId": "REQ-DIRECTORY-EXPANSION-008",
+      "featureId": "threads.relationships",
+      "artifacts": {
+        "documentation": [
+          "docs/features/dictionary.md",
+          "docs/features/directory-expansion.md",
+          "docs/features/relationship-graph.md",
+          "docs/requirements/initial.md"
+        ],
+        "api": [
+          "api/openapi/openapi.yaml",
+          "api/proto/stewardmesh.proto"
+        ],
+        "schema": [
+          "api/openapi/openapi.yaml",
+          "api/proto/stewardmesh.proto"
+        ],
+        "code": [
+          "internal/application/application.go",
+		  "internal/atlas/contracts.go",
+          "internal/atlas/service.go",
+          "internal/directoryexpansion/contracts.go",
+          "internal/directoryexpansion/graph.go",
+          "internal/directoryexpansion/managed_graph.go",
+          "internal/httpapi/server.go",
+          "internal/people/contracts.go",
+		  "internal/repository/memory_atlas.go",
+          "internal/repository/memory_people.go",
+		  "internal/repository/postgres/atlas.go",
+          "internal/repository/postgres/people.go"
+        ],
+        "tests": [
+          "internal/directoryexpansion/relationship_graph_test.go",
+          "internal/httpapi/server_test.go",
+		  "internal/repository/contracttest/atlas.go",
+          "internal/repository/contracttest/people.go",
+		  "internal/repository/memory_atlas_test.go",
+		  "internal/repository/memory_people_test.go",
+          "web/src/PeopleDirectory.test.tsx",
+          "web/src/RelationshipGraphView.test.tsx",
+          "web/src/documentation.test.ts"
+        ],
+        "ui": [
+          "web/src/PeopleDirectory.tsx",
+          "web/src/RelationshipGraphView.tsx",
+          "web/src/documentation.ts"
+        ]
+      }
+    },
+    {
+      "requirementId": "REQ-DIRECTORY-EXPANSION-009",
+      "featureId": "experience.help",
+      "artifacts": {
+        "documentation": [
+          "README.md",
+          "docs/deployment/directory-connectors.md",
+          "docs/features/dictionary.md",
+          "docs/features/directory-expansion.md",
+          "docs/requirements/initial.md",
+          "docs/validation/directory-expansion-release.md"
+        ],
+        "api": [
+          "api/openapi/openapi.yaml",
+          "api/proto/stewardmesh.proto"
+        ],
+        "code": [
+          "internal/directoryexpansion/entra/connector.go",
+          "internal/traceability/verify.go"
+        ],
+        "schema": [
+          ".env.example",
+          "deploy/docker-compose.yml"
+        ],
+        "tests": [
+          ".github/workflows/ci.yml",
+          "internal/directoryexpansion/entra/connector_test.go",
+          "internal/traceability/verify_test.go",
+          "web/src/DirectoryImportManager.test.tsx"
+        ],
+        "ui": [
+          "web/src/DirectoryImportManager.tsx"
         ]
       }
     },

@@ -1,64 +1,97 @@
 package directoryexpansion
 
+// Requirements: REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003.
+// Features: integrations.protocols, identity.directory.
+
 import (
-	"context"
-	"encoding/json"
 	"fmt"
-	"net/http"
+	"regexp"
+	"sort"
 	"strings"
+	"sync"
+	"unicode/utf8"
 )
 
-type HTTPConnector struct {
-	provider        Provider
-	client          *http.Client
-	endpoint, token string
+var (
+	sourceSystemIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
+	providerNamePattern   = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
+)
+
+// Registry is the runtime allowlist for server-configured connectors. It does
+// not manufacture generic HTTP adapters: each provider slice must translate
+// and sanitize its own API contract before registration.
+type Registry struct {
+	mu         sync.RWMutex
+	connectors map[string]Connector
 }
 
-func NewHTTPConnector(provider Provider, endpoint, token string, client *http.Client) *HTTPConnector {
-	if client == nil {
-		client = http.DefaultClient
-	}
-	return &HTTPConnector{provider: provider, endpoint: strings.TrimRight(endpoint, "/"), token: token, client: client}
-}
-func (c *HTTPConnector) Provider() Provider { return c.provider }
-func (c *HTTPConnector) Pull(ctx context.Context) ([]ImportRecord, error) {
-	if c.endpoint == "" {
-		return nil, fmt.Errorf("%s endpoint is required", c.provider)
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.endpoint, nil)
-	if err != nil {
-		return nil, err
-	}
-	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
-	}
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return nil, fmt.Errorf("%s returned HTTP %d", c.provider, resp.StatusCode)
-	}
-	var records []ImportRecord
-	if err := json.NewDecoder(resp.Body).Decode(&records); err != nil {
-		return nil, fmt.Errorf("decode %s response: %w", c.provider, err)
-	}
-	return records, nil
+type registeredConnector struct {
+	Connector
+	system SourceSystem
 }
 
-// NewEntraConnector, NewSailPointConnector, NewGrouperConnector, and
-// NewPeopleSoftConnector share the safe read-only HTTP seam. Production
-// deployments can provide provider-specific request/response translators.
-func NewEntraConnector(endpoint, token string, client *http.Client) Connector {
-	return NewHTTPConnector(ProviderEntra, endpoint, token, client)
+func (c registeredConnector) SourceSystem() SourceSystem { return c.system }
+
+func NewRegistry(connectors ...Connector) (*Registry, error) {
+	registry := &Registry{connectors: make(map[string]Connector, len(connectors))}
+	for _, connector := range connectors {
+		if err := registry.Register(connector); err != nil {
+			return nil, err
+		}
+	}
+	return registry, nil
 }
-func NewSailPointConnector(endpoint, token string, client *http.Client) Connector {
-	return NewHTTPConnector(ProviderSailPoint, endpoint, token, client)
+
+func (r *Registry) Register(connector Connector) error {
+	if r == nil || connector == nil {
+		return fmt.Errorf("%w: connector is required", ErrInvalidInput)
+	}
+	system := connector.SourceSystem()
+	system.ID = strings.TrimSpace(system.ID)
+	system.Provider = Provider(strings.ToLower(strings.TrimSpace(string(system.Provider))))
+	system.ConfigRevision = strings.TrimSpace(system.ConfigRevision)
+	if !sourceSystemIDPattern.MatchString(system.ID) || !providerNamePattern.MatchString(string(system.Provider)) ||
+		system.ConfigRevision == "" || !utf8.ValidString(system.ConfigRevision) || utf8.RuneCountInString(system.ConfigRevision) > 128 {
+		return fmt.Errorf("%w: connector source system identity is invalid", ErrInvalidInput)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.connectors) >= MaximumSources {
+		return fmt.Errorf("%w: connector registry exceeds the source limit", ErrInvalidInput)
+	}
+	if _, exists := r.connectors[system.ID]; exists {
+		return fmt.Errorf("%w: source system is already registered", ErrConflict)
+	}
+	// Preserve the exact normalized identity that was validated. Provider
+	// adapters remain responsible only for page translation and cannot drift
+	// source metadata after registration.
+	r.connectors[system.ID] = registeredConnector{Connector: connector, system: system}
+	return nil
 }
-func NewGrouperConnector(endpoint, token string, client *http.Client) Connector {
-	return NewHTTPConnector(ProviderGrouper, endpoint, token, client)
+
+func (r *Registry) Connector(sourceSystemID string) (Connector, bool) {
+	if r == nil {
+		return nil, false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	connector, ok := r.connectors[sourceSystemID]
+	return connector, ok
 }
-func NewPeopleSoftConnector(endpoint, token string, client *http.Client) Connector {
-	return NewHTTPConnector(ProviderPeopleSoft, endpoint, token, client)
+
+// SourceSystems returns the safe, credential-free identities available to an
+// authorized import operator. Connector implementation details and endpoints
+// remain server-side configuration.
+func (r *Registry) SourceSystems() []SourceSystem {
+	if r == nil {
+		return []SourceSystem{}
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	systems := make([]SourceSystem, 0, len(r.connectors))
+	for _, connector := range r.connectors {
+		systems = append(systems, connector.SourceSystem())
+	}
+	sort.Slice(systems, func(i, j int) bool { return systems[i].ID < systems[j].ID })
+	return systems
 }

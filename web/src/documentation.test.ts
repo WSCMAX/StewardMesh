@@ -1,7 +1,7 @@
 import { expect, test } from 'vitest'
 import { documentationByID, documentationHref, documentationPages, documentationTopicFromHash, searchDocumentation } from './documentation'
 
-// Requirements: A11Y-001, DOC-001. Feature: experience.help.
+// Requirements: A11Y-001, DOC-001, REQ-DIRECTORY-EXPANSION-005, REQ-DIRECTORY-EXPANSION-006, REQ-DIRECTORY-EXPANSION-007, REQ-DIRECTORY-EXPANSION-008, REQ-EXCHANGE-001. Features: experience.help, platform.foundation, integrations.protocols, threads.relationships, migration.packages.
 
 test('creates fixed same-host documentation deep links', () => {
   expect(documentationHref('atlas')).toBe('#docs/atlas')
@@ -11,7 +11,7 @@ test('creates fixed same-host documentation deep links', () => {
 })
 
 test('keeps every local documentation page complete and connected', () => {
-  expect(documentationPages).toHaveLength(10)
+  expect(documentationPages).toHaveLength(15)
   for (const page of documentationPages) {
     expect(page.sections.length).toBeGreaterThan(0)
     expect(page.related.length).toBeGreaterThan(0)
@@ -20,9 +20,36 @@ test('keeps every local documentation page complete and connected', () => {
   }
 })
 
+test('documents the optional read-only Grouper workflow', () => {
+  const results = searchDocumentation('grouper')
+  expect(results.map((page) => page.id)).toContain('people')
+  expect(documentationByID.people.sections.some((section) => section.id === 'grouper-sync')).toBe(true)
+})
+
+test('documents strict opt-in synthetic demo setup', () => {
+  expect(searchDocumentation('synthetic demo').map((page) => page.id)).toContain('people')
+  expect(documentationByID.people.sections.some((section) => section.id === 'synthetic-demo')).toBe(true)
+})
+
+test('documents the permission-scoped relationship graph and its text fallback', () => {
+  expect(searchDocumentation('relationship graph').map((page) => page.id)).toContain('people')
+  const section = documentationByID.people.sections.find((candidate) => candidate.id === 'relationship-graph')
+  expect(section?.bullets?.join(' ')).toContain('keyboard and screen-reader view')
+  expect(section?.callout?.body).toContain('do not accept an organization')
+})
+
+test('documents the optional read-only PeopleSoft workflow', () => {
+  const results = searchDocumentation('campus solutions')
+  expect(results.map((page) => page.id)).toContain('people')
+  expect(documentationByID.people.sections.some((section) => section.id === 'peoplesoft-sync')).toBe(true)
+})
+
 test('searches titles, summaries, and product vocabulary', () => {
   expect(searchDocumentation('budget').map((page) => page.id)).toContain('ledger')
+  expect(searchDocumentation('entitlement').map((page) => page.id)).toContain('stack')
+  expect(searchDocumentation('renewal').map((page) => page.id)).toContain('signals')
   expect(searchDocumentation('barcode').map((page) => page.id)).toEqual(['atlas'])
   expect(searchDocumentation('scoped grants').map((page) => page.id)).toContain('guard')
+  expect(searchDocumentation('openinventory').map((page) => page.id)).toContain('exchange')
   expect(searchDocumentation('')).toEqual(documentationPages)
 })

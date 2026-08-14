@@ -1,5 +1,5 @@
 import { type FormEvent, useEffect, useRef, useState } from 'react'
-import { ApiRequestError, requestJSON } from './api'
+import { ApiRequestError, isRevision, requestJSON, type Revision } from './api'
 import { buttonClass, emptyStateClass, inputClass, secondaryButtonClass, subpanelClass } from './ui'
 
 // Requirement: REQ-ATLAS-CODES-001. Feature: inventory.identifiers.
@@ -16,7 +16,7 @@ export type AssetIdentifier = {
   status: 'active' | 'replaced' | 'deactivated'
   supersedesId?: string
   replacedById?: string
-  revision: number
+  revision: Revision
   createdBy: string
   createdAt: string
   updatedAt: string
@@ -34,6 +34,7 @@ type AtlasIdentifiersProps = {
   assetName: string
   canWrite: boolean
   csrfToken: string
+  onChanged?: () => void
 }
 
 
@@ -44,7 +45,7 @@ function isIdentifier(value: unknown): value is AssetIdentifier {
     && typeof item.assetId === 'string' && (item.symbology === 'code128' || item.symbology === 'qr')
     && typeof item.normalizedValue === 'string' && typeof item.displayValue === 'string'
     && typeof item.source === 'string' && typeof item.primary === 'boolean'
-    && typeof item.status === 'string' && typeof item.revision === 'number'
+    && typeof item.status === 'string' && isRevision(item.revision)
     && typeof item.createdBy === 'string' && typeof item.createdAt === 'string'
     && typeof item.updatedAt === 'string'
 }
@@ -71,7 +72,7 @@ function requestMessage(error: unknown, fallback: string) {
   return error instanceof ApiRequestError ? error.message : fallback
 }
 
-export default function AtlasIdentifiers({ assetId, assetName, canWrite, csrfToken }: AtlasIdentifiersProps) {
+export default function AtlasIdentifiers({ assetId, assetName, canWrite, csrfToken, onChanged }: AtlasIdentifiersProps) {
   const [identifiers, setIdentifiers] = useState<AssetIdentifier[]>([])
   const [busy, setBusy] = useState('loading')
   const [message, setMessage] = useState('')
@@ -141,6 +142,7 @@ export default function AtlasIdentifiers({ assetId, assetName, canWrite, csrfTok
       setCreateOpen(false)
       form.reset()
       await loadIdentifiers()
+      onChanged?.()
     } catch (requestError) {
       if (currentAssetIdRef.current !== requestedAssetId) return
       setError(requestMessage(requestError, 'The identifier could not be associated.'))
@@ -175,6 +177,7 @@ export default function AtlasIdentifiers({ assetId, assetName, canWrite, csrfTok
       setMessage('Identifier replaced; the previous association remains in history.')
       setReplaceTarget(null)
       await loadIdentifiers()
+      onChanged?.()
     } catch (requestError) {
       if (currentAssetIdRef.current !== requestedAssetId) return
       setError(requestMessage(requestError, 'The identifier could not be replaced.'))
@@ -201,6 +204,7 @@ export default function AtlasIdentifiers({ assetId, assetName, canWrite, csrfTok
       setMessage('Identifier deactivated; its history is preserved.')
       setDeactivateTarget(null)
       await loadIdentifiers()
+      onChanged?.()
     } catch (requestError) {
       if (currentAssetIdRef.current !== requestedAssetId) return
       setError(requestMessage(requestError, 'The identifier could not be deactivated.'))
@@ -215,7 +219,7 @@ export default function AtlasIdentifiers({ assetId, assetName, canWrite, csrfTok
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h4 className="font-semibold" id="asset-identifiers-heading">Atlas Codes — Identifiers</h4>
-          <p className="mt-1 text-sm leading-5 text-steward-mist-muted">Manage Code 128 and QR associations for {assetName}. Scanning and label printing arrive in later Atlas Codes slices.</p>
+          <p className="mt-1 text-sm leading-5 text-steward-mist-muted">Manage Code 128 and QR associations for {assetName}. Use the Atlas scanner to find or associate codes; the organization label workspace can select codes across visible assets.</p>
         </div>
         {canWrite && <button className={secondaryButtonClass} onClick={() => { setCreateOpen((open) => !open); setReplaceTarget(null); setDeactivateTarget(null) }} type="button">{createOpen ? 'Cancel association' : 'Associate identifier'}</button>}
       </div>

@@ -1,18 +1,20 @@
 package atlas
 
-// Requirements: REQ-ATLAS-001, REQ-ATLAS-MODELS-001. Features: inventory.assets, inventory.models.
+// Requirements: REQ-ATLAS-001, REQ-ATLAS-MODELS-001, REQ-DIRECTORY-EXPANSION-008. Features: inventory.assets, inventory.models, threads.relationships.
 
 import (
 	"context"
 	"errors"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/maxlemke/stewardmesh/internal/domain"
 	"github.com/maxlemke/stewardmesh/internal/foundation"
+	"github.com/maxlemke/stewardmesh/internal/portabletime"
 )
 
 const (
@@ -44,26 +46,35 @@ type ServiceConfig struct {
 type Service struct {
 	store          Store
 	references     ReferenceValidator
+	writes         WriteGate
 	auditor        foundation.Auditor
 	organizationID string
 	now            func() time.Time
 }
 
 func NewService(store Store, references ReferenceValidator, auditor foundation.Auditor, configuration ServiceConfig) (*Service, error) {
+	service, _, err := NewServiceWithExchangeImporter(store, references, nil, auditor, configuration)
+	return service, err
+}
+
+func NewServiceWithExchangeImporter(store Store, references ReferenceValidator, writes WriteGate, auditor foundation.Auditor, configuration ServiceConfig) (*Service, ExchangeImporter, error) {
 	if store == nil || references == nil || auditor == nil {
-		return nil, errors.New("Atlas store, reference validator, and auditor are required")
+		return nil, nil, errors.New("Atlas store, reference validator, and auditor are required")
 	}
 	configuration.OrganizationID = strings.TrimSpace(configuration.OrganizationID)
 	if configuration.OrganizationID == "" {
-		return nil, errors.New("Atlas organization id is required")
+		return nil, nil, errors.New("Atlas organization id is required")
 	}
-	if configuration.Now == nil {
-		configuration.Now = func() time.Time { return time.Now().UTC() }
+	clock := configuration.Now
+	if clock == nil {
+		clock = time.Now
 	}
-	return &Service{
-		store: store, references: references, auditor: auditor,
-		organizationID: configuration.OrganizationID, now: configuration.Now,
-	}, nil
+	service := &Service{
+		store: store, references: references, writes: writes, auditor: auditor,
+		organizationID: configuration.OrganizationID,
+		now:            func() time.Time { return portabletime.Normalize(clock()) },
+	}
+	return service, &exchangeImporter{service: service}, nil
 }
 
 func (s *Service) ListAssets(ctx context.Context, query Query) ([]domain.Asset, error) {
@@ -72,6 +83,43 @@ func (s *Service) ListAssets(ctx context.Context, query Query) ([]domain.Asset, 
 		return nil, err
 	}
 	return s.store.ListAssets(ctx, s.organizationID, query)
+}
+
+// ListAuthorizedAssets returns an ID-keyset page after applying the
+// authenticated visibility predicate in the authoritative store. It is kept
+// separate from the human-facing name-ordered Atlas list so MCP cursors remain
+// stable and callers outside HTTP cannot accidentally filter after LIMIT.
+func (s *Service) ListAuthorizedAssets(ctx context.Context, query AuthorizedAssetQuery) ([]domain.Asset, error) {
+	query.Search = strings.ToLower(strings.TrimSpace(query.Search))
+	query.Cursor = strings.TrimSpace(query.Cursor)
+	if !validText(query.Search, 200) || (query.Cursor != "" && !assetIDPattern.MatchString(query.Cursor)) ||
+		query.Limit < 1 || query.Limit > maximumListLimit || !query.Visibility.Valid() {
+		return nil, ErrInvalidInput
+	}
+	var err error
+	if query.Visibility.ResourceIDs, err = normalizedGraphIDs(query.Visibility.ResourceIDs, assetIDPattern); err != nil {
+		return nil, err
+	}
+	if query.Visibility.SiteIDs, err = normalizedGraphIDs(query.Visibility.SiteIDs, referencePattern); err != nil {
+		return nil, err
+	}
+	if query.Visibility.DepartmentIDs, err = normalizedGraphIDs(query.Visibility.DepartmentIDs, referencePattern); err != nil {
+		return nil, err
+	}
+	return s.store.ListAuthorizedAssets(ctx, s.organizationID, query)
+}
+
+// ListGraphAssets is the bounded label/reference read used only by the
+// relationship graph. Public Atlas search keeps its broader fields and
+// 100-record limit; graph search matches labels only and applies authenticated
+// visibility plus relationship selectors before its independent 500-node cap.
+// Requirement: REQ-DIRECTORY-EXPANSION-008.
+func (s *Service) ListGraphAssets(ctx context.Context, query GraphAssetQuery) ([]domain.Asset, error) {
+	query, err := normalizeGraphAssetQuery(query)
+	if err != nil {
+		return nil, err
+	}
+	return s.store.ListGraphAssets(ctx, s.organizationID, query)
 }
 
 func (s *Service) GetAsset(ctx context.Context, id string) (domain.Asset, error) {
@@ -96,6 +144,18 @@ func (s *Service) GetModel(ctx context.Context, id string) (domain.AssetModel, e
 		return domain.AssetModel{}, ErrInvalidInput
 	}
 	return s.store.GetModel(ctx, s.organizationID, id)
+}
+
+func (s *Service) GetModelInventory(ctx context.Context, id string, query ModelInventoryQuery) (ModelInventory, error) {
+	id = strings.TrimSpace(id)
+	if !assetIDPattern.MatchString(id) {
+		return ModelInventory{}, ErrInvalidInput
+	}
+	normalized, err := normalizeModelInventoryQuery(query)
+	if err != nil {
+		return ModelInventory{}, err
+	}
+	return s.store.GetModelInventory(ctx, s.organizationID, id, normalized)
 }
 
 func (s *Service) ResolveModel(ctx context.Context, identity ModelIdentity) (domain.AssetModel, error) {
@@ -124,6 +184,9 @@ func (s *Service) CreateModel(ctx context.Context, input CreateModelInput) (doma
 			return domain.AssetModel{}, fmt.Errorf("create model id: %w", err)
 		}
 	}
+	if err := s.checkWrite(ctx, "atlas.model", id); err != nil {
+		return domain.AssetModel{}, err
+	}
 	now := s.now().UTC()
 	model := domain.AssetModel{
 		ID: id, OrganizationID: s.organizationID, Manufacturer: normalized.Manufacturer, Name: normalized.Name,
@@ -147,6 +210,9 @@ func (s *Service) UpdateModel(ctx context.Context, input UpdateModelInput) (doma
 	id := strings.TrimSpace(input.ID)
 	if !assetIDPattern.MatchString(id) || input.Revision < 1 {
 		return domain.AssetModel{}, ErrInvalidInput
+	}
+	if err := s.checkWrite(ctx, "atlas.model", id); err != nil {
+		return domain.AssetModel{}, err
 	}
 	existing, err := s.store.GetModel(ctx, s.organizationID, id)
 	if err != nil {
@@ -177,7 +243,7 @@ func (s *Service) UpdateModel(ctx context.Context, input UpdateModelInput) (doma
 	updated.SourceSystemID = normalized.SourceSystemID
 	updated.SourceRecordID = normalized.SourceRecordID
 	updated.Revision = existing.Revision + 1
-	updated.UpdatedAt = s.now().UTC()
+	updated.UpdatedAt = portabletime.Max(s.now(), existing.UpdatedAt)
 	persisted, err := s.store.UpdateModel(ctx, updated, existing.Revision)
 	if err != nil {
 		return domain.AssetModel{}, err
@@ -193,7 +259,14 @@ func (s *Service) RetireModel(ctx context.Context, id string, revision int64) (d
 	if !assetIDPattern.MatchString(id) || revision < 1 {
 		return domain.AssetModel{}, ErrInvalidInput
 	}
-	retired, err := s.store.RetireModel(ctx, s.organizationID, id, revision, s.now().UTC())
+	if err := s.checkWrite(ctx, "atlas.model", id); err != nil {
+		return domain.AssetModel{}, err
+	}
+	existing, err := s.store.GetModel(ctx, s.organizationID, id)
+	if err != nil {
+		return domain.AssetModel{}, err
+	}
+	retired, err := s.store.RetireModel(ctx, s.organizationID, id, revision, portabletime.Max(s.now(), existing.UpdatedAt))
 	if err != nil {
 		return domain.AssetModel{}, err
 	}
@@ -225,7 +298,10 @@ func (s *Service) CreateAsset(ctx context.Context, input CreateAssetInput) (doma
 			return domain.Asset{}, fmt.Errorf("create asset id: %w", err)
 		}
 	}
-	now := s.now().UTC()
+	if err := s.checkWrite(ctx, "atlas.asset", id); err != nil {
+		return domain.Asset{}, err
+	}
+	now := portabletime.Max(s.now(), model.UpdatedAt)
 	asset := domain.Asset{
 		ID: id, OrganizationID: s.organizationID, ModelID: normalized.ModelID,
 		ModelContext: snapshotModelContext(model, normalized.Kind, now), Name: normalized.Name, Kind: normalized.Kind,
@@ -259,7 +335,7 @@ func (s *Service) CreateAssetsFromModel(ctx context.Context, input BulkCreateAss
 	if err != nil {
 		return BulkCreateAssetsResult{}, err
 	}
-	now := s.now().UTC()
+	now := portabletime.Max(s.now(), model.UpdatedAt)
 	assets := make([]domain.Asset, 0, len(input.Items))
 	events := make([]domain.AssetLifecycleEvent, 0, len(input.Items))
 	ids := make(map[string]struct{}, len(input.Items))
@@ -289,6 +365,9 @@ func (s *Service) CreateAssetsFromModel(ctx context.Context, input BulkCreateAss
 		}
 		if _, exists := ids[id]; exists || repeatedNormalizedValue(assetTags, normalized.AssetTag) || repeatedNormalizedValue(serialNumbers, normalized.SerialNumber) {
 			return BulkCreateAssetsResult{}, ErrConflict
+		}
+		if err := s.checkWrite(ctx, "atlas.asset", id); err != nil {
+			return BulkCreateAssetsResult{}, err
 		}
 		ids[id] = struct{}{}
 		asset := domain.Asset{
@@ -326,6 +405,9 @@ func (s *Service) UpdateAsset(ctx context.Context, input UpdateAssetInput) (doma
 	if !assetIDPattern.MatchString(id) || input.Revision < 1 {
 		return domain.Asset{}, ErrInvalidInput
 	}
+	if err := s.checkWrite(ctx, "atlas.asset", id); err != nil {
+		return domain.Asset{}, err
+	}
 	existing, err := s.store.GetAsset(ctx, s.organizationID, id)
 	if err != nil {
 		return domain.Asset{}, err
@@ -341,9 +423,17 @@ func (s *Service) UpdateAsset(ctx context.Context, input UpdateAssetInput) (doma
 	if err != nil {
 		return domain.Asset{}, err
 	}
-	model, err := s.validateModelReference(ctx, normalized.ModelID)
-	if err != nil {
-		return domain.Asset{}, err
+	var model domain.AssetModel
+	if normalized.ModelID != "" && normalized.ModelID == existing.ModelID && existing.ModelContext != nil {
+		// A retired model cannot be newly assigned, but an existing immutable
+		// model snapshot must not prevent ordinary lifecycle or identity updates
+		// to an asset that was linked while the model was active.
+		model.ID = existing.ModelID
+	} else {
+		model, err = s.validateModelReference(ctx, normalized.ModelID)
+		if err != nil {
+			return domain.Asset{}, err
+		}
 	}
 	if normalized.Kind == "" && model.ID != "" {
 		if existing.ModelID == normalized.ModelID && existing.ModelContext != nil {
@@ -359,7 +449,10 @@ func (s *Service) UpdateAsset(ctx context.Context, input UpdateAssetInput) (doma
 	if !validText(note, 1000) || (note != "" && normalized.Status == existing.Status) {
 		return domain.Asset{}, ErrInvalidInput
 	}
-	now := s.now().UTC()
+	now := portabletime.Max(s.now(), existing.UpdatedAt)
+	if model.ID != "" {
+		now = portabletime.Max(now, model.UpdatedAt)
+	}
 	updated := existing
 	updated.Name = normalized.Name
 	updated.ModelID = normalized.ModelID
@@ -497,6 +590,9 @@ func normalizeCreateModelInput(input CreateModelInput) (CreateModelInput, error)
 		if !validTextRange(key, 1, 80) || !validText(value, 500) {
 			return CreateModelInput{}, ErrInvalidInput
 		}
+		if _, exists := specs[key]; exists {
+			return CreateModelInput{}, ErrInvalidInput
+		}
 		specs[key] = value
 	}
 	input.Specifications = specs
@@ -522,12 +618,14 @@ func normalizeQuery(query Query) (Query, error) {
 	query.SiteID = strings.TrimSpace(query.SiteID)
 	query.DepartmentID = strings.TrimSpace(query.DepartmentID)
 	query.UserID = strings.TrimSpace(query.UserID)
+	query.DeploymentContext = strings.ToLower(strings.TrimSpace(query.DeploymentContext))
 	if !validText(query.Search, 200) || (query.Kind != "" && !validKind(query.Kind)) ||
 		(query.Status != "" && !validStatus(query.Status)) ||
 		(query.ModelID != "" && !assetIDPattern.MatchString(query.ModelID)) ||
 		(query.SiteID != "" && !referencePattern.MatchString(query.SiteID)) ||
 		(query.DepartmentID != "" && !referencePattern.MatchString(query.DepartmentID)) ||
-		(query.UserID != "" && !referencePattern.MatchString(query.UserID)) {
+		(query.UserID != "" && !referencePattern.MatchString(query.UserID)) ||
+		!validText(query.DeploymentContext, 200) {
 		return Query{}, ErrInvalidInput
 	}
 	if query.Limit == 0 {
@@ -535,6 +633,90 @@ func normalizeQuery(query Query) (Query, error) {
 	}
 	if query.Limit < 1 || query.Limit > maximumListLimit {
 		return Query{}, ErrInvalidInput
+	}
+	return query, nil
+}
+
+func normalizeGraphAssetQuery(query GraphAssetQuery) (GraphAssetQuery, error) {
+	query.LabelSearch = strings.ToLower(strings.TrimSpace(query.LabelSearch))
+	if !validText(query.LabelSearch, 200) || !query.Valid() {
+		return GraphAssetQuery{}, ErrInvalidInput
+	}
+	var err error
+	if query.Visibility.ResourceIDs, err = normalizedGraphIDs(query.Visibility.ResourceIDs, assetIDPattern); err != nil {
+		return GraphAssetQuery{}, err
+	}
+	if query.Visibility.SiteIDs, err = normalizedGraphIDs(query.Visibility.SiteIDs, referencePattern); err != nil {
+		return GraphAssetQuery{}, err
+	}
+	if query.Visibility.DepartmentIDs, err = normalizedGraphIDs(query.Visibility.DepartmentIDs, referencePattern); err != nil {
+		return GraphAssetQuery{}, err
+	}
+	if query.Directory.SiteIDs, err = normalizedGraphIDs(query.Directory.SiteIDs, referencePattern); err != nil {
+		return GraphAssetQuery{}, err
+	}
+	if query.Directory.DepartmentIDs, err = normalizedGraphIDs(query.Directory.DepartmentIDs, referencePattern); err != nil {
+		return GraphAssetQuery{}, err
+	}
+	if query.Directory.UserIDs, err = normalizedGraphIDs(query.Directory.UserIDs, referencePattern); err != nil {
+		return GraphAssetQuery{}, err
+	}
+	if query.References.ResourceIDs, err = normalizedGraphIDs(query.References.ResourceIDs, assetIDPattern); err != nil {
+		return GraphAssetQuery{}, err
+	}
+	for values, target := range map[*[]string]*regexp.Regexp{
+		&query.References.SiteIDs: referencePattern, &query.References.BuildingIDs: referencePattern,
+		&query.References.RoomIDs: referencePattern, &query.References.DepartmentIDs: referencePattern,
+		&query.References.UserIDs: referencePattern,
+	} {
+		*values, err = normalizedGraphIDs(*values, target)
+		if err != nil {
+			return GraphAssetQuery{}, err
+		}
+	}
+	if len(query.Visibility.ResourceIDs)+len(query.Visibility.SiteIDs)+len(query.Visibility.DepartmentIDs) > MaximumGraphAssetLimit ||
+		len(query.Directory.SiteIDs)+len(query.Directory.DepartmentIDs)+len(query.Directory.UserIDs) > MaximumGraphAssetLimit ||
+		len(query.References.ResourceIDs)+len(query.References.SiteIDs)+len(query.References.BuildingIDs)+
+			len(query.References.RoomIDs)+len(query.References.DepartmentIDs)+len(query.References.UserIDs) > MaximumGraphAssetLimit {
+		return GraphAssetQuery{}, ErrInvalidInput
+	}
+	return query, nil
+}
+
+func normalizedGraphIDs(values []string, pattern *regexp.Regexp) ([]string, error) {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if !pattern.MatchString(value) {
+			return nil, ErrInvalidInput
+		}
+		if _, present := seen[value]; present {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	sort.Strings(result)
+	return result, nil
+}
+
+func normalizeModelInventoryQuery(query ModelInventoryQuery) (ModelInventoryQuery, error) {
+	assets, err := normalizeQuery(Query{
+		Status: query.Status, SiteID: query.SiteID, DepartmentID: query.DepartmentID,
+		UserID: query.UserID, DeploymentContext: query.DeploymentContext, Limit: query.Limit,
+	})
+	if err != nil {
+		return ModelInventoryQuery{}, err
+	}
+	query.Status, query.SiteID, query.DepartmentID = assets.Status, assets.SiteID, assets.DepartmentID
+	query.UserID, query.DeploymentContext, query.Limit = assets.UserID, assets.DeploymentContext, assets.Limit
+	query.GroupBy = strings.ToLower(strings.TrimSpace(query.GroupBy))
+	switch query.GroupBy {
+	case "", ModelInventoryGroupStatus, ModelInventoryGroupSite, ModelInventoryGroupDepartment,
+		ModelInventoryGroupUser, ModelInventoryGroupDeployment:
+	default:
+		return ModelInventoryQuery{}, ErrInvalidInput
 	}
 	return query, nil
 }
@@ -634,7 +816,7 @@ func snapshotModelContext(model domain.AssetModel, assetKind string, appliedAt t
 		VendorIdentifier: model.VendorIdentifier, Specifications: cloneSpecifications(model.Specifications),
 		SupportURL: model.SupportURL, WarrantyMonths: model.WarrantyMonths, UsefulLifeMonths: model.UsefulLifeMonths,
 		SourceSystemID: model.SourceSystemID, SourceRecordID: model.SourceRecordID, ModelRevision: model.Revision,
-		DefaultsEffectiveAt: model.UpdatedAt.UTC(), AppliedAt: appliedAt.UTC(), Overrides: []string{},
+		DefaultsEffectiveAt: portabletime.Normalize(model.UpdatedAt), AppliedAt: portabletime.Normalize(appliedAt), Overrides: []string{},
 	}
 	if assetKind != model.Kind {
 		context.Overrides = []string{"kind"}
@@ -703,6 +885,23 @@ func (s *Service) auditAsset(ctx context.Context, action, resourceID string, met
 }
 
 func (s *Service) auditRecord(ctx context.Context, action, resourceType, resourceID string, metadata map[string]string) error {
+	if state, importing := ctx.Value(exchangeImportContextKey{}).(exchangeImportContext); importing {
+		if metadata == nil {
+			metadata = make(map[string]string)
+		}
+		if strings.HasPrefix(action, "atlas.model.") {
+			metadata["requirementId"] = ModelRequirementID
+		} else {
+			metadata["requirementId"] = RequirementID
+		}
+		scope := foundation.Scope{OrganizationID: s.organizationID, ActorID: "system:exchange", CorrelationID: state.operation.Token}
+		ctx = foundation.WithScope(ctx, scope)
+		return s.auditor.Record(ctx, foundation.AuditEvent{
+			ID: exchangeAuditIdentity(state.operation, action, resourceType, resourceID), OrganizationID: s.organizationID,
+			ActorID: scope.ActorID, CorrelationID: scope.CorrelationID, Action: action, ResourceType: resourceType,
+			ResourceID: resourceID, OccurredAt: state.operation.OccurredAt, Metadata: metadata,
+		})
+	}
 	scope, ok := foundation.ScopeFromContext(ctx)
 	if !ok || scope.CorrelationID == "" {
 		correlationID, err := foundation.NewCorrelationID()

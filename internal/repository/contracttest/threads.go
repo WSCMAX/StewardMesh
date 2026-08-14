@@ -71,6 +71,14 @@ func ThreadsStore(t testing.TB, subject threads.Store, organizationID, suffix st
 	if err != nil || len(rules) != 1 || rules[0].Mode != threads.RuleSuppress {
 		t.Fatalf("unexpected rules %#v err=%v", rules, err)
 	}
+	importRule := threads.TagRule{OrganizationID: organizationID, TargetType: threads.TargetGoal, TargetID: goalID, TagID: childID,
+		Mode: threads.RuleInclude, Revision: 7, UpdatedBy: "system:exchange", CreatedAt: now, UpdatedAt: now}
+	if created, err := subject.CreateTagRule(ctx, importRule); err != nil || created.Revision != importRule.Revision {
+		t.Fatalf("create arbitrary-revision Threads rule: %#v err=%v", created, err)
+	}
+	if _, err := subject.CreateTagRule(ctx, importRule); !errors.Is(err, threads.ErrConflict) {
+		t.Fatalf("expected duplicate imported Threads rule conflict, got %v", err)
+	}
 	if err := subject.DeleteTagRule(ctx, organizationID, threads.TargetAsset, rule.TargetID, childID, 2); err != nil {
 		t.Fatal(err)
 	}
@@ -85,6 +93,10 @@ func ThreadsStore(t testing.TB, subject threads.Store, organizationID, suffix st
 	links, err := subject.ListGoalLinks(ctx, organizationID, threads.TargetAsset, link.TargetID)
 	if err != nil || len(links) != 1 || links[0].GoalID != goalID {
 		t.Fatalf("unexpected goal links %#v err=%v", links, err)
+	}
+	snapshot, err := subject.Snapshot(ctx, organizationID)
+	if err != nil || len(snapshot.Tags) != 2 || len(snapshot.Goals) != 1 || len(snapshot.TagRules) != 1 || len(snapshot.GoalLinks) != 1 || snapshot.TagRules[0].Revision != 7 {
+		t.Fatalf("unexpected Threads snapshot %#v err=%v", snapshot, err)
 	}
 	if removed, err := subject.DeleteGoalLink(ctx, organizationID, threads.TargetAsset, link.TargetID, goalID); err != nil || !removed {
 		t.Fatalf("unexpected goal unlink removed=%t err=%v", removed, err)

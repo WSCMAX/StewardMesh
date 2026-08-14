@@ -1,5 +1,6 @@
 // Package guard implements StewardMesh authentication and authorization.
-// Requirements: REQ-PLATFORM-VALKEY-001, REQ-LEDGER-001, REQ-HORIZON-001, SEC-GUARD-001, SEC-HTTP-001.
+// Requirements: REQ-DIRECTORY-EXPANSION-002, REQ-PLATFORM-VALKEY-001, REQ-LEDGER-001, REQ-STACK-001, REQ-HORIZON-001, REQ-SIGNALS-001, REQ-REACH-001, SEC-GUARD-001, SEC-HTTP-001.
+// Features: software.licenses, alerts.rules, messaging.delivery.
 package guard
 
 import (
@@ -41,20 +42,28 @@ const MinimumPasswordCharacters = 15
 type Permission string
 
 const (
-	PermissionOrganizationRead Permission = "organization.read"
-	PermissionAssetsRead       Permission = "assets.read"
-	PermissionAssetsWrite      Permission = "assets.write"
-	PermissionDirectoryRead    Permission = "directory.read"
-	PermissionDirectoryWrite   Permission = "directory.write"
-	PermissionGoalsRead        Permission = "goals.read"
-	PermissionGoalsWrite       Permission = "goals.write"
-	PermissionStorageRead      Permission = "storage.read"
-	PermissionStorageWrite     Permission = "storage.write"
-	PermissionFinanceRead      Permission = "finance.read"
-	PermissionFinanceWrite     Permission = "finance.write"
-	PermissionPlanningRead     Permission = "planning.read"
-	PermissionPlanningWrite    Permission = "planning.write"
-	PermissionGuardManage      Permission = "guard.manage"
+	PermissionOrganizationRead  Permission = "organization.read"
+	PermissionAssetsRead        Permission = "assets.read"
+	PermissionAssetsWrite       Permission = "assets.write"
+	PermissionDirectoryRead     Permission = "directory.read"
+	PermissionDirectoryWrite    Permission = "directory.write"
+	PermissionGoalsRead         Permission = "goals.read"
+	PermissionGoalsWrite        Permission = "goals.write"
+	PermissionStorageRead       Permission = "storage.read"
+	PermissionStorageWrite      Permission = "storage.write"
+	PermissionFinanceRead       Permission = "finance.read"
+	PermissionFinanceWrite      Permission = "finance.write"
+	PermissionSoftwareRead      Permission = "software.read"
+	PermissionSoftwareWrite     Permission = "software.write"
+	PermissionPlanningRead      Permission = "planning.read"
+	PermissionPlanningWrite     Permission = "planning.write"
+	PermissionIntegrationsRead  Permission = "integrations.read"
+	PermissionIntegrationsWrite Permission = "integrations.write"
+	PermissionSignalsRead       Permission = "signals.read"
+	PermissionSignalsWrite      Permission = "signals.write"
+	PermissionMessagingRead     Permission = "messaging.read"
+	PermissionMessagingWrite    Permission = "messaging.write"
+	PermissionGuardManage       Permission = "guard.manage"
 )
 
 func AdministratorBundlePermissions() []Permission {
@@ -70,8 +79,16 @@ func AdministratorBundlePermissions() []Permission {
 		PermissionStorageWrite,
 		PermissionFinanceRead,
 		PermissionFinanceWrite,
+		PermissionSoftwareRead,
+		PermissionSoftwareWrite,
 		PermissionPlanningRead,
 		PermissionPlanningWrite,
+		PermissionIntegrationsRead,
+		PermissionIntegrationsWrite,
+		PermissionSignalsRead,
+		PermissionSignalsWrite,
+		PermissionMessagingRead,
+		PermissionMessagingWrite,
 	}
 }
 
@@ -90,8 +107,16 @@ func SupportedPermissions() []Permission {
 		PermissionStorageWrite,
 		PermissionFinanceRead,
 		PermissionFinanceWrite,
+		PermissionSoftwareRead,
+		PermissionSoftwareWrite,
 		PermissionPlanningRead,
 		PermissionPlanningWrite,
+		PermissionIntegrationsRead,
+		PermissionIntegrationsWrite,
+		PermissionSignalsRead,
+		PermissionSignalsWrite,
+		PermissionMessagingRead,
+		PermissionMessagingWrite,
 		PermissionGuardManage,
 	}
 }

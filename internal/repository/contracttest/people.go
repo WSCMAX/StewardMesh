@@ -1,6 +1,6 @@
 package contracttest
 
-// Requirement: REQ-PEOPLE-001. Feature: identity.directory.
+// Requirements: REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-008. Features: identity.directory, integrations.protocols, threads.relationships.
 
 import (
 	"context"
@@ -131,6 +131,26 @@ func PeopleStore(t *testing.T, store people.Store, organizationID string) {
 	if createdDepartment.SiteID != site.ID {
 		t.Fatalf("unexpected department %#v", createdDepartment)
 	}
+	graphLocations, err := store.ListGraphLocations(ctx, organizationID, people.GraphLocationQuery{
+		SiteIDs: []string{site.ID}, ParentSiteIDs: []string{site.ID}, Limit: 10,
+	}, people.Visibility{All: true})
+	if err != nil || len(graphLocations.Sites) != 1 || len(graphLocations.Buildings) != 1 ||
+		len(graphLocations.Rooms) != 1 || len(graphLocations.Departments) != 1 {
+		t.Fatalf("graph location selector query failed: %#v err=%v", graphLocations, err)
+	}
+	directGraphLocations, err := store.ListGraphLocations(ctx, organizationID, people.GraphLocationQuery{
+		DirectOrganizationChildren: true, Limit: 10,
+	}, people.Visibility{All: true})
+	if err != nil || len(directGraphLocations.Sites) != 1 || len(directGraphLocations.Buildings) != 0 ||
+		len(directGraphLocations.Rooms) != 0 || len(directGraphLocations.Departments) != 0 {
+		t.Fatalf("graph direct-child location query failed: %#v err=%v", directGraphLocations, err)
+	}
+	outsideGraphLocations, err := store.ListGraphLocations(ctx, organizationID+"-other", people.GraphLocationQuery{
+		SiteIDs: []string{site.ID}, Limit: 10,
+	}, people.Visibility{All: true})
+	if err != nil || len(outsideGraphLocations.Sites)+len(outsideGraphLocations.Buildings)+len(outsideGraphLocations.Rooms)+len(outsideGraphLocations.Departments) != 0 {
+		t.Fatalf("graph location query escaped organization scope: %#v err=%v", outsideGraphLocations, err)
+	}
 
 	person := contractIdentity(t, organizationID, "person", "Alex Rivera "+suffix, "alex."+suffix+"@example.test", department.ID, site.ID, now)
 	shared := contractIdentity(t, organizationID, "shared", "Operations Desk "+suffix, "", department.ID, site.ID, now)
@@ -139,6 +159,69 @@ func PeopleStore(t *testing.T, store people.Store, organizationID string) {
 		if _, err := store.CreateIdentity(ctx, identity); err != nil {
 			t.Fatal(err)
 		}
+	}
+	graphTarget := contractIdentity(t, organizationID, "person", "Zeta Graph Label "+suffix, "graph."+suffix+"@example.test", "", "", now)
+	if _, err := store.CreateIdentity(ctx, graphTarget); err != nil {
+		t.Fatal(err)
+	}
+	graphItems, err := store.ListGraphIdentities(ctx, organizationID, people.GraphIdentityQuery{
+		LabelSearch: "zeta graph label", IdentityIDs: []string{graphTarget.ID}, Limit: 10,
+	}, people.Visibility{All: true})
+	if err != nil || len(graphItems) != 1 || graphItems[0].ID != graphTarget.ID {
+		t.Fatalf("graph identity label/reference query failed: %#v err=%v", graphItems, err)
+	}
+	directGraphItems, err := store.ListGraphIdentities(ctx, organizationID, people.GraphIdentityQuery{
+		DirectOrganizationChildren: true, Limit: 10,
+	}, people.Visibility{All: true})
+	if err != nil || !contractIdentityPresent(directGraphItems, graphTarget.ID) || contractIdentityPresent(directGraphItems, person.ID) {
+		t.Fatalf("graph direct-child identity query failed: %#v err=%v", directGraphItems, err)
+	}
+	outsideGraphItems, err := store.ListGraphIdentities(ctx, organizationID, people.GraphIdentityQuery{
+		IdentityIDs: []string{graphTarget.ID}, Limit: 10,
+	}, people.Visibility{SiteIDs: []string{randomID(t)}})
+	if err != nil || len(outsideGraphItems) != 0 {
+		t.Fatalf("graph identity query escaped directory visibility: %#v err=%v", outsideGraphItems, err)
+	}
+	managed := contractIdentity(t, organizationID, "person", "Managed Person "+suffix, "managed."+suffix+"@example.test", "", "", now)
+	managed.Provider = "directory.example"
+	managed.ProviderSubject = "source-" + suffix
+	if _, err := store.CreateIdentity(ctx, managed); err != nil {
+		t.Fatal(err)
+	}
+	byProvider, err := store.GetIdentityByProvider(ctx, organizationID, managed.Provider, managed.ProviderSubject)
+	if err != nil || byProvider.ID != managed.ID {
+		t.Fatalf("provider identity lookup failed: %#v %v", byProvider, err)
+	}
+	byEmail, err := store.GetIdentityByEmail(ctx, organizationID, managed.NormalizedEmail)
+	if err != nil || byEmail.ID != managed.ID {
+		t.Fatalf("email identity lookup failed: %#v %v", byEmail, err)
+	}
+	updatedManaged := managed
+	updatedManaged.DisplayName = "Reconciled Person " + suffix
+	updatedManaged.NormalizedName = strings.ToLower(updatedManaged.DisplayName)
+	updatedManaged.Status = people.StatusInactive
+	updatedManaged.Revision = 2
+	updatedManaged.UpdatedAt = now.Add(time.Minute)
+	updatedManaged, err = store.ReconcileIdentity(ctx, updatedManaged, 1)
+	if err != nil || updatedManaged.Revision != 2 || updatedManaged.Status != people.StatusInactive {
+		t.Fatalf("reconcile identity failed: %#v %v", updatedManaged, err)
+	}
+	invalidRevision := updatedManaged
+	invalidRevision.Revision = 4
+	if _, err := store.ReconcileIdentity(ctx, invalidRevision, 2); !errors.Is(err, people.ErrConflict) {
+		t.Fatalf("expected non-sequential reconciliation conflict, got %v", err)
+	}
+	if _, err := store.ReconcileIdentity(ctx, updatedManaged, 1); !errors.Is(err, people.ErrConflict) {
+		t.Fatalf("expected stale reconciliation conflict, got %v", err)
+	}
+	if err := store.DeleteIdentity(ctx, organizationID, managed.ID, 1); !errors.Is(err, people.ErrConflict) {
+		t.Fatalf("expected stale identity deletion conflict, got %v", err)
+	}
+	if err := store.DeleteIdentity(ctx, organizationID, managed.ID, updatedManaged.Revision); err != nil {
+		t.Fatalf("delete compensated identity: %v", err)
+	}
+	if _, err := store.GetIdentity(ctx, organizationID, managed.ID); !errors.Is(err, people.ErrNotFound) {
+		t.Fatalf("deleted identity remained visible: %v", err)
 	}
 	duplicate := contractIdentity(t, organizationID, "person", "Duplicate email "+suffix, person.Email, department.ID, site.ID, now)
 	if _, err := store.CreateIdentity(ctx, duplicate); !errors.Is(err, people.ErrConflict) {
@@ -261,6 +344,15 @@ func contractIdentity(t *testing.T, organizationID string, kind people.IdentityK
 		CreatedAt:       now,
 		UpdatedAt:       now,
 	}
+}
+
+func contractIdentityPresent(identities []people.Identity, id string) bool {
+	for _, identity := range identities {
+		if identity.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 func contractAssignment(t *testing.T, organizationID, assetID, assigneeID string, assigneeKind people.AssigneeKind, role people.AssignmentRole, effectiveFrom time.Time) people.AssetAssignment {

@@ -1,6 +1,6 @@
 package config
 
-// Requirements: REQ-STORAGE-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
+// Requirements: REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005, REQ-DIRECTORY-EXPANSION-006, REQ-DIRECTORY-EXPANSION-007, REQ-STORAGE-001, REQ-REACH-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
 
 import (
 	"strings"
@@ -19,6 +19,257 @@ func TestLoadSupportsMemoryDevelopmentMode(t *testing.T) {
 	}
 	if configuration.RepositoryDriver != RepositoryDriverMemory {
 		t.Fatalf("expected memory driver, got %q", configuration.RepositoryDriver)
+	}
+	if configuration.ExchangeSourceSystemID != "test-organization" {
+		t.Fatalf("expected Exchange source identity to follow the organization by default, got %q", configuration.ExchangeSourceSystemID)
+	}
+}
+
+func TestSyntheticDemoSeedFlagIsStrictOptInAndRestrictedToDemoOrganizations(t *testing.T) {
+	t.Setenv("STEWARDMESH_REPOSITORY_DRIVER", "memory")
+	t.Setenv("STEWARDMESH_SEED_SYNTHETIC", "")
+	disabled, err := Load()
+	if err != nil || disabled.SeedSynthetic {
+		t.Fatalf("synthetic demo data must be disabled by default: enabled=%t err=%v", disabled.SeedSynthetic, err)
+	}
+
+	t.Setenv("STEWARDMESH_SEED_SYNTHETIC", "true")
+	t.Setenv("STEWARDMESH_ORGANIZATION_ID", "demo-training")
+	t.Setenv("STEWARDMESH_ORGANIZATION_NAME", "[Synthetic Demo] Training")
+	enabled, err := Load()
+	if err != nil || !enabled.SeedSynthetic {
+		t.Fatalf("expected explicit demo seed enablement, config=%#v err=%v", enabled, err)
+	}
+
+	t.Setenv("STEWARDMESH_ORGANIZATION_ID", "production")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "demo-*") {
+		t.Fatalf("expected production organization seed rejection, got %v", err)
+	}
+	t.Setenv("STEWARDMESH_SEED_SYNTHETIC", "yes-please")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "must be true or false") {
+		t.Fatalf("expected malformed seed flag rejection, got %v", err)
+	}
+}
+
+func TestExchangeSourceSystemIdentityIsExplicitAndValidated(t *testing.T) {
+	t.Setenv("STEWARDMESH_REPOSITORY_DRIVER", "memory")
+	t.Setenv("STEWARDMESH_EXCHANGE_SOURCE_SYSTEM_ID", "source.inventory:v2")
+	configuration, err := Load()
+	if err != nil || configuration.ExchangeSourceSystemID != "source.inventory:v2" {
+		t.Fatalf("unexpected Exchange source identity %#v err=%v", configuration, err)
+	}
+	for _, invalid := range []string{"", " source", "source/path", strings.Repeat("x", 129)} {
+		configuration.ExchangeSourceSystemID = invalid
+		if err := configuration.Validate(); err == nil || !strings.Contains(err.Error(), "EXCHANGE_SOURCE_SYSTEM_ID") {
+			t.Fatalf("expected invalid Exchange source identity %q to fail, got %v", invalid, err)
+		}
+	}
+}
+
+func TestLoadSupportsOptionalGrouperConnector(t *testing.T) {
+	t.Setenv("STEWARDMESH_REPOSITORY_DRIVER", "memory")
+	t.Setenv("STEWARDMESH_GROUPER_URL", "https://grouper.example.test/grouper-ws/scim/v2")
+	t.Setenv("STEWARDMESH_GROUPER_SOURCE_SYSTEM_ID", "campus-grouper")
+	t.Setenv("STEWARDMESH_GROUPER_BEARER_TOKEN", "secret-manager-token")
+	t.Setenv("STEWARDMESH_GROUPER_CONFIG_REVISION", "mapping-v4")
+	t.Setenv("STEWARDMESH_GROUPER_PAGE_SIZE", "50")
+	t.Setenv("STEWARDMESH_GROUPER_MAXIMUM_RESPONSE_BYTES", "4096")
+	t.Setenv("STEWARDMESH_GROUPER_TIMEOUT", "10s")
+	configuration, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !configuration.GrouperEnabled() || configuration.GrouperSourceSystemID != "campus-grouper" ||
+		configuration.GrouperConfigRevision != "mapping-v4" || configuration.GrouperPageSize != 50 ||
+		configuration.GrouperMaximumResponseBytes != 4096 || configuration.GrouperTimeout != 10*time.Second {
+		t.Fatalf("unexpected Grouper configuration %#v", configuration)
+	}
+}
+
+func TestLoadSupportsOptionalSailPointConnector(t *testing.T) {
+	t.Setenv("STEWARDMESH_REPOSITORY_DRIVER", "memory")
+	t.Setenv("STEWARDMESH_SAILPOINT_SOURCE_SYSTEM_ID", "sailpoint-primary")
+	t.Setenv("STEWARDMESH_SAILPOINT_BASE_URL", "https://example.api.identitynow.com")
+	t.Setenv("STEWARDMESH_SAILPOINT_CLIENT_ID", "0123456789abcdef")
+	t.Setenv("STEWARDMESH_SAILPOINT_CLIENT_SECRET", "abcdef0123456789")
+	configuration, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !configuration.SailPointEnabled() || configuration.SailPointSourceSystemID != "sailpoint-primary" ||
+		configuration.SailPointConfig().BaseURL != "https://example.api.identitynow.com" {
+		t.Fatalf("unexpected SailPoint configuration %#v", configuration)
+	}
+}
+
+func TestLoadSupportsOptionalPeopleSoftConnectorAndInstitutionMappings(t *testing.T) {
+	t.Setenv("STEWARDMESH_REPOSITORY_DRIVER", "memory")
+	t.Setenv("STEWARDMESH_PEOPLESOFT_SOURCE_SYSTEM_ID", "campus-solutions")
+	t.Setenv("STEWARDMESH_PEOPLESOFT_BASE_URL", "https://peoplesoft.example.test/PSIGW/RESTListeningConnector/CAMPUS/ExecuteQuery.v1")
+	t.Setenv("STEWARDMESH_PEOPLESOFT_USERNAME", "integration-reader")
+	t.Setenv("STEWARDMESH_PEOPLESOFT_PASSWORD", "secret-manager-password")
+	t.Setenv("STEWARDMESH_PEOPLESOFT_ORGANIZATION_QUERY", "SM_ORGANIZATIONS")
+	t.Setenv("STEWARDMESH_PEOPLESOFT_LOCATION_QUERY", "SM_LOCATIONS")
+	t.Setenv("STEWARDMESH_PEOPLESOFT_BUILDING_QUERY", "SM_BUILDINGS")
+	t.Setenv("STEWARDMESH_PEOPLESOFT_DEPARTMENT_QUERY", "SM_DEPARTMENTS")
+	t.Setenv("STEWARDMESH_PEOPLESOFT_FIELD_MAPPINGS_JSON", testPeopleSoftMappings)
+	t.Setenv("STEWARDMESH_PEOPLESOFT_MAXIMUM_ROWS", "200")
+	t.Setenv("STEWARDMESH_PEOPLESOFT_MAXIMUM_RESPONSE_BYTES", "4096")
+	t.Setenv("STEWARDMESH_PEOPLESOFT_TIMEOUT", "10s")
+	configuration, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	connectorConfig := configuration.PeopleSoftConnectorConfig()
+	if !configuration.PeopleSoftEnabled() || configuration.PeopleSoftSourceSystemID != "campus-solutions" ||
+		connectorConfig.QueryOwner != "public" || connectorConfig.MaximumRows != 200 ||
+		connectorConfig.MaximumResponseBytes != 4096 || connectorConfig.Timeout != 10*time.Second {
+		t.Fatalf("unexpected PeopleSoft configuration %#v", configuration)
+	}
+}
+
+func TestValidateRejectsUnsafePeopleSoftConfigurationWithoutLeakingSecrets(t *testing.T) {
+	secret := "super-secret-peoplesoft-password"
+	valid := FromEnv()
+	valid.RepositoryDriver = RepositoryDriverMemory
+	valid.PeopleSoftSourceSystemID = "campus-solutions"
+	valid.PeopleSoftBaseURL = "https://peoplesoft.example.test/PSIGW/RESTListeningConnector/CAMPUS/ExecuteQuery.v1"
+	valid.PeopleSoftUsername = "integration-reader"
+	valid.PeopleSoftPassword = secret
+	valid.PeopleSoftQueryOwner = "public"
+	valid.PeopleSoftOrganizationQuery = "SM_ORGANIZATIONS"
+	valid.PeopleSoftLocationQuery = "SM_LOCATIONS"
+	valid.PeopleSoftBuildingQuery = "SM_BUILDINGS"
+	valid.PeopleSoftDepartmentQuery = "SM_DEPARTMENTS"
+	valid.PeopleSoftFieldMappingsJSON = testPeopleSoftMappings
+	valid.PeopleSoftMaximumRows = 200
+	valid.PeopleSoftResponseBytes = 4096
+	valid.PeopleSoftTimeout = 10 * time.Second
+	tests := []struct {
+		name   string
+		mutate func(*Config)
+	}{
+		{name: "missing endpoint", mutate: func(c *Config) { c.PeopleSoftBaseURL = "" }},
+		{name: "plaintext endpoint", mutate: func(c *Config) {
+			c.PeopleSoftBaseURL = "http://peoplesoft.example.test/PSIGW/RESTListeningConnector/CAMPUS/ExecuteQuery.v1"
+		}},
+		{name: "wrong path", mutate: func(c *Config) { c.PeopleSoftBaseURL = "https://peoplesoft.example.test/arbitrary" }},
+		{name: "credentialed URL", mutate: func(c *Config) {
+			c.PeopleSoftBaseURL = "https://user:super-secret@peoplesoft.example.test/PSIGW/RESTListeningConnector/CAMPUS/ExecuteQuery.v1"
+		}},
+		{name: "missing password", mutate: func(c *Config) { c.PeopleSoftPassword = "" }},
+		{name: "ambiguous basic username", mutate: func(c *Config) { c.PeopleSoftUsername = "integration:reader" }},
+		{name: "mixed authentication", mutate: func(c *Config) { c.PeopleSoftBearerToken = "secret-token" }},
+		{name: "missing query", mutate: func(c *Config) { c.PeopleSoftDepartmentQuery = "" }},
+		{name: "malformed mapping", mutate: func(c *Config) { c.PeopleSoftFieldMappingsJSON = `{not-json` }},
+		{name: "unbounded rows", mutate: func(c *Config) { c.PeopleSoftMaximumRows = 10000 }},
+		{name: "unbounded response", mutate: func(c *Config) { c.PeopleSoftResponseBytes = 1 << 30 }},
+		{name: "unbounded timeout", mutate: func(c *Config) { c.PeopleSoftTimeout = time.Minute }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			configuration := valid
+			test.mutate(&configuration)
+			err := configuration.Validate()
+			if err == nil {
+				t.Fatal("expected invalid PeopleSoft configuration")
+			}
+			if strings.Contains(err.Error(), "super-secret") {
+				t.Fatalf("PeopleSoft configuration error leaked a credential: %v", err)
+			}
+		})
+	}
+}
+
+const testPeopleSoftMappings = `{"organization":{"setId":{"selector":"A.SETID","alias":"SETID"},"id":{"selector":"A.ORG_ID","alias":"ORG_ID"},"name":{"selector":"A.DESCR","alias":"DESCR"},"status":{"selector":"A.EFF_STATUS","alias":"EFF_STATUS"}},"location":{"setId":{"selector":"A.SETID","alias":"SETID"},"id":{"selector":"A.LOCATION","alias":"LOCATION"},"name":{"selector":"A.DESCR","alias":"DESCR"},"status":{"selector":"A.EFF_STATUS","alias":"EFF_STATUS"},"organizationId":{"selector":"A.ORG_ID","alias":"ORG_ID"}},"building":{"setId":{"selector":"A.SETID","alias":"SETID"},"id":{"selector":"A.BUILDING","alias":"BUILDING"},"name":{"selector":"A.DESCR","alias":"DESCR"},"status":{"selector":"A.EFF_STATUS","alias":"EFF_STATUS"},"locationId":{"selector":"A.LOCATION","alias":"LOCATION"}},"department":{"setId":{"selector":"A.SETID","alias":"SETID"},"id":{"selector":"A.DEPTID","alias":"DEPTID"},"name":{"selector":"A.DESCR","alias":"DESCR"},"status":{"selector":"A.EFF_STATUS","alias":"EFF_STATUS"},"organizationId":{"selector":"A.ORG_ID","alias":"ORG_ID"},"locationId":{"selector":"A.LOCATION","alias":"LOCATION"}}}`
+
+func TestValidateRejectsUnsafeSailPointConfigurationWithoutLeakingSecrets(t *testing.T) {
+	secret := "super-secret-sailpoint-credential"
+	valid := FromEnv()
+	valid.RepositoryDriver = RepositoryDriverMemory
+	valid.SailPointSourceSystemID = "sailpoint-primary"
+	valid.SailPointBaseURL = "https://example.api.identitynow.com"
+	valid.SailPointClientID = "0123456789abcdef"
+	valid.SailPointClientSecret = secret
+	tests := []struct {
+		name   string
+		mutate func(*Config)
+	}{
+		{name: "missing endpoint", mutate: func(c *Config) { c.SailPointBaseURL = "" }},
+		{name: "plaintext endpoint", mutate: func(c *Config) { c.SailPointBaseURL = "http://example.api.identitynow.com" }},
+		{name: "arbitrary endpoint", mutate: func(c *Config) { c.SailPointBaseURL = "https://identity.example.test" }},
+		{name: "credentialed endpoint", mutate: func(c *Config) { c.SailPointBaseURL = "https://user:super-secret@example.api.identitynow.com" }},
+		{name: "missing client", mutate: func(c *Config) { c.SailPointClientID = "" }},
+		{name: "short secret", mutate: func(c *Config) { c.SailPointClientSecret = "short" }},
+		{name: "invalid source", mutate: func(c *Config) { c.SailPointSourceSystemID = "bad source" }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			configuration := valid
+			test.mutate(&configuration)
+			err := configuration.Validate()
+			if err == nil {
+				t.Fatal("expected invalid SailPoint configuration")
+			}
+			if strings.Contains(err.Error(), "super-secret") {
+				t.Fatalf("SailPoint configuration error leaked a credential: %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateRejectsUnsafeGrouperConfigurationWithoutLeakingSecrets(t *testing.T) {
+	valid := FromEnv()
+	valid.RepositoryDriver = RepositoryDriverMemory
+	valid.GrouperURL = "https://grouper.example.test/grouper-ws/scim/v2"
+	valid.GrouperSourceSystemID = "campus-grouper"
+	valid.GrouperConfigRevision = "v1"
+	valid.GrouperBearerToken = "super-secret-grouper-token"
+	valid.GrouperPageSize = 100
+	valid.GrouperMaximumResponseBytes = 2 << 20
+	valid.GrouperTimeout = 15 * time.Second
+	tests := []struct {
+		name   string
+		mutate func(*Config)
+	}{
+		{name: "ignored token", mutate: func(c *Config) { c.GrouperURL = "" }},
+		{name: "credentialed URL", mutate: func(c *Config) { c.GrouperURL = "https://user:super-secret@grouper.example.test/grouper-ws/scim/v2" }},
+		{name: "wrong path", mutate: func(c *Config) { c.GrouperURL = "https://grouper.example.test/arbitrary" }},
+		{name: "plaintext remote", mutate: func(c *Config) { c.GrouperURL = "http://grouper.example.test/grouper-ws/scim/v2" }},
+		{name: "mixed credentials", mutate: func(c *Config) { c.GrouperUsername, c.GrouperPassword = "reader", "super-secret-password" }},
+		{name: "unbounded page", mutate: func(c *Config) { c.GrouperPageSize = 1000 }},
+		{name: "unbounded response", mutate: func(c *Config) { c.GrouperMaximumResponseBytes = 1 << 30 }},
+		{name: "unbounded timeout", mutate: func(c *Config) { c.GrouperTimeout = time.Minute }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			configuration := valid
+			test.mutate(&configuration)
+			err := configuration.Validate()
+			if err == nil {
+				t.Fatal("expected invalid Grouper configuration")
+			}
+			if strings.Contains(err.Error(), "super-secret") {
+				t.Fatalf("Grouper configuration error leaked a credential: %v", err)
+			}
+		})
+	}
+}
+
+func TestLoadSupportsReachDeploymentReferences(t *testing.T) {
+	t.Setenv("STEWARDMESH_REPOSITORY_DRIVER", "memory")
+	t.Setenv("STEWARDMESH_REACH_ENDPOINTS_FILE", "deploy/reach-endpoints.example.json")
+	t.Setenv("STEWARDMESH_REACH_SECRET_PREFIX", "ORG_REACH_SECRET_")
+	configuration, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if configuration.ReachEndpointsFile != "deploy/reach-endpoints.example.json" || configuration.ReachSecretPrefix != "ORG_REACH_SECRET_" {
+		t.Fatalf("unexpected Reach configuration %#v", configuration)
+	}
+	configuration.ReachSecretPrefix = "unsafe-prefix"
+	if err := configuration.Validate(); err == nil || strings.Contains(err.Error(), "ORG_REACH") {
+		t.Fatalf("expected redacted invalid Reach prefix, got %v", err)
 	}
 }
 
@@ -130,6 +381,55 @@ func TestLoadSupportsDisabledMemoryAndValkeyCacheDrivers(t *testing.T) {
 			if configuration.CacheDriver != test.driver || configuration.CacheURL != test.url ||
 				configuration.CacheKeySecret != test.keySecret {
 				t.Fatalf("unexpected cache configuration %#v", configuration)
+			}
+		})
+	}
+}
+
+func TestLoadSupportsOptionalMicrosoftEntraConfiguration(t *testing.T) {
+	t.Setenv("STEWARDMESH_REPOSITORY_DRIVER", "memory")
+	t.Setenv("STEWARDMESH_ENTRA_SOURCE_SYSTEM_ID", "entra-primary")
+	t.Setenv("STEWARDMESH_ENTRA_TENANT_ID", "11111111-1111-4111-8111-111111111111")
+	t.Setenv("STEWARDMESH_ENTRA_CLIENT_ID", "22222222-2222-4222-8222-222222222222")
+	t.Setenv("STEWARDMESH_ENTRA_CLIENT_SECRET", "0123456789abcdef")
+	configuration, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !configuration.EntraEnabled() || configuration.EntraSourceSystemID != "entra-primary" ||
+		configuration.EntraConfig().TenantID != "11111111-1111-4111-8111-111111111111" {
+		t.Fatal("unexpected Microsoft Entra configuration")
+	}
+}
+
+func TestValidateRejectsPartialMicrosoftEntraConfigurationWithoutLeakingCredentials(t *testing.T) {
+	secret := "super-secret-credential"
+	valid := FromEnv()
+	valid.RepositoryDriver = RepositoryDriverMemory
+	valid.EntraSourceSystemID = "entra-primary"
+	valid.EntraTenantID = "11111111-1111-4111-8111-111111111111"
+	valid.EntraClientID = "22222222-2222-4222-8222-222222222222"
+	valid.EntraClientSecret = secret
+	tests := []struct {
+		name   string
+		mutate func(*Config)
+	}{
+		{name: "missing tenant", mutate: func(c *Config) { c.EntraTenantID = "" }},
+		{name: "common tenant", mutate: func(c *Config) { c.EntraTenantID = "common" }},
+		{name: "missing client", mutate: func(c *Config) { c.EntraClientID = "" }},
+		{name: "short secret", mutate: func(c *Config) { c.EntraClientSecret = "short" }},
+		{name: "invalid source", mutate: func(c *Config) { c.EntraSourceSystemID = "entra source" }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			configuration := valid
+			test.mutate(&configuration)
+			err := configuration.Validate()
+			if err == nil {
+				t.Fatal("expected invalid Microsoft Entra configuration")
+			}
+			if strings.Contains(err.Error(), secret) {
+				t.Fatalf("configuration error leaked a credential: %v", err)
 			}
 		})
 	}

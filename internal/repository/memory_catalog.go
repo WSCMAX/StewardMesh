@@ -29,6 +29,31 @@ func NewMemoryCatalogStore() *MemoryCatalogStore {
 	}
 }
 
+func (s *MemoryCatalogStore) Snapshot(_ context.Context, organizationID string) (catalog.Snapshot, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	result := catalog.Snapshot{Configurations: []catalog.Configuration{}, Prices: []catalog.Price{}, UpgradePaths: []catalog.UpgradePath{}}
+	for _, item := range s.configurations {
+		if item.OrganizationID == organizationID {
+			result.Configurations = append(result.Configurations, cloneCatalogConfiguration(item))
+		}
+	}
+	for _, item := range s.prices {
+		if item.OrganizationID == organizationID {
+			result.Prices = append(result.Prices, cloneCatalogPrice(item))
+		}
+	}
+	for _, item := range s.upgradePaths {
+		if item.OrganizationID == organizationID {
+			result.UpgradePaths = append(result.UpgradePaths, item)
+		}
+	}
+	sort.Slice(result.Configurations, func(i, j int) bool { return result.Configurations[i].ID < result.Configurations[j].ID })
+	sort.Slice(result.Prices, func(i, j int) bool { return result.Prices[i].ID < result.Prices[j].ID })
+	sort.Slice(result.UpgradePaths, func(i, j int) bool { return result.UpgradePaths[i].ID < result.UpgradePaths[j].ID })
+	return result, nil
+}
+
 func catalogMemoryKey(organizationID, id string) string { return organizationID + "\x00" + id }
 
 func (s *MemoryCatalogStore) ListConfigurations(_ context.Context, organizationID, modelID string) ([]catalog.Configuration, error) {
@@ -102,6 +127,9 @@ func (s *MemoryCatalogStore) ListPrices(_ context.Context, organizationID, model
 func (s *MemoryCatalogStore) CreatePrice(_ context.Context, price catalog.Price) (catalog.Price, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if price.Revision != 1 {
+		return catalog.Price{}, catalog.ErrInvalidInput
+	}
 	if price.ConfigurationID != "" {
 		configuration, exists := s.configurations[catalogMemoryKey(price.OrganizationID, price.ConfigurationID)]
 		if !exists || configuration.ModelID != price.ModelID {
@@ -113,6 +141,16 @@ func (s *MemoryCatalogStore) CreatePrice(_ context.Context, price catalog.Price)
 		return catalog.Price{}, catalog.ErrConflict
 	}
 	s.prices[key] = cloneCatalogPrice(price)
+	return cloneCatalogPrice(price), nil
+}
+
+func (s *MemoryCatalogStore) GetPrice(_ context.Context, organizationID, priceID string) (catalog.Price, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	price, exists := s.prices[catalogMemoryKey(organizationID, priceID)]
+	if !exists {
+		return catalog.Price{}, catalog.ErrNotFound
+	}
 	return cloneCatalogPrice(price), nil
 }
 
@@ -138,6 +176,9 @@ func (s *MemoryCatalogStore) ListUpgradePaths(_ context.Context, organizationID,
 func (s *MemoryCatalogStore) CreateUpgradePath(_ context.Context, path catalog.UpgradePath) (catalog.UpgradePath, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if path.Revision != 1 {
+		return catalog.UpgradePath{}, catalog.ErrInvalidInput
+	}
 	if !s.validCatalogEndpoint(path.OrganizationID, path.FromModelID, path.FromConfigurationID) ||
 		!s.validCatalogEndpoint(path.OrganizationID, path.ToModelID, path.ToConfigurationID) {
 		return catalog.UpgradePath{}, catalog.ErrNotFound
@@ -155,6 +196,16 @@ func (s *MemoryCatalogStore) CreateUpgradePath(_ context.Context, path catalog.U
 		}
 	}
 	s.upgradePaths[key] = path
+	return path, nil
+}
+
+func (s *MemoryCatalogStore) GetUpgradePath(_ context.Context, organizationID, pathID string) (catalog.UpgradePath, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	path, exists := s.upgradePaths[catalogMemoryKey(organizationID, pathID)]
+	if !exists {
+		return catalog.UpgradePath{}, catalog.ErrNotFound
+	}
 	return path, nil
 }
 

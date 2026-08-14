@@ -1,7 +1,7 @@
 package httpapi
 
 // Requirements: REQ-FOUNDATION-001, REQ-WORKSPACE-001, REQ-ATLAS-001, REQ-ATLAS-MODELS-001, REQ-ATLAS-CODES-001, REQ-PEOPLE-001,
-// REQ-DIRECTORY-EXPANSION-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-HORIZON-001, REQ-PLATFORM-VALKEY-001,
+// REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-005, REQ-DIRECTORY-EXPANSION-006, REQ-DIRECTORY-EXPANSION-008, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-STACK-001, REQ-HORIZON-001, REQ-SIGNALS-001, REQ-REACH-001, REQ-EXCHANGE-001, REQ-PLATFORM-VALKEY-001,
 // SEC-GUARD-001, SEC-HTTP-001. Features include experience.workspace.
 
 import (
@@ -11,11 +11,13 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -23,14 +25,20 @@ import (
 	"github.com/maxlemke/stewardmesh/internal/atlas"
 	"github.com/maxlemke/stewardmesh/internal/atlascodes"
 	"github.com/maxlemke/stewardmesh/internal/bootstrap"
+	"github.com/maxlemke/stewardmesh/internal/directoryexpansion"
 	"github.com/maxlemke/stewardmesh/internal/domain"
+	"github.com/maxlemke/stewardmesh/internal/exchange"
 	"github.com/maxlemke/stewardmesh/internal/foundation"
 	"github.com/maxlemke/stewardmesh/internal/guard"
 	"github.com/maxlemke/stewardmesh/internal/horizon"
 	"github.com/maxlemke/stewardmesh/internal/identity"
 	"github.com/maxlemke/stewardmesh/internal/ledger"
+	"github.com/maxlemke/stewardmesh/internal/patterns"
 	"github.com/maxlemke/stewardmesh/internal/people"
+	"github.com/maxlemke/stewardmesh/internal/reach"
 	"github.com/maxlemke/stewardmesh/internal/repository"
+	"github.com/maxlemke/stewardmesh/internal/signals"
+	"github.com/maxlemke/stewardmesh/internal/stack"
 	"github.com/maxlemke/stewardmesh/internal/storage"
 	"github.com/maxlemke/stewardmesh/internal/threads"
 )
@@ -70,9 +78,43 @@ func (allowHTTPThreadTargets) ValidateThreadTarget(context.Context, string, thre
 
 type allowHTTPLedgerReferences struct{}
 
+type httpReachSecrets struct{}
+
+func (httpReachSecrets) Resolve(context.Context, string) ([]byte, error) {
+	return []byte("01234567890123456789012345678901"), nil
+}
+
+type httpReachTransport struct{}
+
+func (httpReachTransport) Test(context.Context, reach.Endpoint, reach.Provider, []byte) reach.DeliveryResult {
+	return reach.DeliveryResult{Succeeded: true}
+}
+
+func (httpReachTransport) Send(context.Context, reach.Endpoint, reach.Provider, reach.Message, []byte) reach.DeliveryResult {
+	return reach.DeliveryResult{Succeeded: true}
+}
+
 func (allowHTTPLedgerReferences) ValidateAssets(context.Context, []string) error          { return nil }
 func (allowHTTPLedgerReferences) ValidateDocuments(context.Context, []string) error       { return nil }
 func (allowHTTPLedgerReferences) ValidateDirectory(context.Context, string, string) error { return nil }
+
+type allowHTTPStackReferences struct{}
+
+func (allowHTTPStackReferences) ResolveAsset(_ context.Context, id string) (stack.AssetContext, error) {
+	return stack.AssetContext{ID: id}, nil
+}
+func (allowHTTPStackReferences) ValidateAssignee(context.Context, string, string) error { return nil }
+func (allowHTTPStackReferences) ValidateFinancialReferences(context.Context, string, string, string, string) error {
+	return nil
+}
+func (allowHTTPStackReferences) ValidateDocuments(context.Context, []string) error { return nil }
+
+type httpSignalsEvaluator struct{}
+
+func (httpSignalsEvaluator) Evaluate(_ context.Context, rule signals.Rule, asOf time.Time) ([]signals.Candidate, error) {
+	due := asOf.AddDate(0, 0, 30)
+	return []signals.Candidate{{TargetType: "contract", TargetID: "support-contract", Title: "Contract renewal decision is approaching", Summary: "Support contract renews in 30 days.", DueAt: &due, ThresholdDays: 30}}, nil
+}
 
 type fakeHTTPOIDCAuthenticator struct {
 	state         string
@@ -85,6 +127,24 @@ type fakeHTTPSAMLAuthenticator struct {
 	relayState        string
 	expectedRequestID string
 	authenticates     int
+}
+
+type httpDirectoryConnector struct {
+	system directoryexpansion.SourceSystem
+	page   directoryexpansion.Page
+	calls  int
+}
+
+func (c *httpDirectoryConnector) SourceSystem() directoryexpansion.SourceSystem {
+	if c.system.ID != "" {
+		return c.system
+	}
+	return directoryexpansion.SourceSystem{ID: "hr-primary", Provider: "example", ConfigRevision: "v1"}
+}
+
+func (c *httpDirectoryConnector) PullPage(context.Context, string) (directoryexpansion.Page, error) {
+	c.calls++
+	return c.page, nil
 }
 
 func (f *fakeHTTPSAMLAuthenticator) AuthenticationURL(relayState string) (string, string, error) {
@@ -146,6 +206,88 @@ func TestHealthIsPublicAndHardened(t *testing.T) {
 	}
 	if res.Header().Get("Content-Security-Policy") == "" || res.Header().Get("X-Content-Type-Options") != "nosniff" {
 		t.Fatal("expected centralized browser security headers")
+	}
+}
+
+func TestPatternsTemplateManagementSchemaValidationAndCSV(t *testing.T) {
+	handler := newGuardServer(t)
+	session := bootstrapAdministrator(t, handler)
+
+	list := httptest.NewRecorder()
+	handler.ServeHTTP(list, authenticatedRequest(http.MethodGet, "/api/v1/templates?recordType=atlas.asset&includeVersions=true", nil, session))
+	if list.Code != http.StatusOK || !strings.Contains(list.Body.String(), `"id":"builtin-atlas-asset"`) || !strings.Contains(list.Body.String(), `"accessibleLabel":"Asset name"`) {
+		t.Fatalf("expected built-in form metadata, got %d: %s", list.Code, list.Body.String())
+	}
+	malformedVersions := httptest.NewRecorder()
+	handler.ServeHTTP(malformedVersions, authenticatedRequest(http.MethodGet, "/api/v1/templates?includeVersions=sometimes", nil, session))
+	if malformedVersions.Code != http.StatusBadRequest || !strings.Contains(malformedVersions.Body.String(), "includeVersions must be true or false") {
+		t.Fatalf("expected malformed includeVersions rejection, got %d: %s", malformedVersions.Code, malformedVersions.Body.String())
+	}
+
+	payload := map[string]any{
+		"id": "http-intake", "recordType": "exchange.row", "name": "HTTP intake",
+		"fields": []map[string]any{
+			{"key": "name", "label": "Record name", "help": "Use the name shown by the source system.", "type": "text", "required": true},
+			{"key": "ownerId", "label": "Owner", "type": "reference", "required": true, "allowHolding": true, "referenceType": "people.identity"},
+		},
+	}
+	encoded, _ := json.Marshal(payload)
+	create := httptest.NewRecorder()
+	handler.ServeHTTP(create, authenticatedRequest(http.MethodPost, "/api/v1/templates", bytes.NewReader(encoded), session))
+	if create.Code != http.StatusCreated || !strings.Contains(create.Body.String(), `"version":1`) {
+		t.Fatalf("expected custom template creation, got %d: %s", create.Code, create.Body.String())
+	}
+	versionPayload, _ := json.Marshal(map[string]any{"description": "Second immutable version", "fields": payload["fields"]})
+	version := httptest.NewRecorder()
+	handler.ServeHTTP(version, authenticatedRequest(http.MethodPost, "/api/v1/templates/http-intake/versions", bytes.NewReader(versionPayload), session))
+	if version.Code != http.StatusCreated || !strings.Contains(version.Body.String(), `"version":2`) {
+		t.Fatalf("expected appended custom version, got %d: %s", version.Code, version.Body.String())
+	}
+	history := httptest.NewRecorder()
+	handler.ServeHTTP(history, authenticatedRequest(http.MethodGet, "/api/v1/templates?recordType=exchange.row&includeVersions=true", nil, session))
+	if history.Code != http.StatusOK || strings.Count(history.Body.String(), `"id":"http-intake"`) != 2 {
+		t.Fatalf("expected both immutable versions, got %d: %s", history.Code, history.Body.String())
+	}
+
+	schema := httptest.NewRecorder()
+	handler.ServeHTTP(schema, authenticatedRequest(http.MethodGet, "/api/v1/templates/http-intake/schema?version=1", nil, session))
+	if schema.Code != http.StatusOK || !strings.Contains(schema.Body.String(), `"csvHeader":"ownerId"`) {
+		t.Fatalf("expected schema metadata, got %d: %s", schema.Code, schema.Body.String())
+	}
+
+	validationPayload, _ := json.Marshal(map[string]any{
+		"values":            map[string]any{"name": "Imported row", "ownerId": "person-404"},
+		"missingReferences": []string{"ownerId"}, "allowHoldingRecord": true,
+	})
+	validation := httptest.NewRecorder()
+	handler.ServeHTTP(validation, authenticatedRequest(http.MethodPost, "/api/v1/templates/http-intake/validate?version=1", bytes.NewReader(validationPayload), session))
+	if validation.Code != http.StatusOK || !strings.Contains(validation.Body.String(), `"status":"holding"`) || !strings.Contains(validation.Body.String(), `"field":"ownerId"`) {
+		t.Fatalf("expected visible holding result, got %d: %s", validation.Code, validation.Body.String())
+	}
+
+	csvTemplate := httptest.NewRecorder()
+	handler.ServeHTTP(csvTemplate, authenticatedRequest(http.MethodGet, "/api/v1/templates/http-intake/template.csv?version=1", nil, session))
+	if csvTemplate.Code != http.StatusOK || csvTemplate.Header().Get("Content-Type") != "text/csv; charset=utf-8" || csvTemplate.Body.String() != "name,ownerId\n" {
+		t.Fatalf("expected CSV template, got %d %q: %s", csvTemplate.Code, csvTemplate.Header().Get("Content-Type"), csvTemplate.Body.String())
+	}
+}
+
+func TestPatternsValidationRejectsLexicallyFractionalMoneyWithoutRounding(t *testing.T) {
+	handler := newGuardServer(t)
+	session := bootstrapAdministrator(t, handler)
+	createBody := `{"id":"exact-money","recordType":"example.money","name":"Exact money","fields":[{"key":"currency","label":"Currency","type":"text","required":true,"maximumLength":3},{"key":"amountMinor","label":"Amount","type":"money","required":true,"currencyField":"currency"}]}`
+	created := httptest.NewRecorder()
+	handler.ServeHTTP(created, authenticatedRequest(http.MethodPost, "/api/v1/templates", strings.NewReader(createBody), session))
+	if created.Code != http.StatusCreated {
+		t.Fatalf("expected exact-money template, got %d: %s", created.Code, created.Body.String())
+	}
+	for _, token := range []string{"9007199254740990.5", "1.0000000000000001", "0.99999999999999999"} {
+		validated := httptest.NewRecorder()
+		body := `{"values":{"currency":"USD","amountMinor":` + token + `}}`
+		handler.ServeHTTP(validated, authenticatedRequest(http.MethodPost, "/api/v1/templates/exact-money/validate?version=1", strings.NewReader(body), session))
+		if validated.Code != http.StatusOK || !strings.Contains(validated.Body.String(), `"status":"invalid"`) || !strings.Contains(validated.Body.String(), `"code":"money"`) {
+			t.Fatalf("money token %s was rounded or accepted: %d %s", token, validated.Code, validated.Body.String())
+		}
 	}
 }
 
@@ -284,6 +426,181 @@ func TestLedgerFinanceWorkflowVarianceReconciliationAndExport(t *testing.T) {
 	}
 }
 
+func TestStackSoftwareLicenseWorkflowAnalyticsExchangeAndProtection(t *testing.T) {
+	handler, guardService := newGuardServerWithIdentityAndGuard(t, nil, nil, nil)
+	session := bootstrapAdministrator(t, handler)
+	product := createPeopleRecord[stack.Product](t, handler, session, "/api/v1/stack/products", map[string]any{
+		"id": "writer", "name": "Steward Writer", "publisher": "Example Publisher", "category": "productivity",
+	})
+	version := createPeopleRecord[stack.Version](t, handler, session, "/api/v1/stack/versions", map[string]any{
+		"id": "writer-v1", "productId": product.ID, "name": "1.0", "releasedOn": "2026-01-01T00:00:00Z",
+	})
+	license := createPeopleRecord[stack.License](t, handler, session, "/api/v1/stack/licenses", map[string]any{
+		"id": "writer-license", "productId": product.ID, "versionId": version.ID, "name": "Device subscription",
+		"entitlementMetric": "device", "quantity": 1, "expiresOn": "2026-09-01T00:00:00Z",
+		"vendorId": "vendor-1", "purchaseOrderId": "po-1", "contractId": "contract-1", "costRecordId": "cost-1",
+		"documentIds": []string{"license-document"},
+	})
+	for _, assetID := range []string{"asset-covered", "asset-unlicensed"} {
+		createPeopleRecord[stack.Installation](t, handler, session, "/api/v1/stack/installations", map[string]any{
+			"id": "installation-" + assetID, "versionId": version.ID, "assetId": assetID,
+			"installedAt": "2026-08-01T00:00:00Z", "usageState": "used",
+		})
+	}
+	assignment := createPeopleRecord[stack.Assignment](t, handler, session, "/api/v1/stack/assignments", map[string]any{
+		"id": "assignment-covered", "licenseId": license.ID, "assigneeKind": "asset", "assigneeId": "asset-covered",
+		"seats": 2, "usageState": "unused", "assignedAt": "2026-08-01T00:00:00Z",
+	})
+
+	analytics := httptest.NewRecorder()
+	handler.ServeHTTP(analytics, authenticatedRequest(http.MethodGet, "/api/v1/stack/analytics?asOf=2026-08-13T00%3A00%3A00Z&expiringWithinDays=30", nil, session))
+	for _, expected := range []string{`"code":"expiring"`, `"code":"missing_license"`, `"code":"over_assigned"`, `"code":"under_used"`} {
+		if !strings.Contains(analytics.Body.String(), expected) {
+			t.Fatalf("expected analytics condition %s, got %d: %s", expected, analytics.Code, analytics.Body.String())
+		}
+	}
+	if analytics.Code != http.StatusOK || analytics.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("unexpected Stack analytics response %d headers=%v", analytics.Code, analytics.Header())
+	}
+
+	usagePayload, _ := json.Marshal(map[string]any{"usageState": "used", "lastUsedAt": "2026-08-13T00:00:00Z", "revision": assignment.Revision})
+	usage := httptest.NewRecorder()
+	handler.ServeHTTP(usage, authenticatedRequest(http.MethodPut, "/api/v1/stack/assignments/"+assignment.ID+"/usage", bytes.NewReader(usagePayload), session))
+	if usage.Code != http.StatusOK || !strings.Contains(usage.Body.String(), `"usageState":"used"`) || !strings.Contains(usage.Body.String(), `"revision":2`) {
+		t.Fatalf("unexpected Stack usage response %d: %s", usage.Code, usage.Body.String())
+	}
+	licensePayload, _ := json.Marshal(map[string]any{"quantity": 3, "status": "active", "expiresOn": "2026-10-01T00:00:00Z", "revision": license.Revision})
+	licenseUpdate := httptest.NewRecorder()
+	handler.ServeHTTP(licenseUpdate, authenticatedRequest(http.MethodPut, "/api/v1/stack/licenses/"+license.ID+"/entitlement", bytes.NewReader(licensePayload), session))
+	if licenseUpdate.Code != http.StatusOK || !strings.Contains(licenseUpdate.Body.String(), `"quantity":3`) || !strings.Contains(licenseUpdate.Body.String(), `"revision":2`) {
+		t.Fatalf("unexpected Stack entitlement response %d: %s", licenseUpdate.Code, licenseUpdate.Body.String())
+	}
+	endPayload, _ := json.Marshal(map[string]any{"endedAt": "2026-08-14T00:00:00Z", "revision": 2})
+	ended := httptest.NewRecorder()
+	handler.ServeHTTP(ended, authenticatedRequest(http.MethodPut, "/api/v1/stack/assignments/"+assignment.ID+"/end", bytes.NewReader(endPayload), session))
+	if ended.Code != http.StatusOK || !strings.Contains(ended.Body.String(), `"endedAt":"2026-08-14T00:00:00Z"`) || !strings.Contains(ended.Body.String(), `"revision":3`) {
+		t.Fatalf("unexpected Stack assignment end response %d: %s", ended.Code, ended.Body.String())
+	}
+
+	snapshot := httptest.NewRecorder()
+	handler.ServeHTTP(snapshot, authenticatedRequest(http.MethodGet, "/api/v1/stack", nil, session))
+	if snapshot.Code != http.StatusOK || snapshot.Header().Get("Cache-Control") != "no-store" || !strings.Contains(snapshot.Body.String(), "Steward Writer") {
+		t.Fatalf("unexpected Stack snapshot %d headers=%v body=%s", snapshot.Code, snapshot.Header(), snapshot.Body.String())
+	}
+	exchange := httptest.NewRecorder()
+	handler.ServeHTTP(exchange, authenticatedRequest(http.MethodGet, "/api/v1/stack/exchange", nil, session))
+	if exchange.Code != http.StatusOK || exchange.Header().Get("Content-Disposition") != `attachment; filename="stewardmesh-stack.json"` ||
+		!strings.Contains(exchange.Body.String(), `"type":"stack.product"`) || !strings.Contains(exchange.Body.String(), `"dependencies"`) {
+		t.Fatalf("unexpected Stack exchange %d: %s", exchange.Code, exchange.Body.String())
+	}
+
+	missingCSRF := authenticatedRequest(http.MethodPost, "/api/v1/stack/products", bytes.NewBufferString(`{"name":"Denied","publisher":"Denied"}`), session)
+	missingCSRF.Header.Del(csrfHeader)
+	denied := httptest.NewRecorder()
+	handler.ServeHTTP(denied, missingCSRF)
+	if denied.Code != http.StatusForbidden || !strings.Contains(denied.Body.String(), "csrf_failed") {
+		t.Fatalf("expected Stack writes to require CSRF, got %d: %s", denied.Code, denied.Body.String())
+	}
+
+	importPayload, _ := json.Marshal(map[string]any{
+		"sourceSystemId": "external-catalog",
+		"records": []map[string]any{{
+			"type": "stack.product", "id": "imported-product", "revision": 1, "dependencies": []string{},
+			"payload": map[string]any{
+				"id": "imported-product", "organizationId": "attacker-organization", "name": "Imported private product",
+				"publisher": "External publisher", "status": "active", "revision": 1,
+				"createdAt": "2026-08-13T00:00:00Z", "updatedAt": "2026-08-13T00:00:00Z",
+			},
+		}},
+	})
+	administratorAuthentication, err := guardService.AuthenticateSession(context.Background(), session.cookie.Value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readCredentials, err := guardService.LoginOIDC(context.Background(), identity.OIDCPrincipal{
+		Issuer: "https://identity.example.test/stack-import", Subject: "stack-import-reader",
+		Email: "stack-import-reader@example.test", EmailVerified: true, DisplayName: "Stack import reader",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	readRole, err := guardService.CreateRole(context.Background(), administratorAuthentication, guard.CreateRoleInput{
+		Name: "Stack import reader", Permissions: []guard.Permission{guard.PermissionSoftwareRead},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := guardService.AssignRole(context.Background(), administratorAuthentication, guard.RoleAssignmentInput{
+		AccountID: readCredentials.Authentication.Principal.Subject, RoleID: readRole.ID, ScopeKind: guard.ScopeOrganization,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	readSession := testSession{cookie: &http.Cookie{Name: localSessionName, Value: readCredentials.Token}, csrfToken: readCredentials.CSRFToken}
+	readDenied := httptest.NewRecorder()
+	handler.ServeHTTP(readDenied, authenticatedRequest(http.MethodPost, "/api/v1/stack/exchange/import", bytes.NewReader(importPayload), readSession))
+	if readDenied.Code != http.StatusForbidden || !strings.Contains(readDenied.Body.String(), `"code":"permission_denied"`) || strings.Contains(readDenied.Body.String(), "Imported private product") {
+		t.Fatalf("read-only Stack importer was not safely denied: %d: %s", readDenied.Code, readDenied.Body.String())
+	}
+	if _, err := guardService.ImportedResourceOwnership(context.Background(), "example-org", "stack.product", "imported-product"); !errors.Is(err, guard.ErrNotFound) {
+		t.Fatalf("denied import created ownership: %v", err)
+	}
+
+	imported := httptest.NewRecorder()
+	handler.ServeHTTP(imported, authenticatedRequest(http.MethodPost, "/api/v1/stack/exchange/import", bytes.NewReader(importPayload), session))
+	if imported.Code != http.StatusOK || imported.Header().Get("X-Exchange-Package-ID") == "" || imported.Header().Get("X-Idempotent-Replay") != "false" ||
+		!strings.Contains(imported.Body.String(), `"status":"completed"`) || !strings.Contains(imported.Body.String(), `"created":1`) || !strings.Contains(imported.Body.String(), `"writeLocked":true`) {
+		t.Fatalf("durable Stack import response was incomplete: %d headers=%v body=%s", imported.Code, imported.Header(), imported.Body.String())
+	}
+	packageID := imported.Header().Get("X-Exchange-Package-ID")
+	locked, err := guardService.ImportedResourceOwnership(context.Background(), "example-org", "stack.product", "imported-product")
+	if err != nil || !locked.WriteLocked || locked.SourceSystemID != "external-catalog" || locked.SourceRecordID != "stack.product:imported-product" || locked.OrganizationID != "example-org" {
+		t.Fatalf("durable Stack import ownership was incorrect: %#v err=%v", locked, err)
+	}
+	if _, err := guardService.ImportedResourceOwnership(context.Background(), "attacker-organization", "stack.product", "imported-product"); !errors.Is(err, guard.ErrNotFound) {
+		t.Fatalf("payload organization escaped the configured organization: %v", err)
+	}
+	replayedImport := httptest.NewRecorder()
+	handler.ServeHTTP(replayedImport, authenticatedRequest(http.MethodPost, "/api/v1/stack/exchange/import", bytes.NewReader(importPayload), session))
+	if replayedImport.Code != http.StatusOK || replayedImport.Header().Get("X-Exchange-Package-ID") != packageID || replayedImport.Header().Get("X-Idempotent-Replay") != "true" || !strings.Contains(replayedImport.Body.String(), `"replay":true`) {
+		t.Fatalf("exact Stack HTTP retry did not replay: %d headers=%v body=%s", replayedImport.Code, replayedImport.Header(), replayedImport.Body.String())
+	}
+	lockedMutationPayload := bytes.NewBufferString(`{"status":"retired","revision":1}`)
+	lockedMutation := httptest.NewRecorder()
+	handler.ServeHTTP(lockedMutation, authenticatedRequest(http.MethodPut, "/api/v1/stack/products/imported-product/status", lockedMutationPayload, session))
+	if lockedMutation.Code != http.StatusLocked || !strings.Contains(lockedMutation.Body.String(), `"code":"ownership_locked"`) {
+		t.Fatalf("imported Stack ownership did not enforce the normal mutation lock: %d: %s", lockedMutation.Code, lockedMutation.Body.String())
+	}
+
+	partialFailurePayload, _ := json.Marshal(map[string]any{
+		"sourceSystemId": "conflict-catalog",
+		"records": []map[string]any{
+			{
+				"type": "stack.product", "id": "aaa-prefix-product", "revision": 1, "dependencies": []string{},
+				"payload": map[string]any{"id": "aaa-prefix-product", "name": "Committed prefix product", "publisher": "External", "status": "active", "revision": 1},
+			},
+			{
+				"type": "stack.product", "id": "writer", "revision": 1, "dependencies": []string{},
+				"payload": map[string]any{"id": "writer", "name": "Conflicting replacement", "publisher": "External", "status": "active", "revision": 1},
+			},
+		},
+	})
+	partialFailure := httptest.NewRecorder()
+	handler.ServeHTTP(partialFailure, authenticatedRequest(http.MethodPost, "/api/v1/stack/exchange/import", bytes.NewReader(partialFailurePayload), session))
+	if partialFailure.Code != http.StatusConflict || partialFailure.Header().Get("X-Exchange-Package-ID") == "" ||
+		partialFailure.Header().Get("X-Idempotent-Replay") != "false" ||
+		!strings.Contains(partialFailure.Body.String(), `"code":"package_conflict"`) || !strings.Contains(partialFailure.Body.String(), `"status":"failed"`) ||
+		!strings.Contains(partialFailure.Body.String(), `"created":1`) || !strings.Contains(partialFailure.Body.String(), `"id":"aaa-prefix-product"`) ||
+		strings.Contains(partialFailure.Body.String(), `"id":"writer","revision"`) {
+		t.Fatalf("failed Stack HTTP import hid or misstated its committed prefix: %d headers=%v body=%s", partialFailure.Code, partialFailure.Header(), partialFailure.Body.String())
+	}
+	partialPackageID := partialFailure.Header().Get("X-Exchange-Package-ID")
+	partialRetry := httptest.NewRecorder()
+	handler.ServeHTTP(partialRetry, authenticatedRequest(http.MethodPost, "/api/v1/stack/exchange/import", bytes.NewReader(partialFailurePayload), session))
+	if partialRetry.Code != http.StatusConflict || partialRetry.Header().Get("X-Exchange-Package-ID") != partialPackageID || !strings.Contains(partialRetry.Body.String(), `"created":1`) {
+		t.Fatalf("failed Stack HTTP import retry did not address the same receipt: %d headers=%v body=%s", partialRetry.Code, partialRetry.Header(), partialRetry.Body.String())
+	}
+}
+
 func TestHorizonLifecyclePlanForecastHistoryAndExport(t *testing.T) {
 	handler := newGuardServer(t)
 	session := bootstrapAdministrator(t, handler)
@@ -334,6 +651,216 @@ func TestHorizonLifecyclePlanForecastHistoryAndExport(t *testing.T) {
 	}
 }
 
+func TestHorizonForecastQueryAcceptsRepeatedAndCommaSeparatedScenarios(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/horizon/forecast?scenarios=baseline&scenarios=accelerated%2Cconservative", nil)
+	query, err := horizonForecastQuery(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"baseline", "accelerated", "conservative"}
+	if !slices.Equal(query.Scenarios, want) {
+		t.Fatalf("scenarios = %#v, want %#v", query.Scenarios, want)
+	}
+}
+
+func TestSignalsRuleEvaluationActionHistoryDeliveryAndProtection(t *testing.T) {
+	handler := newGuardServer(t)
+	session := bootstrapAdministrator(t, handler)
+	provider := createPeopleRecord[reach.Provider](t, handler, session, "/api/v1/reach/providers", map[string]any{
+		"id": "signals-hook", "name": "Signals webhook", "kind": "webhook", "endpointId": "hook-primary", "secretRef": "external:hook-secret-v1",
+	})
+	template := createPeopleRecord[reach.Template](t, handler, session, "/api/v1/reach/templates", map[string]any{
+		"id": "signals-template", "name": "Signals template", "subject": "{{title}}", "body": "{{summary}}",
+	})
+	createPeopleRecord[reach.SubscriberGroup](t, handler, session, "/api/v1/reach/groups", map[string]any{
+		"id": "finance-owners", "name": "Finance owners", "providerId": provider.ID, "templateId": template.ID,
+		"recipients": []map[string]string{{"kind": "email", "address": "finance@example.test"}},
+	})
+	targets := httptest.NewRecorder()
+	handler.ServeHTTP(targets, authenticatedRequest(http.MethodGet, "/api/v1/signals/subscription-targets", nil, session))
+	if targets.Code != http.StatusOK || !strings.Contains(targets.Body.String(), `"targetKind":"group","targetId":"finance-owners","label":"Finance owners"`) ||
+		!strings.Contains(targets.Body.String(), `"targetKind":"webhook","targetId":"signals-hook","label":"Signals webhook"`) {
+		t.Fatalf("unexpected Signals subscription targets %d: %s", targets.Code, targets.Body.String())
+	}
+	rule := createPeopleRecord[signals.Rule](t, handler, session, "/api/v1/signals/rules", map[string]any{
+		"id": "renewals", "name": "Contract renewals", "condition": "renewal", "severity": "warning",
+	})
+	if len(rule.ThresholdDays) != 4 || rule.ThresholdDays[0] != 180 {
+		t.Fatalf("unexpected Signals default thresholds %#v", rule)
+	}
+	subscription := createPeopleRecord[signals.Subscription](t, handler, session, "/api/v1/signals/subscriptions", map[string]any{
+		"id": "finance-group", "ruleId": rule.ID, "targetKind": "group", "targetId": "finance-owners",
+	})
+	if subscription.TargetID != "finance-owners" {
+		t.Fatalf("unexpected Signals subscription %#v", subscription)
+	}
+
+	evaluation := httptest.NewRecorder()
+	handler.ServeHTTP(evaluation, authenticatedRequest(http.MethodPost, "/api/v1/signals/evaluate", bytes.NewBufferString(`{"asOf":"2026-08-13T12:00:00Z"}`), session))
+	if evaluation.Code != http.StatusOK || !strings.Contains(evaluation.Body.String(), `"created":1`) {
+		t.Fatalf("unexpected Signals evaluation %d: %s", evaluation.Code, evaluation.Body.String())
+	}
+	queue := httptest.NewRecorder()
+	handler.ServeHTTP(queue, authenticatedRequest(http.MethodGet, "/api/v1/signals/alerts?status=active&limit=10", nil, session))
+	var body struct {
+		Items []signals.Alert `json:"items"`
+	}
+	if queue.Code != http.StatusOK || json.Unmarshal(queue.Body.Bytes(), &body) != nil || len(body.Items) != 1 {
+		t.Fatalf("unexpected Signals alert queue %d: %s", queue.Code, queue.Body.String())
+	}
+	alert := body.Items[0]
+	if alert.Condition != signals.ConditionRenewal || alert.Status != signals.StatusActive {
+		t.Fatalf("unexpected Signals alert %#v", alert)
+	}
+	pending := httptest.NewRecorder()
+	handler.ServeHTTP(pending, authenticatedRequest(http.MethodGet, "/api/v1/signals/deliveries/pending?asOf=9999-12-31T00:00:00Z&limit=10", nil, session))
+	var deliveryQueue struct {
+		Items []signals.Delivery `json:"items"`
+	}
+	if pending.Code != http.StatusOK || json.Unmarshal(pending.Body.Bytes(), &deliveryQueue) != nil || len(deliveryQueue.Items) != 1 || deliveryQueue.Items[0].TargetID != "finance-owners" {
+		t.Fatalf("unexpected Signals delivery queue %d: %s", pending.Code, pending.Body.String())
+	}
+	missingDeliveryCSRF := authenticatedRequest(http.MethodPost, "/api/v1/signals/deliveries/"+deliveryQueue.Items[0].ID+"/attempts", bytes.NewBufferString(`{"succeeded":true,"retryable":false}`), session)
+	missingDeliveryCSRF.Header.Del(csrfHeader)
+	missingDeliveryCSRFResponse := httptest.NewRecorder()
+	handler.ServeHTTP(missingDeliveryCSRFResponse, missingDeliveryCSRF)
+	if missingDeliveryCSRFResponse.Code != http.StatusForbidden || !strings.Contains(missingDeliveryCSRFResponse.Body.String(), "csrf_failed") {
+		t.Fatalf("expected Signals delivery attempts to require CSRF, got %d: %s", missingDeliveryCSRFResponse.Code, missingDeliveryCSRFResponse.Body.String())
+	}
+	recordedDelivery := httptest.NewRecorder()
+	handler.ServeHTTP(recordedDelivery, authenticatedRequest(http.MethodPost, "/api/v1/signals/deliveries/"+deliveryQueue.Items[0].ID+"/attempts", bytes.NewBufferString(`{"succeeded":true,"retryable":false}`), session))
+	if recordedDelivery.Code != http.StatusOK || !strings.Contains(recordedDelivery.Body.String(), `"status":"delivered"`) {
+		t.Fatalf("unexpected Signals delivery attempt %d: %s", recordedDelivery.Code, recordedDelivery.Body.String())
+	}
+
+	ackPayload, _ := json.Marshal(map[string]any{"revision": alert.Revision})
+	ack := httptest.NewRecorder()
+	handler.ServeHTTP(ack, authenticatedRequest(http.MethodPost, "/api/v1/signals/alerts/"+alert.ID+"/acknowledge", bytes.NewReader(ackPayload), session))
+	var acknowledged signals.Alert
+	if ack.Code != http.StatusOK || json.Unmarshal(ack.Body.Bytes(), &acknowledged) != nil || acknowledged.Status != signals.StatusAcknowledged {
+		t.Fatalf("unexpected Signals acknowledgment %d: %s", ack.Code, ack.Body.String())
+	}
+	assignmentPayload, _ := json.Marshal(map[string]any{"kind": "group", "targetId": "finance-owners", "revision": acknowledged.Revision})
+	assignment := httptest.NewRecorder()
+	handler.ServeHTTP(assignment, authenticatedRequest(http.MethodPut, "/api/v1/signals/alerts/"+alert.ID+"/assignment", bytes.NewReader(assignmentPayload), session))
+	if assignment.Code != http.StatusOK || !strings.Contains(assignment.Body.String(), `"assignedId":"finance-owners"`) {
+		t.Fatalf("unexpected Signals assignment %d: %s", assignment.Code, assignment.Body.String())
+	}
+	history := httptest.NewRecorder()
+	handler.ServeHTTP(history, authenticatedRequest(http.MethodGet, "/api/v1/signals/alerts/"+alert.ID+"/history", nil, session))
+	for _, action := range []string{`"action":"created"`, `"action":"acknowledged"`, `"action":"assigned"`} {
+		if history.Code != http.StatusOK || !strings.Contains(history.Body.String(), action) {
+			t.Fatalf("Signals history missing %s: %d %s", action, history.Code, history.Body.String())
+		}
+	}
+	report := httptest.NewRecorder()
+	handler.ServeHTTP(report, authenticatedRequest(http.MethodGet, "/api/v1/signals/report.csv?limit=10", nil, session))
+	if report.Code != http.StatusOK || report.Header().Get("Content-Type") != "text/csv; charset=utf-8" || !strings.Contains(report.Body.String(), "support-contract") || report.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("unexpected Signals CSV %d headers=%v body=%s", report.Code, report.Header(), report.Body.String())
+	}
+
+	missingCSRF := authenticatedRequest(http.MethodPost, "/api/v1/signals/evaluate", bytes.NewBufferString(`{}`), session)
+	missingCSRF.Header.Del(csrfHeader)
+	denied := httptest.NewRecorder()
+	handler.ServeHTTP(denied, missingCSRF)
+	if denied.Code != http.StatusForbidden || !strings.Contains(denied.Body.String(), "csrf_failed") {
+		t.Fatalf("expected Signals evaluation to require CSRF, got %d: %s", denied.Code, denied.Body.String())
+	}
+	unsafeSubscriber := httptest.NewRecorder()
+	unsafePayload := bytes.NewBufferString(`{"targetKind":"webhook","targetId":"https://secret.example.test/token"}`)
+	handler.ServeHTTP(unsafeSubscriber, authenticatedRequest(http.MethodPost, "/api/v1/signals/subscriptions", unsafePayload, session))
+	if unsafeSubscriber.Code != http.StatusBadRequest || !strings.Contains(unsafeSubscriber.Body.String(), "validation_failed") {
+		t.Fatalf("expected Signals to reject webhook URLs, got %d: %s", unsafeSubscriber.Code, unsafeSubscriber.Body.String())
+	}
+	for name, payload := range map[string]string{
+		"missing target":    `{"targetKind":"group","targetId":"missing-group"}`,
+		"wrong target kind": `{"targetKind":"webhook","targetId":"finance-owners"}`,
+	} {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, authenticatedRequest(http.MethodPost, "/api/v1/signals/subscriptions", bytes.NewBufferString(payload), session))
+		if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "validation_failed") {
+			t.Fatalf("expected Signals to reject %s, got %d: %s", name, response.Code, response.Body.String())
+		}
+	}
+	disableBody, _ := json.Marshal(map[string]any{"name": provider.Name, "sender": "", "enabled": false, "revision": provider.Revision})
+	disabled := httptest.NewRecorder()
+	handler.ServeHTTP(disabled, authenticatedRequest(http.MethodPut, "/api/v1/reach/providers/"+provider.ID, bytes.NewReader(disableBody), session))
+	if disabled.Code != http.StatusOK {
+		t.Fatalf("disable Reach target %d: %s", disabled.Code, disabled.Body.String())
+	}
+	disabledTarget := httptest.NewRecorder()
+	handler.ServeHTTP(disabledTarget, authenticatedRequest(http.MethodPost, "/api/v1/signals/subscriptions", bytes.NewBufferString(`{"id":"disabled-target","targetKind":"webhook","targetId":"signals-hook"}`), session))
+	if disabledTarget.Code != http.StatusBadRequest || !strings.Contains(disabledTarget.Body.String(), "validation_failed") {
+		t.Fatalf("expected Signals to reject a disabled target, got %d: %s", disabledTarget.Code, disabledTarget.Body.String())
+	}
+}
+
+func TestReachConfigurationSendHistorySignalsHandoffAndProtection(t *testing.T) {
+	handler := newGuardServer(t)
+	session := bootstrapAdministrator(t, handler)
+	provider := createPeopleRecord[reach.Provider](t, handler, session, "/api/v1/reach/providers", map[string]any{
+		"id": "operations-hook", "name": "Operations hook", "kind": "webhook", "endpointId": "hook-primary", "secretRef": "external:hook-secret-v1",
+	})
+	if !provider.SecretConfigured || provider.SecretRef != "" {
+		t.Fatalf("Reach provider response did not redact its external secret reference: %#v", provider)
+	}
+	template := createPeopleRecord[reach.Template](t, handler, session, "/api/v1/reach/templates", map[string]any{
+		"id": "signal-template", "name": "Signal alert", "subject": "{{severity}}: {{title}}", "body": "{{summary}}\nAlert {{record_id}}",
+	})
+	group := createPeopleRecord[reach.SubscriberGroup](t, handler, session, "/api/v1/reach/groups", map[string]any{
+		"id": "finance-owners", "name": "Finance owners", "providerId": provider.ID, "templateId": template.ID,
+		"recipients": []map[string]string{{"kind": "email", "address": "owner@example.test"}},
+	})
+	if len(group.Recipients) != 1 {
+		t.Fatalf("unexpected Reach group %#v", group)
+	}
+
+	providerTest := httptest.NewRecorder()
+	handler.ServeHTTP(providerTest, authenticatedRequest(http.MethodPost, "/api/v1/reach/providers/"+provider.ID+"/test", bytes.NewBufferString(`{"confirm":true}`), session))
+	if providerTest.Code != http.StatusOK || !strings.Contains(providerTest.Body.String(), `"outcome":"succeeded"`) || strings.Contains(providerTest.Body.String(), "hook-secret") {
+		t.Fatalf("unexpected redacted Reach provider test %d: %s", providerTest.Code, providerTest.Body.String())
+	}
+
+	send := authenticatedRequest(http.MethodPost, "/api/v1/reach/messages/send", bytes.NewBufferString(`{"groupId":"finance-owners","variables":{"severity":"warning","title":"Renewal","summary":"Renewal is due.","record_id":"contract-one"},"confirm":true}`), session)
+	send.Header.Set(idempotencyHeader, "reach-http-send-one")
+	sendResponse := httptest.NewRecorder()
+	handler.ServeHTTP(sendResponse, send)
+	var message reach.Message
+	if sendResponse.Code != http.StatusAccepted || json.Unmarshal(sendResponse.Body.Bytes(), &message) != nil || message.Status != "delivered" {
+		t.Fatalf("unexpected Reach send %d: %s", sendResponse.Code, sendResponse.Body.String())
+	}
+	attempts := httptest.NewRecorder()
+	handler.ServeHTTP(attempts, authenticatedRequest(http.MethodGet, "/api/v1/reach/messages/"+message.ID+"/attempts", nil, session))
+	if attempts.Code != http.StatusOK || !strings.Contains(attempts.Body.String(), `"outcome":"succeeded"`) || strings.Contains(attempts.Body.String(), "hook-secret") {
+		t.Fatalf("unexpected Reach history %d: %s", attempts.Code, attempts.Body.String())
+	}
+
+	rule := createPeopleRecord[signals.Rule](t, handler, session, "/api/v1/signals/rules", map[string]any{
+		"id": "reach-renewals", "name": "Reach renewals", "condition": "renewal", "severity": "critical",
+	})
+	createPeopleRecord[signals.Subscription](t, handler, session, "/api/v1/signals/subscriptions", map[string]any{
+		"id": "reach-finance-subscription", "ruleId": rule.ID, "targetKind": "group", "targetId": group.ID,
+	})
+	evaluation := httptest.NewRecorder()
+	handler.ServeHTTP(evaluation, authenticatedRequest(http.MethodPost, "/api/v1/signals/evaluate", bytes.NewBufferString(`{"asOf":"2026-08-13T12:00:00Z"}`), session))
+	if evaluation.Code != http.StatusOK {
+		t.Fatalf("prepare Reach Signals delivery %d: %s", evaluation.Code, evaluation.Body.String())
+	}
+	process := httptest.NewRecorder()
+	handler.ServeHTTP(process, authenticatedRequest(http.MethodPost, "/api/v1/reach/signals/process", bytes.NewBufferString(`{"confirm":true,"limit":10}`), session))
+	if process.Code != http.StatusOK || !strings.Contains(process.Body.String(), `"delivered":1`) {
+		t.Fatalf("unexpected Reach Signals processing %d: %s", process.Code, process.Body.String())
+	}
+
+	missingCSRF := authenticatedRequest(http.MethodPost, "/api/v1/reach/providers/"+provider.ID+"/test", bytes.NewBufferString(`{"confirm":true}`), session)
+	missingCSRF.Header.Del(csrfHeader)
+	denied := httptest.NewRecorder()
+	handler.ServeHTTP(denied, missingCSRF)
+	if denied.Code != http.StatusForbidden || !strings.Contains(denied.Body.String(), "csrf_failed") {
+		t.Fatalf("expected Reach provider test to require CSRF, got %d: %s", denied.Code, denied.Body.String())
+	}
+}
+
 func TestProtectedRoutesRequireAuthentication(t *testing.T) {
 	handler := newGuardServer(t)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/organization", nil)
@@ -377,7 +904,7 @@ func TestOIDCAuthorizationCodeFlowCreatesJITSession(t *testing.T) {
 		t.Fatalf("unexpected OpenID Connect start response %d %#v", startRes.Code, startRes.Header())
 	}
 	transactionCookie := findCookie(t, startRes.Result().Cookies(), localOIDCTransactionName)
-	if !transactionCookie.HttpOnly || transactionCookie.Secure || transactionCookie.SameSite != http.SameSiteLaxMode || transactionCookie.Value == "" {
+	if !transactionCookie.HttpOnly || !transactionCookie.Secure || transactionCookie.SameSite != http.SameSiteLaxMode || transactionCookie.Value == "" {
 		t.Fatalf("unexpected OpenID Connect transaction cookie %#v", transactionCookie)
 	}
 	callback := httptest.NewRequest(http.MethodGet, "/api/v1/auth/oidc/callback?code=authorization-code&state="+url.QueryEscape(authenticator.state), nil)
@@ -544,7 +1071,7 @@ func TestBootstrapSessionAndOrganizationCorrelation(t *testing.T) {
 		t.Fatalf("unexpected bootstrap status %#v", status)
 	}
 	session := bootstrapAdministrator(t, handler)
-	if !session.cookie.HttpOnly || session.cookie.Secure || session.cookie.SameSite != http.SameSiteLaxMode {
+	if !session.cookie.HttpOnly || !session.cookie.Secure || session.cookie.SameSite != http.SameSiteLaxMode {
 		t.Fatalf("unexpected local session cookie %#v", session.cookie)
 	}
 	req := authenticatedRequest(http.MethodGet, "/api/v1/organization", nil, session)
@@ -617,6 +1144,19 @@ func TestGuardAccessAPIManagesScopedAssignmentsAndProtectsLastAdministrator(t *t
 	if createdRole.Name != "Asset steward" || createdRole.Source != guard.LocalRoleSource || createdRole.Managed ||
 		len(createdRole.Permissions) != 2 || len(createdRole.PolicyBundleIDs) != 1 {
 		t.Fatalf("unexpected custom role %#v", createdRole)
+	}
+	directRolePayload, err := json.Marshal(map[string]any{
+		"name": "Directory reader", "description": "Reads directory records.",
+		"permissions": []string{"organization.read", "directory.read", "integrations.read"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	directRoleRequest := authenticatedRequest(http.MethodPost, "/api/v1/guard/roles", bytes.NewReader(directRolePayload), session)
+	directRoleResponse := httptest.NewRecorder()
+	handler.ServeHTTP(directRoleResponse, directRoleRequest)
+	if directRoleResponse.Code != http.StatusCreated || !strings.Contains(directRoleResponse.Body.String(), `"policyBundleIds":[]`) {
+		t.Fatalf("expected a direct-only role to return an empty JSON array, got %d: %s", directRoleResponse.Code, directRoleResponse.Body.String())
 	}
 	duplicateRolePayload := bytes.Replace(rolePayload, []byte("Asset steward"), []byte("ASSET STEWARD"), 1)
 	duplicateRoleRequest := authenticatedRequest(http.MethodPost, "/api/v1/guard/roles", bytes.NewReader(duplicateRolePayload), session)
@@ -800,11 +1340,38 @@ func TestCreateAndListAssetRequiresPermissionAndCSRF(t *testing.T) {
 	if modelListRes.Code != http.StatusOK || !strings.Contains(modelListRes.Body.String(), `"instanceCount":1`) {
 		t.Fatalf("expected model list with instance count, got %d: %s", modelListRes.Code, modelListRes.Body.String())
 	}
+	modelUpdatePayload, _ := json.Marshal(map[string]any{
+		"manufacturer": model.Manufacturer, "name": "Laptop 13 v2", "modelNumber": model.ModelNumber,
+		"kind": model.Kind, "warrantyMonths": 48, "usefulLifeMonths": model.UsefulLifeMonths,
+		"specifications": map[string]string{"CPU": "Ryzen AI", "Memory": "32 GB"},
+		"sourceSystemId": "model-import", "sourceRecordId": "framework-fw13-v2", "revision": model.Revision,
+	})
+	modelUpdateReq := authenticatedRequest(http.MethodPut, "/api/v1/asset-models/model-1", bytes.NewReader(modelUpdatePayload), session)
+	modelUpdateRes := httptest.NewRecorder()
+	handler.ServeHTTP(modelUpdateRes, modelUpdateReq)
+	if modelUpdateRes.Code != http.StatusOK || !strings.Contains(modelUpdateRes.Body.String(), `"revision":2`) ||
+		!strings.Contains(modelUpdateRes.Body.String(), `"sourceRecordId":"framework-fw13-v2"`) {
+		t.Fatalf("expected complete model update, got %d: %s", modelUpdateRes.Code, modelUpdateRes.Body.String())
+	}
 	listReq := authenticatedRequest(http.MethodGet, "/api/v1/assets?q=lab-001&kind=server&status=active&modelId=model-1", nil, session)
 	listRes := httptest.NewRecorder()
 	handler.ServeHTTP(listRes, listReq)
 	if listRes.Code != http.StatusOK || !strings.Contains(listRes.Body.String(), "asset-1") {
 		t.Fatalf("expected filtered asset, got %d: %s", listRes.Code, listRes.Body.String())
+	}
+	inventoryReq := authenticatedRequest(http.MethodGet, "/api/v1/asset-models/model-1/inventory?status=active&deploymentContext=LAB-SERVER&groupBy=status&limit=10", nil, session)
+	inventoryRes := httptest.NewRecorder()
+	handler.ServeHTTP(inventoryRes, inventoryReq)
+	if inventoryRes.Code != http.StatusOK || !strings.Contains(inventoryRes.Body.String(), `"totalCount":1`) ||
+		!strings.Contains(inventoryRes.Body.String(), `"filteredCount":1`) || !strings.Contains(inventoryRes.Body.String(), `"key":"active","count":1`) ||
+		!strings.Contains(inventoryRes.Body.String(), `"id":"asset-1"`) {
+		t.Fatalf("expected filtered and grouped model inventory, got %d: %s", inventoryRes.Code, inventoryRes.Body.String())
+	}
+	invalidInventoryReq := authenticatedRequest(http.MethodGet, "/api/v1/asset-models/model-1/inventory?groupBy=building", nil, session)
+	invalidInventoryRes := httptest.NewRecorder()
+	handler.ServeHTTP(invalidInventoryRes, invalidInventoryReq)
+	if invalidInventoryRes.Code != http.StatusBadRequest {
+		t.Fatalf("expected invalid model inventory grouping to fail, got %d: %s", invalidInventoryRes.Code, invalidInventoryRes.Body.String())
 	}
 	getReq := authenticatedRequest(http.MethodGet, "/api/v1/assets/asset-1", nil, session)
 	getRes := httptest.NewRecorder()
@@ -838,11 +1405,23 @@ func TestCreateAndListAssetRequiresPermissionAndCSRF(t *testing.T) {
 	if staleRes.Code != http.StatusConflict {
 		t.Fatalf("expected stale revision conflict, got %d: %s", staleRes.Code, staleRes.Body.String())
 	}
-	retireReq := authenticatedRequest(http.MethodPost, "/api/v1/asset-models/model-1/retire?revision=1", nil, session)
+	retireReq := authenticatedRequest(http.MethodPost, "/api/v1/asset-models/model-1/retire?revision=2", nil, session)
 	retireRes := httptest.NewRecorder()
 	handler.ServeHTTP(retireRes, retireReq)
 	if retireRes.Code != http.StatusOK || !strings.Contains(retireRes.Body.String(), `"status":"retired"`) {
 		t.Fatalf("expected model retirement, got %d: %s", retireRes.Code, retireRes.Body.String())
+	}
+	postRetirementPayload, _ := json.Marshal(map[string]any{
+		"modelId": created.ModelID, "name": "Lab server maintained", "kind": created.Kind,
+		"assetTag": created.AssetTag, "serialNumber": created.SerialNumber, "hostname": created.Hostname,
+		"status": "retired", "revision": 2,
+	})
+	postRetirementReq := authenticatedRequest(http.MethodPut, "/api/v1/assets/asset-1", bytes.NewReader(postRetirementPayload), session)
+	postRetirementRes := httptest.NewRecorder()
+	handler.ServeHTTP(postRetirementRes, postRetirementReq)
+	if postRetirementRes.Code != http.StatusOK || !strings.Contains(postRetirementRes.Body.String(), `"revision":3`) ||
+		!strings.Contains(postRetirementRes.Body.String(), `"modelRevision":1`) {
+		t.Fatalf("expected linked asset maintenance after model retirement, got %d: %s", postRetirementRes.Code, postRetirementRes.Body.String())
 	}
 	missingCSRF := authenticatedRequest(http.MethodPost, "/api/v1/assets", bytes.NewReader(payload), session)
 	missingCSRF.Header.Del(csrfHeader)
@@ -1051,6 +1630,272 @@ func TestAtlasCodesIdentifierLifecycleIsRetrySafeLockedAndConflictRedacted(t *te
 	}
 }
 
+func TestAtlasCodesLabelTemplatesAndPrintArtifactsAreBoundedRetrySafeAndConfirmedByClients(t *testing.T) {
+	handler := newGuardServer(t)
+	session := bootstrapAdministrator(t, handler)
+	createPeopleRecord[domain.Asset](t, handler, session, "/api/v1/assets", map[string]any{
+		"id": "label-asset-one", "name": "Label asset one", "kind": "server", "assetTag": "LABEL-001", "serialNumber": "PRIVATE-SERIAL", "status": "active",
+	})
+	identifierPayload, _ := json.Marshal(map[string]any{
+		"id": "label-identifier-one", "symbology": "code128", "value": "LABEL-001", "displayValue": "LABEL-001", "source": "generated",
+	})
+	identifierRequest := authenticatedRequest(http.MethodPost, "/api/v1/assets/label-asset-one/identifiers", bytes.NewReader(identifierPayload), session)
+	identifierResponse := httptest.NewRecorder()
+	handler.ServeHTTP(identifierResponse, identifierRequest)
+	if identifierResponse.Code != http.StatusCreated {
+		t.Fatalf("create printable identifier: %d: %s", identifierResponse.Code, identifierResponse.Body.String())
+	}
+
+	templatesRequest := authenticatedRequest(http.MethodGet, "/api/v1/asset-label-templates", nil, session)
+	templatesResponse := httptest.NewRecorder()
+	handler.ServeHTTP(templatesResponse, templatesRequest)
+	if templatesResponse.Code != http.StatusOK || !strings.Contains(templatesResponse.Body.String(), `"patternTemplateId":"builtin-atlas-label-code128"`) ||
+		!strings.Contains(templatesResponse.Body.String(), `"maximumBatchSize":50`) || !strings.Contains(templatesResponse.Body.String(), `"widthMm":70`) ||
+		!strings.Contains(templatesResponse.Body.String(), `"outputs":["svg","pdf"]`) || strings.Contains(templatesResponse.Body.String(), "zpl") {
+		t.Fatalf("unexpected label templates response %d: %s", templatesResponse.Code, templatesResponse.Body.String())
+	}
+
+	payload, _ := json.Marshal(map[string]any{
+		"templateId": "builtin-atlas-label-code128", "templateVersion": 1,
+		"identifierIds": []string{"label-identifier-one"}, "output": "svg", "testPrint": true,
+	})
+	printRequest := authenticatedRequest(http.MethodPost, "/api/v1/asset-label-batches", bytes.NewReader(payload), session)
+	printRequest.Header.Set("Idempotency-Key", "http-label-preview-one")
+	printResponse := httptest.NewRecorder()
+	handler.ServeHTTP(printResponse, printRequest)
+	if printResponse.Code != http.StatusOK || printResponse.Header().Get("Content-Type") != "image/svg+xml" ||
+		printResponse.Header().Get("X-Label-Width-MM") != "70.00" || printResponse.Header().Get("X-Label-Height-MM") != "30.00" ||
+		printResponse.Header().Get("X-Label-Item-Count") != "1" || printResponse.Header().Get("X-Idempotent-Replay") != "false" ||
+		!strings.Contains(printResponse.Header().Get("Content-Disposition"), "inline") || !strings.Contains(printResponse.Body.String(), `stroke-dasharray="1 1"`) ||
+		strings.Contains(printResponse.Body.String(), "PRIVATE-SERIAL") {
+		t.Fatalf("unexpected print-ready SVG %d %#v: %s", printResponse.Code, printResponse.Header(), printResponse.Body.String())
+	}
+	for _, exposed := range []string{
+		"Content-Disposition", "X-Label-Batch-ID", "X-Label-Template-Version", "X-Label-Width-MM",
+		"X-Label-Height-MM", "X-Label-Item-Count", "X-Content-SHA256", "X-Label-Created-At", "X-Idempotent-Replay",
+	} {
+		if !strings.Contains(printResponse.Header().Get("Access-Control-Expose-Headers"), exposed) {
+			t.Fatalf("label artifact response does not expose %s: %#v", exposed, printResponse.Header())
+		}
+	}
+	if strings.Contains(printResponse.Header().Get("Access-Control-Expose-Headers"), "X-StewardMesh-Label-Template") {
+		t.Fatalf("internal gRPC template metadata header was exposed to browser JavaScript: %#v", printResponse.Header())
+	}
+	replayRequest := authenticatedRequest(http.MethodPost, "/api/v1/asset-label-batches", bytes.NewReader(payload), session)
+	replayRequest.Header.Set("Idempotency-Key", "http-label-preview-one")
+	replayResponse := httptest.NewRecorder()
+	handler.ServeHTTP(replayResponse, replayRequest)
+	if replayResponse.Code != http.StatusOK || replayResponse.Header().Get("X-Idempotent-Replay") != "true" || replayResponse.Body.String() != printResponse.Body.String() {
+		t.Fatalf("expected exact retry-safe label response %d: %s", replayResponse.Code, replayResponse.Body.String())
+	}
+
+	pdfPayload, _ := json.Marshal(map[string]any{
+		"templateId": "builtin-atlas-label-code128", "templateVersion": 1,
+		"identifierIds": []string{"label-identifier-one"}, "output": "pdf",
+	})
+	pdfRequest := authenticatedRequest(http.MethodPost, "/api/v1/asset-label-batches", bytes.NewReader(pdfPayload), session)
+	pdfRequest.Header.Set("Idempotency-Key", "http-label-pdf-one")
+	pdfResponse := httptest.NewRecorder()
+	handler.ServeHTTP(pdfResponse, pdfRequest)
+	if pdfResponse.Code != http.StatusOK || pdfResponse.Header().Get("Content-Type") != "application/pdf" || !bytes.HasPrefix(pdfResponse.Body.Bytes(), []byte("%PDF-1.4")) {
+		t.Fatalf("unexpected PDF label output %d: %q", pdfResponse.Code, pdfResponse.Body.Bytes())
+	}
+	zplPayload, _ := json.Marshal(map[string]any{
+		"templateId": "builtin-atlas-label-code128", "templateVersion": 1,
+		"identifierIds": []string{"label-identifier-one"}, "output": "zpl",
+	})
+	zplRequest := authenticatedRequest(http.MethodPost, "/api/v1/asset-label-batches", bytes.NewReader(zplPayload), session)
+	zplRequest.Header.Set("Idempotency-Key", "http-label-zpl-unqualified")
+	zplResponse := httptest.NewRecorder()
+	handler.ServeHTTP(zplResponse, zplRequest)
+	if zplResponse.Code != http.StatusBadRequest || !strings.Contains(zplResponse.Body.String(), `"code":"validation_failed"`) ||
+		strings.Contains(zplResponse.Header().Get("Content-Type"), "zpl") {
+		t.Fatalf("unqualified ZPL output was advertised by HTTP: %d headers=%#v body=%s", zplResponse.Code, zplResponse.Header(), zplResponse.Body.String())
+	}
+
+	missingCSRF := authenticatedRequest(http.MethodPost, "/api/v1/asset-label-batches", bytes.NewReader(payload), session)
+	missingCSRF.Header.Del(csrfHeader)
+	missingCSRF.Header.Set("Idempotency-Key", "http-label-missing-csrf")
+	missingCSRFResponse := httptest.NewRecorder()
+	handler.ServeHTTP(missingCSRFResponse, missingCSRF)
+	if missingCSRFResponse.Code != http.StatusForbidden {
+		t.Fatalf("expected label output to require CSRF, got %d", missingCSRFResponse.Code)
+	}
+
+	listRequest := authenticatedRequest(http.MethodGet, "/api/v1/assets/label-asset-one/identifiers", nil, session)
+	listResponse := httptest.NewRecorder()
+	handler.ServeHTTP(listResponse, listRequest)
+	var list struct {
+		Items []atlascodes.Identifier `json:"items"`
+	}
+	if err := json.Unmarshal(listResponse.Body.Bytes(), &list); err != nil || len(list.Items) != 1 {
+		t.Fatalf("label retries must not duplicate identifier associations: %#v err=%v", list, err)
+	}
+}
+
+func TestAtlasCodesLabelEndpointsEnforceScopedReadWriteAndOwnership(t *testing.T) {
+	handler, guardService := newGuardServerWithIdentityAndGuard(t, nil, nil, nil)
+	administrator := bootstrapAdministrator(t, handler)
+	for _, asset := range []map[string]any{
+		{
+			"id": "label-auth-visible-asset", "name": "Visible asset", "kind": "server",
+			"assetTag": "VIS-AUTH", "serialNumber": "PRIVATE-VISIBLE-SERIAL", "status": "active",
+		},
+		{
+			"id": "label-auth-hidden-asset", "name": "Hidden asset", "kind": "server",
+			"assetTag": "HID-AUTH", "serialNumber": "PRIVATE-HIDDEN-SERIAL", "status": "active",
+		},
+	} {
+		createPeopleRecord[domain.Asset](t, handler, administrator, "/api/v1/assets", asset)
+	}
+	for _, association := range []struct {
+		assetID string
+		id      string
+		value   string
+	}{
+		{assetID: "label-auth-visible-asset", id: "label-auth-visible-code", value: "VIS-AUTH-01"},
+		{assetID: "label-auth-hidden-asset", id: "label-auth-hidden-code", value: "HID-AUTH-01"},
+	} {
+		payload, _ := json.Marshal(map[string]any{
+			"id": association.id, "symbology": "code128", "value": association.value,
+			"displayValue": association.value, "source": "user_entered",
+		})
+		request := authenticatedRequest(http.MethodPost, "/api/v1/assets/"+association.assetID+"/identifiers", bytes.NewReader(payload), administrator)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusCreated {
+			t.Fatalf("create label authorization fixture %s: %d: %s", association.id, response.Code, response.Body.String())
+		}
+	}
+
+	ctx := context.Background()
+	administratorAuthentication, err := guardService.AuthenticateSession(ctx, administrator.cookie.Value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	createSession := func(name string, permissions []guard.Permission, scopeKind guard.ScopeKind, resourceID string) testSession {
+		t.Helper()
+		subject := strings.ReplaceAll(strings.ToLower(name), " ", "-")
+		credentials, err := guardService.LoginOIDC(ctx, identity.OIDCPrincipal{
+			Issuer: "https://identity.example.test/label-authorization", Subject: subject,
+			Email: subject + "@example.test", EmailVerified: true, DisplayName: name,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		role, err := guardService.CreateRole(ctx, administratorAuthentication, guard.CreateRoleInput{
+			Name: name, Permissions: permissions,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := guardService.AssignRole(ctx, administratorAuthentication, guard.RoleAssignmentInput{
+			AccountID: credentials.Authentication.Principal.Subject,
+			RoleID:    role.ID, ScopeKind: scopeKind, ResourceID: resourceID,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return testSession{
+			cookie: &http.Cookie{Name: localSessionName, Value: credentials.Token}, csrfToken: credentials.CSRFToken,
+		}
+	}
+	writeOnly := createSession(
+		"Label write only", []guard.Permission{guard.PermissionAssetsWrite}, guard.ScopeOrganization, "",
+	)
+	readOnly := createSession(
+		"Label read only", []guard.Permission{guard.PermissionAssetsRead}, guard.ScopeOrganization, "",
+	)
+	scopedReadWrite := createSession(
+		"Scoped label reader writer", []guard.Permission{guard.PermissionAssetsRead, guard.PermissionAssetsWrite},
+		guard.ScopeResource, "label-auth-visible-asset",
+	)
+
+	requestBatch := func(session testSession, identifierID, idempotencyKey string) *httptest.ResponseRecorder {
+		t.Helper()
+		payload, _ := json.Marshal(map[string]any{
+			"templateId": "builtin-atlas-label-code128", "templateVersion": 1,
+			"identifierIds": []string{identifierID}, "output": "svg",
+		})
+		request := authenticatedRequest(http.MethodPost, "/api/v1/asset-label-batches", bytes.NewReader(payload), session)
+		request.Header.Set("Idempotency-Key", idempotencyKey)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		return response
+	}
+	assertNoLabelFields := func(response *httptest.ResponseRecorder) {
+		t.Helper()
+		for _, privateValue := range []string{
+			"Visible asset", "VIS-AUTH", "PRIVATE-VISIBLE-SERIAL", "VIS-AUTH-01",
+			"Hidden asset", "HID-AUTH", "PRIVATE-HIDDEN-SERIAL", "HID-AUTH-01",
+		} {
+			if strings.Contains(response.Body.String(), privateValue) {
+				t.Fatalf("authorization denial leaked %q in %d response: %s", privateValue, response.Code, response.Body.String())
+			}
+		}
+	}
+
+	t.Run("write-only principal cannot discover label data", func(t *testing.T) {
+		response := requestBatch(writeOnly, "label-auth-visible-code", "label-auth-write-only")
+		if response.Code != http.StatusNotFound || !strings.Contains(response.Body.String(), `"code":"not_found"`) {
+			t.Fatalf("expected redacted not-found without asset read permission, got %d: %s", response.Code, response.Body.String())
+		}
+		assertNoLabelFields(response)
+
+		templatesRequest := authenticatedRequest(http.MethodGet, "/api/v1/asset-label-templates", nil, writeOnly)
+		templatesResponse := httptest.NewRecorder()
+		handler.ServeHTTP(templatesResponse, templatesRequest)
+		if templatesResponse.Code != http.StatusForbidden || !strings.Contains(templatesResponse.Body.String(), `"code":"permission_denied"`) {
+			t.Fatalf("expected template listing to require asset read permission, got %d: %s", templatesResponse.Code, templatesResponse.Body.String())
+		}
+	})
+
+	t.Run("read-only principal cannot generate labels", func(t *testing.T) {
+		response := requestBatch(readOnly, "label-auth-visible-code", "label-auth-read-only")
+		if response.Code != http.StatusForbidden || !strings.Contains(response.Body.String(), `"code":"permission_denied"`) {
+			t.Fatalf("expected label generation to require asset write permission, got %d: %s", response.Code, response.Body.String())
+		}
+		assertNoLabelFields(response)
+	})
+
+	t.Run("resource-scoped read and write exposes only the granted asset", func(t *testing.T) {
+		templatesRequest := authenticatedRequest(http.MethodGet, "/api/v1/asset-label-templates", nil, scopedReadWrite)
+		templatesResponse := httptest.NewRecorder()
+		handler.ServeHTTP(templatesResponse, templatesRequest)
+		if templatesResponse.Code != http.StatusOK || !strings.Contains(templatesResponse.Body.String(), `"patternTemplateId":"builtin-atlas-label-code128"`) {
+			t.Fatalf("expected resource-scoped reader to list label templates, got %d: %s", templatesResponse.Code, templatesResponse.Body.String())
+		}
+
+		visible := requestBatch(scopedReadWrite, "label-auth-visible-code", "label-auth-scoped-visible")
+		if visible.Code != http.StatusOK || visible.Header().Get("Content-Type") != "image/svg+xml" ||
+			!strings.Contains(visible.Body.String(), "VIS-AUTH-01") {
+			t.Fatalf("expected resource-scoped label generation for visible asset, got %d: %s", visible.Code, visible.Body.String())
+		}
+		if strings.Contains(visible.Body.String(), "PRIVATE-VISIBLE-SERIAL") {
+			t.Fatalf("printable label leaked a non-template serial number: %s", visible.Body.String())
+		}
+
+		hidden := requestBatch(scopedReadWrite, "label-auth-hidden-code", "label-auth-scoped-hidden")
+		if hidden.Code != http.StatusNotFound || !strings.Contains(hidden.Body.String(), `"code":"not_found"`) {
+			t.Fatalf("expected redacted not-found for asset outside resource scope, got %d: %s", hidden.Code, hidden.Body.String())
+		}
+		assertNoLabelFields(hidden)
+	})
+
+	t.Run("ownership lock blocks an otherwise authorized label", func(t *testing.T) {
+		if _, created, err := guardService.RegisterResourceOwnership(ctx, administratorAuthentication, guard.ResourceOwnershipInput{
+			ResourceType: "asset", ResourceID: "label-auth-visible-asset",
+			SourceSystemID: "external-inventory", SourceRecordID: "external-visible-asset",
+		}); err != nil || !created {
+			t.Fatalf("register ownership lock: created=%t err=%v", created, err)
+		}
+		response := requestBatch(scopedReadWrite, "label-auth-visible-code", "label-auth-ownership-locked")
+		if response.Code != http.StatusLocked || !strings.Contains(response.Body.String(), `"code":"ownership_locked"`) {
+			t.Fatalf("expected ownership lock denial, got %d: %s", response.Code, response.Body.String())
+		}
+		assertNoLabelFields(response)
+	})
+}
+
 func TestAtlasCodesResolveHonorsScopedAssetReadWithoutDisclosingDeniedMatches(t *testing.T) {
 	handler, guardService := newGuardServerWithIdentityAndGuard(t, nil, nil, nil)
 	administrator := bootstrapAdministrator(t, handler)
@@ -1154,6 +1999,199 @@ func TestAtlasCodesResolveHonorsScopedAssetReadWithoutDisclosingDeniedMatches(t 
 			strings.Contains(response.Body.String(), "scoped-hidden-asset") || strings.Contains(response.Body.String(), value) {
 			t.Fatalf("expected uniform redacted not-found for %q, got %d: %s", value, response.Code, response.Body.String())
 		}
+	}
+}
+
+func TestAtlasCodesIdentifierLifecycleHonorsTargetAssetScopes(t *testing.T) {
+	handler, guardService := newGuardServerWithIdentityAndGuard(t, nil, nil, nil)
+	administrator := bootstrapAdministrator(t, handler)
+	visibleSite := createPeopleRecord[people.Site](t, handler, administrator, "/api/v1/sites", map[string]any{
+		"name": "Identifier visible site",
+	})
+	hiddenSite := createPeopleRecord[people.Site](t, handler, administrator, "/api/v1/sites", map[string]any{
+		"name": "Identifier hidden site",
+	})
+	visibleDepartment := createPeopleRecord[people.Department](t, handler, administrator, "/api/v1/departments", map[string]any{
+		"name": "Identifier visible department", "siteId": visibleSite.ID,
+	})
+	hiddenDepartment := createPeopleRecord[people.Department](t, handler, administrator, "/api/v1/departments", map[string]any{
+		"name": "Identifier hidden department", "siteId": hiddenSite.ID,
+	})
+	for _, asset := range []map[string]any{
+		{
+			"id": "identifier-scope-visible", "name": "Visible scoped asset", "kind": "server", "status": "active",
+			"siteId": visibleSite.ID, "departmentId": visibleDepartment.ID,
+		},
+		{
+			"id": "identifier-scope-hidden", "name": "Private hidden asset", "kind": "server", "status": "active",
+			"siteId": hiddenSite.ID, "departmentId": hiddenDepartment.ID,
+		},
+	} {
+		createPeopleRecord[domain.Asset](t, handler, administrator, "/api/v1/assets", asset)
+	}
+	for _, association := range []struct {
+		assetID string
+		id      string
+		value   string
+	}{
+		{assetID: "identifier-scope-visible", id: "identifier-scope-visible-code", value: "VISIBLE-SCOPE-CODE"},
+		{assetID: "identifier-scope-hidden", id: "identifier-scope-hidden-code", value: "PRIVATE-HIDDEN-CODE"},
+	} {
+		payload, _ := json.Marshal(map[string]any{
+			"id": association.id, "symbology": "code128", "value": association.value, "displayValue": association.value,
+		})
+		request := authenticatedRequest(http.MethodPost, "/api/v1/assets/"+association.assetID+"/identifiers", bytes.NewReader(payload), administrator)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusCreated {
+			t.Fatalf("create identifier fixture %s: %d: %s", association.id, response.Code, response.Body.String())
+		}
+	}
+
+	administratorAuthentication, err := guardService.AuthenticateSession(context.Background(), administrator.cookie.Value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	createScopedSession := func(name string, permissions []guard.Permission, kind guard.ScopeKind, resourceID string) testSession {
+		t.Helper()
+		subject := strings.ReplaceAll(strings.ToLower(name), " ", "-")
+		credentials, err := guardService.LoginOIDC(context.Background(), identity.OIDCPrincipal{
+			Issuer: "https://identity.example.test/atlas-code-scopes", Subject: subject,
+			Email: subject + "@example.test", EmailVerified: true, DisplayName: name,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		role, err := guardService.CreateRole(context.Background(), administratorAuthentication, guard.CreateRoleInput{
+			Name: name, Permissions: permissions,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := guardService.AssignRole(context.Background(), administratorAuthentication, guard.RoleAssignmentInput{
+			AccountID: credentials.Authentication.Principal.Subject, RoleID: role.ID, ScopeKind: kind, ResourceID: resourceID,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return testSession{
+			cookie: &http.Cookie{Name: localSessionName, Value: credentials.Token}, csrfToken: credentials.CSRFToken,
+		}
+	}
+	request := func(session testSession, method, path string, payload []byte) *httptest.ResponseRecorder {
+		t.Helper()
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, authenticatedRequest(method, path, bytes.NewReader(payload), session))
+		return response
+	}
+
+	resourceReadWrite := createScopedSession(
+		"Identifier resource reader writer",
+		[]guard.Permission{guard.PermissionAssetsRead, guard.PermissionAssetsWrite},
+		guard.ScopeResource,
+		"identifier-scope-visible",
+	)
+	visibleList := request(resourceReadWrite, http.MethodGet, "/api/v1/assets/identifier-scope-visible/identifiers", nil)
+	if visibleList.Code != http.StatusOK || !strings.Contains(visibleList.Body.String(), "VISIBLE-SCOPE-CODE") {
+		t.Fatalf("expected resource-scoped identifier history, got %d: %s", visibleList.Code, visibleList.Body.String())
+	}
+	hiddenList := request(resourceReadWrite, http.MethodGet, "/api/v1/assets/identifier-scope-hidden/identifiers", nil)
+	if hiddenList.Code != http.StatusNotFound || strings.Contains(hiddenList.Body.String(), "PRIVATE") || strings.Contains(hiddenList.Body.String(), "identifier-scope-hidden") {
+		t.Fatalf("hidden identifier history was not uniformly redacted: %d: %s", hiddenList.Code, hiddenList.Body.String())
+	}
+
+	createPayload, _ := json.Marshal(map[string]any{
+		"id": "identifier-resource-created", "symbology": "code128", "value": "RESOURCE-CREATED-CODE",
+	})
+	created := request(resourceReadWrite, http.MethodPost, "/api/v1/assets/identifier-scope-visible/identifiers", createPayload)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("expected resource-scoped identifier creation, got %d: %s", created.Code, created.Body.String())
+	}
+	replacePayload, _ := json.Marshal(map[string]any{
+		"replacementId": "identifier-resource-replacement", "symbology": "qr", "value": "RESOURCE-REPLACEMENT-CODE", "revision": 1,
+	})
+	replaced := request(resourceReadWrite, http.MethodPost, "/api/v1/assets/identifier-scope-visible/identifiers/identifier-resource-created/replace", replacePayload)
+	if replaced.Code != http.StatusOK || !strings.Contains(replaced.Body.String(), `"changed":true`) {
+		t.Fatalf("expected resource-scoped replacement, got %d: %s", replaced.Code, replaced.Body.String())
+	}
+	deactivatePayload, _ := json.Marshal(map[string]int64{"revision": 1})
+	deactivated := request(resourceReadWrite, http.MethodPost, "/api/v1/assets/identifier-scope-visible/identifiers/identifier-resource-replacement/deactivate", deactivatePayload)
+	if deactivated.Code != http.StatusOK || !strings.Contains(deactivated.Body.String(), `"status":"deactivated"`) {
+		t.Fatalf("expected resource-scoped deactivation, got %d: %s", deactivated.Code, deactivated.Body.String())
+	}
+
+	hiddenCreatePayload, _ := json.Marshal(map[string]any{
+		"id": "identifier-hidden-attempt", "symbology": "code128", "value": "PRIVATE-HIDDEN-ATTEMPT",
+	})
+	hiddenCreate := request(resourceReadWrite, http.MethodPost, "/api/v1/assets/identifier-scope-hidden/identifiers", hiddenCreatePayload)
+	if hiddenCreate.Code != http.StatusNotFound || strings.Contains(hiddenCreate.Body.String(), "PRIVATE") || strings.Contains(hiddenCreate.Body.String(), "identifier-scope-hidden") {
+		t.Fatalf("hidden identifier mutation was not uniformly redacted: %d: %s", hiddenCreate.Code, hiddenCreate.Body.String())
+	}
+
+	readOnly := createScopedSession(
+		"Identifier resource reader",
+		[]guard.Permission{guard.PermissionAssetsRead},
+		guard.ScopeResource,
+		"identifier-scope-visible",
+	)
+	readOnlyCreate := request(readOnly, http.MethodPost, "/api/v1/assets/identifier-scope-visible/identifiers", createPayload)
+	if readOnlyCreate.Code != http.StatusForbidden || !strings.Contains(readOnlyCreate.Body.String(), `"code":"permission_denied"`) || strings.Contains(readOnlyCreate.Body.String(), "RESOURCE-CREATED-CODE") {
+		t.Fatalf("read-only mutation denial was not safe: %d: %s", readOnlyCreate.Code, readOnlyCreate.Body.String())
+	}
+
+	for _, scoped := range []struct {
+		name       string
+		kind       guard.ScopeKind
+		resourceID string
+		identifier string
+	}{
+		{name: "Identifier site reader writer", kind: guard.ScopeSite, resourceID: visibleSite.ID, identifier: "identifier-site-created"},
+		{name: "Identifier department reader writer", kind: guard.ScopeDepartment, resourceID: visibleDepartment.ID, identifier: "identifier-department-created"},
+	} {
+		session := createScopedSession(scoped.name, []guard.Permission{guard.PermissionAssetsRead, guard.PermissionAssetsWrite}, scoped.kind, scoped.resourceID)
+		payload, _ := json.Marshal(map[string]any{
+			"id": scoped.identifier, "symbology": "code128", "value": strings.ToUpper(scoped.identifier),
+		})
+		response := request(session, http.MethodPost, "/api/v1/assets/identifier-scope-visible/identifiers", payload)
+		if response.Code != http.StatusCreated {
+			t.Fatalf("expected %s-scoped identifier creation, got %d: %s", scoped.kind, response.Code, response.Body.String())
+		}
+	}
+}
+
+func TestAtlasCodesResolveRateLimitIsPrincipalScopedAndRedacted(t *testing.T) {
+	handler, guardService := newGuardServerWithIdentityAndGuard(t, nil, nil, nil)
+	administrator := bootstrapAdministrator(t, handler)
+	payload, _ := json.Marshal(map[string]string{"symbology": "code128", "value": "RATE-LIMIT-SECRET"})
+	for attempt := 0; attempt < atlasCodesResolveRequestLimit.Maximum; attempt++ {
+		request := authenticatedRequest(http.MethodPost, "/api/v1/asset-identifiers/resolve", bytes.NewReader(payload), administrator)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusNotFound {
+			t.Fatalf("allowed resolution attempt %d returned %d: %s", attempt+1, response.Code, response.Body.String())
+		}
+	}
+	limitedRequest := authenticatedRequest(http.MethodPost, "/api/v1/asset-identifiers/resolve", bytes.NewReader(payload), administrator)
+	limitedResponse := httptest.NewRecorder()
+	handler.ServeHTTP(limitedResponse, limitedRequest)
+	if limitedResponse.Code != http.StatusTooManyRequests || limitedResponse.Header().Get("Retry-After") != "60" ||
+		!strings.Contains(limitedResponse.Body.String(), `"code":"rate_limited"`) || strings.Contains(limitedResponse.Body.String(), "RATE-LIMIT-SECRET") ||
+		!strings.Contains(limitedResponse.Header().Get("Access-Control-Expose-Headers"), "Retry-After") {
+		t.Fatalf("unexpected rate-limit response %d headers=%#v body=%s", limitedResponse.Code, limitedResponse.Header(), limitedResponse.Body.String())
+	}
+
+	other, err := guardService.LoginOIDC(context.Background(), identity.OIDCPrincipal{
+		Issuer: "https://identity.example.test/atlas-code-rate-limit", Subject: "other-rate-principal",
+		Email: "other-rate-principal@example.test", EmailVerified: true, DisplayName: "Other rate principal",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherSession := testSession{cookie: &http.Cookie{Name: localSessionName, Value: other.Token}, csrfToken: other.CSRFToken}
+	otherRequest := authenticatedRequest(http.MethodPost, "/api/v1/asset-identifiers/resolve", bytes.NewReader(payload), otherSession)
+	otherResponse := httptest.NewRecorder()
+	handler.ServeHTTP(otherResponse, otherRequest)
+	if otherResponse.Code != http.StatusNotFound {
+		t.Fatalf("one principal's limit affected another principal: %d: %s", otherResponse.Code, otherResponse.Body.String())
 	}
 }
 
@@ -1417,13 +2455,16 @@ func TestLoginReturnsSafeServiceUnavailableWhenSharedProtectionFails(t *testing.
 
 func TestCORSAllowsOnlyConfiguredCredentialedOrigin(t *testing.T) {
 	handler := newGuardServer(t)
-	allowed := httptest.NewRequest(http.MethodOptions, "/api/v1/auth/login", nil)
+	allowed := httptest.NewRequest(http.MethodOptions, "/api/v1/asset-label-batches", nil)
 	allowed.Header.Set("Origin", testOrigin)
+	allowed.Header.Set("Access-Control-Request-Method", http.MethodPost)
+	allowed.Header.Set("Access-Control-Request-Headers", "Content-Type, X-CSRF-Token, Idempotency-Key")
 	allowedRes := httptest.NewRecorder()
 	handler.ServeHTTP(allowedRes, allowed)
 	if allowedRes.Code != http.StatusNoContent ||
 		allowedRes.Header().Get("Access-Control-Allow-Origin") != testOrigin ||
-		allowedRes.Header().Get("Access-Control-Allow-Credentials") != "true" {
+		allowedRes.Header().Get("Access-Control-Allow-Credentials") != "true" ||
+		!strings.Contains(allowedRes.Header().Get("Access-Control-Allow-Headers"), "Idempotency-Key") {
 		t.Fatalf("unexpected allowed preflight %d %#v", allowedRes.Code, allowedRes.Header())
 	}
 	denied := httptest.NewRequest(http.MethodOptions, "/api/v1/auth/login", nil)
@@ -1434,6 +2475,259 @@ func TestCORSAllowsOnlyConfiguredCredentialedOrigin(t *testing.T) {
 		deniedRes.Header().Get("Access-Control-Allow-Origin") != "" ||
 		deniedRes.Header().Get("Vary") != "Origin" {
 		t.Fatalf("expected untrusted origin to fail, got %d", deniedRes.Code)
+	}
+}
+
+func TestDirectoryImportHTTPRequiresIntegrationPermissionsCSRFAndNoStore(t *testing.T) {
+	connector := &httpDirectoryConnector{page: directoryexpansion.Page{CompleteSnapshot: true, Records: []directoryexpansion.Record{{
+		SourceRecordID: "employee-1", Kind: directoryexpansion.RecordIdentity, IdentityKind: "person",
+		DisplayName: "Ada Example", Email: "ada@example.test", Status: "active",
+	}}}}
+	handler, _, connector := newGuardServerWithDirectory(t, nil, nil, nil, connector)
+	session := bootstrapAdministrator(t, handler)
+	sourcesRequest := authenticatedRequest(http.MethodGet, "/api/v1/directory-import-sources", nil, session)
+	sourcesResponse := httptest.NewRecorder()
+	handler.ServeHTTP(sourcesResponse, sourcesRequest)
+	if sourcesResponse.Code != http.StatusOK || sourcesResponse.Header().Get("Cache-Control") != "no-store" ||
+		!strings.Contains(sourcesResponse.Body.String(), `"id":"hr-primary"`) ||
+		strings.Contains(strings.ToLower(sourcesResponse.Body.String()), "credential") {
+		t.Fatalf("unexpected safe source discovery %d headers=%#v body=%s", sourcesResponse.Code, sourcesResponse.Header(), sourcesResponse.Body.String())
+	}
+
+	unauthenticated := httptest.NewRequest(http.MethodGet, "/api/v1/directory-imports", nil)
+	unauthenticatedRes := httptest.NewRecorder()
+	handler.ServeHTTP(unauthenticatedRes, unauthenticated)
+	if unauthenticatedRes.Code != http.StatusUnauthorized || unauthenticatedRes.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("expected protected no-store response, got %d %#v", unauthenticatedRes.Code, unauthenticatedRes.Header())
+	}
+
+	missingCSRF := authenticatedRequest(http.MethodPost, "/api/v1/directory-imports/preview", strings.NewReader(`{"sourceSystemId":"hr-primary"}`), session)
+	missingCSRF.Header.Del(csrfHeader)
+	missingCSRF.Header.Set(idempotencyHeader, "http-preview-key-1")
+	missingCSRFRes := httptest.NewRecorder()
+	handler.ServeHTTP(missingCSRFRes, missingCSRF)
+	if missingCSRFRes.Code != http.StatusForbidden || connector.calls != 0 || missingCSRFRes.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("CSRF failure reached connector: %d calls=%d headers=%#v", missingCSRFRes.Code, connector.calls, missingCSRFRes.Header())
+	}
+
+	previewRequest := authenticatedRequest(http.MethodPost, "/api/v1/directory-imports/preview", strings.NewReader(`{"sourceSystemId":"hr-primary"}`), session)
+	previewRequest.Header.Set(idempotencyHeader, "http-preview-key-1")
+	previewRes := httptest.NewRecorder()
+	handler.ServeHTTP(previewRes, previewRequest)
+	if previewRes.Code != http.StatusCreated || previewRes.Header().Get("Cache-Control") != "no-store" || connector.calls != 2 {
+		t.Fatalf("unexpected preview %d headers=%#v body=%s calls=%d", previewRes.Code, previewRes.Header(), previewRes.Body.String(), connector.calls)
+	}
+	var preview directoryexpansion.OperationResult
+	if err := json.Unmarshal(previewRes.Body.Bytes(), &preview); err != nil {
+		t.Fatal(err)
+	}
+	if preview.Batch.ID == "" || preview.Batch.Status != directoryexpansion.BatchPreviewed {
+		t.Fatalf("unexpected preview %#v", preview)
+	}
+
+	applyRequest := authenticatedRequest(http.MethodPost, "/api/v1/directory-imports/"+preview.Batch.ID+"/apply", nil, session)
+	applyRequest.Header.Set(idempotencyHeader, "http-apply-key-001")
+	applyRes := httptest.NewRecorder()
+	handler.ServeHTTP(applyRes, applyRequest)
+	if applyRes.Code != http.StatusOK || applyRes.Header().Get("Cache-Control") != "no-store" || !strings.Contains(applyRes.Body.String(), `"status":"applied"`) {
+		t.Fatalf("unexpected apply %d headers=%#v body=%s", applyRes.Code, applyRes.Header(), applyRes.Body.String())
+	}
+
+	detailRequest := authenticatedRequest(http.MethodGet, "/api/v1/directory-imports/"+preview.Batch.ID, nil, session)
+	detailRes := httptest.NewRecorder()
+	handler.ServeHTTP(detailRes, detailRequest)
+	if detailRes.Code != http.StatusOK || detailRes.Header().Get("Cache-Control") != "no-store" || strings.Contains(detailRes.Body.String(), "http-preview-key") || strings.Contains(detailRes.Body.String(), "account:") {
+		t.Fatalf("unexpected safe detail %d headers=%#v body=%s", detailRes.Code, detailRes.Header(), detailRes.Body.String())
+	}
+}
+
+func TestRelationshipGraphHTTPIntersectsGuardScopesAndValidatesFilters(t *testing.T) {
+	handler, guardService, _ := newGuardServerWithDirectory(t, nil, nil, nil, nil)
+	administrator := bootstrapAdministrator(t, handler)
+	visibleSite := createPeopleRecord[people.Site](t, handler, administrator, "/api/v1/sites", map[string]any{"name": "Visible Campus", "status": "active"})
+	hiddenSite := createPeopleRecord[people.Site](t, handler, administrator, "/api/v1/sites", map[string]any{"name": "Hidden Campus", "status": "active"})
+	visibleDepartment := createPeopleRecord[people.Department](t, handler, administrator, "/api/v1/departments", map[string]any{"name": "Visible Department", "siteId": visibleSite.ID, "status": "active"})
+	hiddenDepartment := createPeopleRecord[people.Department](t, handler, administrator, "/api/v1/departments", map[string]any{"name": "Hidden Department", "siteId": hiddenSite.ID, "status": "active"})
+	createPeopleRecord[people.Identity](t, handler, administrator, "/api/v1/identities", map[string]any{
+		"kind": "person", "displayName": "Visible Person", "email": "visible@example.test", "departmentId": visibleDepartment.ID, "siteId": visibleSite.ID, "status": "active",
+	})
+	createPeopleRecord[people.Identity](t, handler, administrator, "/api/v1/identities", map[string]any{
+		"kind": "person", "displayName": "Hidden Person", "email": "hidden@example.test", "departmentId": hiddenDepartment.ID, "siteId": hiddenSite.ID, "status": "active",
+	})
+	createPeopleRecord[domain.Asset](t, handler, administrator, "/api/v1/assets", map[string]any{
+		"id": "graph-visible-asset", "name": "Visible Asset", "kind": "computer", "siteId": visibleSite.ID, "departmentId": visibleDepartment.ID, "status": "active",
+	})
+	createPeopleRecord[domain.Asset](t, handler, administrator, "/api/v1/assets", map[string]any{
+		"id": "graph-hidden-asset", "name": "Hidden Asset", "kind": "computer", "siteId": hiddenSite.ID, "departmentId": hiddenDepartment.ID, "status": "active",
+	})
+
+	administratorRequest := authenticatedRequest(http.MethodGet, "/api/v1/graph?limit=500", nil, administrator)
+	administratorResponse := httptest.NewRecorder()
+	handler.ServeHTTP(administratorResponse, administratorRequest)
+	if administratorResponse.Code != http.StatusOK || administratorResponse.Header().Get("Cache-Control") != "no-store" ||
+		!strings.Contains(administratorResponse.Body.String(), "Visible Person") || !strings.Contains(administratorResponse.Body.String(), "Hidden Person") ||
+		strings.Contains(administratorResponse.Body.String(), "visible@example.test") {
+		t.Fatalf("unexpected organization relationship graph %d headers=%#v body=%s", administratorResponse.Code, administratorResponse.Header(), administratorResponse.Body.String())
+	}
+
+	ctx := context.Background()
+	administratorAuthentication, err := guardService.AuthenticateSession(ctx, administrator.cookie.Value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	credentials, err := guardService.LoginOIDC(ctx, identity.OIDCPrincipal{
+		Issuer: "https://identity.example.test/graph", Subject: "scoped-graph-reader", Email: "graph-reader@example.test", EmailVerified: true, DisplayName: "Scoped Graph Reader",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	role, err := guardService.CreateRole(ctx, administratorAuthentication, guard.CreateRoleInput{
+		Name: "Scoped graph reader", Permissions: []guard.Permission{guard.PermissionDirectoryRead, guard.PermissionAssetsRead},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := guardService.AssignRole(ctx, administratorAuthentication, guard.RoleAssignmentInput{
+		AccountID: credentials.Authentication.Principal.Subject, RoleID: role.ID, ScopeKind: guard.ScopeSite, ResourceID: visibleSite.ID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	scoped := testSession{cookie: &http.Cookie{Name: localSessionName, Value: credentials.Token}, csrfToken: credentials.CSRFToken}
+	scopedDirectoryRequest := authenticatedRequest(http.MethodGet, "/api/v1/graph?limit=25", nil, scoped)
+	scopedDirectoryResponse := httptest.NewRecorder()
+	handler.ServeHTTP(scopedDirectoryResponse, scopedDirectoryRequest)
+	if scopedDirectoryResponse.Code != http.StatusOK || !strings.Contains(scopedDirectoryResponse.Body.String(), "Visible Person") ||
+		!strings.Contains(scopedDirectoryResponse.Body.String(), visibleSite.ID) || strings.Contains(scopedDirectoryResponse.Body.String(), "Hidden Person") ||
+		strings.Contains(scopedDirectoryResponse.Body.String(), hiddenSite.ID) {
+		t.Fatalf("unfiltered relationship graph escaped directory scope: %d body=%s", scopedDirectoryResponse.Code, scopedDirectoryResponse.Body.String())
+	}
+	scopedRequest := authenticatedRequest(http.MethodGet, "/api/v1/graph?kind=asset&relationship=located_at&limit=25", nil, scoped)
+	scopedResponse := httptest.NewRecorder()
+	handler.ServeHTTP(scopedResponse, scopedRequest)
+	if scopedResponse.Code != http.StatusOK || scopedResponse.Header().Get("Cache-Control") != "no-store" ||
+		!strings.Contains(scopedResponse.Body.String(), "Visible Asset") || !strings.Contains(scopedResponse.Body.String(), `"kind":"located_at"`) ||
+		!strings.Contains(scopedResponse.Body.String(), visibleSite.ID) || strings.Contains(scopedResponse.Body.String(), "Hidden Asset") ||
+		strings.Contains(scopedResponse.Body.String(), "Hidden Person") || strings.Contains(scopedResponse.Body.String(), hiddenSite.ID) {
+		t.Fatalf("relationship graph escaped intersected scopes: %d headers=%#v body=%s", scopedResponse.Code, scopedResponse.Header(), scopedResponse.Body.String())
+	}
+
+	for _, path := range []string{"/api/v1/graph?limit=not-a-number", "/api/v1/graph?kind=unregistered"} {
+		invalidRequest := authenticatedRequest(http.MethodGet, path, nil, administrator)
+		invalidResponse := httptest.NewRecorder()
+		handler.ServeHTTP(invalidResponse, invalidRequest)
+		if invalidResponse.Code != http.StatusBadRequest || invalidResponse.Header().Get("Cache-Control") != "no-store" {
+			t.Fatalf("invalid graph filter %s was not rejected safely: %d headers=%#v body=%s", path, invalidResponse.Code, invalidResponse.Header(), invalidResponse.Body.String())
+		}
+	}
+
+	assetOnlyCredentials, err := guardService.LoginOIDC(ctx, identity.OIDCPrincipal{
+		Issuer: "https://identity.example.test/graph", Subject: "asset-only-reader", Email: "asset-only@example.test", EmailVerified: true, DisplayName: "Asset Only Reader",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assetRole, err := guardService.CreateRole(ctx, administratorAuthentication, guard.CreateRoleInput{Name: "Asset only reader", Permissions: []guard.Permission{guard.PermissionAssetsRead}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := guardService.AssignRole(ctx, administratorAuthentication, guard.RoleAssignmentInput{
+		AccountID: assetOnlyCredentials.Authentication.Principal.Subject, RoleID: assetRole.ID, ScopeKind: guard.ScopeOrganization, ResourceID: "example-org",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	assetOnly := testSession{cookie: &http.Cookie{Name: localSessionName, Value: assetOnlyCredentials.Token}, csrfToken: assetOnlyCredentials.CSRFToken}
+	deniedRequest := authenticatedRequest(http.MethodGet, "/api/v1/graph", nil, assetOnly)
+	deniedResponse := httptest.NewRecorder()
+	handler.ServeHTTP(deniedResponse, deniedRequest)
+	if deniedResponse.Code != http.StatusForbidden || deniedResponse.Header().Get("Cache-Control") != "no-store" || strings.Contains(deniedResponse.Body.String(), "Visible Asset") {
+		t.Fatalf("graph without directory permission did not fail closed: %d headers=%#v body=%s", deniedResponse.Code, deniedResponse.Header(), deniedResponse.Body.String())
+	}
+}
+
+func TestDirectoryImportHTTPRejectsMissingIdempotencyAndUnknownSource(t *testing.T) {
+	handler, _, _ := newGuardServerWithDirectory(t, nil, nil, nil, nil)
+	session := bootstrapAdministrator(t, handler)
+	missingKey := authenticatedRequest(http.MethodPost, "/api/v1/directory-imports/preview", strings.NewReader(`{"sourceSystemId":"hr-primary"}`), session)
+	missingKeyRes := httptest.NewRecorder()
+	handler.ServeHTTP(missingKeyRes, missingKey)
+	if missingKeyRes.Code != http.StatusBadRequest || !strings.Contains(missingKeyRes.Body.String(), "validation_failed") {
+		t.Fatalf("unexpected missing key response %d %s", missingKeyRes.Code, missingKeyRes.Body.String())
+	}
+	unknown := authenticatedRequest(http.MethodPost, "/api/v1/directory-imports/preview", strings.NewReader(`{"sourceSystemId":"hr-primary"}`), session)
+	unknown.Header.Set(idempotencyHeader, "http-preview-key-2")
+	unknownRes := httptest.NewRecorder()
+	handler.ServeHTTP(unknownRes, unknown)
+	if unknownRes.Code != http.StatusNotFound || !strings.Contains(unknownRes.Body.String(), "source_system_not_found") {
+		t.Fatalf("unexpected unknown source response %d %s", unknownRes.Code, unknownRes.Body.String())
+	}
+}
+
+func TestDirectoryImportHTTPRejectsSessionWithoutIntegrationPermission(t *testing.T) {
+	connector := &httpDirectoryConnector{page: directoryexpansion.Page{CompleteSnapshot: true}}
+	handler, guardService, _ := newGuardServerWithDirectory(t, nil, nil, nil, connector)
+	administrator := bootstrapAdministrator(t, handler)
+
+	request := authenticatedRequest(http.MethodGet, "/api/v1/directory-imports", nil, administrator)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("administrator integration permission missing: %d %s", response.Code, response.Body.String())
+	}
+
+	external, err := guardService.LoginOIDC(context.Background(), identity.OIDCPrincipal{
+		Issuer: "https://issuer.example.test", Subject: "directory-reader", Email: "reader@example.test", DisplayName: "Reader",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deniedSession := testSession{cookie: &http.Cookie{Name: localSessionName, Value: external.Token}, csrfToken: external.CSRFToken}
+	denied := authenticatedRequest(http.MethodGet, "/api/v1/directory-imports", nil, deniedSession)
+	deniedRes := httptest.NewRecorder()
+	handler.ServeHTTP(deniedRes, denied)
+	if deniedRes.Code != http.StatusForbidden || !strings.Contains(deniedRes.Body.String(), "permission_denied") {
+		t.Fatalf("expected session without integrations.read to fail, got %d %s", deniedRes.Code, deniedRes.Body.String())
+	}
+	deniedSources := authenticatedRequest(http.MethodGet, "/api/v1/directory-import-sources", nil, deniedSession)
+	deniedSourcesRes := httptest.NewRecorder()
+	handler.ServeHTTP(deniedSourcesRes, deniedSources)
+	if deniedSourcesRes.Code != http.StatusForbidden {
+		t.Fatalf("expected source discovery to enforce integrations.read, got %d", deniedSourcesRes.Code)
+	}
+}
+
+func TestGrouperDirectoryImportHTTPUsesSharedAuthorizationPreviewAndApply(t *testing.T) {
+	connector := &httpDirectoryConnector{system: directoryexpansion.SourceSystem{ID: "grouper-primary", Provider: directoryexpansion.GrouperProvider, ConfigRevision: "v1"},
+		page: directoryexpansion.Page{CompleteSnapshot: true, Records: []directoryexpansion.Record{{
+			SourceRecordID: "group-1", Kind: directoryexpansion.RecordGroup, GroupName: "app:researchers",
+			DisplayName: "Researchers", Status: "active",
+		}}}}
+	handler, _, connector := newGuardServerWithDirectory(t, nil, nil, nil, connector)
+	session := bootstrapAdministrator(t, handler)
+
+	missingCSRF := authenticatedRequest(http.MethodPost, "/api/v1/directory-imports/preview", strings.NewReader(`{"sourceSystemId":"grouper-primary"}`), session)
+	missingCSRF.Header.Del(csrfHeader)
+	missingCSRF.Header.Set(idempotencyHeader, "grouper-http-preview")
+	missingCSRFResponse := httptest.NewRecorder()
+	handler.ServeHTTP(missingCSRFResponse, missingCSRF)
+	if missingCSRFResponse.Code != http.StatusForbidden || connector.calls != 0 {
+		t.Fatalf("unauthorized Grouper preview reached source: %d calls=%d", missingCSRFResponse.Code, connector.calls)
+	}
+
+	previewRequest := authenticatedRequest(http.MethodPost, "/api/v1/directory-imports/preview", strings.NewReader(`{"sourceSystemId":"grouper-primary"}`), session)
+	previewRequest.Header.Set(idempotencyHeader, "grouper-http-preview")
+	previewResponse := httptest.NewRecorder()
+	handler.ServeHTTP(previewResponse, previewRequest)
+	var preview directoryexpansion.OperationResult
+	if previewResponse.Code != http.StatusCreated || json.Unmarshal(previewResponse.Body.Bytes(), &preview) != nil ||
+		preview.Batch.Provider != directoryexpansion.GrouperProvider || preview.Batch.Counts.Created != 1 {
+		t.Fatalf("unexpected Grouper preview %d %s", previewResponse.Code, previewResponse.Body.String())
+	}
+	applyRequest := authenticatedRequest(http.MethodPost, "/api/v1/directory-imports/"+preview.Batch.ID+"/apply", nil, session)
+	applyRequest.Header.Set(idempotencyHeader, "grouper-http-apply-1")
+	applyResponse := httptest.NewRecorder()
+	handler.ServeHTTP(applyResponse, applyRequest)
+	if applyResponse.Code != http.StatusOK || !strings.Contains(applyResponse.Body.String(), `"status":"applied"`) {
+		t.Fatalf("unexpected Grouper apply %d %s", applyResponse.Code, applyResponse.Body.String())
 	}
 }
 
@@ -1455,6 +2749,11 @@ func newGuardServerWithIdentity(t *testing.T, limiter guard.AttemptLimiter, oidc
 }
 
 func newGuardServerWithIdentityAndGuard(t *testing.T, limiter guard.AttemptLimiter, oidcFlow *identity.OIDCFlow, samlFlow *identity.SAMLFlow) (http.Handler, *guard.Service) {
+	handler, service, _ := newGuardServerWithDirectory(t, limiter, oidcFlow, samlFlow, nil)
+	return handler, service
+}
+
+func newGuardServerWithDirectory(t *testing.T, limiter guard.AttemptLimiter, oidcFlow *identity.OIDCFlow, samlFlow *identity.SAMLFlow, connector directoryexpansion.Connector) (http.Handler, *guard.Service, *httpDirectoryConnector) {
 	t.Helper()
 	organization, err := bootstrap.NewOrganization("example-org", "Example Organization")
 	if err != nil {
@@ -1481,9 +2780,42 @@ func newGuardServerWithIdentityAndGuard(t *testing.T, limiter guard.AttemptLimit
 	if err != nil {
 		t.Fatal(err)
 	}
-	peopleService, err := people.NewService(repository.NewMemoryPeopleStore(), atlasService, foundation.NopAuditor{}, people.ServiceConfig{
+	peopleStore := repository.NewMemoryPeopleStore()
+	peopleService, err := people.NewService(peopleStore, atlasService, foundation.NopAuditor{}, people.ServiceConfig{
 		OrganizationID: organization.ID,
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry, err := directoryexpansion.NewRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var concreteConnector *httpDirectoryConnector
+	if connector != nil {
+		if err := registry.Register(connector); err != nil {
+			t.Fatal(err)
+		}
+		concreteConnector, _ = connector.(*httpDirectoryConnector)
+	}
+	directoryTarget, err := directoryexpansion.NewPeopleTarget(peopleStore, service, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directoryStore := repository.NewMemoryDirectoryImportStore()
+	groupTarget, err := directoryexpansion.NewGroupTarget(directoryStore, service, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	combinedTarget, err := directoryexpansion.NewDirectoryTarget(directoryTarget, groupTarget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directoryService, err := directoryexpansion.NewService(directoryStore, combinedTarget, foundation.NopAuditor{}, registry, directoryexpansion.ServiceConfig{OrganizationID: organization.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	directoryGraph, err := directoryexpansion.NewRelationshipGraphStore(directoryStore, peopleStore, atlasService, organization)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1505,23 +2837,95 @@ func newGuardServerWithIdentityAndGuard(t *testing.T, limiter guard.AttemptLimit
 	if err != nil {
 		t.Fatal(err)
 	}
+	stackService, stackImporter, err := stack.NewServiceWithExchangeImporter(repository.NewMemoryStackStore(), allowHTTPStackReferences{}, foundation.NopAuditor{}, stack.ServiceConfig{
+		OrganizationID: organization.ID,
+		Now: func() time.Time {
+			return time.Date(2026, time.August, 13, 0, 0, 0, 0, time.UTC)
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	horizonService, err := horizon.NewService(repository.NewMemoryHorizonStore(), atlasService, ledgerService, threadsService, foundation.NopAuditor{}, horizon.ServiceConfig{OrganizationID: organization.ID})
 	if err != nil {
 		t.Fatal(err)
 	}
+	patternsService, err := patterns.NewService(repository.NewMemoryPatternsStore(), foundation.NopAuditor{}, patterns.ServiceConfig{OrganizationID: organization.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reachEndpoints, err := reach.NewEndpointCatalog([]reach.Endpoint{{ID: "hook-primary", Label: "Operations hook", Kind: reach.ProviderWebhook, URL: "https://hooks.example.test/reach"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reachStore := repository.NewMemoryReachStore()
+	signalTargets, err := reach.NewSubscriptionTargetCatalog(reachStore, reachEndpoints)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signalsService, err := signals.NewService(repository.NewMemorySignalsStore(), httpSignalsEvaluator{}, foundation.NopAuditor{}, signals.ServiceConfig{
+		OrganizationID:      organization.ID,
+		SubscriptionTargets: signalTargets,
+		Now:                 func() time.Time { return time.Date(2026, time.August, 13, 12, 0, 0, 0, time.UTC) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reachTransports, err := reach.NewTransportRegistry(map[reach.ProviderKind]reach.Transport{reach.ProviderWebhook: httpReachTransport{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reachService, err := reach.NewService(reachStore, reachEndpoints, reachTransports, httpReachSecrets{}, signalsService, foundation.NopAuditor{}, reach.ServiceConfig{
+		OrganizationID: organization.ID,
+		Now:            func() time.Time { return time.Date(2026, time.August, 13, 12, 0, 0, 0, time.UTC) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	atlasLabelsService, err := atlascodes.NewLabelService(atlasCodesService, atlasService, patternsService, atlascodes.DefaultLabelRenderers(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stackExchangeProvider, err := exchange.NewStackProvider(stackService, stackImporter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vaultExchangeProvider, err := exchange.NewVaultProvider(vaultService)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exchangeService, err := exchange.NewService(repository.NewMemoryExchangeStore(), foundation.NopAuditor{}, service, exchange.ServiceConfig{
+		OrganizationID: organization.ID,
+		SourceSystemID: "http-test-system",
+		Schemas:        patternsService,
+		Now: func() time.Time {
+			return time.Date(2026, time.August, 13, 0, 0, 0, 0, time.UTC)
+		},
+	}, stackExchangeProvider, vaultExchangeProvider)
+	if err != nil {
+		t.Fatal(err)
+	}
 	handler := NewServer(Dependencies{
-		Atlas:      atlasService,
-		AtlasCodes: atlasCodesService,
-		People:     peopleService,
-		Threads:    threadsService,
-		Vault:      vaultService,
-		Ledger:     ledgerService,
-		Horizon:    horizonService,
-		Guard:      service,
-		OIDC:       oidcFlow,
-		SAML:       samlFlow,
+		Atlas:            atlasService,
+		AtlasCodes:       atlasCodesService,
+		AtlasLabels:      atlasLabelsService,
+		People:           peopleService,
+		DirectoryImports: directoryService,
+		Graph:            directoryGraph,
+		Threads:          threadsService,
+		Vault:            vaultService,
+		Ledger:           ledgerService,
+		Stack:            stackService,
+		Horizon:          horizonService,
+		Patterns:         patternsService,
+		Signals:          signalsService,
+		Exchange:         exchangeService,
+		Reach:            reachService,
+		Guard:            service,
+		OIDC:             oidcFlow,
+		SAML:             samlFlow,
 	}, testOrigin, organization)
-	return handler, service
+	return handler, service, concreteConnector
 }
 
 func findCookie(t *testing.T, cookies []*http.Cookie, name string) *http.Cookie {
@@ -1592,4 +2996,13 @@ func authenticatedRequest(method, path string, body io.Reader, session testSessi
 		req.Header.Set(csrfHeader, session.csrfToken)
 	}
 	return req
+}
+
+func TestSignalsOwnershipLockUsesLockedResponse(t *testing.T) {
+	request := httptest.NewRequest(http.MethodPut, "/api/v1/signals/rules/imported-rule", nil)
+	response := httptest.NewRecorder()
+	writeSignalsError(response, request, guard.ErrResourceWriteLocked)
+	if response.Code != http.StatusLocked || !strings.Contains(response.Body.String(), `"code":"ownership_locked"`) {
+		t.Fatalf("unexpected Signals ownership response %d: %s", response.Code, response.Body.String())
+	}
 }

@@ -13,16 +13,18 @@ import (
 	"unicode/utf8"
 
 	"github.com/maxlemke/stewardmesh/internal/foundation"
+	"github.com/maxlemke/stewardmesh/internal/portabletime"
 )
 
 const defaultSearchLimit = 50
 const maximumSearchLimit = 100
 
 var (
-	providerPattern    = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
-	recordIDPattern    = regexp.MustCompile(`^[a-f0-9]{32}$`)
-	assetIDPattern     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
-	countryCodePattern = regexp.MustCompile(`^[A-Za-z]{2}$`)
+	providerPattern        = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
+	recordIDPattern        = regexp.MustCompile(`^[a-f0-9]{32}$`)
+	assetIDPattern         = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
+	countryCodePattern     = regexp.MustCompile(`^[A-Za-z]{2}$`)
+	maximumPortableInstant = time.Date(9999, time.December, 31, 23, 59, 59, 999999000, time.UTC)
 )
 
 type ServiceConfig struct {
@@ -33,29 +35,106 @@ type ServiceConfig struct {
 type Service struct {
 	store          Store
 	assets         AssetReader
+	writes         WriteGate
 	auditor        foundation.Auditor
 	organizationID string
 	now            func() time.Time
 }
 
+type exchangeImporter struct{ service *Service }
+
+func (*exchangeImporter) peopleExchangeImporter() {}
+
 func NewService(store Store, assets AssetReader, auditor foundation.Auditor, configuration ServiceConfig) (*Service, error) {
+	service, _, err := NewServiceWithExchangeImporter(store, assets, nil, auditor, configuration)
+	return service, err
+}
+
+func NewServiceWithExchangeImporter(store Store, assets AssetReader, writes WriteGate, auditor foundation.Auditor, configuration ServiceConfig) (*Service, ExchangeImporter, error) {
 	if store == nil || assets == nil || auditor == nil {
-		return nil, errors.New("people store, asset reader, and auditor are required")
+		return nil, nil, errors.New("people store, asset reader, and auditor are required")
 	}
 	configuration.OrganizationID = strings.TrimSpace(configuration.OrganizationID)
 	if configuration.OrganizationID == "" {
-		return nil, errors.New("people organization id is required")
+		return nil, nil, errors.New("people organization id is required")
 	}
-	if configuration.Now == nil {
-		configuration.Now = func() time.Time { return time.Now().UTC() }
+	clock := configuration.Now
+	if clock == nil {
+		clock = time.Now
 	}
-	return &Service{
+	service := &Service{
 		store:          store,
 		assets:         assets,
+		writes:         writes,
 		auditor:        auditor,
 		organizationID: configuration.OrganizationID,
-		now:            configuration.Now,
-	}, nil
+		now:            func() time.Time { return portabletime.Normalize(clock()) },
+	}
+	return service, &exchangeImporter{service: service}, nil
+}
+
+func (s *Service) OwnsExchangeImporter(candidate ExchangeImporter) bool {
+	importer, ok := candidate.(*exchangeImporter)
+	return ok && importer != nil && importer.service == s
+}
+
+func (s *Service) ExchangeSnapshot(ctx context.Context, maximum int) (ExchangeSnapshot, error) {
+	return s.store.ExchangeSnapshot(ctx, s.organizationID, maximum)
+}
+
+func (s *Service) GetSite(ctx context.Context, id string) (Site, error) {
+	id = strings.TrimSpace(id)
+	if !recordIDPattern.MatchString(id) {
+		return Site{}, ErrInvalidInput
+	}
+	return s.store.GetSite(ctx, s.organizationID, id)
+}
+
+func (s *Service) GetBuilding(ctx context.Context, id string) (Building, error) {
+	id = strings.TrimSpace(id)
+	if !recordIDPattern.MatchString(id) {
+		return Building{}, ErrInvalidInput
+	}
+	return s.store.GetBuilding(ctx, s.organizationID, id)
+}
+
+func (s *Service) GetRoom(ctx context.Context, id string) (Room, error) {
+	id = strings.TrimSpace(id)
+	if !recordIDPattern.MatchString(id) {
+		return Room{}, ErrInvalidInput
+	}
+	return s.store.GetRoom(ctx, s.organizationID, id)
+}
+
+func (s *Service) GetDepartment(ctx context.Context, id string) (Department, error) {
+	id = strings.TrimSpace(id)
+	if !recordIDPattern.MatchString(id) {
+		return Department{}, ErrInvalidInput
+	}
+	return s.store.GetDepartment(ctx, s.organizationID, id)
+}
+
+func (s *Service) GetIdentity(ctx context.Context, id string) (Identity, error) {
+	id = strings.TrimSpace(id)
+	if !recordIDPattern.MatchString(id) {
+		return Identity{}, ErrInvalidInput
+	}
+	return s.store.GetIdentity(ctx, s.organizationID, id)
+}
+
+func (s *Service) GetAssetAssignment(ctx context.Context, id string) (AssetAssignment, error) {
+	id = strings.TrimSpace(id)
+	if !recordIDPattern.MatchString(id) {
+		return AssetAssignment{}, ErrInvalidInput
+	}
+	return s.store.GetAssetAssignment(ctx, s.organizationID, id)
+}
+
+func (s *Service) checkWrite(ctx context.Context, recordType, id string) error {
+	if s.writes == nil {
+		return nil
+	}
+	return s.writes.CheckResourceWrite(ctx, recordType, id)
 }
 
 func (s *Service) CreateSite(ctx context.Context, input CreateSiteInput) (Site, error) {
@@ -71,6 +150,9 @@ func (s *Service) CreateSite(ctx context.Context, input CreateSiteInput) (Site, 
 	id, err := foundation.NewCorrelationID()
 	if err != nil {
 		return Site{}, fmt.Errorf("create site id: %w", err)
+	}
+	if err := s.checkWrite(ctx, "people.site", id); err != nil {
+		return Site{}, err
 	}
 	created, err := s.store.CreateSite(ctx, Site{
 		ID:             id,
@@ -123,6 +205,9 @@ func (s *Service) CreateBuilding(ctx context.Context, input CreateBuildingInput)
 	id, err := foundation.NewCorrelationID()
 	if err != nil {
 		return Building{}, fmt.Errorf("create building id: %w", err)
+	}
+	if err := s.checkWrite(ctx, "people.building", id); err != nil {
+		return Building{}, err
 	}
 	created, err := s.store.CreateBuilding(ctx, Building{
 		ID:             id,
@@ -192,6 +277,9 @@ func (s *Service) CreateRoom(ctx context.Context, input CreateRoomInput) (Room, 
 	if err != nil {
 		return Room{}, fmt.Errorf("create room id: %w", err)
 	}
+	if err := s.checkWrite(ctx, "people.room", id); err != nil {
+		return Room{}, err
+	}
 	created, err := s.store.CreateRoom(ctx, Room{
 		ID:               id,
 		OrganizationID:   s.organizationID,
@@ -253,6 +341,9 @@ func (s *Service) CreateDepartment(ctx context.Context, input CreateDepartmentIn
 	if err != nil {
 		return Department{}, fmt.Errorf("create department id: %w", err)
 	}
+	if err := s.checkWrite(ctx, "people.department", id); err != nil {
+		return Department{}, err
+	}
 	created, err := s.store.CreateDepartment(ctx, Department{
 		ID:             id,
 		OrganizationID: s.organizationID,
@@ -288,6 +379,9 @@ func (s *Service) ListDepartments(ctx context.Context, visibility Visibility) ([
 func (s *Service) CreateIdentity(ctx context.Context, input CreateIdentityInput) (Identity, error) {
 	identity, err := s.prepareIdentity(ctx, input)
 	if err != nil {
+		return Identity{}, err
+	}
+	if err := s.checkWrite(ctx, "people.identity", identity.ID); err != nil {
 		return Identity{}, err
 	}
 	created, err := s.store.CreateIdentity(ctx, identity)
@@ -361,10 +455,13 @@ func (s *Service) CreateAssetAssignment(ctx context.Context, input CreateAssetAs
 	if effectiveFrom.IsZero() {
 		effectiveFrom = s.now()
 	}
-	effectiveFrom = effectiveFrom.UTC()
+	effectiveFrom = portabletime.Normalize(effectiveFrom)
 	id, err := foundation.NewCorrelationID()
 	if err != nil {
 		return AssetAssignment{}, fmt.Errorf("create assignment id: %w", err)
+	}
+	if err := s.checkWrite(ctx, "people.assignment", id); err != nil {
+		return AssetAssignment{}, err
 	}
 	actorID := actorFromContext(ctx)
 	assignment := AssetAssignment{
@@ -398,11 +495,33 @@ func (s *Service) EndAssetAssignment(ctx context.Context, input EndAssetAssignme
 	if !assetIDPattern.MatchString(assetID) || !recordIDPattern.MatchString(assignmentID) {
 		return AssetAssignment{}, ErrInvalidInput
 	}
+	assignment, err := s.store.GetAssetAssignment(ctx, s.organizationID, assignmentID)
+	if err != nil {
+		return AssetAssignment{}, err
+	}
+	if assignment.AssetID != assetID {
+		return AssetAssignment{}, ErrNotFound
+	}
+	if err := s.checkWrite(ctx, "people.assignment", assignmentID); err != nil {
+		return AssetAssignment{}, err
+	}
 	effectiveTo := input.EffectiveTo
+	defaultedEffectiveTo := effectiveTo.IsZero()
 	if effectiveTo.IsZero() {
 		effectiveTo = s.now()
 	}
-	ended, err := s.store.EndAssetAssignment(ctx, s.organizationID, assetID, assignmentID, effectiveTo.UTC())
+	effectiveTo = portabletime.Normalize(effectiveTo)
+	if defaultedEffectiveTo && !effectiveTo.After(assignment.EffectiveFrom) {
+		effectiveFrom := portabletime.Normalize(assignment.EffectiveFrom)
+		if !effectiveFrom.Before(maximumPortableInstant) {
+			return AssetAssignment{}, ErrConflict
+		}
+		effectiveTo = effectiveFrom.Add(time.Microsecond)
+	}
+	if effectiveTo.Year() > 9999 {
+		return AssetAssignment{}, ErrConflict
+	}
+	ended, err := s.store.EndAssetAssignment(ctx, s.organizationID, assetID, assignmentID, effectiveTo)
 	if err != nil {
 		return AssetAssignment{}, err
 	}

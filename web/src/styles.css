@@ -13,7 +13,7 @@
   --color-steward-ink-800: #12314c;
   --color-steward-mist: #f7fafc;
   --color-steward-mist-muted: #dce6ef;
-  --color-steward-slate: #6e8294;
+  --color-steward-slate: #90a4b5;
 
   --color-steward-success: #168c4b;
   --color-steward-warning: #c57900;
@@ -93,5 +93,41 @@ option {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    transition-delay: 0ms !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
+
+.atlas-label-print-sheet {
+  display: none;
+}
+
+@media print {
+  body > *:not(.atlas-label-print-sheet) {
+    display: none !important;
+  }
+
+  body > .atlas-label-print-sheet {
+    display: block !important;
+    position: absolute;
+    inset: 0 auto auto 0;
+    margin: 0;
+    padding: 0;
+  }
+
+  .atlas-label-print-sheet img {
+    display: block;
+    width: auto;
+    max-width: none;
+    height: auto;
+    background: #fff;
+  }
+
+  @page {
+    margin: 0;
+  }
 }

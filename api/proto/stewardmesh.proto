@@ -1,14 +1,44 @@
+// Requirement: REQ-DIRECTORY-EXPANSION-009. Feature: experience.help.
 syntax = "proto3";
 
 package stewardmesh.v1;
 
 import "google/protobuf/timestamp.proto";
+import "google/protobuf/struct.proto";
 
 option go_package = "github.com/maxlemke/stewardmesh/api/proto;stewardmeshv1";
 
 // Requirement: REQ-FOUNDATION-001.
 service FoundationService {
   rpc GetOrganization(GetOrganizationRequest) returns (Organization);
+}
+
+// Provider-neutral Bridge administration parity for REST client and grant
+// operations. Browser OAuth redirects, token exchange, MCP Streamable HTTP,
+// and local stdio remain transport-specific and are intentionally not exposed
+// as gRPC RPCs. Requirements: REQ-API-001, SEC-MCP-001.
+// Feature: integrations.protocols. GitHub: #14.
+service BridgeService {
+  rpc ListClients(ListBridgeClientsRequest) returns (ListBridgeClientsResponse);
+  rpc CreateClient(CreateBridgeClientRequest) returns (BridgeClient);
+  rpc RevokeClient(RevokeBridgeClientRequest) returns (BridgeClient);
+  rpc ListGrants(ListBridgeGrantsRequest) returns (ListBridgeGrantsResponse);
+  rpc RevokeGrant(RevokeBridgeGrantRequest) returns (BridgeGrant);
+}
+
+// Versioned record templates and provider-neutral typed validation.
+// Requirement: REQ-PATTERNS-001. Feature: templates.schemas.
+// The schema and validation messages are the stable Exchange seam; Exchange
+// can validate package rows without coupling to the REST or PostgreSQL layers.
+service PatternsService {
+  rpc ListTemplates(ListPatternsTemplatesRequest) returns (ListPatternsTemplatesResponse);
+  rpc CreateTemplate(CreatePatternsTemplateRequest) returns (PatternsTemplate);
+  rpc GetTemplate(GetPatternsTemplateRequest) returns (PatternsTemplate);
+  rpc GetTemplateSchema(GetPatternsTemplateSchemaRequest) returns (PatternsTemplate);
+  rpc CopyTemplate(CopyPatternsTemplateRequest) returns (PatternsTemplate);
+  rpc CreateTemplateVersion(CreatePatternsTemplateVersionRequest) returns (PatternsTemplate);
+  rpc ValidateRecord(ValidatePatternsRecordRequest) returns (PatternsValidationResult);
+  rpc ExportCSVTemplate(ExportPatternsCSVTemplateRequest) returns (ExportPatternsCSVTemplateResponse);
 }
 
 // Guard authentication contract. OpenID Connect authorization-code redirects
@@ -33,12 +63,12 @@ service GuardService {
 // Authenticated Guard RPCs carry the opaque session bearer in gRPC
 // authorization metadata. The bearer is never repeated in request bodies.
 
-// Requirements: REQ-ATLAS-001, REQ-ATLAS-CODES-001.
-// Features: inventory.assets, inventory.models, inventory.identifiers.
 // Requirements: REQ-ATLAS-001, REQ-ATLAS-MODELS-001, REQ-ATLAS-CODES-001.
+// Features: inventory.assets, inventory.models, inventory.identifiers.
 service AssetService {
   rpc ListAssetModels(ListAssetModelsRequest) returns (ListAssetModelsResponse);
   rpc GetAssetModel(GetAssetModelRequest) returns (AssetModel);
+  rpc GetAssetModelInventory(GetAssetModelInventoryRequest) returns (AssetModelInventory);
   rpc ResolveAssetModel(ResolveAssetModelRequest) returns (AssetModel);
   rpc CreateAssetModel(CreateAssetModelRequest) returns (AssetModel);
   rpc UpdateAssetModel(UpdateAssetModelRequest) returns (AssetModel);
@@ -56,6 +86,11 @@ service AssetService {
   rpc CreateAssetIdentifier(CreateAssetIdentifierRequest) returns (CreateAssetIdentifierResponse);
   rpc ReplaceAssetIdentifier(ReplaceAssetIdentifierRequest) returns (ReplaceAssetIdentifierResponse);
   rpc DeactivateAssetIdentifier(DeactivateAssetIdentifierRequest) returns (DeactivateAssetIdentifierResponse);
+  rpc ListAssetLabelTemplates(ListAssetLabelTemplatesRequest) returns (ListAssetLabelTemplatesResponse);
+  // GenerateAssetLabelBatch is read-only against identifier associations.
+  // gRPC cancellation stops generation; output bytes are delivered to an
+  // operator-controlled browser/OS or device workflow, never a selected printer.
+  rpc GenerateAssetLabelBatch(GenerateAssetLabelBatchRequest) returns (AssetLabelArtifact);
 }
 
 // People directory and effective-dated asset assignments.
@@ -77,6 +112,32 @@ service PeopleService {
   rpc ListAssetAssignments(ListAssetAssignmentsRequest) returns (ListAssetAssignmentsResponse);
   rpc CreateAssetAssignment(CreateAssetAssignmentRequest) returns (AssetAssignment);
   rpc EndAssetAssignment(EndAssetAssignmentRequest) returns (AssetAssignment);
+}
+
+// Bounded read-only projection of visible organization records.
+// Requirement: REQ-DIRECTORY-EXPANSION-008. Feature: threads.relationships.
+// Directory and asset visibility are derived from authenticated Guard grants;
+// request messages deliberately contain no organization or visibility scope.
+service RelationshipGraphService {
+  rpc GetRelationshipGraph(GetRelationshipGraphRequest) returns (RelationshipGraph);
+}
+
+// Durable provider-neutral preview, apply, reconciliation, and retry.
+// Requirements: REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005, REQ-DIRECTORY-EXPANSION-006.
+// Features: integrations.protocols, identity.directory.
+// Every RPC is organization-scoped. List/Get require integrations.read;
+// Preview/Apply/Retry require integrations.write. Transport adapters map the
+// idempotency key to the REST Idempotency-Key header or equivalent gRPC input.
+// Preview persists a complete immutable plan but never mutates directory data;
+// apply and action retry consume only that plan. A transient connector failure
+// before plan creation may retry the same failed batch with its pinned config.
+service DirectoryImportService {
+  rpc ListDirectoryImportSources(ListDirectoryImportSourcesRequest) returns (ListDirectoryImportSourcesResponse);
+  rpc ListDirectoryImports(ListDirectoryImportsRequest) returns (ListDirectoryImportsResponse);
+  rpc GetDirectoryImport(GetDirectoryImportRequest) returns (DirectoryImportBatchDetail);
+  rpc PreviewDirectoryImport(PreviewDirectoryImportRequest) returns (DirectoryImportOperationResult);
+  rpc ApplyDirectoryImport(ApplyDirectoryImportRequest) returns (DirectoryImportOperationResult);
+  rpc RetryDirectoryImport(RetryDirectoryImportRequest) returns (DirectoryImportOperationResult);
 }
 
 // Organization-scoped tag and goal hierarchies with explicit inheritance
@@ -135,6 +196,91 @@ service LedgerService {
   rpc ExportCSV(ExportLedgerCSVRequest) returns (ExportLedgerCSVResponse);
 }
 
+// Organization-scoped software inventory, entitlements, and compliance.
+// Requirement: REQ-STACK-001. Feature: software.licenses.
+service StackService {
+  rpc GetSnapshot(GetStackSnapshotRequest) returns (StackSnapshot);
+  rpc GetAnalytics(GetStackAnalyticsRequest) returns (StackAnalytics);
+  rpc CreateProduct(CreateStackProductRequest) returns (StackProduct);
+  rpc UpdateProductStatus(UpdateStackProductStatusRequest) returns (StackProduct);
+  rpc CreateVersion(CreateStackVersionRequest) returns (StackVersion);
+  rpc UpdateVersionStatus(UpdateStackVersionStatusRequest) returns (StackVersion);
+  rpc RecordInstallation(RecordStackInstallationRequest) returns (StackInstallation);
+  rpc UpdateInstallationState(UpdateStackInstallationStateRequest) returns (StackInstallation);
+  rpc CreateLicense(CreateStackLicenseRequest) returns (StackLicense);
+  rpc UpdateLicenseEntitlement(UpdateStackLicenseEntitlementRequest) returns (StackLicense);
+  rpc CreateAssignment(CreateStackAssignmentRequest) returns (StackAssignment);
+  rpc UpdateAssignmentUsage(UpdateStackAssignmentUsageRequest) returns (StackAssignment);
+  rpc EndAssignment(EndStackAssignmentRequest) returns (StackAssignment);
+  rpc ExportRecords(ExportStackRecordsRequest) returns (ExportStackRecordsResponse);
+  rpc ImportRecords(ImportStackRecordsRequest) returns (StackImportResult);
+}
+
+// Durable, deduplicated operational and financial alerts with a provider-
+// neutral Reach delivery handoff. Requirement: REQ-SIGNALS-001.
+// Feature: alerts.rules. Every read requires signals.read; rule, evaluation,
+// acknowledgment, assignment, subscription, and delivery changes require
+// signals.write. Subscriber values are configured IDs, never URLs or secrets.
+service SignalsService {
+  rpc ListRules(ListSignalRulesRequest) returns (ListSignalRulesResponse);
+  rpc CreateRule(CreateSignalRuleRequest) returns (SignalRule);
+  rpc UpdateRule(UpdateSignalRuleRequest) returns (SignalRule);
+  rpc ListAlerts(ListSignalAlertsRequest) returns (ListSignalAlertsResponse);
+  rpc ListAlertHistory(ListSignalAlertHistoryRequest) returns (ListSignalAlertHistoryResponse);
+  rpc Evaluate(EvaluateSignalsRequest) returns (SignalEvaluationResult);
+  rpc AcknowledgeAlert(AcknowledgeSignalAlertRequest) returns (SignalAlert);
+  rpc AssignAlert(AssignSignalAlertRequest) returns (SignalAlert);
+  rpc ListSubscriptions(ListSignalSubscriptionsRequest) returns (ListSignalSubscriptionsResponse);
+  rpc ListSubscriptionTargets(ListSignalSubscriptionTargetsRequest) returns (ListSignalSubscriptionTargetsResponse);
+  rpc CreateSubscription(CreateSignalSubscriptionRequest) returns (SignalSubscription);
+  rpc DeleteSubscription(DeleteSignalSubscriptionRequest) returns (DeleteSignalSubscriptionResponse);
+  rpc ListPendingDeliveries(ListPendingSignalDeliveriesRequest) returns (ListPendingSignalDeliveriesResponse);
+  rpc RecordDeliveryAttempt(RecordSignalDeliveryAttemptRequest) returns (SignalDelivery);
+  rpc ExportCSV(ExportSignalsCSVRequest) returns (ExportSignalsCSVResponse);
+}
+
+// Bounded, dependency-aware, provider-neutral migration packages.
+// Requirement: REQ-EXCHANGE-001. Feature: migration.packages.
+// Every RPC is scoped to the authenticated Guard organization; organization
+// identity is never accepted from a request body. List RPCs require
+// integrations.read. ExportExchangePackage and ImportExchangePackage require
+// integrations.write. The transport rejects archives larger than 32 MiB and
+// the decoder rejects more than 64 MiB uncompressed. Package metadata and
+// payloads never contain credentials, object-store keys, or signed URLs.
+service ExchangeService {
+  rpc ListExchangeRecords(ListExchangeRecordsRequest) returns (ListExchangeRecordsResponse);
+  rpc ListExchangePackages(ListExchangePackagesRequest) returns (ListExchangePackagesResponse);
+  rpc ExportExchangePackage(ExportExchangePackageRequest) returns (ExchangeExportArtifact);
+  rpc ImportExchangePackage(ImportExchangePackageRequest) returns (ImportExchangePackageResponse);
+}
+
+// Provider-safe messaging configuration, explicit delivery actions, and
+// sanitized history. Requirement: REQ-REACH-001. Feature: messaging.delivery.
+// Reads require messaging.read; mutations, connection tests, sends, retries,
+// secret-reference rotation, and Signals processing require messaging.write.
+// Endpoint locations, provider response bodies, and secret values are never
+// represented by this contract.
+service ReachService {
+  rpc ListEndpoints(ListReachEndpointsRequest) returns (ListReachEndpointsResponse);
+  rpc ListProviders(ListReachProvidersRequest) returns (ListReachProvidersResponse);
+  rpc CreateProvider(CreateReachProviderRequest) returns (ReachProvider);
+  rpc UpdateProvider(UpdateReachProviderRequest) returns (ReachProvider);
+  rpc RotateProviderSecret(RotateReachProviderSecretRequest) returns (ReachProvider);
+  rpc TestProvider(TestReachProviderRequest) returns (ReachProviderTest);
+  rpc ListProviderTests(ListReachProviderTestsRequest) returns (ListReachProviderTestsResponse);
+  rpc ListTemplates(ListReachTemplatesRequest) returns (ListReachTemplatesResponse);
+  rpc CreateTemplate(CreateReachTemplateRequest) returns (ReachTemplate);
+  rpc UpdateTemplate(UpdateReachTemplateRequest) returns (ReachTemplate);
+  rpc ListGroups(ListReachGroupsRequest) returns (ListReachGroupsResponse);
+  rpc CreateGroup(CreateReachGroupRequest) returns (ReachSubscriberGroup);
+  rpc UpdateGroup(UpdateReachGroupRequest) returns (ReachSubscriberGroup);
+  rpc ListMessages(ListReachMessagesRequest) returns (ListReachMessagesResponse);
+  rpc SendMessage(SendReachMessageRequest) returns (ReachMessage);
+  rpc RetryMessage(RetryReachMessageRequest) returns (ReachMessage);
+  rpc ListMessageAttempts(ListReachMessageAttemptsRequest) returns (ListReachMessageAttemptsResponse);
+  rpc ProcessSignals(ProcessReachSignalsRequest) returns (ReachProcessResult);
+}
+
 message GetOrganizationRequest {}
 
 message Organization {
@@ -142,6 +288,170 @@ message Organization {
   string name = 2;
   google.protobuf.Timestamp created_at = 3;
   google.protobuf.Timestamp updated_at = 4;
+}
+
+message ListPatternsTemplatesRequest {
+  // Exact provider-neutral record family; empty returns every family.
+  string record_type = 1;
+  bool include_retired = 2;
+  // Return all immutable versions instead of only the latest per template.
+  bool include_versions = 3;
+}
+
+message ListPatternsTemplatesResponse {
+  repeated PatternsTemplate items = 1;
+}
+
+message GetPatternsTemplateRequest {
+  string template_id = 1;
+  // Zero resolves the latest immutable version; positive values select one.
+  int64 version = 2;
+}
+
+message GetPatternsTemplateSchemaRequest {
+  string template_id = 1;
+  // Zero resolves the latest immutable version; positive values select one.
+  int64 version = 2;
+}
+
+message CreatePatternsTemplateRequest {
+  // Optional stable ID; the service generates one when empty.
+  string id = 1;
+  string record_type = 2;
+  string name = 3;
+  string description = 4;
+  repeated PatternsField fields = 5;
+}
+
+message CopyPatternsTemplateRequest {
+  string source_template_id = 1;
+  // Zero resolves the latest immutable source version.
+  int64 source_version = 2;
+  // Optional stable ID for the newly created custom template.
+  string id = 3;
+  string name = 4;
+  // Empty inherits the source version description.
+  string description = 5;
+}
+
+message CreatePatternsTemplateVersionRequest {
+  string template_id = 1;
+  // Empty inherits the current version description.
+  string description = 2;
+  repeated PatternsField fields = 3;
+}
+
+message ValidatePatternsRecordRequest {
+  string template_id = 1;
+  // Zero resolves the latest immutable version.
+  int64 version = 2;
+  // Provider-neutral JSON values keyed by PatternsField.key. This keeps the
+  // request usable by REST forms and Exchange package ingestion alike.
+  google.protobuf.Struct values = 3;
+  // Reference field keys whose resolved target is missing or not visible.
+  repeated string missing_references = 4;
+  // Missing references can enter holding only when their fields allow it.
+  bool allow_holding_record = 5;
+}
+
+message ExportPatternsCSVTemplateRequest {
+  string template_id = 1;
+  // Zero resolves the latest immutable version.
+  int64 version = 2;
+}
+
+message ExportPatternsCSVTemplateResponse {
+  bytes content = 1;
+  string media_type = 2;
+  string filename = 3;
+  string template_id = 4;
+  int64 version = 5;
+}
+
+message PatternsTemplate {
+  string id = 1;
+  // Empty for code-versioned built-ins; set for organization-owned templates.
+  string organization_id = 2;
+  string record_type = 3;
+  string name = 4;
+  string description = 5;
+  // Immutable schema version used by forms, CSV tooling, and Exchange.
+  int64 version = 6;
+  bool built_in = 7;
+  PatternsTemplateStatus status = 8;
+  repeated PatternsField fields = 9;
+  string created_by = 10;
+  google.protobuf.Timestamp created_at = 11;
+}
+
+message PatternsField {
+  string key = 1;
+  string label = 2;
+  // Concise guidance rendered beside generated controls.
+  string help = 3;
+  PatternsFieldType type = 4;
+  bool required = 5;
+  bool allow_holding = 6;
+  // Target record family for reference and attachment fields.
+  string reference_type = 7;
+  repeated string options = 8;
+  // Presence flags distinguish an omitted bound from an explicit zero bound.
+  double minimum = 9;
+  bool has_minimum = 10;
+  double maximum = 11;
+  bool has_maximum = 12;
+  uint32 maximum_length = 13;
+  string currency_field = 14;
+  // Accessible control name and validation-message prefix.
+  string accessible_label = 15;
+  // Header emitted by the CSV template in field order.
+  string csv_header = 16;
+}
+
+message PatternsFieldError {
+  string field = 1;
+  string code = 2;
+  // Accessible-label-prefixed correction guidance.
+  string message = 3;
+}
+
+message PatternsHoldingReference {
+  string field = 1;
+  string reference_type = 2;
+  // Empty when a required reference value itself was absent.
+  string value = 3;
+}
+
+message PatternsValidationResult {
+  PatternsValidationStatus status = 1;
+  google.protobuf.Struct normalized_values = 2;
+  repeated PatternsFieldError errors = 3;
+  // Non-empty when the record is otherwise valid but needs reconciliation.
+  repeated PatternsHoldingReference holding_references = 4;
+}
+
+enum PatternsFieldType {
+  PATTERNS_FIELD_TYPE_UNSPECIFIED = 0;
+  PATTERNS_FIELD_TYPE_TEXT = 1;
+  PATTERNS_FIELD_TYPE_NUMBER = 2;
+  PATTERNS_FIELD_TYPE_DATE = 3;
+  PATTERNS_FIELD_TYPE_MONEY = 4;
+  PATTERNS_FIELD_TYPE_ENUM = 5;
+  PATTERNS_FIELD_TYPE_ATTACHMENT = 6;
+  PATTERNS_FIELD_TYPE_REFERENCE = 7;
+}
+
+enum PatternsTemplateStatus {
+  PATTERNS_TEMPLATE_STATUS_UNSPECIFIED = 0;
+  PATTERNS_TEMPLATE_STATUS_ACTIVE = 1;
+  PATTERNS_TEMPLATE_STATUS_RETIRED = 2;
+}
+
+enum PatternsValidationStatus {
+  PATTERNS_VALIDATION_STATUS_UNSPECIFIED = 0;
+  PATTERNS_VALIDATION_STATUS_VALID = 1;
+  PATTERNS_VALIDATION_STATUS_HOLDING = 2;
+  PATTERNS_VALIDATION_STATUS_INVALID = 3;
 }
 
 // Requirement: SEC-GUARD-001.
@@ -311,6 +621,7 @@ message ListAssetsRequest {
   string user_id = 6;
   int32 limit = 7;
   string model_id = 8;
+  string deployment_context = 9;
 }
 
 message ListAssetModelsRequest {
@@ -330,6 +641,31 @@ message CreateAssetModelRequest {
 
 message GetAssetModelRequest {
   string model_id = 1;
+}
+
+message GetAssetModelInventoryRequest {
+  string model_id = 1;
+  string status = 2;
+  string site_id = 3;
+  string department_id = 4;
+  string user_id = 5;
+  string deployment_context = 6;
+  string group_by = 7;
+  int32 limit = 8;
+}
+
+message AssetModelInventoryGroup {
+  string key = 1;
+  int32 count = 2;
+}
+
+message AssetModelInventory {
+  string model_id = 1;
+  int32 total_count = 2;
+  int32 filtered_count = 3;
+  string group_by = 4;
+  repeated AssetModelInventoryGroup groups = 5;
+  repeated Asset items = 6;
 }
 
 message ResolveAssetModelRequest {
@@ -440,6 +776,83 @@ message DeactivateAssetIdentifierRequest {
 message DeactivateAssetIdentifierResponse {
   AssetIdentifier identifier = 1;
   bool changed = 2;
+}
+
+message ListAssetLabelTemplatesRequest {}
+
+message ListAssetLabelTemplatesResponse {
+  repeated AssetLabelTemplate items = 1;
+  int32 maximum_batch_size = 2;
+  repeated AssetLabelOutput outputs = 3;
+}
+
+message AssetLabelTemplate {
+  // Exact immutable Patterns template ID. Geometry and symbology come from the
+  // selected schema version's fields and are never parsed from this ID.
+  string id = 1;
+  string pattern_template_id = 2;
+  int64 pattern_version = 3;
+  string name = 4;
+  string description = 5;
+  int64 version = 6;
+  double width_mm = 7;
+  double height_mm = 8;
+  double margin_mm = 9;
+  double quiet_zone_mm = 10;
+  AssetIdentifierSymbology symbology = 11;
+  AssetLabelPayloadSource payload_source = 12;
+  string human_readable_field = 13;
+  repeated string safe_asset_fields = 14;
+  string organization_branding = 15;
+}
+
+enum AssetLabelPayloadSource {
+  ASSET_LABEL_PAYLOAD_SOURCE_UNSPECIFIED = 0;
+  ASSET_LABEL_PAYLOAD_SOURCE_IDENTIFIER_VALUE = 1;
+  ASSET_LABEL_PAYLOAD_SOURCE_ORGANIZATION_ROUTE = 2;
+}
+
+enum AssetLabelOutput {
+  ASSET_LABEL_OUTPUT_UNSPECIFIED = 0;
+  ASSET_LABEL_OUTPUT_SVG = 1;
+  ASSET_LABEL_OUTPUT_PDF = 2;
+  // Device-language output remains an internal qualification seam until a
+  // dated real-device record exists; value 3 must not be reused.
+  reserved 3;
+  reserved "ASSET_LABEL_OUTPUT_ZPL";
+}
+
+message GenerateAssetLabelBatchRequest {
+  // Exact retries reuse this safe stable key within the bounded replay window;
+  // a retained key cannot represent two inputs and an expired replay needs a
+  // new key.
+  string idempotency_key = 1;
+  // Exact ID and immutable version returned by ListAssetLabelTemplates.
+  string template_id = 2;
+  int64 template_version = 3;
+  // One to fifty unique active identifier IDs of one symbology. SVG requires
+  // exactly one and PDF emits one physical page per item. The adapter rechecks
+  // read, write, scope, and ownership for every selected asset before returning
+  // bytes.
+  repeated string identifier_ids = 4;
+  // All rendered human-readable fields are bounded printable ASCII so SVG and
+  // PDF cannot silently substitute different glyphs.
+  AssetLabelOutput output = 5;
+  bool test_print = 6;
+}
+
+message AssetLabelArtifact {
+  string batch_id = 1;
+  AssetLabelTemplate template = 2;
+  AssetLabelOutput output = 3;
+  bool test_print = 4;
+  int32 item_count = 5;
+  string media_type = 6;
+  string file_name = 7;
+  bytes content = 8;
+  string sha256 = 9;
+  google.protobuf.Timestamp created_at = 10;
+  bool idempotent_replay = 11;
 }
 
 message AssetIdentifier {
@@ -671,6 +1084,188 @@ message Room {
   google.protobuf.Timestamp updated_at = 10;
 }
 
+message ListDirectoryImportSourcesRequest {}
+
+message DirectoryImportSource {
+  string id = 1;
+  string provider = 2;
+  // Non-secret revision of the server-owned connector configuration.
+  string config_revision = 3;
+}
+
+message ListDirectoryImportSourcesResponse {
+  repeated DirectoryImportSource items = 1;
+}
+
+message ListDirectoryImportsRequest {
+  // Zero uses the server default; valid explicit values are 1 through 100.
+  uint32 limit = 1;
+  // Opaque cursor from the preceding page.
+  string cursor = 2;
+}
+
+message ListDirectoryImportsResponse {
+  repeated DirectoryImportBatch batches = 1;
+  string next_cursor = 2;
+}
+
+message GetDirectoryImportRequest {
+  string batch_id = 1;
+}
+
+message PreviewDirectoryImportRequest {
+  // Stable identity of a server-configured read-only source. Provider records,
+  // credentials, mappings, and raw payloads are never accepted here. Pulls are
+  // bounded to 100 provider pages and a 5,000-item plan, including historical
+  // mappings considered for deactivation.
+  string source_system_id = 1;
+  // REST maps this value from the required Idempotency-Key header.
+  string idempotency_key = 2;
+}
+
+message ApplyDirectoryImportRequest {
+  string batch_id = 1;
+  // REST maps this value from the required Idempotency-Key header.
+  string idempotency_key = 2;
+}
+
+message RetryDirectoryImportRequest {
+  string batch_id = 1;
+  // REST maps this value from the required Idempotency-Key header.
+  string idempotency_key = 2;
+}
+
+message DirectoryImportCounts {
+  uint32 created = 1;
+  uint32 updated = 2;
+  uint32 unchanged = 3;
+  uint32 deactivated = 4;
+  uint32 conflicts = 5;
+  uint32 failed = 6;
+}
+
+message DirectoryImportRecord {
+  string source_record_id = 1;
+  // identity, group, or membership.
+  string kind = 2;
+  string identity_kind = 3;
+  string display_name = 4;
+  string email = 5;
+  string status = 6;
+  string department = 7;
+  // Provider adapters expose only a bounded allowlisted projection. Raw
+  // Microsoft Graph properties and credentials are never represented.
+  map<string, string> directory_attributes = 8;
+  // Stable direct group source references, sorted and bounded by the server.
+  repeated string group_source_ids = 9;
+  string group_name = 10;
+  string description = 11;
+  string group_source_id = 12;
+  string member_source_id = 13;
+  // subject or group when kind is membership.
+  string member_kind = 14;
+  // Allowlisted normalized string metadata, never raw provider extensions.
+  map<string, string> metadata = 15;
+}
+
+message DirectoryImportItem {
+  string id = 1;
+  uint32 ordinal = 2;
+  // Bounded normalized typed record. Raw provider payloads, arbitrary
+  // attributes, credentials, and internal mapping digests are not represented.
+  DirectoryImportRecord record = 3;
+  string target_id = 4;
+  uint64 expected_revision = 5;
+  DirectoryImportAction action = 6;
+  DirectoryImportOutcome outcome = 7;
+  DirectoryImportFailureClass failure_class = 8;
+  bool retryable = 9;
+  string error = 10;
+  google.protobuf.Timestamp updated_at = 11;
+}
+
+message DirectoryImportAttempt {
+  string id = 1;
+  DirectoryImportOperation operation = 2;
+  uint32 number = 3;
+  DirectoryImportBatchStatus status = 4;
+  DirectoryImportFailureClass failure_class = 5;
+  bool retryable = 6;
+  string error = 7;
+  reserved 8;
+  string correlation_id = 9;
+  google.protobuf.Timestamp started_at = 10;
+  google.protobuf.Timestamp completed_at = 11;
+}
+
+message DirectoryImportBatch {
+  string id = 1;
+  string source_system_id = 2;
+  string provider = 3;
+  string config_revision = 4;
+  DirectoryImportBatchStatus status = 5;
+  // Missing-source deactivations are planned only for a complete snapshot.
+  bool complete_snapshot = 6;
+  DirectoryImportCounts counts = 7;
+  google.protobuf.Timestamp created_at = 8;
+  google.protobuf.Timestamp updated_at = 9;
+  google.protobuf.Timestamp completed_at = 10;
+}
+
+message DirectoryImportBatchDetail {
+  DirectoryImportBatch batch = 1;
+  // Complete mapping-safe plan and append-only attempt history.
+  repeated DirectoryImportItem items = 2;
+  repeated DirectoryImportAttempt attempts = 3;
+}
+
+message DirectoryImportOperationResult {
+  DirectoryImportBatch batch = 1;
+  // True when this exact idempotent operation returned its persisted result.
+  bool replay = 2;
+}
+
+enum DirectoryImportBatchStatus {
+  DIRECTORY_IMPORT_BATCH_STATUS_UNSPECIFIED = 0;
+  DIRECTORY_IMPORT_BATCH_STATUS_PREVIEWED = 1;
+  DIRECTORY_IMPORT_BATCH_STATUS_APPLYING = 2;
+  DIRECTORY_IMPORT_BATCH_STATUS_APPLIED = 3;
+  DIRECTORY_IMPORT_BATCH_STATUS_PARTIALLY_APPLIED = 4;
+  DIRECTORY_IMPORT_BATCH_STATUS_FAILED = 5;
+}
+
+enum DirectoryImportAction {
+  DIRECTORY_IMPORT_ACTION_UNSPECIFIED = 0;
+  DIRECTORY_IMPORT_ACTION_CREATE = 1;
+  DIRECTORY_IMPORT_ACTION_UPDATE = 2;
+  DIRECTORY_IMPORT_ACTION_DEACTIVATE = 3;
+  DIRECTORY_IMPORT_ACTION_UNCHANGED = 4;
+  DIRECTORY_IMPORT_ACTION_CONFLICT = 5;
+}
+
+enum DirectoryImportOutcome {
+  DIRECTORY_IMPORT_OUTCOME_UNSPECIFIED = 0;
+  DIRECTORY_IMPORT_OUTCOME_PENDING = 1;
+  DIRECTORY_IMPORT_OUTCOME_APPLIED = 2;
+  DIRECTORY_IMPORT_OUTCOME_UNCHANGED = 3;
+  DIRECTORY_IMPORT_OUTCOME_CONFLICT = 4;
+  DIRECTORY_IMPORT_OUTCOME_FAILED = 5;
+}
+
+enum DirectoryImportOperation {
+  DIRECTORY_IMPORT_OPERATION_UNSPECIFIED = 0;
+  DIRECTORY_IMPORT_OPERATION_PREVIEW = 1;
+  DIRECTORY_IMPORT_OPERATION_APPLY = 2;
+  DIRECTORY_IMPORT_OPERATION_RETRY = 3;
+}
+
+enum DirectoryImportFailureClass {
+  DIRECTORY_IMPORT_FAILURE_CLASS_UNSPECIFIED = 0;
+  DIRECTORY_IMPORT_FAILURE_CLASS_TRANSIENT = 1;
+  DIRECTORY_IMPORT_FAILURE_CLASS_PERMANENT = 2;
+  DIRECTORY_IMPORT_FAILURE_CLASS_CONFLICT = 3;
+}
+
 message ListDepartmentsRequest {}
 
 message ListDepartmentsResponse {
@@ -732,6 +1327,58 @@ message DirectoryIdentity {
   uint64 revision = 11;
   google.protobuf.Timestamp created_at = 12;
   google.protobuf.Timestamp updated_at = 13;
+}
+
+message GetRelationshipGraphRequest {
+  string search = 1;
+  RelationshipGraphNodeKind kind = 2;
+  RelationshipGraphEdgeKind relationship = 3;
+  uint32 limit = 4;
+}
+
+message RelationshipGraph {
+  repeated RelationshipGraphNode nodes = 1;
+  repeated RelationshipGraphEdge edges = 2;
+}
+
+message RelationshipGraphNode {
+  string id = 1;
+  RelationshipGraphNodeKind kind = 2;
+  string label = 3;
+  map<string, string> attributes = 4;
+}
+
+message RelationshipGraphEdge {
+  string id = 1;
+  string from = 2;
+  string to = 3;
+  RelationshipGraphEdgeKind kind = 4;
+  map<string, string> attributes = 5;
+}
+
+enum RelationshipGraphNodeKind {
+  RELATIONSHIP_GRAPH_NODE_KIND_UNSPECIFIED = 0;
+  RELATIONSHIP_GRAPH_NODE_KIND_ORGANIZATION = 1;
+  RELATIONSHIP_GRAPH_NODE_KIND_SITE = 2;
+  RELATIONSHIP_GRAPH_NODE_KIND_BUILDING = 3;
+  RELATIONSHIP_GRAPH_NODE_KIND_ROOM = 4;
+  RELATIONSHIP_GRAPH_NODE_KIND_DEPARTMENT = 5;
+  RELATIONSHIP_GRAPH_NODE_KIND_PERSON = 6;
+  RELATIONSHIP_GRAPH_NODE_KIND_SHARED = 7;
+  RELATIONSHIP_GRAPH_NODE_KIND_PUBLIC = 8;
+  RELATIONSHIP_GRAPH_NODE_KIND_LAB = 9;
+  RELATIONSHIP_GRAPH_NODE_KIND_GROUP = 10;
+  RELATIONSHIP_GRAPH_NODE_KIND_SUBJECT = 11;
+  RELATIONSHIP_GRAPH_NODE_KIND_ASSET = 12;
+}
+
+enum RelationshipGraphEdgeKind {
+  RELATIONSHIP_GRAPH_EDGE_KIND_UNSPECIFIED = 0;
+  RELATIONSHIP_GRAPH_EDGE_KIND_CONTAINS = 1;
+  RELATIONSHIP_GRAPH_EDGE_KIND_BELONGS_TO = 2;
+  RELATIONSHIP_GRAPH_EDGE_KIND_LOCATED_AT = 3;
+  RELATIONSHIP_GRAPH_EDGE_KIND_MEMBER_OF = 4;
+  RELATIONSHIP_GRAPH_EDGE_KIND_ASSIGNED_TO = 5;
 }
 
 message ListAssetAssignmentsRequest {
@@ -1358,4 +2005,1004 @@ message ExportLedgerCSVResponse {
   bytes content = 1;
   string media_type = 2;
   string filename = 3;
+}
+
+message GetStackSnapshotRequest {}
+
+message StackProduct {
+  string id = 1;
+  string organization_id = 2;
+  string name = 3;
+  string publisher = 4;
+  string category = 5;
+  string status = 6;
+  string source_system_id = 7;
+  string source_record_id = 8;
+  int64 revision = 9;
+  google.protobuf.Timestamp created_at = 10;
+  google.protobuf.Timestamp updated_at = 11;
+}
+
+message CreateStackProductRequest {
+  string id = 1;
+  string name = 2;
+  string publisher = 3;
+  string category = 4;
+  string status = 5;
+  string source_system_id = 6;
+  string source_record_id = 7;
+}
+
+message UpdateStackProductStatusRequest {
+  string product_id = 1;
+  string status = 2;
+  int64 revision = 3;
+}
+
+message StackVersion {
+  string id = 1;
+  string organization_id = 2;
+  string product_id = 3;
+  string name = 4;
+  google.protobuf.Timestamp released_on = 5;
+  string status = 6;
+  string source_system_id = 7;
+  string source_record_id = 8;
+  int64 revision = 9;
+  google.protobuf.Timestamp created_at = 10;
+  google.protobuf.Timestamp updated_at = 11;
+}
+
+message CreateStackVersionRequest {
+  string id = 1;
+  string product_id = 2;
+  string name = 3;
+  google.protobuf.Timestamp released_on = 4;
+  string status = 5;
+  string source_system_id = 6;
+  string source_record_id = 7;
+}
+
+message UpdateStackVersionStatusRequest {
+  string version_id = 1;
+  string status = 2;
+  int64 revision = 3;
+}
+
+message StackInstallation {
+  string id = 1;
+  string organization_id = 2;
+  string version_id = 3;
+  string asset_id = 4;
+  string status = 5;
+  string usage_state = 6;
+  google.protobuf.Timestamp installed_at = 7;
+  google.protobuf.Timestamp last_used_at = 8;
+  google.protobuf.Timestamp removed_at = 9;
+  string source_system_id = 10;
+  string source_record_id = 11;
+  int64 revision = 12;
+  google.protobuf.Timestamp created_at = 13;
+  google.protobuf.Timestamp updated_at = 14;
+}
+
+message RecordStackInstallationRequest {
+  string id = 1;
+  string version_id = 2;
+  string asset_id = 3;
+  string status = 4;
+  string usage_state = 5;
+  google.protobuf.Timestamp installed_at = 6;
+  google.protobuf.Timestamp last_used_at = 7;
+  google.protobuf.Timestamp removed_at = 8;
+  string source_system_id = 9;
+  string source_record_id = 10;
+}
+
+message UpdateStackInstallationStateRequest {
+  string installation_id = 1;
+  string status = 2;
+  string usage_state = 3;
+  google.protobuf.Timestamp last_used_at = 4;
+  google.protobuf.Timestamp removed_at = 5;
+  int64 revision = 6;
+}
+
+message StackLicense {
+  string id = 1;
+  string organization_id = 2;
+  string product_id = 3;
+  string version_id = 4;
+  string name = 5;
+  string entitlement_metric = 6;
+  int64 quantity = 7;
+  string status = 8;
+  google.protobuf.Timestamp starts_on = 9;
+  google.protobuf.Timestamp expires_on = 10;
+  string vendor_id = 11;
+  string purchase_order_id = 12;
+  string contract_id = 13;
+  string cost_record_id = 14;
+  repeated string document_ids = 15;
+  string source_system_id = 16;
+  string source_record_id = 17;
+  int64 revision = 18;
+  google.protobuf.Timestamp created_at = 19;
+  google.protobuf.Timestamp updated_at = 20;
+}
+
+message CreateStackLicenseRequest {
+  string id = 1;
+  string product_id = 2;
+  string version_id = 3;
+  string name = 4;
+  string entitlement_metric = 5;
+  int64 quantity = 6;
+  string status = 7;
+  google.protobuf.Timestamp starts_on = 8;
+  google.protobuf.Timestamp expires_on = 9;
+  string vendor_id = 10;
+  string purchase_order_id = 11;
+  string contract_id = 12;
+  string cost_record_id = 13;
+  repeated string document_ids = 14;
+  string source_system_id = 15;
+  string source_record_id = 16;
+}
+
+message UpdateStackLicenseEntitlementRequest {
+  string license_id = 1;
+  int64 quantity = 2;
+  string status = 3;
+  google.protobuf.Timestamp starts_on = 4;
+  google.protobuf.Timestamp expires_on = 5;
+  int64 revision = 6;
+}
+
+message StackAssignment {
+  string id = 1;
+  string organization_id = 2;
+  string license_id = 3;
+  string assignee_kind = 4;
+  string assignee_id = 5;
+  int64 seats = 6;
+  string usage_state = 7;
+  google.protobuf.Timestamp assigned_at = 8;
+  google.protobuf.Timestamp last_used_at = 9;
+  google.protobuf.Timestamp ended_at = 10;
+  string source_system_id = 11;
+  string source_record_id = 12;
+  int64 revision = 13;
+  google.protobuf.Timestamp created_at = 14;
+  google.protobuf.Timestamp updated_at = 15;
+}
+
+message CreateStackAssignmentRequest {
+  string id = 1;
+  string license_id = 2;
+  string assignee_kind = 3;
+  string assignee_id = 4;
+  int64 seats = 5;
+  string usage_state = 6;
+  google.protobuf.Timestamp assigned_at = 7;
+  google.protobuf.Timestamp last_used_at = 8;
+  string source_system_id = 9;
+  string source_record_id = 10;
+  google.protobuf.Timestamp ended_at = 11;
+}
+
+message UpdateStackAssignmentUsageRequest {
+  string assignment_id = 1;
+  string usage_state = 2;
+  google.protobuf.Timestamp last_used_at = 3;
+  int64 revision = 4;
+}
+
+message EndStackAssignmentRequest {
+  string assignment_id = 1;
+  google.protobuf.Timestamp ended_at = 2;
+  int64 revision = 3;
+}
+
+message StackSnapshot {
+  repeated StackProduct products = 1;
+  repeated StackVersion versions = 2;
+  repeated StackInstallation installations = 3;
+  repeated StackLicense licenses = 4;
+  repeated StackAssignment assignments = 5;
+}
+
+message GetStackAnalyticsRequest {
+  google.protobuf.Timestamp as_of = 1;
+  int64 expiring_within_days = 2;
+}
+
+message StackCondition {
+  string code = 1;
+  string severity = 2;
+  string product_id = 3;
+  string version_id = 4;
+  string license_id = 5;
+  string asset_id = 6;
+  int64 entitled_quantity = 7;
+  int64 assigned_quantity = 8;
+  int64 underused_quantity = 9;
+  int64 days_until_expiry = 10;
+  string human_readable_state = 11;
+}
+
+message StackAnalytics {
+  google.protobuf.Timestamp as_of = 1;
+  int64 expiring_within_days = 2;
+  int32 products = 3;
+  int32 active_installations = 4;
+  int32 active_licenses = 5;
+  int64 entitled_quantity = 6;
+  int64 assigned_quantity = 7;
+  int32 underused_assignments = 8;
+  repeated StackCondition compliance_conditions = 9;
+}
+
+message StackExchangeRecord {
+  string type = 1;
+  string id = 2;
+  int64 revision = 3;
+  repeated string dependencies = 4;
+  google.protobuf.Struct payload = 5;
+  // Optional paired earliest-known provenance. source_system_id is a stable
+  // identifier of at most 128 characters and source_record_id is at most 255.
+  string source_system_id = 6;
+  string source_record_id = 7;
+}
+
+message ExportStackRecordsRequest {}
+
+message ExportStackRecordsResponse {
+  repeated StackExchangeRecord records = 1;
+}
+
+// Legacy schema-less Stack import requests are pinned to the five v1 built-in
+// Stack templates so exact retries remain stable across later schema releases.
+message ImportStackRecordsRequest {
+  string source_system_id = 1;
+  repeated StackExchangeRecord records = 2;
+}
+
+message StackImportResult {
+  int32 created = 1;
+  int32 unchanged = 2;
+  // Deterministic Exchange receipt identity for exact retry/recovery.
+  string package_id = 3;
+  // "processing", "completed", "holding", or "failed".
+  string status = 4;
+  int32 holding = 5;
+  bool replay = 6;
+  string error_code = 7;
+  // Checkpointed outcomes make any committed prefix and ownership lock explicit.
+  repeated ExchangeRecordOutcome records = 8;
+  // Guard locks that exist while the provider outcome still awaits recovery.
+  repeated StackImportOwnership pending_ownership = 9;
+}
+
+message StackImportOwnership {
+  string type = 1;
+  string id = 2;
+  bool write_locked = 3;
+}
+
+message ListSignalRulesRequest {}
+
+message ListSignalRulesResponse {
+  repeated SignalRule items = 1;
+}
+
+message SignalRule {
+  string id = 1;
+  string organization_id = 2;
+  string name = 3;
+  string condition = 4;
+  string severity = 5;
+  bool enabled = 6;
+  repeated int32 threshold_days = 7;
+  string fiscal_period = 8;
+  string scenario = 9;
+  string created_by = 10;
+  int64 revision = 11;
+  google.protobuf.Timestamp created_at = 12;
+  google.protobuf.Timestamp updated_at = 13;
+}
+
+message CreateSignalRuleRequest {
+  string id = 1;
+  string name = 2;
+  // One of over_budget, forecast_over_budget, unpaid, overdue, expiration,
+  // renewal, unused_commitment, or reconciliation.
+  string condition = 3;
+  // One of info, warning, or critical.
+  string severity = 4;
+  // has_enabled distinguishes omission, which defaults true, from false.
+  bool enabled = 5;
+  bool has_enabled = 6;
+  repeated int32 threshold_days = 7;
+  string fiscal_period = 8;
+  string scenario = 9;
+}
+
+message UpdateSignalRuleRequest {
+  string rule_id = 1;
+  string name = 2;
+  string condition = 3;
+  string severity = 4;
+  bool enabled = 5;
+  repeated int32 threshold_days = 6;
+  string fiscal_period = 7;
+  string scenario = 8;
+  int64 revision = 9;
+}
+
+message ListSignalAlertsRequest {
+  string status = 1;
+  string severity = 2;
+  string condition = 3;
+  int32 limit = 4;
+}
+
+message ListSignalAlertsResponse {
+  repeated SignalAlert items = 1;
+}
+
+message SignalAlert {
+  string id = 1;
+  string organization_id = 2;
+  string rule_id = 3;
+  string condition = 4;
+  string severity = 5;
+  string status = 6;
+  string title = 7;
+  string summary = 8;
+  string target_type = 9;
+  string target_id = 10;
+  google.protobuf.Timestamp due_at = 11;
+  int32 threshold_days = 12;
+  string assigned_kind = 13;
+  string assigned_id = 14;
+  string acknowledged_by = 15;
+  google.protobuf.Timestamp acknowledged_at = 16;
+  google.protobuf.Timestamp first_detected_at = 17;
+  google.protobuf.Timestamp last_observed_at = 18;
+  google.protobuf.Timestamp resolved_at = 19;
+  int64 revision = 20;
+}
+
+message ListSignalAlertHistoryRequest {
+  string alert_id = 1;
+}
+
+message ListSignalAlertHistoryResponse {
+  repeated SignalAlertHistory items = 1;
+}
+
+message SignalAlertHistory {
+  string id = 1;
+  string alert_id = 2;
+  string action = 3;
+  string actor_id = 4;
+  google.protobuf.Timestamp occurred_at = 5;
+  int64 revision = 6;
+}
+
+message EvaluateSignalsRequest {
+  // Empty uses the service UTC clock.
+  google.protobuf.Timestamp as_of = 1;
+}
+
+message SignalEvaluationResult {
+  google.protobuf.Timestamp as_of = 1;
+  int32 rules = 2;
+  int32 created = 3;
+  int32 refreshed = 4;
+  int32 resolved = 5;
+}
+
+message AcknowledgeSignalAlertRequest {
+  string alert_id = 1;
+  int64 revision = 2;
+}
+
+message AssignSignalAlertRequest {
+  string alert_id = 1;
+  // One of identity or group.
+  string kind = 2;
+  string target_id = 3;
+  int64 revision = 4;
+}
+
+message ListSignalSubscriptionsRequest {}
+
+message ListSignalSubscriptionsResponse {
+  repeated SignalSubscription items = 1;
+}
+
+message ListSignalSubscriptionTargetsRequest {}
+
+message ListSignalSubscriptionTargetsResponse {
+  repeated SignalSubscriptionTarget items = 1;
+}
+
+message SignalSubscriptionTarget {
+  // One of group or webhook.
+  string target_kind = 1;
+  string target_id = 2;
+  // Safe human label. Routes, credentials, and provider responses are omitted.
+  string label = 3;
+}
+
+message SignalSubscription {
+  string id = 1;
+  string organization_id = 2;
+  string rule_id = 3;
+  // One of group or webhook.
+  string target_kind = 4;
+  // Stable deployment-configured reference, never a URL or credential.
+  string target_id = 5;
+  bool enabled = 6;
+  string created_by = 7;
+  google.protobuf.Timestamp created_at = 8;
+  int64 revision = 9;
+  google.protobuf.Timestamp updated_at = 10;
+}
+
+message CreateSignalSubscriptionRequest {
+  string id = 1;
+  string rule_id = 2;
+  string target_kind = 3;
+  string target_id = 4;
+}
+
+message DeleteSignalSubscriptionRequest {
+  string subscription_id = 1;
+}
+
+message DeleteSignalSubscriptionResponse {
+  bool deleted = 1;
+}
+
+message SignalDelivery {
+  string id = 1;
+  string alert_id = 2;
+  string subscription_id = 3;
+  string target_kind = 4;
+  string target_id = 5;
+  string status = 6;
+  int32 attempts = 7;
+  google.protobuf.Timestamp next_attempt_at = 8;
+  // Sanitized stable code only; provider response bodies are prohibited.
+  string last_error_code = 9;
+  google.protobuf.Timestamp created_at = 10;
+  google.protobuf.Timestamp updated_at = 11;
+}
+
+message ListPendingSignalDeliveriesRequest {
+  google.protobuf.Timestamp as_of = 1;
+  int32 limit = 2;
+}
+
+message ListPendingSignalDeliveriesResponse {
+  repeated SignalDelivery items = 1;
+}
+
+message RecordSignalDeliveryAttemptRequest {
+  string delivery_id = 1;
+  bool succeeded = 2;
+  bool retryable = 3;
+  string error_code = 4;
+}
+
+message ExportSignalsCSVRequest {
+  string status = 1;
+  string severity = 2;
+  string condition = 3;
+  int32 limit = 4;
+}
+
+message ExportSignalsCSVResponse {
+  bytes content = 1;
+  string media_type = 2;
+  string filename = 3;
+}
+
+// Stable provider-neutral identity used for selections and relationships.
+message ExchangeReference {
+  string type = 1;
+  string id = 2;
+}
+
+// Exact immutable Patterns schema pinned for one manifest record family.
+message ExchangeSchemaReference {
+  string record_type = 1;
+  string template_id = 2;
+  int64 template_version = 3;
+}
+
+// Earliest known source identity. Import preserves these values instead of
+// replacing them with a transport filename or an object-store location.
+message ExchangeProvenance {
+  string source_system_id = 1;
+  string source_record_id = 2;
+}
+
+// Ownership state is portable, but operator/account identifiers are not.
+message ExchangeOwnershipMetadata {
+  string state = 1;
+  string source_system_id = 2;
+  string source_record_id = 3;
+  google.protobuf.Timestamp claimed_at = 4;
+}
+
+// File metadata never contains an object key, credential, token, or URL.
+// entry is a fixed package-internal path and is populated only when mode is
+// "include"; each included file is limited to 16 MiB.
+message ExchangeFileMetadata {
+  // "metadata" or "include".
+  string mode = 1;
+  string name = 2;
+  string media_type = 3;
+  int64 size_bytes = 4;
+  string sha256 = 5;
+  string entry = 6;
+}
+
+// Portable record stored in the manifest. A package contains at most 10,000
+// records, each record contains at most 128 dependencies, and a JSON payload is
+// limited to 1 MiB (24 MiB across the package).
+message ExchangeRecord {
+  string type = 1;
+  string id = 2;
+  int64 revision = 3;
+  string checksum = 4;
+  repeated ExchangeReference dependencies = 5;
+  ExchangeProvenance provenance = 6;
+  ExchangeOwnershipMetadata ownership = 7;
+  ExchangeFileMetadata file = 8;
+  google.protobuf.Struct payload = 9;
+  string template_id = 10;
+  int64 template_version = 11;
+}
+
+// Canonical manifest encoded as manifest.json inside the .openinventory ZIP.
+message ExchangeManifest {
+  string schema_version = 1;
+  string package_id = 2;
+  string source_system_id = 3;
+  google.protobuf.Timestamp exported_at = 4;
+  // "metadata" or "include".
+  string file_mode = 5;
+  repeated ExchangeRecord records = 6;
+  // Sorted, unique schema identities used by records in this manifest.
+  repeated ExchangeSchemaReference schemas = 7;
+}
+
+message ExchangeRecordDescriptor {
+  string type = 1;
+  string id = 2;
+  int64 revision = 3;
+  // At most 128 direct relationships.
+  repeated ExchangeReference dependencies = 4;
+  bool has_file = 5;
+  string template_id = 6;
+  int64 template_version = 7;
+}
+
+message ListExchangeRecordsRequest {}
+
+message ListExchangeRecordsResponse {
+  // At most 10,000 provider-neutral records visible to the organization.
+  repeated ExchangeRecordDescriptor items = 1;
+}
+
+message ListExchangePackagesRequest {
+  // Zero uses the server default; otherwise this must be between 1 and 100.
+  int32 limit = 1;
+}
+
+message ListExchangePackagesResponse {
+  // Newest first and never more than 100 package receipts.
+  repeated ExchangePackage items = 1;
+}
+
+message ExportExchangePackageRequest {
+  // Between 1 and 1,000 unique provider-neutral record identities. Dependency
+  // expansion may produce no more than 10,000 records in the final package.
+  repeated ExchangeReference selection = 1;
+  bool include_dependencies = 2;
+  // "metadata" includes portable file metadata only; "include" also embeds
+  // bounded file bytes. Neither mode exports credentials or signed URLs.
+  string file_mode = 3;
+}
+
+message ExchangeExportArtifact {
+  string package_id = 1;
+  string sha256 = 2;
+  // application/vnd.stewardmesh.openinventory+zip, at most 32 MiB.
+  bytes archive = 3;
+}
+
+message ImportExchangePackageRequest {
+  // A complete application/vnd.stewardmesh.openinventory+zip archive, at most
+  // 32 MiB compressed and 64 MiB after bounded decompression.
+  bytes archive = 1;
+}
+
+message ExchangeRecordOutcome {
+  string type = 1;
+  string id = 2;
+  int64 revision = 3;
+  string checksum = 4;
+  // "created", "unchanged", or "holding".
+  string status = 5;
+  // At most 130 entries: the record's 128 relationships plus bounded provider
+  // diagnostics. Holding outcomes remain readable and write-locked.
+  repeated ExchangeReference missing_dependencies = 6;
+  bool write_locked = 7;
+}
+
+// Durable organization-scoped import/export receipt. Imported records remain
+// readable but write-protected until an explicit Guard ownership claim.
+message ExchangePackage {
+  string package_id = 1;
+  // "export" or "import".
+  string direction = 2;
+  string schema_version = 3;
+  string source_system_id = 4;
+  string archive_sha256 = 5;
+  int64 size_bytes = 6;
+  // "metadata" or "include".
+  string file_mode = 7;
+  // "processing", "completed", "holding", or "failed".
+  string status = 8;
+  int32 record_count = 9;
+  int32 file_count = 10;
+  int32 created_count = 11;
+  int32 unchanged_count = 12;
+  int32 holding_count = 13;
+  // At most 10,000 results; processing and failed receipts retain checkpointed
+  // created/unchanged outcomes, while completed/holding receipts are complete.
+  // List history itself is bounded to 100 packages.
+  repeated ExchangeRecordOutcome records = 14;
+  string error_code = 15;
+  google.protobuf.Timestamp created_at = 16;
+  google.protobuf.Timestamp updated_at = 17;
+}
+
+message ImportExchangePackageResponse {
+  ExchangePackage package = 1;
+  // True only when the same package ID and archive checksum were previously
+  // completed; no provider writes are repeated. Holding and failed receipts,
+  // plus processing receipts after their five-minute lease expires, may safely
+  // retry the exact archive without repeating checkpointed provider work.
+  bool replay = 2;
+}
+
+message ListReachEndpointsRequest {}
+
+message ListReachEndpointsResponse {
+  repeated ReachEndpoint items = 1;
+}
+
+message ReachEndpoint {
+  string id = 1;
+  string label = 2;
+  // smtp, ses, gmail_oauth, outlook_oauth, teams, or webhook.
+  string kind = 3;
+  // Stable non-secret Teams destination key. Required only for teams and maps
+  // one-to-one to the endpoint's fixed deployment-owned channel route.
+  string destination_key = 4;
+}
+
+message ListReachProvidersRequest {}
+
+message ListReachProvidersResponse {
+  repeated ReachProvider items = 1;
+}
+
+message ReachProvider {
+  string id = 1;
+  string organization_id = 2;
+  string name = 3;
+  string kind = 4;
+  // Empty only for a safely inert imported provider. A local owner must select
+  // a deployment-approved endpoint before the provider can be enabled.
+  string endpoint_id = 5;
+  string sender = 6;
+  // True indicates an external reference exists. Its identifier and resolved
+  // secret are intentionally omitted.
+  bool secret_configured = 7;
+  bool enabled = 8;
+  int64 revision = 9;
+  string created_by = 10;
+  string updated_by = 11;
+  google.protobuf.Timestamp created_at = 12;
+  google.protobuf.Timestamp updated_at = 13;
+}
+
+message CreateReachProviderRequest {
+  string id = 1;
+  string name = 2;
+  string kind = 3;
+  string endpoint_id = 4;
+  string sender = 5;
+  // An env: or external: reference under a deployment-owned resolver. Raw OAuth
+  // tokens, passwords, signing keys, and provider credentials are invalid.
+  string secret_ref = 6;
+  // Omission defaults to enabled. Presence is required to create a disabled
+  // provider because an absent proto3 scalar is otherwise indistinguishable
+  // from an explicit false value.
+  optional bool enabled = 7;
+}
+
+message UpdateReachProviderRequest {
+  string provider_id = 1;
+  string name = 2;
+  string sender = 3;
+  bool enabled = 4;
+  int64 revision = 5;
+  // Optional deployment-approved route selection. Provider secrets remain
+  // exclusive to RotateProviderSecret and its explicit confirmation.
+  string endpoint_id = 6;
+}
+
+message RotateReachProviderSecretRequest {
+  string provider_id = 1;
+  // An env: or external: reference; never raw secret material.
+  string secret_ref = 2;
+  int64 revision = 3;
+  bool confirm = 4;
+}
+
+message TestReachProviderRequest {
+  string provider_id = 1;
+  bool confirm = 2;
+}
+
+message ListReachProviderTestsRequest {
+  string provider_id = 1;
+}
+
+message ListReachProviderTestsResponse {
+  repeated ReachProviderTest items = 1;
+}
+
+message ReachProviderTest {
+  string id = 1;
+  string provider_id = 2;
+  string outcome = 3;
+  // Sanitized stable code only; raw provider responses are prohibited.
+  string error_code = 4;
+  string tested_by = 5;
+  google.protobuf.Timestamp tested_at = 6;
+}
+
+message ListReachTemplatesRequest {}
+
+message ListReachTemplatesResponse {
+  repeated ReachTemplate items = 1;
+}
+
+message ReachTemplate {
+  string id = 1;
+  string organization_id = 2;
+  string name = 3;
+  string subject = 4;
+  string body = 5;
+  int64 revision = 6;
+  string created_by = 7;
+  string updated_by = 8;
+  google.protobuf.Timestamp created_at = 9;
+  google.protobuf.Timestamp updated_at = 10;
+}
+
+message CreateReachTemplateRequest {
+  string id = 1;
+  string name = 2;
+  // Plain text with allowlisted variables; markup is never interpreted.
+  string subject = 3;
+  string body = 4;
+}
+
+message UpdateReachTemplateRequest {
+  string template_id = 1;
+  string name = 2;
+  string subject = 3;
+  string body = 4;
+  int64 revision = 5;
+}
+
+message ReachRecipient {
+  // email or channel.
+  string kind = 1;
+  // Validated email address or stable channel identifier.
+  string address = 2;
+}
+
+message ListReachGroupsRequest {}
+
+message ListReachGroupsResponse {
+  repeated ReachSubscriberGroup items = 1;
+}
+
+message ReachSubscriberGroup {
+  string id = 1;
+  string organization_id = 2;
+  string name = 3;
+  string provider_id = 4;
+  string template_id = 5;
+  repeated ReachRecipient recipients = 6;
+  int64 revision = 7;
+  string created_by = 8;
+  string updated_by = 9;
+  google.protobuf.Timestamp created_at = 10;
+  google.protobuf.Timestamp updated_at = 11;
+}
+
+message CreateReachGroupRequest {
+  string id = 1;
+  string name = 2;
+  string provider_id = 3;
+  string template_id = 4;
+  repeated ReachRecipient recipients = 5;
+}
+
+message UpdateReachGroupRequest {
+  string group_id = 1;
+  string name = 2;
+  string provider_id = 3;
+  string template_id = 4;
+  repeated ReachRecipient recipients = 5;
+  int64 revision = 6;
+}
+
+message ListReachMessagesRequest {
+  int32 limit = 1;
+}
+
+message ListReachMessagesResponse {
+  repeated ReachMessage items = 1;
+}
+
+message ReachMessage {
+  string id = 1;
+  string organization_id = 2;
+  string group_id = 3;
+  string provider_id = 4;
+  string template_id = 5;
+  string source_kind = 6;
+  string source_id = 7;
+  string subject = 8;
+  string body = 9;
+  repeated ReachRecipient recipients = 10;
+  string status = 11;
+  int32 attempts = 12;
+  google.protobuf.Timestamp next_attempt_at = 13;
+  string last_error_code = 14;
+  string created_by = 15;
+  google.protobuf.Timestamp created_at = 16;
+  google.protobuf.Timestamp updated_at = 17;
+}
+
+message SendReachMessageRequest {
+  string group_id = 1;
+  map<string, string> variables = 2;
+  bool confirm = 3;
+  string idempotency_key = 4;
+}
+
+message RetryReachMessageRequest {
+  string message_id = 1;
+  bool confirm = 2;
+}
+
+message ListReachMessageAttemptsRequest {
+  string message_id = 1;
+}
+
+message ListReachMessageAttemptsResponse {
+  repeated ReachDeliveryAttempt items = 1;
+}
+
+message ReachDeliveryAttempt {
+  string id = 1;
+  string message_id = 2;
+  int32 attempt = 3;
+  string outcome = 4;
+  string error_code = 5;
+  bool retryable = 6;
+  google.protobuf.Timestamp next_attempt_at = 7;
+  google.protobuf.Timestamp occurred_at = 8;
+}
+
+message ProcessReachSignalsRequest {
+  bool confirm = 1;
+  int32 limit = 2;
+}
+
+message ReachProcessResult {
+  int32 examined = 1;
+  int32 delivered = 2;
+  int32 retrying = 3;
+  int32 failed = 4;
+}
+
+message ListBridgeClientsRequest {
+  // Stable client ID returned as next_cursor by the preceding page.
+  string cursor = 1;
+  // Zero defaults to 25; valid values are 1 through 100.
+  int32 limit = 2;
+}
+
+message ListBridgeClientsResponse {
+  repeated BridgeClient items = 1;
+  string next_cursor = 2;
+}
+
+message CreateBridgeClientRequest {
+  string name = 1;
+  repeated string redirect_uris = 2;
+  repeated BridgeScope allowed_scopes = 3;
+}
+
+message RevokeBridgeClientRequest {
+  string client_id = 1;
+}
+
+// Provider-neutral Bridge administration record.
+// Requirements: REQ-API-001, SEC-MCP-001. Feature: integrations.protocols.
+message BridgeClient {
+  string id = 1;
+  string organization_id = 2;
+  string name = 3;
+  repeated string redirect_uris = 4;
+  repeated BridgeScope allowed_scopes = 5;
+  string created_by = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp revoked_at = 8;
+}
+
+enum BridgeScope {
+  BRIDGE_SCOPE_UNSPECIFIED = 0;
+  BRIDGE_SCOPE_MCP_RESOURCES = 1;
+  BRIDGE_SCOPE_ASSETS_READ = 2;
+  BRIDGE_SCOPE_DIRECTORY_READ = 3;
+  BRIDGE_SCOPE_SIGNALS_READ = 4;
+  BRIDGE_SCOPE_SIGNALS_ACKNOWLEDGE = 5;
+}
+
+message ListBridgeGrantsRequest {
+  // Stable grant ID returned as next_cursor by the preceding page.
+  string cursor = 1;
+  // Zero defaults to 25; valid values are 1 through 100.
+  int32 limit = 2;
+}
+
+message ListBridgeGrantsResponse {
+  repeated BridgeGrant items = 1;
+  string next_cursor = 2;
+}
+
+message RevokeBridgeGrantRequest {
+  string grant_id = 1;
+}
+
+message BridgeGrant {
+  string id = 1;
+  string organization_id = 2;
+  string client_id = 3;
+  string client_name = 4;
+  string actor_id = 5;
+  string resource_uri = 6;
+  repeated BridgeScope scopes = 7;
+  google.protobuf.Timestamp access_expires_at = 8;
+  google.protobuf.Timestamp refresh_expires_at = 9;
+  google.protobuf.Timestamp created_at = 10;
+  google.protobuf.Timestamp last_used_at = 11;
+  google.protobuf.Timestamp revoked_at = 12;
 }

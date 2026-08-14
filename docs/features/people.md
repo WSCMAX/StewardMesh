@@ -50,6 +50,10 @@ The People work area composes existing directory APIs into a three-step person t
 
 The controlled draft survives forward and backward navigation as well as step-level validation errors. A building or room resolves to its containing site because the current identity contract persists a `siteId`; the exact selected building or room remains visible through review. Inline location writes and the final person write use the synchronized CSRF token and remain independently authorized by the existing endpoints. Read-only users keep the visible location inventory and receive a clear administrator path instead of creation controls.
 
+This task is the first consumer of Workspace's reusable related-record workflow pattern. It declares People ownership and the existing identity/location API boundaries, announces asynchronous creation and confirmation, preserves inputs after a recoverable failure, offers retry, and clears temporary values on explicit cancellation. Workspace coordinates the steps but never weakens People validation or Guard authorization.
+
+The matching same-host **People** documentation links back to `#workspace-people`; the same-host **Workspace** documentation explains the reusable cross-feature pattern and its ownership boundary. Guide's People topic opens both the focused People work area and this local documentation without putting a selected person, location, search term, or draft value into the URL.
+
 ## Asset assignments
 
 People records three relationship roles:
@@ -78,6 +82,17 @@ Atlas supplies the asset-existence check through a small `AssetReader` interface
 
 The `people.Store` interface is the behavior contract for memory, PostgreSQL, and future DynamoDB adapters. The same conformance suite validates organization isolation, scoped search, unique email and provider mappings, multi-user assignments, replacement history, and ending assignments.
 
+Exchange owns one provider for each People family: `people.site`,
+`people.building`, `people.room`, `people.department`, `people.identity`, and
+`people.assignment`. Version-2 Patterns schemas preserve exact revisions,
+status, structured addresses, source mappings, UTC timestamps, effective dates,
+and ended assignment history. Packages omit organization and creating-operator
+identity; imported assignments use the non-personal `system:exchange` actor.
+The memory adapter locks one bounded snapshot and PostgreSQL uses a bounded
+repeatable-read transaction. Exact imports use an opaque construction-time
+capability, while ordinary People service mutations remain denied by Guard
+until an imported record is explicitly claimed.
+
 ## Security and privacy
 
 - Search terms and emails are parameterized in PostgreSQL queries.
@@ -99,7 +114,7 @@ The on-page quick guide follows this sequence:
 3. Review the scoped directory and location inventory.
 4. Select an asset and add one or more relationships.
 
-Use the configurable **Report a People issue** link on the workspace to report a component problem. Include the response correlation ID when available. Do not include email lists, identity-provider claims, cookies, CSRF values, or other private directory data.
+Use Workspace's Guide report view to report a People component problem. It includes only the URL pathname, selected component, public version, coarse browser/system/viewport, and a bounded response correlation ID. It excludes the Workspace hash, query string, person and location drafts, selected record values, search terms, roles, permissions, cookies, CSRF values, and request bodies. The editable destination opens only after the user selects **Review issue before submitting**; remove any private directory data added manually.
 
 ## Audit events
 

@@ -1,13 +1,15 @@
 package httpapi
 
 // Requirements: REQ-FOUNDATION-001, REQ-WORKSPACE-001, REQ-ATLAS-001, REQ-ATLAS-CODES-001, REQ-PEOPLE-001,
-// REQ-DIRECTORY-EXPANSION-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-HORIZON-001, REQ-PLATFORM-VALKEY-001,
-// SEC-GUARD-001, SEC-HTTP-001. Features include experience.workspace and inventory.models.
+// REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-008, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-STACK-001, REQ-HORIZON-001, REQ-SIGNALS-001, REQ-REACH-001, REQ-EXCHANGE-001, REQ-API-001, REQ-PLATFORM-VALKEY-001,
+// SEC-GUARD-001, SEC-HTTP-001, SEC-MCP-001. Features include experience.workspace, inventory.models, integrations.protocols, threads.relationships, and migration.packages.
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"mime"
 	"net"
@@ -22,20 +24,27 @@ import (
 	"github.com/maxlemke/stewardmesh/internal/atlas"
 	"github.com/maxlemke/stewardmesh/internal/atlascodes"
 	"github.com/maxlemke/stewardmesh/internal/bootstrap"
+	"github.com/maxlemke/stewardmesh/internal/bridge"
 	"github.com/maxlemke/stewardmesh/internal/directoryexpansion"
 	"github.com/maxlemke/stewardmesh/internal/domain"
+	"github.com/maxlemke/stewardmesh/internal/exchange"
 	"github.com/maxlemke/stewardmesh/internal/foundation"
 	"github.com/maxlemke/stewardmesh/internal/guard"
 	"github.com/maxlemke/stewardmesh/internal/horizon"
 	"github.com/maxlemke/stewardmesh/internal/identity"
 	"github.com/maxlemke/stewardmesh/internal/ledger"
+	"github.com/maxlemke/stewardmesh/internal/patterns"
 	"github.com/maxlemke/stewardmesh/internal/people"
+	"github.com/maxlemke/stewardmesh/internal/reach"
+	"github.com/maxlemke/stewardmesh/internal/signals"
+	"github.com/maxlemke/stewardmesh/internal/stack"
 	"github.com/maxlemke/stewardmesh/internal/storage"
 	"github.com/maxlemke/stewardmesh/internal/threads"
 )
 
 const (
 	csrfHeader                = "X-CSRF-Token"
+	idempotencyHeader         = "Idempotency-Key"
 	localSessionName          = "stewardmesh_session"
 	secureSessionName         = "__Host-stewardmesh_session"
 	localOIDCTransactionName  = "stewardmesh_oidc_transaction"
@@ -44,14 +53,30 @@ const (
 
 var correlationIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
 
+var (
+	atlasCodesResolveRequestLimit  = atlascodes.RequestRateLimit{Maximum: 60, Window: time.Minute}
+	atlasCodesReadRequestLimit     = atlascodes.RequestRateLimit{Maximum: 240, Window: time.Minute}
+	atlasCodesMutationRequestLimit = atlascodes.RequestRateLimit{Maximum: 60, Window: time.Minute}
+	atlasCodesLabelRequestLimit    = atlascodes.RequestRateLimit{Maximum: 20, Window: time.Minute}
+)
+
 type Dependencies struct {
 	Atlas               *atlas.Service
 	AtlasCodes          *atlascodes.Service
+	AtlasLabels         *atlascodes.LabelService
+	AtlasCodesLimiter   atlascodes.RequestLimiter
 	People              *people.Service
+	DirectoryImports    *directoryexpansion.Service
 	Threads             *threads.Service
 	Vault               *storage.Service
 	Ledger              *ledger.Service
+	Stack               *stack.Service
 	Horizon             *horizon.Service
+	Patterns            *patterns.Service
+	Signals             *signals.Service
+	Exchange            *exchange.Service
+	Reach               *reach.Service
+	Bridge              *bridge.Service
 	Guard               *guard.Service
 	OIDC                *identity.OIDCFlow
 	SAML                *identity.SAMLFlow
@@ -62,11 +87,20 @@ type Dependencies struct {
 type Server struct {
 	atlas               *atlas.Service
 	atlasCodes          *atlascodes.Service
+	atlasLabels         *atlascodes.LabelService
+	atlasCodesLimiter   atlascodes.RequestLimiter
 	people              *people.Service
+	directoryImports    *directoryexpansion.Service
 	threads             *threads.Service
 	vault               *storage.Service
 	ledger              *ledger.Service
+	stack               *stack.Service
 	horizon             *horizon.Service
+	patterns            *patterns.Service
+	signals             *signals.Service
+	exchange            *exchange.Service
+	reach               *reach.Service
+	bridge              *bridge.Service
 	guard               *guard.Service
 	oidc                *identity.OIDCFlow
 	saml                *identity.SAMLFlow
@@ -139,14 +173,27 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 	if len(organizations) > 0 {
 		organization = organizations[0]
 	}
+	atlasCodesLimiter := deps.AtlasCodesLimiter
+	if atlasCodesLimiter == nil {
+		atlasCodesLimiter = atlascodes.NewDefaultRequestLimiter()
+	}
 	server := &Server{
 		atlas:               deps.Atlas,
 		atlasCodes:          deps.AtlasCodes,
+		atlasLabels:         deps.AtlasLabels,
+		atlasCodesLimiter:   atlasCodesLimiter,
 		people:              deps.People,
+		directoryImports:    deps.DirectoryImports,
 		threads:             deps.Threads,
 		vault:               deps.Vault,
 		ledger:              deps.Ledger,
+		stack:               deps.Stack,
 		horizon:             deps.Horizon,
+		patterns:            deps.Patterns,
+		signals:             deps.Signals,
+		exchange:            deps.Exchange,
+		reach:               deps.Reach,
+		bridge:              deps.Bridge,
 		guard:               deps.Guard,
 		oidc:                deps.OIDC,
 		saml:                deps.SAML,
@@ -160,6 +207,14 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 	mux.HandleFunc("GET /api/v1/auth/bootstrap", server.bootstrapStatus)
 	mux.HandleFunc("POST /api/v1/auth/bootstrap", server.bootstrapAdministrator)
 	mux.HandleFunc("POST /api/v1/auth/login", server.login)
+	mux.HandleFunc("GET /.well-known/oauth-protected-resource", server.bridgeProtectedResourceMetadata)
+	mux.HandleFunc("GET /.well-known/oauth-authorization-server", server.bridgeAuthorizationServerMetadata)
+	mux.HandleFunc("GET /oauth/authorize", server.bridgeAuthorize)
+	mux.HandleFunc("POST /oauth/token", server.bridgeToken)
+	mux.HandleFunc("POST /oauth/revoke", server.bridgeRevokeToken)
+	if server.bridge != nil {
+		mux.Handle("POST /mcp", server.bridge.MCPHTTPHandler())
+	}
 	mux.HandleFunc("GET /api/v1/auth/oidc/start", server.oidcStart)
 	mux.HandleFunc("GET /api/v1/auth/oidc/callback", server.oidcCallback)
 	mux.HandleFunc("GET /api/v1/auth/saml/metadata", server.samlMetadata)
@@ -167,6 +222,23 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 	mux.HandleFunc("POST /api/v1/auth/saml/acs", server.samlACS)
 	mux.Handle("GET /api/v1/auth/session", server.protected("", false, server.getSession))
 	mux.Handle("POST /api/v1/auth/logout", server.protected("", true, server.logout))
+	mux.Handle("GET /api/v1/directory-import-sources", server.protected(guard.PermissionIntegrationsRead, false, server.listDirectoryImportSources))
+	mux.Handle("GET /api/v1/bridge/clients", server.protected(guard.PermissionIntegrationsRead, false, server.listBridgeClients))
+	mux.Handle("POST /api/v1/bridge/clients", server.protected(guard.PermissionIntegrationsWrite, true, server.createBridgeClient))
+	mux.Handle("DELETE /api/v1/bridge/clients/{clientID}", server.protected(guard.PermissionIntegrationsWrite, true, server.revokeBridgeClient))
+	mux.Handle("GET /api/v1/bridge/grants", server.protected(guard.PermissionIntegrationsRead, false, server.listBridgeGrants))
+	mux.Handle("DELETE /api/v1/bridge/grants/{grantID}", server.protected(guard.PermissionIntegrationsWrite, true, server.revokeBridgeGrant))
+	mux.Handle("GET /api/v1/bridge/consents/{requestID}", server.protected(guard.PermissionIntegrationsRead, false, server.getBridgeConsent))
+	mux.Handle("POST /api/v1/bridge/consents/{requestID}/decision", server.protected(guard.PermissionIntegrationsRead, true, server.decideBridgeConsent))
+	mux.Handle("GET /api/v1/directory-imports", server.protected(guard.PermissionIntegrationsRead, false, server.listDirectoryImports))
+	mux.Handle("GET /api/v1/directory-imports/{batchID}", server.protected(guard.PermissionIntegrationsRead, false, server.getDirectoryImport))
+	mux.Handle("POST /api/v1/directory-imports/preview", server.protected(guard.PermissionIntegrationsWrite, true, server.previewDirectoryImport))
+	mux.Handle("POST /api/v1/directory-imports/{batchID}/apply", server.protected(guard.PermissionIntegrationsWrite, true, server.applyDirectoryImport))
+	mux.Handle("POST /api/v1/directory-imports/{batchID}/retry", server.protected(guard.PermissionIntegrationsWrite, true, server.retryDirectoryImport))
+	mux.Handle("GET /api/v1/exchange/records", server.protected(guard.PermissionIntegrationsRead, false, server.listExchangeRecords))
+	mux.Handle("GET /api/v1/exchange/packages", server.protected(guard.PermissionIntegrationsRead, false, server.listExchangePackages))
+	mux.Handle("POST /api/v1/exchange/export", server.protected(guard.PermissionIntegrationsWrite, true, server.exportExchangePackage))
+	mux.Handle("POST /api/v1/exchange/import", server.protected(guard.PermissionIntegrationsWrite, true, server.importExchangePackage))
 	mux.Handle("GET /api/v1/guard/access", server.protected(guard.PermissionGuardManage, false, server.listGuardAccess))
 	mux.Handle("POST /api/v1/guard/roles", server.protected(guard.PermissionGuardManage, true, server.createGuardRole))
 	mux.Handle("POST /api/v1/guard/role-assignments", server.protected(guard.PermissionGuardManage, true, server.createGuardRoleAssignment))
@@ -175,10 +247,19 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 	mux.Handle("POST /api/v1/guard/resource-ownership", server.protected(guard.PermissionGuardManage, true, server.registerGuardResourceOwnership))
 	mux.Handle("POST /api/v1/guard/resource-ownership/{resourceType}/{resourceID}/claim", server.protected(guard.PermissionGuardManage, true, server.claimGuardResourceOwnership))
 	mux.Handle("GET /api/v1/organization", server.protected(guard.PermissionOrganizationRead, false, server.getOrganization))
+	mux.Handle("GET /api/v1/templates", server.protected("", false, server.listPatternsTemplates))
+	mux.Handle("POST /api/v1/templates", server.protected(guard.PermissionGuardManage, true, server.createPatternsTemplate))
+	mux.Handle("GET /api/v1/templates/{templateID}", server.protected("", false, server.getPatternsTemplate))
+	mux.Handle("GET /api/v1/templates/{templateID}/schema", server.protected("", false, server.getPatternsTemplate))
+	mux.Handle("POST /api/v1/templates/{templateID}/copy", server.protected(guard.PermissionGuardManage, true, server.copyPatternsTemplate))
+	mux.Handle("POST /api/v1/templates/{templateID}/versions", server.protected(guard.PermissionGuardManage, true, server.createPatternsTemplateVersion))
+	mux.Handle("POST /api/v1/templates/{templateID}/validate", server.protected("", true, server.validatePatternsRecord))
+	mux.Handle("GET /api/v1/templates/{templateID}/template.csv", server.protected("", false, server.exportPatternsCSVTemplate))
 	mux.Handle("GET /api/v1/asset-models", server.protected(guard.PermissionAssetsRead, false, server.listAssetModels))
 	mux.Handle("POST /api/v1/asset-models", server.protected(guard.PermissionAssetsWrite, true, server.createAssetModel))
 	mux.Handle("GET /api/v1/asset-models/resolve", server.protected(guard.PermissionAssetsRead, false, server.resolveAssetModel))
 	mux.Handle("GET /api/v1/asset-models/{modelID}", server.protected(guard.PermissionAssetsRead, false, server.getAssetModel))
+	mux.Handle("GET /api/v1/asset-models/{modelID}/inventory", server.protected(guard.PermissionAssetsRead, false, server.getAssetModelInventory))
 	mux.Handle("PUT /api/v1/asset-models/{modelID}", server.protected(guard.PermissionAssetsWrite, true, server.updateAssetModel))
 	mux.Handle("POST /api/v1/asset-models/{modelID}/retire", server.protected(guard.PermissionAssetsWrite, true, server.retireAssetModel))
 	mux.Handle("POST /api/v1/asset-models/{modelID}/assets/bulk", server.protected(guard.PermissionAssetsWrite, true, server.createAssetsFromModel))
@@ -193,10 +274,14 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 	// department, and resource-scoped readers can use the endpoint without
 	// revealing matches outside their grants.
 	mux.Handle("POST /api/v1/asset-identifiers/resolve", server.protected("", false, server.resolveAssetIdentifier))
-	mux.Handle("GET /api/v1/assets/{assetID}/identifiers", server.protected(guard.PermissionAssetsRead, false, server.listAssetIdentifiers))
-	mux.Handle("POST /api/v1/assets/{assetID}/identifiers", server.protected(guard.PermissionAssetsWrite, true, server.createAssetIdentifier))
-	mux.Handle("POST /api/v1/assets/{assetID}/identifiers/{identifierID}/replace", server.protected(guard.PermissionAssetsWrite, true, server.replaceAssetIdentifier))
-	mux.Handle("POST /api/v1/assets/{assetID}/identifiers/{identifierID}/deactivate", server.protected(guard.PermissionAssetsWrite, true, server.deactivateAssetIdentifier))
+	mux.Handle("GET /api/v1/asset-label-templates", server.protected("", false, server.listAssetLabelTemplates))
+	mux.Handle("POST /api/v1/asset-label-batches", server.protected("", true, server.createAssetLabelBatch))
+	// Identifier handlers authorize the loaded asset so organization-, site-,
+	// department-, and resource-scoped grants all preserve the same boundary.
+	mux.Handle("GET /api/v1/assets/{assetID}/identifiers", server.protected("", false, server.listAssetIdentifiers))
+	mux.Handle("POST /api/v1/assets/{assetID}/identifiers", server.protected("", true, server.createAssetIdentifier))
+	mux.Handle("POST /api/v1/assets/{assetID}/identifiers/{identifierID}/replace", server.protected("", true, server.replaceAssetIdentifier))
+	mux.Handle("POST /api/v1/assets/{assetID}/identifiers/{identifierID}/deactivate", server.protected("", true, server.deactivateAssetIdentifier))
 	mux.Handle("GET /api/v1/sites", server.protected("", false, server.listSites))
 	mux.Handle("POST /api/v1/sites", server.protected(guard.PermissionDirectoryWrite, true, server.createSite))
 	mux.Handle("GET /api/v1/buildings", server.protected("", false, server.listBuildings))
@@ -241,14 +326,357 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 	mux.Handle("POST /api/v1/ledger/costs/reconcile", server.protected(guard.PermissionFinanceWrite, true, server.reconcileLedgerCost))
 	mux.Handle("GET /api/v1/ledger/budget-variance", server.protected(guard.PermissionFinanceRead, false, server.getLedgerBudgetVariance))
 	mux.Handle("GET /api/v1/ledger/export.csv", server.protected(guard.PermissionFinanceRead, false, server.exportLedgerCSV))
+	mux.Handle("GET /api/v1/stack", server.protected(guard.PermissionSoftwareRead, false, server.getStackSnapshot))
+	mux.Handle("GET /api/v1/stack/analytics", server.protected(guard.PermissionSoftwareRead, false, server.getStackAnalytics))
+	mux.Handle("POST /api/v1/stack/products", server.protected(guard.PermissionSoftwareWrite, true, server.createStackProduct))
+	mux.Handle("PUT /api/v1/stack/products/{productID}/status", server.protected(guard.PermissionSoftwareWrite, true, server.updateStackProductStatus))
+	mux.Handle("POST /api/v1/stack/versions", server.protected(guard.PermissionSoftwareWrite, true, server.createStackVersion))
+	mux.Handle("PUT /api/v1/stack/versions/{versionID}/status", server.protected(guard.PermissionSoftwareWrite, true, server.updateStackVersionStatus))
+	mux.Handle("POST /api/v1/stack/installations", server.protected(guard.PermissionSoftwareWrite, true, server.recordStackInstallation))
+	mux.Handle("PUT /api/v1/stack/installations/{installationID}", server.protected(guard.PermissionSoftwareWrite, true, server.updateStackInstallationState))
+	mux.Handle("POST /api/v1/stack/licenses", server.protected(guard.PermissionSoftwareWrite, true, server.createStackLicense))
+	mux.Handle("PUT /api/v1/stack/licenses/{licenseID}/entitlement", server.protected(guard.PermissionSoftwareWrite, true, server.updateStackLicenseEntitlement))
+	mux.Handle("POST /api/v1/stack/assignments", server.protected(guard.PermissionSoftwareWrite, true, server.createStackAssignment))
+	mux.Handle("PUT /api/v1/stack/assignments/{assignmentID}/usage", server.protected(guard.PermissionSoftwareWrite, true, server.updateStackAssignmentUsage))
+	mux.Handle("PUT /api/v1/stack/assignments/{assignmentID}/end", server.protected(guard.PermissionSoftwareWrite, true, server.endStackAssignment))
+	mux.Handle("GET /api/v1/stack/exchange", server.protected(guard.PermissionSoftwareRead, false, server.exportStackRecords))
+	mux.Handle("POST /api/v1/stack/exchange/import", server.protected(guard.PermissionSoftwareWrite, true, server.importStackRecords))
 	mux.Handle("GET /api/v1/horizon/plans", server.protected(guard.PermissionPlanningRead, false, server.listHorizonPlans))
 	mux.Handle("POST /api/v1/horizon/plans", server.protected(guard.PermissionPlanningWrite, true, server.createHorizonPlan))
 	mux.Handle("PUT /api/v1/horizon/plans/{planID}", server.protected(guard.PermissionPlanningWrite, true, server.updateHorizonPlan))
 	mux.Handle("GET /api/v1/horizon/plans/{planID}/history", server.protected(guard.PermissionPlanningRead, false, server.listHorizonPlanHistory))
 	mux.Handle("GET /api/v1/horizon/forecast", server.protected(guard.PermissionPlanningRead, false, server.getHorizonForecast))
 	mux.Handle("GET /api/v1/horizon/export.csv", server.protected(guard.PermissionPlanningRead, false, server.exportHorizonCSV))
+	mux.Handle("GET /api/v1/signals/rules", server.protected(guard.PermissionSignalsRead, false, server.listSignalRules))
+	mux.Handle("POST /api/v1/signals/rules", server.protected(guard.PermissionSignalsWrite, true, server.createSignalRule))
+	mux.Handle("PUT /api/v1/signals/rules/{ruleID}", server.protected(guard.PermissionSignalsWrite, true, server.updateSignalRule))
+	mux.Handle("GET /api/v1/signals/alerts", server.protected(guard.PermissionSignalsRead, false, server.listSignalAlerts))
+	mux.Handle("GET /api/v1/signals/alerts/{alertID}/history", server.protected(guard.PermissionSignalsRead, false, server.listSignalAlertHistory))
+	mux.Handle("POST /api/v1/signals/evaluate", server.protected(guard.PermissionSignalsWrite, true, server.evaluateSignals))
+	mux.Handle("POST /api/v1/signals/alerts/{alertID}/acknowledge", server.protected(guard.PermissionSignalsWrite, true, server.acknowledgeSignalAlert))
+	mux.Handle("PUT /api/v1/signals/alerts/{alertID}/assignment", server.protected(guard.PermissionSignalsWrite, true, server.assignSignalAlert))
+	mux.Handle("GET /api/v1/signals/subscriptions", server.protected(guard.PermissionSignalsRead, false, server.listSignalSubscriptions))
+	mux.Handle("GET /api/v1/signals/subscription-targets", server.protected(guard.PermissionSignalsRead, false, server.listSignalSubscriptionTargets))
+	mux.Handle("POST /api/v1/signals/subscriptions", server.protected(guard.PermissionSignalsWrite, true, server.createSignalSubscription))
+	mux.Handle("DELETE /api/v1/signals/subscriptions/{subscriptionID}", server.protected(guard.PermissionSignalsWrite, true, server.deleteSignalSubscription))
+	mux.Handle("GET /api/v1/signals/deliveries/pending", server.protected(guard.PermissionSignalsRead, false, server.listPendingSignalDeliveries))
+	mux.Handle("POST /api/v1/signals/deliveries/{deliveryID}/attempts", server.protected(guard.PermissionSignalsWrite, true, server.recordSignalDeliveryAttempt))
+	mux.Handle("GET /api/v1/signals/report.csv", server.protected(guard.PermissionSignalsRead, false, server.exportSignalsCSV))
+	mux.Handle("GET /api/v1/reach/endpoints", server.protected(guard.PermissionMessagingRead, false, server.listReachEndpoints))
+	mux.Handle("GET /api/v1/reach/providers", server.protected(guard.PermissionMessagingRead, false, server.listReachProviders))
+	mux.Handle("POST /api/v1/reach/providers", server.protected(guard.PermissionMessagingWrite, true, server.createReachProvider))
+	mux.Handle("PUT /api/v1/reach/providers/{providerID}", server.protected(guard.PermissionMessagingWrite, true, server.updateReachProvider))
+	mux.Handle("POST /api/v1/reach/providers/{providerID}/rotate-secret", server.protected(guard.PermissionMessagingWrite, true, server.rotateReachProviderSecret))
+	mux.Handle("POST /api/v1/reach/providers/{providerID}/test", server.protected(guard.PermissionMessagingWrite, true, server.testReachProvider))
+	mux.Handle("GET /api/v1/reach/providers/{providerID}/tests", server.protected(guard.PermissionMessagingRead, false, server.listReachProviderTests))
+	mux.Handle("GET /api/v1/reach/templates", server.protected(guard.PermissionMessagingRead, false, server.listReachTemplates))
+	mux.Handle("POST /api/v1/reach/templates", server.protected(guard.PermissionMessagingWrite, true, server.createReachTemplate))
+	mux.Handle("PUT /api/v1/reach/templates/{templateID}", server.protected(guard.PermissionMessagingWrite, true, server.updateReachTemplate))
+	mux.Handle("GET /api/v1/reach/groups", server.protected(guard.PermissionMessagingRead, false, server.listReachGroups))
+	mux.Handle("POST /api/v1/reach/groups", server.protected(guard.PermissionMessagingWrite, true, server.createReachGroup))
+	mux.Handle("PUT /api/v1/reach/groups/{groupID}", server.protected(guard.PermissionMessagingWrite, true, server.updateReachGroup))
+	mux.Handle("GET /api/v1/reach/messages", server.protected(guard.PermissionMessagingRead, false, server.listReachMessages))
+	mux.Handle("POST /api/v1/reach/messages/send", server.protected(guard.PermissionMessagingWrite, true, server.sendReachMessage))
+	mux.Handle("POST /api/v1/reach/messages/{messageID}/retry", server.protected(guard.PermissionMessagingWrite, true, server.retryReachMessage))
+	mux.Handle("GET /api/v1/reach/messages/{messageID}/attempts", server.protected(guard.PermissionMessagingRead, false, server.listReachMessageAttempts))
+	mux.Handle("POST /api/v1/reach/signals/process", server.protected(guard.PermissionMessagingWrite, true, server.processReachSignals))
 	mux.Handle("GET /api/v1/graph", server.protected("", false, server.graphView))
 	return server.correlation(server.securityHeaders(server.cors(mux)))
+}
+
+func (s *Server) listDirectoryImportSources(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	s.noStore(w)
+	if s.directoryImports == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "integrations_unavailable", "directory integrations are unavailable")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": s.directoryImports.Sources()})
+}
+
+func (s *Server) listDirectoryImports(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	s.noStore(w)
+	if s.directoryImports == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "integrations_unavailable", "directory integrations are unavailable")
+		return
+	}
+	limit := directoryexpansion.DefaultListLimit
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil {
+			writeError(w, r, http.StatusBadRequest, "validation_failed", "directory import pagination is invalid")
+			return
+		}
+		limit = parsed
+	}
+	page, err := s.directoryImports.List(r.Context(), directoryexpansion.ListQuery{
+		Limit: limit, Cursor: strings.TrimSpace(r.URL.Query().Get("cursor")),
+	})
+	if err != nil {
+		writeDirectoryImportError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, page)
+}
+
+func (s *Server) getDirectoryImport(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	s.noStore(w)
+	if s.directoryImports == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "integrations_unavailable", "directory integrations are unavailable")
+		return
+	}
+	detail, err := s.directoryImports.Get(r.Context(), r.PathValue("batchID"))
+	if err != nil {
+		writeDirectoryImportError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, detail)
+}
+
+func (s *Server) previewDirectoryImport(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
+	s.noStore(w)
+	if s.directoryImports == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "integrations_unavailable", "directory integrations are unavailable")
+		return
+	}
+	var input directoryexpansion.PreviewRequest
+	if err := decodeJSON(w, r, 8<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid directory preview payload")
+		return
+	}
+	result, err := s.directoryImports.Preview(r.Context(), authentication, input, r.Header.Get(idempotencyHeader))
+	if err != nil {
+		writeDirectoryImportError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, result)
+}
+
+func (s *Server) applyDirectoryImport(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
+	s.noStore(w)
+	if s.directoryImports == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "integrations_unavailable", "directory integrations are unavailable")
+		return
+	}
+	result, err := s.directoryImports.Apply(r.Context(), authentication, r.PathValue("batchID"), r.Header.Get(idempotencyHeader))
+	if err != nil {
+		writeDirectoryImportError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) retryDirectoryImport(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
+	s.noStore(w)
+	if s.directoryImports == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "integrations_unavailable", "directory integrations are unavailable")
+		return
+	}
+	result, err := s.directoryImports.Retry(r.Context(), authentication, r.PathValue("batchID"), r.Header.Get(idempotencyHeader))
+	if err != nil {
+		writeDirectoryImportError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func writeDirectoryImportError(w http.ResponseWriter, r *http.Request, err error) {
+	switch {
+	case errors.Is(err, directoryexpansion.ErrInvalidInput):
+		writeError(w, r, http.StatusBadRequest, "validation_failed", "directory import input is invalid")
+	case errors.Is(err, directoryexpansion.ErrConnectorMissing):
+		writeError(w, r, http.StatusNotFound, "source_system_not_found", "the configured directory source system was not found")
+	case errors.Is(err, directoryexpansion.ErrNotFound):
+		writeError(w, r, http.StatusNotFound, "not_found", "the directory import batch was not found")
+	case errors.Is(err, directoryexpansion.ErrBusy):
+		writeError(w, r, http.StatusConflict, "operation_in_progress", "the directory import batch is already being processed")
+	case errors.Is(err, directoryexpansion.ErrNotRetryable):
+		writeError(w, r, http.StatusConflict, "not_retryable", "the directory import has no retryable failures")
+	case errors.Is(err, directoryexpansion.ErrConflict), errors.Is(err, directoryexpansion.ErrLeaseLost):
+		writeError(w, r, http.StatusConflict, "conflict", "the directory import conflicts with authoritative state")
+	default:
+		writeError(w, r, http.StatusInternalServerError, "integration_error", "the directory import operation could not be completed")
+	}
+}
+
+func (s *Server) listPatternsTemplates(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.patterns == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "patterns_unavailable", "Patterns templates are unavailable")
+		return
+	}
+	includeRetired := false
+	if value := strings.TrimSpace(r.URL.Query().Get("includeRetired")); value != "" {
+		parsed, err := strconv.ParseBool(value)
+		if err != nil {
+			writeError(w, r, http.StatusBadRequest, "validation_failed", "includeRetired must be true or false")
+			return
+		}
+		includeRetired = parsed
+	}
+	includeVersions := false
+	if value := strings.TrimSpace(r.URL.Query().Get("includeVersions")); value != "" {
+		parsed, err := strconv.ParseBool(value)
+		if err != nil {
+			writeError(w, r, http.StatusBadRequest, "validation_failed", "includeVersions must be true or false")
+			return
+		}
+		includeVersions = parsed
+	}
+	items, err := s.patterns.ListTemplates(r.Context(), patterns.ListQuery{RecordType: r.URL.Query().Get("recordType"), IncludeRetired: includeRetired, IncludeVersions: includeVersions})
+	if err != nil {
+		writePatternsError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) getPatternsTemplate(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.patterns == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "patterns_unavailable", "Patterns templates are unavailable")
+		return
+	}
+	version, ok := patternsVersion(w, r)
+	if !ok {
+		return
+	}
+	template, err := s.patterns.GetTemplate(r.Context(), r.PathValue("templateID"), version)
+	if err != nil {
+		writePatternsError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, template)
+}
+
+func (s *Server) createPatternsTemplate(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.patterns == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "patterns_unavailable", "Patterns templates are unavailable")
+		return
+	}
+	var input patterns.CreateTemplateInput
+	if err := decodeJSON(w, r, 128<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid template payload")
+		return
+	}
+	created, err := s.patterns.CreateTemplate(r.Context(), input)
+	if err != nil {
+		writePatternsError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, created)
+}
+
+func (s *Server) copyPatternsTemplate(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.patterns == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "patterns_unavailable", "Patterns templates are unavailable")
+		return
+	}
+	version, ok := patternsVersion(w, r)
+	if !ok {
+		return
+	}
+	var input patterns.CopyTemplateInput
+	if err := decodeJSON(w, r, 32<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid template copy payload")
+		return
+	}
+	created, err := s.patterns.CopyTemplate(r.Context(), r.PathValue("templateID"), version, input)
+	if err != nil {
+		writePatternsError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, created)
+}
+
+func (s *Server) createPatternsTemplateVersion(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.patterns == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "patterns_unavailable", "Patterns templates are unavailable")
+		return
+	}
+	var input patterns.NewVersionInput
+	if err := decodeJSON(w, r, 128<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid template version payload")
+		return
+	}
+	created, err := s.patterns.CreateVersion(r.Context(), r.PathValue("templateID"), input)
+	if err != nil {
+		writePatternsError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, created)
+}
+
+func (s *Server) validatePatternsRecord(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.patterns == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "patterns_unavailable", "Patterns templates are unavailable")
+		return
+	}
+	version, ok := patternsVersion(w, r)
+	if !ok {
+		return
+	}
+	var input patterns.ValidationInput
+	if err := decodeJSON(w, r, 256<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid record validation payload")
+		return
+	}
+	result, err := s.patterns.Validate(r.Context(), r.PathValue("templateID"), version, input)
+	if err != nil {
+		writePatternsError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) exportPatternsCSVTemplate(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.patterns == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "patterns_unavailable", "Patterns templates are unavailable")
+		return
+	}
+	version, ok := patternsVersion(w, r)
+	if !ok {
+		return
+	}
+	template, err := s.patterns.GetTemplate(r.Context(), r.PathValue("templateID"), version)
+	if err != nil {
+		writePatternsError(w, r, err)
+		return
+	}
+	contents, err := s.patterns.CSVTemplate(r.Context(), template.ID, template.Version)
+	if err != nil {
+		writePatternsError(w, r, err)
+		return
+	}
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="template-%s-v%d.csv"`, template.ID, template.Version))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(contents)
+}
+
+func patternsVersion(w http.ResponseWriter, r *http.Request) (int64, bool) {
+	value := strings.TrimSpace(r.URL.Query().Get("version"))
+	if value == "" {
+		return 0, true
+	}
+	version, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || version < 1 {
+		writeError(w, r, http.StatusBadRequest, "validation_failed", "version must be a positive integer")
+		return 0, false
+	}
+	return version, true
+}
+
+func writePatternsError(w http.ResponseWriter, r *http.Request, err error) {
+	switch {
+	case errors.Is(err, guard.ErrResourceWriteLocked):
+		writeError(w, r, http.StatusLocked, "ownership_locked", "claim local ownership before changing this imported Patterns template")
+	case errors.Is(err, patterns.ErrInvalidInput):
+		writeError(w, r, http.StatusBadRequest, "validation_failed", "Patterns template or record values are invalid")
+	case errors.Is(err, patterns.ErrNotFound):
+		writeError(w, r, http.StatusNotFound, "not_found", "the requested template or version was not found")
+	case errors.Is(err, patterns.ErrConflict):
+		writeError(w, r, http.StatusConflict, "conflict", "this template conflicts with existing data or cannot be changed")
+	default:
+		writeError(w, r, http.StatusInternalServerError, "patterns_error", "the Patterns operation could not be completed")
+	}
 }
 
 func (s *Server) getLedgerSnapshot(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
@@ -446,6 +874,8 @@ func (s *Server) exportLedgerCSV(w http.ResponseWriter, r *http.Request, _ guard
 
 func writeLedgerError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
+	case errors.Is(err, guard.ErrResourceWriteLocked):
+		writeError(w, r, http.StatusLocked, "ownership_locked", "claim local ownership before changing this imported Ledger record")
 	case errors.Is(err, ledger.ErrInvalidInput):
 		writeError(w, r, http.StatusBadRequest, "validation_failed", "Ledger details are invalid")
 	case errors.Is(err, ledger.ErrReferenceMissing):
@@ -458,6 +888,371 @@ func writeLedgerError(w http.ResponseWriter, r *http.Request, err error) {
 		writeError(w, r, http.StatusConflict, "conflict", "this Ledger record conflicts with current data")
 	default:
 		writeError(w, r, http.StatusInternalServerError, "ledger_error", "the Ledger operation could not be completed")
+	}
+}
+
+// Stack handlers implement REQ-STACK-001 / software.licenses.
+func (s *Server) getStackSnapshot(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.stack == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "stack_unavailable", "Stack software inventory is unavailable")
+		return
+	}
+	snapshot, err := s.stack.Snapshot(r.Context())
+	if err != nil {
+		writeStackError(w, r, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, snapshot)
+}
+
+func (s *Server) getStackAnalytics(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.stack == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "stack_unavailable", "Stack software inventory is unavailable")
+		return
+	}
+	var asOf time.Time
+	if value := strings.TrimSpace(r.URL.Query().Get("asOf")); value != "" {
+		parsed, err := time.Parse(time.RFC3339, value)
+		if err != nil {
+			writeError(w, r, http.StatusBadRequest, "validation_failed", "asOf must be an RFC 3339 timestamp")
+			return
+		}
+		asOf = parsed
+	}
+	days := int64(0)
+	if value := strings.TrimSpace(r.URL.Query().Get("expiringWithinDays")); value != "" {
+		parsed, err := strconv.ParseInt(value, 10, 64)
+		if err != nil {
+			writeError(w, r, http.StatusBadRequest, "validation_failed", "expiringWithinDays must be an integer")
+			return
+		}
+		days = parsed
+	}
+	report, err := s.stack.Analytics(r.Context(), asOf, days)
+	if err != nil {
+		writeStackError(w, r, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, report)
+}
+
+func (s *Server) createStackProduct(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.stack == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "stack_unavailable", "Stack software inventory is unavailable")
+		return
+	}
+	var input stack.CreateProductInput
+	if err := decodeJSON(w, r, 32<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid Stack product payload")
+		return
+	}
+	created, err := s.stack.CreateProduct(r.Context(), input)
+	if err != nil {
+		writeStackError(w, r, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusCreated, created)
+}
+
+func (s *Server) createStackVersion(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.stack == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "stack_unavailable", "Stack software inventory is unavailable")
+		return
+	}
+	var input stack.CreateVersionInput
+	if err := decodeJSON(w, r, 32<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid Stack version payload")
+		return
+	}
+	created, err := s.stack.CreateVersion(r.Context(), input)
+	if err != nil {
+		writeStackError(w, r, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusCreated, created)
+}
+
+func (s *Server) updateStackProductStatus(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
+	if s.stack == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "stack_unavailable", "Stack software inventory is unavailable")
+		return
+	}
+	if !s.requireResourceWrite(w, r, authentication, "stack.product", r.PathValue("productID")) {
+		return
+	}
+	var input stack.UpdateProductStatusInput
+	if err := decodeJSON(w, r, 16<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid Stack product status payload")
+		return
+	}
+	input.ID = r.PathValue("productID")
+	updated, err := s.stack.UpdateProductStatus(r.Context(), input)
+	if err != nil {
+		writeStackError(w, r, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, updated)
+}
+
+func (s *Server) updateStackVersionStatus(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
+	if s.stack == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "stack_unavailable", "Stack software inventory is unavailable")
+		return
+	}
+	if !s.requireResourceWrite(w, r, authentication, "stack.version", r.PathValue("versionID")) {
+		return
+	}
+	var input stack.UpdateVersionStatusInput
+	if err := decodeJSON(w, r, 16<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid Stack version status payload")
+		return
+	}
+	input.ID = r.PathValue("versionID")
+	updated, err := s.stack.UpdateVersionStatus(r.Context(), input)
+	if err != nil {
+		writeStackError(w, r, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, updated)
+}
+
+func (s *Server) recordStackInstallation(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.stack == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "stack_unavailable", "Stack software inventory is unavailable")
+		return
+	}
+	var input stack.RecordInstallationInput
+	if err := decodeJSON(w, r, 64<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid Stack installation payload")
+		return
+	}
+	created, err := s.stack.RecordInstallation(r.Context(), input)
+	if err != nil {
+		writeStackError(w, r, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusCreated, created)
+}
+
+func (s *Server) createStackLicense(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.stack == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "stack_unavailable", "Stack software inventory is unavailable")
+		return
+	}
+	var input stack.CreateLicenseInput
+	if err := decodeJSON(w, r, 128<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid Stack license payload")
+		return
+	}
+	created, err := s.stack.CreateLicense(r.Context(), input)
+	if err != nil {
+		writeStackError(w, r, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusCreated, created)
+}
+
+func (s *Server) updateStackInstallationState(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
+	if s.stack == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "stack_unavailable", "Stack software inventory is unavailable")
+		return
+	}
+	if !s.requireResourceWrite(w, r, authentication, "stack.installation", r.PathValue("installationID")) {
+		return
+	}
+	var input stack.UpdateInstallationStateInput
+	if err := decodeJSON(w, r, 32<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid Stack installation state payload")
+		return
+	}
+	input.ID = r.PathValue("installationID")
+	updated, err := s.stack.UpdateInstallationState(r.Context(), input)
+	if err != nil {
+		writeStackError(w, r, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, updated)
+}
+
+func (s *Server) updateStackLicenseEntitlement(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
+	if s.stack == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "stack_unavailable", "Stack software inventory is unavailable")
+		return
+	}
+	if !s.requireResourceWrite(w, r, authentication, "stack.license", r.PathValue("licenseID")) {
+		return
+	}
+	var input stack.UpdateLicenseEntitlementInput
+	if err := decodeJSON(w, r, 32<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid Stack license entitlement payload")
+		return
+	}
+	input.ID = r.PathValue("licenseID")
+	updated, err := s.stack.UpdateLicenseEntitlement(r.Context(), input)
+	if err != nil {
+		writeStackError(w, r, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, updated)
+}
+
+func (s *Server) createStackAssignment(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.stack == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "stack_unavailable", "Stack software inventory is unavailable")
+		return
+	}
+	var input stack.CreateAssignmentInput
+	if err := decodeJSON(w, r, 64<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid Stack assignment payload")
+		return
+	}
+	created, err := s.stack.CreateAssignment(r.Context(), input)
+	if err != nil {
+		writeStackError(w, r, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusCreated, created)
+}
+
+func (s *Server) updateStackAssignmentUsage(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
+	if s.stack == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "stack_unavailable", "Stack software inventory is unavailable")
+		return
+	}
+	if !s.requireResourceWrite(w, r, authentication, "stack.assignment", r.PathValue("assignmentID")) {
+		return
+	}
+	var input stack.UpdateAssignmentUsageInput
+	if err := decodeJSON(w, r, 32<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid Stack assignment usage payload")
+		return
+	}
+	input.ID = r.PathValue("assignmentID")
+	updated, err := s.stack.UpdateAssignmentUsage(r.Context(), input)
+	if err != nil {
+		writeStackError(w, r, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, updated)
+}
+
+func (s *Server) endStackAssignment(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
+	if s.stack == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "stack_unavailable", "Stack software inventory is unavailable")
+		return
+	}
+	if !s.requireResourceWrite(w, r, authentication, "stack.assignment", r.PathValue("assignmentID")) {
+		return
+	}
+	var input stack.EndAssignmentInput
+	if err := decodeJSON(w, r, 16<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid Stack assignment end payload")
+		return
+	}
+	input.ID = r.PathValue("assignmentID")
+	updated, err := s.stack.EndAssignment(r.Context(), input)
+	if err != nil {
+		writeStackError(w, r, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, updated)
+}
+
+func (s *Server) exportStackRecords(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.stack == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "stack_unavailable", "Stack software inventory is unavailable")
+		return
+	}
+	records, err := s.stack.ExportRecords(r.Context())
+	if err != nil {
+		writeStackError(w, r, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Disposition", `attachment; filename="stewardmesh-stack.json"`)
+	writeJSON(w, http.StatusOK, map[string]any{"records": records})
+}
+
+func (s *Server) importStackRecords(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
+	if s.stack == nil || s.exchange == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "stack_unavailable", "Stack software inventory is unavailable")
+		return
+	}
+	var input struct {
+		SourceSystemID string                 `json:"sourceSystemId"`
+		Records        []stack.ExchangeRecord `json:"records"`
+	}
+	if err := decodeJSON(w, r, 10<<20, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid Stack exchange payload")
+		return
+	}
+	result, err := s.exchange.ImportStackRecords(r.Context(), authentication.Principal.Subject, input.SourceSystemID, input.Records)
+	if err != nil {
+		writeStackImportError(w, r, result, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Exchange-Package-ID", result.PackageID)
+	w.Header().Set("X-Idempotent-Replay", strconv.FormatBool(result.Replay))
+	writeJSON(w, http.StatusOK, result)
+}
+
+func writeStackImportError(w http.ResponseWriter, r *http.Request, result exchange.StackImportResult, err error) {
+	if result.PackageID == "" {
+		writeExchangeError(w, r, err)
+		return
+	}
+	status, code, message := http.StatusInternalServerError, "stack_import_failed", "the durable Stack import did not complete; retry the exact request to resume it"
+	switch {
+	case errors.Is(err, exchange.ErrTooLarge):
+		status, code, message = http.StatusRequestEntityTooLarge, "package_too_large", "the Stack import exceeds a configured limit"
+	case errors.Is(err, exchange.ErrInvalidInput):
+		status, code, message = http.StatusBadRequest, "validation_failed", "the Stack import payload is invalid"
+	case errors.Is(err, exchange.ErrIntegrity), errors.Is(err, exchange.ErrDependencyMissing):
+		status, code, message = http.StatusUnprocessableEntity, "import_unprocessable", "the Stack import could not safely process a dependency"
+	case errors.Is(err, exchange.ErrConflict):
+		status, code, message = http.StatusConflict, "package_conflict", "the Stack import conflicts with durable history or current records"
+	}
+	correlationID := ""
+	if scope, ok := foundation.ScopeFromContext(r.Context()); ok {
+		correlationID = scope.CorrelationID
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	if result.PackageID != "" {
+		w.Header().Set("X-Exchange-Package-ID", result.PackageID)
+	}
+	w.Header().Set("X-Idempotent-Replay", strconv.FormatBool(result.Replay))
+	writeJSON(w, status, map[string]any{
+		"error":  map[string]string{"code": code, "message": message, "correlationId": correlationID},
+		"import": result,
+	})
+}
+
+func writeStackError(w http.ResponseWriter, r *http.Request, err error) {
+	switch {
+	case errors.Is(err, stack.ErrInvalidInput):
+		writeError(w, r, http.StatusBadRequest, "validation_failed", "Stack software or license details are invalid")
+	case errors.Is(err, stack.ErrReferenceMissing):
+		writeError(w, r, http.StatusUnprocessableEntity, "reference_missing", "a referenced Stack, Atlas, People, Ledger, or Vault record is unavailable")
+	case errors.Is(err, stack.ErrNotFound):
+		writeError(w, r, http.StatusNotFound, "not_found", "the requested Stack record was not found")
+	case errors.Is(err, stack.ErrConflict):
+		writeError(w, r, http.StatusConflict, "conflict", "this Stack record conflicts with current data")
+	default:
+		writeError(w, r, http.StatusInternalServerError, "stack_error", "the Stack operation could not be completed")
 	}
 }
 
@@ -575,8 +1370,12 @@ func (s *Server) exportHorizonCSV(w http.ResponseWriter, r *http.Request, _ guar
 func horizonForecastQuery(r *http.Request) (horizon.ForecastQuery, error) {
 	values := r.URL.Query()
 	query := horizon.ForecastQuery{GroupBy: values.Get("groupBy")}
-	if raw := strings.TrimSpace(values.Get("scenarios")); raw != "" {
-		query.Scenarios = strings.Split(raw, ",")
+	for _, raw := range values["scenarios"] {
+		for _, scenario := range strings.Split(raw, ",") {
+			if scenario = strings.TrimSpace(scenario); scenario != "" {
+				query.Scenarios = append(query.Scenarios, scenario)
+			}
+		}
 	}
 	if raw := strings.TrimSpace(values.Get("asOf")); raw != "" {
 		parsed, err := time.Parse(time.RFC3339, raw)
@@ -608,6 +1407,8 @@ func optionalQueryInt(value string) (int, error) {
 
 func writeHorizonError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
+	case errors.Is(err, guard.ErrResourceWriteLocked):
+		writeError(w, r, http.StatusLocked, "ownership_locked", "claim local ownership before changing this imported Horizon plan")
 	case errors.Is(err, horizon.ErrInvalidInput):
 		writeError(w, r, http.StatusBadRequest, "validation_failed", "Horizon planning details are invalid")
 	case errors.Is(err, horizon.ErrReferenceMissing):
@@ -752,29 +1553,65 @@ func writeVaultError(w http.ResponseWriter, r *http.Request, err error) {
 }
 
 func (s *Server) graphView(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
+	s.noStore(w)
 	if s.graph == nil {
 		writeError(w, r, http.StatusServiceUnavailable, "graph_unavailable", "relationship graph unavailable")
 		return
 	}
-	if _, ok := s.directoryVisibility(w, r, authentication); !ok {
+	visibility, ok := s.directoryVisibility(w, r, authentication)
+	if !ok {
 		return
 	}
 	query := directoryexpansion.GraphQuery{
 		Search:       r.URL.Query().Get("search"),
-		Kind:         r.URL.Query().Get("kind"),
-		Relationship: r.URL.Query().Get("relationship"),
+		Kind:         directoryexpansion.NodeKind(r.URL.Query().Get("kind")),
+		Relationship: directoryexpansion.RelationshipKind(r.URL.Query().Get("relationship")),
+		Scope: directoryexpansion.GraphScope{
+			Directory: visibility,
+			Assets:    s.graphAssetVisibility(authentication),
+		},
 	}
 	if value := r.URL.Query().Get("limit"); value != "" {
-		if parsed, err := strconv.Atoi(value); err == nil {
-			query.Limit = parsed
+		parsed, err := strconv.Atoi(value)
+		if err != nil {
+			writeError(w, r, http.StatusBadRequest, "validation_failed", "relationship graph filters are invalid")
+			return
 		}
+		query.Limit = parsed
 	}
 	graph, err := s.graph.Graph(r.Context(), query)
 	if err != nil {
-		writeError(w, r, http.StatusInternalServerError, "graph_error", "unable to load relationship graph")
+		switch {
+		case errors.Is(err, directoryexpansion.ErrInvalidInput):
+			writeError(w, r, http.StatusBadRequest, "validation_failed", "relationship graph filters are invalid")
+		case errors.Is(err, directoryexpansion.ErrGraphScope):
+			writeError(w, r, http.StatusForbidden, "permission_denied", "directory permission is required for this operation")
+		default:
+			writeError(w, r, http.StatusInternalServerError, "graph_error", "unable to load relationship graph")
+		}
 		return
 	}
 	writeJSON(w, http.StatusOK, graph)
+}
+
+func (s *Server) graphAssetVisibility(authentication guard.Authentication) directoryexpansion.AssetVisibility {
+	visibility := directoryexpansion.AssetVisibility{}
+	for _, grant := range authentication.Grants {
+		if grant.Permission != guard.PermissionAssetsRead || grant.Scope.OrganizationID != s.organization.ID {
+			continue
+		}
+		switch grant.Scope.Kind {
+		case guard.ScopeOrganization:
+			return directoryexpansion.AssetVisibility{All: true}
+		case guard.ScopeResource:
+			visibility.ResourceIDs = append(visibility.ResourceIDs, grant.Scope.ResourceID)
+		case guard.ScopeSite:
+			visibility.SiteIDs = append(visibility.SiteIDs, grant.Scope.ResourceID)
+		case guard.ScopeDepartment:
+			visibility.DepartmentIDs = append(visibility.DepartmentIDs, grant.Scope.ResourceID)
+		}
+	}
+	return visibility
 }
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
@@ -915,7 +1752,7 @@ func (s *Server) oidcStart(w http.ResponseWriter, r *http.Request) {
 		Expires:  expiresAt,
 		MaxAge:   max(1, int(time.Until(expiresAt).Seconds())),
 		HttpOnly: true,
-		Secure:   s.sessionCookieSecure,
+		Secure:   true,
 		SameSite: http.SameSiteLaxMode,
 	})
 	http.Redirect(w, r, authorizationURL, http.StatusSeeOther)
@@ -1111,8 +1948,8 @@ func (s *Server) listGuardAccess(w http.ResponseWriter, r *http.Request, authent
 	for _, role := range directory.Roles {
 		roles = append(roles, guardRoleResponse{
 			ID: role.ID, Name: role.Name, Description: role.Description,
-			Permissions:     append([]guard.Permission(nil), role.Permissions...),
-			PolicyBundleIDs: append([]string(nil), role.PolicyBundleIDs...),
+			Permissions:     append([]guard.Permission{}, role.Permissions...),
+			PolicyBundleIDs: append([]string{}, role.PolicyBundleIDs...),
 			Source:          role.Source, Managed: role.Source == guard.BuiltInRoleSource,
 		})
 	}
@@ -1156,8 +1993,8 @@ func (s *Server) createGuardRole(w http.ResponseWriter, r *http.Request, authent
 	}
 	writeJSON(w, http.StatusCreated, guardRoleResponse{
 		ID: role.ID, Name: role.Name, Description: role.Description,
-		Permissions:     append([]guard.Permission(nil), role.Permissions...),
-		PolicyBundleIDs: append([]string(nil), role.PolicyBundleIDs...),
+		Permissions:     append([]guard.Permission{}, role.Permissions...),
+		PolicyBundleIDs: append([]string{}, role.PolicyBundleIDs...),
 		Source:          role.Source, Managed: false,
 	})
 }
@@ -1357,6 +2194,24 @@ func (s *Server) getAssetModel(w http.ResponseWriter, r *http.Request, _ guard.A
 		return
 	}
 	writeJSON(w, http.StatusOK, model)
+}
+
+func (s *Server) getAssetModelInventory(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.atlas == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "repository_unavailable", "asset repository unavailable")
+		return
+	}
+	query, err := assetModelInventoryQueryFromRequest(r)
+	if err != nil {
+		writeError(w, r, http.StatusBadRequest, "validation_failed", "model inventory filters are invalid")
+		return
+	}
+	inventory, err := s.atlas.GetModelInventory(r.Context(), r.PathValue("modelID"), query)
+	if err != nil {
+		writeAtlasError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, inventory)
 }
 
 func (s *Server) resolveAssetModel(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
@@ -2058,6 +2913,9 @@ func (s *Server) resolveAssetIdentifier(w http.ResponseWriter, r *http.Request, 
 		writeError(w, r, http.StatusServiceUnavailable, "atlas_codes_unavailable", "Atlas Codes is unavailable")
 		return
 	}
+	if !s.allowAtlasCodesRequest(w, r, authentication, "resolve", atlasCodesResolveRequestLimit) {
+		return
+	}
 	var input struct {
 		Symbology atlascodes.Symbology `json:"symbology"`
 		Value     string               `json:"value"`
@@ -2082,8 +2940,20 @@ func (s *Server) resolveAssetIdentifier(w http.ResponseWriter, r *http.Request, 
 }
 
 func (s *Server) canReadAsset(ctx context.Context, authentication guard.Authentication, asset domain.Asset) bool {
+	if s.hasAssetGrant(authentication, guard.PermissionAssetsRead, asset) {
+		return true
+	}
+	// Preserve Guard's centralized denial event without exposing whether a
+	// value resolved successfully.
+	_ = s.guard.CheckPermission(ctx, authentication, guard.PermissionAssetsRead, guard.Scope{
+		Kind: guard.ScopeResource, OrganizationID: s.organization.ID, ResourceID: asset.ID,
+	})
+	return false
+}
+
+func (s *Server) hasAssetGrant(authentication guard.Authentication, permission guard.Permission, asset domain.Asset) bool {
 	for _, grant := range authentication.Grants {
-		if grant.Permission != guard.PermissionAssetsRead || grant.Scope.OrganizationID != s.organization.ID {
+		if grant.Permission != permission || grant.Scope.OrganizationID != s.organization.ID {
 			continue
 		}
 		switch grant.Scope.Kind {
@@ -2103,20 +2973,41 @@ func (s *Server) canReadAsset(ctx context.Context, authentication guard.Authenti
 			}
 		}
 	}
-	// Preserve Guard's centralized denial event without exposing whether a
-	// value resolved successfully.
-	_ = s.guard.CheckPermission(ctx, authentication, guard.PermissionAssetsRead, guard.Scope{
+	return false
+}
+
+func (s *Server) canWriteAsset(ctx context.Context, authentication guard.Authentication, asset domain.Asset) bool {
+	if s.hasAssetGrant(authentication, guard.PermissionAssetsWrite, asset) {
+		return true
+	}
+	_ = s.guard.CheckPermission(ctx, authentication, guard.PermissionAssetsWrite, guard.Scope{
 		Kind: guard.ScopeResource, OrganizationID: s.organization.ID, ResourceID: asset.ID,
 	})
 	return false
 }
 
-func (s *Server) listAssetIdentifiers(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
-	if s.atlasCodes == nil {
+func (s *Server) hasAnyAssetGrant(authentication guard.Authentication, permission guard.Permission) bool {
+	for _, grant := range authentication.Grants {
+		if grant.Permission == permission && grant.Scope.OrganizationID == s.organization.ID {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Server) listAssetIdentifiers(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
+	if s.atlasCodes == nil || s.atlas == nil {
 		writeError(w, r, http.StatusServiceUnavailable, "atlas_codes_unavailable", "Atlas Codes is unavailable")
 		return
 	}
-	items, err := s.atlasCodes.ListIdentifiers(r.Context(), r.PathValue("assetID"))
+	if !s.allowAtlasCodesRequest(w, r, authentication, "read", atlasCodesReadRequestLimit) {
+		return
+	}
+	assetID := r.PathValue("assetID")
+	if !s.authorizeAtlasCodeAsset(w, r, authentication, assetID, guard.PermissionAssetsRead) {
+		return
+	}
+	items, err := s.atlasCodes.ListIdentifiers(r.Context(), assetID)
 	if err != nil {
 		writeAtlasCodesError(w, r, err)
 		return
@@ -2124,12 +3015,97 @@ func (s *Server) listAssetIdentifiers(w http.ResponseWriter, r *http.Request, _ 
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
+func (s *Server) listAssetLabelTemplates(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
+	if s.atlasLabels == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "atlas_labels_unavailable", "Atlas Codes label printing is unavailable")
+		return
+	}
+	if !s.allowAtlasCodesRequest(w, r, authentication, "read", atlasCodesReadRequestLimit) {
+		return
+	}
+	if !s.hasAnyAssetGrant(authentication, guard.PermissionAssetsRead) {
+		writeError(w, r, http.StatusForbidden, "permission_denied", "asset read permission is required for label templates")
+		return
+	}
+	items, err := s.atlasLabels.ListTemplates(r.Context())
+	if err != nil {
+		writeAtlasCodesError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"items":            items,
+		"maximumBatchSize": atlascodes.MaximumLabelBatch,
+		"outputs":          []atlascodes.LabelOutput{atlascodes.LabelOutputSVG, atlascodes.LabelOutputPDF},
+	})
+}
+
+func (s *Server) createAssetLabelBatch(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
+	if s.atlasLabels == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "atlas_labels_unavailable", "Atlas Codes label printing is unavailable")
+		return
+	}
+	if !s.allowAtlasCodesRequest(w, r, authentication, "label", atlasCodesLabelRequestLimit) {
+		return
+	}
+	var input atlascodes.LabelBatchInput
+	if err := decodeJSON(w, r, 32<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid label batch payload")
+		return
+	}
+	if input.Output != atlascodes.LabelOutputSVG && input.Output != atlascodes.LabelOutputPDF {
+		writeAtlasCodesError(w, r, atlascodes.ErrUnsupportedLabelOutput)
+		return
+	}
+	input.IdempotencyKey = r.Header.Get("Idempotency-Key")
+	batch, created, err := s.atlasLabels.CreateBatchAuthorized(r.Context(), input, func(ctx context.Context, asset domain.Asset) error {
+		if !s.canReadAsset(ctx, authentication, asset) {
+			return atlascodes.ErrNotFound
+		}
+		if !s.canWriteAsset(ctx, authentication, asset) {
+			return guard.ErrPermissionDenied
+		}
+		return s.guard.CheckResourceWrite(ctx, authentication, "asset", asset.ID)
+	})
+	if err != nil {
+		writeAtlasCodesError(w, r, err)
+		return
+	}
+	w.Header().Set("Content-Type", batch.MediaType)
+	w.Header().Set("Content-Disposition", mime.FormatMediaType("inline", map[string]string{"filename": batch.FileName}))
+	w.Header().Set("X-Label-Batch-ID", batch.ID)
+	templateMetadata, err := json.Marshal(batch.Template)
+	if err != nil {
+		writeError(w, r, http.StatusInternalServerError, "atlas_labels_error", "label template metadata could not be encoded")
+		return
+	}
+	// The gRPC adapter invokes this same handler in-process and uses the exact
+	// immutable template selected during generation. Raw URL encoding keeps
+	// the bounded JSON metadata header-safe; browsers cannot read this internal
+	// header because it is deliberately absent from Access-Control-Expose-Headers.
+	w.Header().Set("X-StewardMesh-Label-Template", base64.RawURLEncoding.EncodeToString(templateMetadata))
+	w.Header().Set("X-Label-Template-Version", strconv.FormatInt(batch.Template.Version, 10))
+	w.Header().Set("X-Label-Width-MM", strconv.FormatFloat(batch.Template.WidthMM, 'f', 2, 64))
+	w.Header().Set("X-Label-Height-MM", strconv.FormatFloat(batch.Template.HeightMM, 'f', 2, 64))
+	w.Header().Set("X-Label-Item-Count", strconv.Itoa(batch.ItemCount))
+	w.Header().Set("X-Content-SHA256", batch.SHA256)
+	w.Header().Set("X-Label-Created-At", batch.CreatedAt.UTC().Format(time.RFC3339Nano))
+	w.Header().Set("X-Idempotent-Replay", strconv.FormatBool(!created))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(batch.Contents)
+}
+
 func (s *Server) createAssetIdentifier(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
-	if s.atlasCodes == nil {
+	if s.atlasCodes == nil || s.atlas == nil {
 		writeError(w, r, http.StatusServiceUnavailable, "atlas_codes_unavailable", "Atlas Codes is unavailable")
 		return
 	}
+	if !s.allowAtlasCodesRequest(w, r, authentication, "mutation", atlasCodesMutationRequestLimit) {
+		return
+	}
 	assetID := r.PathValue("assetID")
+	if !s.authorizeAtlasCodeAsset(w, r, authentication, assetID, guard.PermissionAssetsWrite) {
+		return
+	}
 	if !s.requireResourceWrite(w, r, authentication, "asset", assetID) {
 		return
 	}
@@ -2152,11 +3128,17 @@ func (s *Server) createAssetIdentifier(w http.ResponseWriter, r *http.Request, a
 }
 
 func (s *Server) replaceAssetIdentifier(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
-	if s.atlasCodes == nil {
+	if s.atlasCodes == nil || s.atlas == nil {
 		writeError(w, r, http.StatusServiceUnavailable, "atlas_codes_unavailable", "Atlas Codes is unavailable")
 		return
 	}
+	if !s.allowAtlasCodesRequest(w, r, authentication, "mutation", atlasCodesMutationRequestLimit) {
+		return
+	}
 	assetID := r.PathValue("assetID")
+	if !s.authorizeAtlasCodeAsset(w, r, authentication, assetID, guard.PermissionAssetsWrite) {
+		return
+	}
 	if !s.requireResourceWrite(w, r, authentication, "asset", assetID) {
 		return
 	}
@@ -2176,11 +3158,17 @@ func (s *Server) replaceAssetIdentifier(w http.ResponseWriter, r *http.Request, 
 }
 
 func (s *Server) deactivateAssetIdentifier(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
-	if s.atlasCodes == nil {
+	if s.atlasCodes == nil || s.atlas == nil {
 		writeError(w, r, http.StatusServiceUnavailable, "atlas_codes_unavailable", "Atlas Codes is unavailable")
 		return
 	}
+	if !s.allowAtlasCodesRequest(w, r, authentication, "mutation", atlasCodesMutationRequestLimit) {
+		return
+	}
 	assetID := r.PathValue("assetID")
+	if !s.authorizeAtlasCodeAsset(w, r, authentication, assetID, guard.PermissionAssetsWrite) {
+		return
+	}
 	if !s.requireResourceWrite(w, r, authentication, "asset", assetID) {
 		return
 	}
@@ -2199,10 +3187,67 @@ func (s *Server) deactivateAssetIdentifier(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, map[string]any{"identifier": identifier, "changed": changed})
 }
 
+func (s *Server) authorizeAtlasCodeAsset(w http.ResponseWriter, r *http.Request, authentication guard.Authentication, assetID string, permission guard.Permission) bool {
+	asset, err := s.atlas.GetAsset(r.Context(), assetID)
+	if err != nil {
+		if errors.Is(err, atlas.ErrInvalidInput) {
+			writeError(w, r, http.StatusBadRequest, "validation_failed", "asset identity is invalid")
+			return false
+		}
+		writeError(w, r, http.StatusNotFound, "not_found", "the requested asset identifier was not found")
+		return false
+	}
+	allowed := false
+	switch permission {
+	case guard.PermissionAssetsRead:
+		allowed = s.canReadAsset(r.Context(), authentication, asset)
+	case guard.PermissionAssetsWrite:
+		allowed = s.canWriteAsset(r.Context(), authentication, asset)
+	}
+	if allowed {
+		return true
+	}
+	if permission == guard.PermissionAssetsWrite && s.hasAssetGrant(authentication, guard.PermissionAssetsRead, asset) {
+		writeError(w, r, http.StatusForbidden, "permission_denied", "asset write permission is required for this operation")
+		return false
+	}
+	// Unknown assets and assets outside the caller's visible scope are
+	// intentionally indistinguishable so history and mutation paths cannot be
+	// used as discovery oracles.
+	writeError(w, r, http.StatusNotFound, "not_found", "the requested asset identifier was not found")
+	return false
+}
+
+func (s *Server) allowAtlasCodesRequest(w http.ResponseWriter, r *http.Request, authentication guard.Authentication, operation string, limit atlascodes.RequestRateLimit) bool {
+	key := s.organization.ID + "\x00" + authentication.Principal.Subject + "\x00" + operation
+	allowed, err := s.atlasCodesLimiter.Allow(r.Context(), key, limit, time.Now().UTC())
+	if err != nil {
+		writeError(w, r, http.StatusServiceUnavailable, "rate_limiter_unavailable", "Atlas Codes request limiting is temporarily unavailable")
+		return false
+	}
+	if allowed {
+		return true
+	}
+	retryAfter := (limit.Window + time.Second - 1) / time.Second
+	w.Header().Set("Retry-After", strconv.FormatInt(int64(retryAfter), 10))
+	writeError(w, r, http.StatusTooManyRequests, "rate_limited", "too many Atlas Codes requests; retry later")
+	return false
+}
+
 func writeAtlasCodesError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
-	case errors.Is(err, atlascodes.ErrInvalidInput):
+	case errors.Is(err, atlascodes.ErrInvalidInput), errors.Is(err, atlascodes.ErrUnsupportedLabelOutput):
 		writeError(w, r, http.StatusBadRequest, "validation_failed", "identifier details are invalid")
+	case errors.Is(err, atlascodes.ErrBatchCancelled):
+		writeError(w, r, http.StatusConflict, "label_batch_cancelled", "label generation was cancelled and can be retried safely")
+	case errors.Is(err, atlascodes.ErrIdempotencyConflict):
+		writeError(w, r, http.StatusConflict, "idempotency_conflict", "the idempotency key was already used for different label details")
+	case errors.Is(err, atlascodes.ErrIdempotencyExpired):
+		writeError(w, r, http.StatusConflict, "idempotency_replay_expired", "the exact label artifact is no longer retained; generate current data with a new idempotency key")
+	case errors.Is(err, guard.ErrPermissionDenied):
+		writeError(w, r, http.StatusForbidden, "permission_denied", "asset read and write permission is required for every selected label")
+	case errors.Is(err, guard.ErrResourceWriteLocked):
+		writeError(w, r, http.StatusLocked, "ownership_locked", "claim local ownership before generating a label for this imported asset")
 	case errors.Is(err, atlascodes.ErrNotFound), errors.Is(err, atlascodes.ErrReferenceMissing):
 		writeError(w, r, http.StatusNotFound, "not_found", "the requested asset identifier was not found")
 	case errors.Is(err, atlascodes.ErrConflict):
@@ -2225,7 +3270,24 @@ func assetQueryFromRequest(r *http.Request) (atlas.Query, error) {
 	return atlas.Query{
 		Search: values.Get("q"), Kind: values.Get("kind"), Status: values.Get("status"),
 		ModelID: values.Get("modelId"), SiteID: values.Get("siteId"), DepartmentID: values.Get("departmentId"), UserID: values.Get("userId"),
-		Limit: limit,
+		DeploymentContext: values.Get("deploymentContext"), Limit: limit,
+	}, nil
+}
+
+func assetModelInventoryQueryFromRequest(r *http.Request) (atlas.ModelInventoryQuery, error) {
+	values := r.URL.Query()
+	limit := 0
+	if rawLimit := strings.TrimSpace(values.Get("limit")); rawLimit != "" {
+		parsed, err := strconv.Atoi(rawLimit)
+		if err != nil {
+			return atlas.ModelInventoryQuery{}, err
+		}
+		limit = parsed
+	}
+	return atlas.ModelInventoryQuery{
+		Status: values.Get("status"), SiteID: values.Get("siteId"), DepartmentID: values.Get("departmentId"),
+		UserID: values.Get("userId"), DeploymentContext: values.Get("deploymentContext"),
+		GroupBy: values.Get("groupBy"), Limit: limit,
 	}, nil
 }
 
@@ -2244,6 +3306,8 @@ func assetModelQueryFromRequest(r *http.Request) (atlas.ModelQuery, error) {
 
 func writeAtlasError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
+	case errors.Is(err, guard.ErrResourceWriteLocked):
+		writeError(w, r, http.StatusLocked, "ownership_locked", "claim local ownership before changing this imported Atlas record")
 	case errors.Is(err, atlas.ErrInvalidInput):
 		writeError(w, r, http.StatusBadRequest, "validation_failed", "asset details or filters are invalid")
 	case errors.Is(err, atlas.ErrNotFound):
@@ -2259,6 +3323,10 @@ func writeAtlasError(w http.ResponseWriter, r *http.Request, err error) {
 
 func writeThreadsError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
+	case errors.Is(err, guard.ErrResourceWriteLocked):
+		writeError(w, r, http.StatusLocked, "ownership_locked", "claim local ownership before changing this imported Threads record")
+	case errors.Is(err, guard.ErrPermissionDenied):
+		writeError(w, r, http.StatusForbidden, "permission_denied", "Threads write permission is required for this operation")
 	case errors.Is(err, threads.ErrInvalidInput):
 		writeError(w, r, http.StatusBadRequest, "validation_failed", "tag, goal, target, or revision details are invalid")
 	case errors.Is(err, threads.ErrNotFound):
@@ -2350,22 +3418,25 @@ func (s *Server) protected(permission guard.Permission, requireCSRF bool, next a
 			writeError(w, r, http.StatusServiceUnavailable, "authentication_unavailable", "authentication service unavailable")
 			return
 		}
-		cookie, err := r.Cookie(s.sessionCookieName())
-		if err != nil || cookie.Value == "" {
-			writeError(w, r, http.StatusUnauthorized, "authentication_required", "sign in is required")
-			return
-		}
-		authentication, err := s.guard.AuthenticateSession(r.Context(), cookie.Value)
-		if err != nil {
-			s.clearSessionCookie(w)
-			writeError(w, r, http.StatusUnauthorized, "invalid_session", "the session is invalid or expired")
-			return
+		authentication, nonBrowser := transportAuthentication(r.Context())
+		if !nonBrowser {
+			cookie, err := r.Cookie(s.sessionCookieName())
+			if err != nil || cookie.Value == "" {
+				writeError(w, r, http.StatusUnauthorized, "authentication_required", "sign in is required")
+				return
+			}
+			authentication, err = s.guard.AuthenticateSession(r.Context(), cookie.Value)
+			if err != nil {
+				s.clearSessionCookie(w)
+				writeError(w, r, http.StatusUnauthorized, "invalid_session", "the session is invalid or expired")
+				return
+			}
 		}
 		if scope, ok := foundation.ScopeFromContext(r.Context()); ok {
 			scope.ActorID = authentication.Principal.Subject
 			r = r.WithContext(foundation.WithScope(r.Context(), scope))
 		}
-		if requireCSRF {
+		if requireCSRF && !nonBrowser {
 			if !s.trustedBrowserRequest(r) {
 				writeError(w, r, http.StatusForbidden, "origin_denied", "request origin is not allowed")
 				return
@@ -2403,7 +3474,7 @@ func (s *Server) setSessionCookie(w http.ResponseWriter, credentials guard.Sessi
 		Expires:  credentials.Authentication.Session.ExpiresAt,
 		MaxAge:   int(time.Until(credentials.Authentication.Session.ExpiresAt).Seconds()),
 		HttpOnly: true,
-		Secure:   s.sessionCookieSecure,
+		Secure:   true,
 		SameSite: http.SameSiteLaxMode,
 	})
 }
@@ -2470,7 +3541,7 @@ func (s *Server) clearSessionCookie(w http.ResponseWriter) {
 		Expires:  time.Unix(1, 0).UTC(),
 		MaxAge:   -1,
 		HttpOnly: true,
-		Secure:   s.sessionCookieSecure,
+		Secure:   true,
 		SameSite: http.SameSiteLaxMode,
 	})
 }
@@ -2497,7 +3568,7 @@ func (s *Server) clearOIDCTransactionCookie(w http.ResponseWriter) {
 		Expires:  time.Unix(1, 0).UTC(),
 		MaxAge:   -1,
 		HttpOnly: true,
-		Secure:   s.sessionCookieSecure,
+		Secure:   true,
 		SameSite: http.SameSiteLaxMode,
 	})
 }
@@ -2571,7 +3642,7 @@ func (s *Server) cors(next http.Handler) http.Handler {
 		if originAllowed {
 			w.Header().Set("Access-Control-Allow-Origin", s.allowedOrigin)
 			w.Header().Set("Access-Control-Allow-Credentials", "true")
-			w.Header().Set("Access-Control-Expose-Headers", "X-Correlation-ID")
+			w.Header().Set("Access-Control-Expose-Headers", "X-Correlation-ID, Content-Disposition, Retry-After, X-Label-Batch-ID, X-Label-Template-Version, X-Label-Width-MM, X-Label-Height-MM, X-Label-Item-Count, X-Content-SHA256, X-Label-Created-At, X-Exchange-Package-ID, X-Idempotent-Replay")
 		}
 		if r.Method == http.MethodOptions {
 			if !originAllowed {
@@ -2579,7 +3650,7 @@ func (s *Server) cors(next http.Handler) http.Handler {
 				return
 			}
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-CSRF-Token, X-Correlation-ID")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-CSRF-Token, X-Correlation-ID, Idempotency-Key")
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
@@ -2599,6 +3670,7 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, maximumBytes int64, dest
 	}
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maximumBytes))
 	decoder.DisallowUnknownFields()
+	decoder.UseNumber()
 	if err := decoder.Decode(destination); err != nil {
 		return err
 	}
@@ -2657,6 +3729,10 @@ func writeError(w http.ResponseWriter, r *http.Request, status int, code, messag
 
 func writePeopleError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
+	case errors.Is(err, guard.ErrResourceWriteLocked):
+		writeError(w, r, http.StatusLocked, "ownership_locked", "claim local ownership before changing this imported directory record")
+	case errors.Is(err, guard.ErrPermissionDenied):
+		writeError(w, r, http.StatusForbidden, "permission_denied", "directory write permission is required for this operation")
 	case errors.Is(err, people.ErrInvalidInput):
 		writeError(w, r, http.StatusBadRequest, "validation_failed", "people directory input is invalid")
 	case errors.Is(err, people.ErrNotFound), errors.Is(err, people.ErrReferenceMissing):

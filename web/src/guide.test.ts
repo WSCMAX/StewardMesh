@@ -11,7 +11,7 @@ import {
   writeWalkthroughStatus,
 } from './guide'
 
-// Requirements: REQ-HORIZON-001, A11Y-001, DOC-001, DOC-002. Features: lifecycle.planning, experience.help.
+// Requirements: REQ-WORKSPACE-001, REQ-HORIZON-001, A11Y-001, DOC-001, DOC-002. Features: experience.workspace, lifecycle.planning, experience.help.
 
 beforeEach(() => {
   localStorage.clear()
@@ -48,12 +48,13 @@ test('builds a prefilled report from allow-listed sanitized context', () => {
   const body = report.searchParams.get('body') ?? ''
 
   expect(context.page).toBe('/assets')
-  expect(context.component).toBe('People privateexample.test')
-  expect(context.version).toBe('1.2.3script')
+  expect(context.component).toBe('Workspace')
+  expect(context.version).toBe('development')
   expect(context.viewport).toBe('320x640')
   expect(report.pathname).toBe('/WSCMAX/StewardMesh/issues/new')
   expect(body).toContain('Correlation ID: request-123')
   expect(body).not.toContain('token=private')
+  expect(body).not.toContain('private@example.test')
   expect(body).not.toContain('<script>')
 })
 

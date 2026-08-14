@@ -22,6 +22,20 @@ type identifierTestAssets struct {
 	missing        bool
 }
 
+type identifierTestWriteGate struct {
+	deniedType string
+	err        error
+	calls      []string
+}
+
+func (g *identifierTestWriteGate) CheckResourceWrite(_ context.Context, recordType, id string) error {
+	g.calls = append(g.calls, recordType+":"+id)
+	if recordType == g.deniedType {
+		return g.err
+	}
+	return nil
+}
+
 func (a identifierTestAssets) GetAsset(_ context.Context, id string) (domain.Asset, error) {
 	if a.missing {
 		return domain.Asset{}, atlas.ErrNotFound
@@ -65,6 +79,25 @@ func newIdentifierTestStore() *identifierTestStore {
 
 func identifierTestKey(organizationID, id string) string { return organizationID + "\x00" + id }
 
+func (s *identifierTestStore) SnapshotIdentifiers(_ context.Context, organizationID string, maximum int) ([]Identifier, error) {
+	if maximum < 1 {
+		return nil, ErrInvalidInput
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	items := make([]Identifier, 0)
+	for _, item := range s.items {
+		if item.OrganizationID == organizationID {
+			items = append(items, cloneIdentifier(item))
+			if len(items) > maximum {
+				return nil, ErrTooLarge
+			}
+		}
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].ID < items[j].ID })
+	return items, nil
+}
+
 func (s *identifierTestStore) ListIdentifiers(_ context.Context, organizationID, assetID string) ([]Identifier, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -83,6 +116,16 @@ func (s *identifierTestStore) GetIdentifier(_ context.Context, organizationID, a
 	defer s.mu.Unlock()
 	item, exists := s.items[identifierTestKey(organizationID, identifierID)]
 	if !exists || item.AssetID != assetID {
+		return Identifier{}, ErrNotFound
+	}
+	return cloneIdentifier(item), nil
+}
+
+func (s *identifierTestStore) GetIdentifierByID(_ context.Context, organizationID, identifierID string) (Identifier, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	item, exists := s.items[identifierTestKey(organizationID, identifierID)]
+	if !exists {
 		return Identifier{}, ErrNotFound
 	}
 	return cloneIdentifier(item), nil
@@ -188,6 +231,49 @@ func (s *identifierTestStore) DeactivateIdentifier(
 	item.DeactivatedAt = &deactivatedAt
 	s.items[key] = item
 	return cloneIdentifier(item), true, nil
+}
+
+func (s *identifierTestStore) ImportIdentifierChain(_ context.Context, organizationID string, chain IdentifierChain) (IdentifierChain, bool, error) {
+	if organizationID == "" || chain.TerminalID == "" || len(chain.Items) == 0 {
+		return IdentifierChain{}, false, ErrInvalidInput
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	existingCount := 0
+	for _, item := range chain.Items {
+		if item.OrganizationID != organizationID {
+			return IdentifierChain{}, false, ErrInvalidInput
+		}
+		if existing, exists := s.items[identifierTestKey(organizationID, item.ID)]; exists {
+			existingCount++
+			if !reflect.DeepEqual(existing, item) {
+				return IdentifierChain{}, false, ErrConflict
+			}
+		}
+	}
+	if existingCount == len(chain.Items) {
+		return cloneIdentifierTestChain(chain), false, nil
+	}
+	if existingCount != 0 {
+		return IdentifierChain{}, false, ErrConflict
+	}
+	for _, item := range chain.Items {
+		if item.Status == StatusActive && s.activeConflict(item, "") {
+			return IdentifierChain{}, false, ErrConflict
+		}
+	}
+	for _, item := range chain.Items {
+		s.items[identifierTestKey(organizationID, item.ID)] = cloneIdentifier(item)
+	}
+	return cloneIdentifierTestChain(chain), true, nil
+}
+
+func cloneIdentifierTestChain(chain IdentifierChain) IdentifierChain {
+	result := IdentifierChain{TerminalID: chain.TerminalID, Items: make([]Identifier, len(chain.Items))}
+	for index, item := range chain.Items {
+		result.Items[index] = cloneIdentifier(item)
+	}
+	return result
 }
 
 func (s *identifierTestStore) activeConflict(candidate Identifier, excludingID string) bool {
@@ -540,5 +626,80 @@ func TestNewServiceRequiresDependenciesAndOrganization(t *testing.T) {
 	}
 	if service, err := NewService(newIdentifierTestStore(), assets, foundation.NopAuditor{}, ServiceConfig{}); err == nil || service != nil {
 		t.Fatal("expected a required organization")
+	}
+}
+
+func TestExchangeImporterPreservesIdentifierLineageAndOrdinaryWritesStayFenced(t *testing.T) {
+	now := time.Date(2024, time.March, 2, 15, 4, 5, 600_000_000, time.UTC)
+	replacedAt := now.Add(time.Hour)
+	denied := errors.New("imported resource is write locked")
+	writes := &identifierTestWriteGate{deniedType: "atlas.identifier", err: denied}
+	store := newIdentifierTestStore()
+	auditor := &identifierTestAuditor{}
+	service, importer, err := NewServiceWithExchangeImporter(
+		store, identifierTestAssets{organizationID: "target-org"}, writes, auditor,
+		ServiceConfig{OrganizationID: "target-org", Now: func() time.Time { return now.Add(24 * time.Hour) }},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	chain := IdentifierChain{TerminalID: "identifier-new", Items: []Identifier{
+		{
+			ID: "identifier-old", AssetID: "asset-one", Symbology: SymbologyCode128,
+			NormalizedValue: "SECRET-OLD", DisplayValue: "Secret old label", Source: SourceImported,
+			Primary: true, Status: StatusReplaced, ReplacedByID: "identifier-new", Revision: 2,
+			CreatedBy: "source-creator", CreatedCorrelationID: "source-create-correlation",
+			UpdatedBy: "source-replacer", UpdatedCorrelationID: "source-replace-correlation",
+			CreatedAt: now, UpdatedAt: replacedAt, DeactivatedAt: &replacedAt,
+		},
+		{
+			ID: "identifier-new", AssetID: "asset-one", Symbology: SymbologyQR,
+			NormalizedValue: "Secret/New/Value", DisplayValue: "Secret new label", Source: SourceGenerated,
+			Primary: true, Status: StatusActive, SupersedesID: "identifier-old", Revision: 1,
+			CreatedBy: "source-replacer", CreatedCorrelationID: "source-replace-correlation",
+			UpdatedBy: "source-replacer", UpdatedCorrelationID: "source-replace-correlation",
+			CreatedAt: replacedAt, UpdatedAt: replacedAt,
+		},
+	}}
+	operation := ExchangeImportOperation{Token: "exchange-identifier-import", OccurredAt: now.Add(12 * time.Hour)}
+	result, err := importer.ImportIdentifierChain(context.Background(), operation, chain)
+	if err != nil || !result.Committed || !result.Created {
+		t.Fatalf("import Atlas identifier lineage: result=%#v err=%v", result, err)
+	}
+	if chain.Items[0].OrganizationID != "" || chain.Items[1].OrganizationID != "" {
+		t.Fatalf("importer mutated caller-owned lineage: %#v", chain)
+	}
+	loaded, err := service.ExchangeIdentifierChain(context.Background(), chain.TerminalID)
+	if err != nil || len(loaded.Items) != 2 || loaded.Items[0].OrganizationID != "target-org" || loaded.Items[1].OrganizationID != "target-org" {
+		t.Fatalf("unexpected imported lineage: %#v err=%v", loaded, err)
+	}
+	if len(writes.calls) != 0 {
+		t.Fatalf("private Exchange importer consulted the ordinary write gate: %#v", writes.calls)
+	}
+	if len(auditor.events) != 1 || auditor.events[0].ActorID != "system:exchange" ||
+		auditor.events[0].CorrelationID != operation.Token || auditor.events[0].ResourceType != "atlas.identifier" ||
+		!auditor.events[0].OccurredAt.Equal(operation.OccurredAt) {
+		t.Fatalf("unexpected Atlas identifier Exchange audit: %#v", auditor.events)
+	}
+	for key, value := range auditor.events[0].Metadata {
+		if strings.Contains(strings.ToLower(key), "value") || strings.Contains(value, "SECRET-OLD") ||
+			strings.Contains(value, "Secret old label") || strings.Contains(value, "Secret/New/Value") ||
+			strings.Contains(value, "Secret new label") {
+			t.Fatalf("Exchange audit leaked identifier content in %q=%q", key, value)
+		}
+	}
+	replayed, err := importer.ImportIdentifierChain(context.Background(), operation, chain)
+	if err != nil || !replayed.Committed || replayed.Created || len(auditor.events) != 1 {
+		t.Fatalf("exact Atlas identifier replay was not idempotent: result=%#v audits=%#v err=%v", replayed, auditor.events, err)
+	}
+
+	if _, _, err := service.CreateIdentifier(context.Background(), CreateIdentifierInput{
+		ID: "identifier-local", AssetID: "asset-one", Symbology: SymbologyCode128, Value: "LOCAL-CODE",
+	}); !errors.Is(err, denied) {
+		t.Fatalf("ordinary identifier creation bypassed the write gate: %v", err)
+	}
+	wantCalls := []string{"atlas.asset:asset-one", "atlas.identifier:identifier-local"}
+	if !reflect.DeepEqual(writes.calls, wantCalls) {
+		t.Fatalf("unexpected canonical write-gate calls: got %#v want %#v", writes.calls, wantCalls)
 	}
 }

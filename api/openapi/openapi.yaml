@@ -1,8 +1,9 @@
-# Requirements: REQ-ATLAS-001, REQ-ATLAS-CODES-001, REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-HORIZON-001, REQ-LEDGER-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001.
+# Requirements: REQ-API-001, REQ-ATLAS-001, REQ-ATLAS-MODELS-001, REQ-ATLAS-CODES-001, REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005, REQ-DIRECTORY-EXPANSION-006, REQ-DIRECTORY-EXPANSION-007, REQ-DIRECTORY-EXPANSION-008, REQ-DIRECTORY-EXPANSION-009, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-HORIZON-001, REQ-LEDGER-001, REQ-STACK-001, REQ-SIGNALS-001, REQ-REACH-001, REQ-EXCHANGE-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001, SEC-MCP-001.
+# Feature: experience.help.
 openapi: 3.1.0
 info:
   title: StewardMesh API
-  version: 0.9.0
+  version: 0.12.0
   description: Requirements-driven inventory, lifecycle, and secure organization management API.
   license:
     name: Apache License 2.0
@@ -11,6 +12,178 @@ servers:
   - url: /
 security: []
 paths:
+  /.well-known/oauth-protected-resource:
+    get:
+      summary: Discover Bridge protected-resource metadata
+      operationId: getBridgeProtectedResourceMetadata
+      tags: [Bridge]
+      x-requirement: SEC-MCP-001
+      responses:
+        '200':
+          description: RFC 9728 metadata for the exact MCP resource audience
+          content: {application/json: {schema: {$ref: '#/components/schemas/BridgeProtectedResourceMetadata'}}}
+  /.well-known/oauth-authorization-server:
+    get:
+      summary: Discover Bridge authorization-server metadata
+      operationId: getBridgeAuthorizationServerMetadata
+      tags: [Bridge]
+      x-requirement: SEC-MCP-001
+      responses:
+        '200':
+          description: OAuth authorization server metadata
+          content: {application/json: {schema: {$ref: '#/components/schemas/BridgeAuthorizationServerMetadata'}}}
+  /oauth/authorize:
+    get:
+      summary: Begin an authenticated OAuth authorization-code consent request
+      operationId: authorizeBridgeClient
+      tags: [Bridge]
+      x-requirement: SEC-MCP-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - {name: response_type, in: query, required: true, schema: {type: string, const: code}}
+        - {name: client_id, in: query, required: true, schema: {$ref: '#/components/schemas/BridgeID'}}
+        - {name: redirect_uri, in: query, required: true, schema: {type: string, format: uri, maxLength: 2048}}
+        - {name: resource, in: query, required: true, schema: {type: string, format: uri}}
+        - {name: scope, in: query, required: true, schema: {type: string, maxLength: 256}}
+        - {name: state, in: query, required: false, schema: {type: string, maxLength: 512}}
+        - {name: code_challenge, in: query, required: true, schema: {type: string, pattern: '^[A-Za-z0-9_-]{43}$'}}
+        - {name: code_challenge_method, in: query, required: true, schema: {type: string, const: S256}}
+      responses:
+        '303': {description: Continue on the same-origin consent screen}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '429': {description: Authorization attempts are rate limited}
+  /oauth/token:
+    post:
+      summary: Exchange a code or rotate a refresh token
+      operationId: exchangeBridgeToken
+      tags: [Bridge]
+      x-requirement: SEC-MCP-001
+      requestBody:
+        required: true
+        content: {application/x-www-form-urlencoded: {schema: {$ref: '#/components/schemas/BridgeTokenRequest'}}}
+      responses:
+        '200': {description: Short-lived access and rotating refresh credentials, content: {application/json: {schema: {$ref: '#/components/schemas/BridgeTokenResponse'}}}}
+        '400': {description: 'OAuth invalid_request, invalid_grant, or invalid_scope response'}
+        '429': {description: Token attempts are rate limited}
+  /oauth/revoke:
+    post:
+      summary: Revoke a Bridge access or refresh credential
+      operationId: revokeBridgeToken
+      tags: [Bridge]
+      x-requirement: SEC-MCP-001
+      requestBody:
+        required: true
+        content: {application/x-www-form-urlencoded: {schema: {type: object, required: [token], properties: {token: {type: string, maxLength: 512, writeOnly: true}}}}}
+      responses:
+        '200': {description: Idempotent revocation response}
+        '429': {description: Revocation attempts are rate limited}
+  /mcp:
+    post:
+      summary: Send one authenticated MCP 2026-07-28 request over stateless Streamable HTTP
+      operationId: callBridgeMCP
+      tags: [Bridge]
+      x-requirement: SEC-MCP-001
+      security: [{bridgeBearerAuth: ['mcp:resources']}]
+      parameters:
+        - {name: MCP-Protocol-Version, in: header, required: true, schema: {type: string, const: 2026-07-28}}
+        - {name: MCP-Method, in: header, required: true, schema: {type: string, maxLength: 128}}
+      requestBody:
+        required: true
+        content: {application/json: {schema: {type: object, additionalProperties: true, maxProperties: 16}}}
+      responses:
+        '200': {description: One JSON-RPC response}
+        '400': {description: 'Invalid, batched, or unsupported MCP request'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '413': {description: MCP request exceeds 64 KiB}
+        '415': {description: MCP requests require application/json}
+  /api/v1/bridge/clients:
+    get:
+      summary: List registered Bridge OAuth clients
+      operationId: listBridgeClients
+      tags: [Bridge]
+      x-requirement: REQ-API-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - {name: cursor, in: query, required: false, schema: {$ref: '#/components/schemas/BridgePageCursor'}}
+        - {name: limit, in: query, required: false, schema: {type: integer, minimum: 1, maximum: 100, default: 25}}
+      responses:
+        '200': {description: OAuth clients, content: {application/json: {schema: {$ref: '#/components/schemas/BridgeClientCollection'}}}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+    post:
+      summary: Register a public Bridge OAuth client
+      operationId: createBridgeClient
+      tags: [Bridge]
+      x-requirement: REQ-API-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CreateBridgeClientRequest'}}}}
+      responses:
+        '201': {description: Client registered, content: {application/json: {schema: {$ref: '#/components/schemas/BridgeClient'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {description: Client name or limit conflict}
+  /api/v1/bridge/clients/{clientID}:
+    delete:
+      summary: Revoke a Bridge OAuth client and all its grants
+      operationId: revokeBridgeClient
+      tags: [Bridge]
+      x-requirement: REQ-API-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{name: clientID, in: path, required: true, schema: {$ref: '#/components/schemas/BridgeID'}}]
+      responses:
+        '200': {description: Revoked client, content: {application/json: {schema: {$ref: '#/components/schemas/BridgeClient'}}}}
+        '404': {description: Client not found}
+  /api/v1/bridge/grants:
+    get:
+      summary: List Bridge OAuth grants without raw credentials
+      operationId: listBridgeGrants
+      tags: [Bridge]
+      x-requirement: REQ-API-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - {name: cursor, in: query, required: false, schema: {$ref: '#/components/schemas/BridgePageCursor'}}
+        - {name: limit, in: query, required: false, schema: {type: integer, minimum: 1, maximum: 100, default: 25}}
+      responses:
+        '200': {description: OAuth grants, content: {application/json: {schema: {$ref: '#/components/schemas/BridgeGrantCollection'}}}}
+  /api/v1/bridge/grants/{grantID}:
+    delete:
+      summary: Revoke one Bridge OAuth grant
+      operationId: revokeBridgeGrant
+      tags: [Bridge]
+      x-requirement: REQ-API-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{name: grantID, in: path, required: true, schema: {$ref: '#/components/schemas/BridgeID'}}]
+      responses:
+        '200': {description: Revoked grant, content: {application/json: {schema: {$ref: '#/components/schemas/BridgeGrant'}}}}
+        '404': {description: Grant not found}
+  /api/v1/bridge/consents/{requestID}:
+    get:
+      summary: Get the current actor's pending Bridge consent
+      operationId: getBridgeConsent
+      tags: [Bridge]
+      x-requirement: SEC-MCP-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{name: requestID, in: path, required: true, schema: {$ref: '#/components/schemas/BridgeID'}}]
+      responses:
+        '200': {description: Pending consent, content: {application/json: {schema: {$ref: '#/components/schemas/BridgeConsent'}}}}
+        '404': {description: Consent not found}
+        '410': {description: Consent expired}
+  /api/v1/bridge/consents/{requestID}/decision:
+    post:
+      summary: Approve or deny one actor-bound Bridge consent
+      operationId: decideBridgeConsent
+      tags: [Bridge]
+      x-requirement: SEC-MCP-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{name: requestID, in: path, required: true, schema: {$ref: '#/components/schemas/BridgeID'}}]
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [approved], additionalProperties: false, properties: {approved: {type: boolean}}}}}}
+      responses:
+        '200': {description: Exact registered redirect selected by the server, content: {application/json: {schema: {type: object, required: [redirectTo], properties: {redirectTo: {type: string, format: uri}}}}}}
+        '409': {description: Consent was already decided}
+        '410': {description: Consent expired}
   /healthz:
     get:
       summary: Get service health
@@ -472,13 +645,229 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+  /api/v1/templates:
+    get:
+      summary: List Patterns templates
+      operationId: listPatternsTemplates
+      tags: [Patterns]
+      x-requirement: REQ-PATTERNS-001
+      description: Returns immutable built-in templates and organization-owned templates for form generation, imports, and Exchange discovery. By default only the latest version of each template is returned; includeVersions exposes immutable history.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - in: query
+          name: recordType
+          required: false
+          description: Exact provider-neutral record family to return.
+          schema: {$ref: '#/components/schemas/PatternsRecordType'}
+        - in: query
+          name: includeRetired
+          required: false
+          schema: {type: boolean, default: false}
+        - in: query
+          name: includeVersions
+          required: false
+          description: Return every immutable version instead of only the latest version of each template.
+          schema: {type: boolean, default: false}
+      responses:
+        '200':
+          description: Versioned template collection
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PatternsTemplateCollection'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+    post:
+      summary: Create a custom Patterns template
+      operationId: createPatternsTemplate
+      tags: [Patterns]
+      x-requirement: REQ-PATTERNS-001
+      description: Creates immutable version 1 of an organization-owned template. Requires the Guard management permission.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreatePatternsTemplateRequest'}
+      responses:
+        '201':
+          description: Custom template version created
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PatternsTemplate'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+  /api/v1/templates/{templateId}:
+    parameters:
+      - $ref: '#/components/parameters/PatternsTemplateID'
+      - $ref: '#/components/parameters/PatternsVersion'
+    get:
+      summary: Get a Patterns template version
+      operationId: getPatternsTemplate
+      tags: [Patterns]
+      x-requirement: REQ-PATTERNS-001
+      description: Returns the requested immutable version, or the latest version when version is omitted.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200':
+          description: Exact template identity, version metadata, and field schema
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PatternsTemplate'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+  /api/v1/templates/{templateId}/schema:
+    parameters:
+      - $ref: '#/components/parameters/PatternsTemplateID'
+      - $ref: '#/components/parameters/PatternsVersion'
+    get:
+      summary: Get a Patterns schema version
+      operationId: getPatternsTemplateSchema
+      tags: [Patterns]
+      x-requirement: REQ-PATTERNS-001
+      description: Stable discovery seam for generated forms, CSV tooling, and Exchange. Returns the same provider-neutral, versioned template contract as the detail endpoint.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200':
+          description: Exact versioned schema with help, accessible-label, and CSV metadata
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PatternsTemplate'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+  /api/v1/templates/{templateId}/copy:
+    parameters:
+      - $ref: '#/components/parameters/PatternsTemplateID'
+      - $ref: '#/components/parameters/PatternsVersion'
+    post:
+      summary: Copy a Patterns template version
+      operationId: copyPatternsTemplate
+      tags: [Patterns]
+      x-requirement: REQ-PATTERNS-001
+      description: Copies the selected immutable source version into version 1 of a new organization-owned template. Requires the Guard management permission.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CopyPatternsTemplateRequest'}
+      responses:
+        '201':
+          description: Copied custom template created
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PatternsTemplate'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+  /api/v1/templates/{templateId}/versions:
+    parameters:
+      - $ref: '#/components/parameters/PatternsTemplateID'
+    post:
+      summary: Create a Patterns template version
+      operationId: createPatternsTemplateVersion
+      tags: [Patterns]
+      x-requirement: REQ-PATTERNS-001
+      description: Appends the next immutable version to a custom template; built-in templates cannot be versioned through the API. Requires the Guard management permission.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreatePatternsTemplateVersionRequest'}
+      responses:
+        '201':
+          description: New immutable template version created
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PatternsTemplate'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+  /api/v1/templates/{templateId}/validate:
+    parameters:
+      - $ref: '#/components/parameters/PatternsTemplateID'
+      - $ref: '#/components/parameters/PatternsVersion'
+    post:
+      summary: Validate record values against a Patterns version
+      operationId: validatePatternsRecord
+      tags: [Patterns]
+      x-requirement: REQ-PATTERNS-001
+      description: Provider-neutral validation seam shared by interactive forms and Exchange package rows. Missing allowed references may produce a holding result instead of invalidating the row.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PatternsValidationRequest'}
+      responses:
+        '200':
+          description: Deterministic valid, holding, or invalid result with normalized values
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PatternsValidationResult'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+  /api/v1/templates/{templateId}/template.csv:
+    parameters:
+      - $ref: '#/components/parameters/PatternsTemplateID'
+      - $ref: '#/components/parameters/PatternsVersion'
+    get:
+      summary: Export a Patterns CSV header template
+      operationId: exportPatternsCSVTemplate
+      tags: [Patterns]
+      x-requirement: REQ-PATTERNS-001
+      description: Emits one RFC 4180-compatible header row in field order using each field's csvHeader metadata.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200':
+          description: CSV import template for the resolved immutable version
+          headers:
+            Content-Disposition:
+              description: Attachment filename containing the template identity and resolved version.
+              schema: {type: string}
+          content:
+            text/csv:
+              schema: {type: string}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
   /api/v1/asset-identifiers/resolve:
     post:
       summary: Resolve an active asset identifier
       operationId: resolveAssetIdentifier
       tags: [Atlas Codes]
       x-requirement: REQ-ATLAS-CODES-001
-      description: Resolves an active identifier without placing the encoded value in a URL or access log, then authorizes the matched asset against the caller's organization, site, department, or resource-scoped assets.read grants. Unknown and unauthorized values return the same not-found response.
+      description: Resolves an active identifier without placing the encoded value in a URL or access log, including credential-free `/atlas/codes/{opaqueIdentifierId}` routes emitted by QR label templates. It then authorizes the matched asset against the caller's organization, site, department, or resource-scoped assets.read grants. Unknown and unauthorized values return the same not-found response. Authenticated principals are rate limited in a bounded one-minute window without retaining raw codes in the limiter key or error.
       security: [{localCookieAuth: []}, {secureCookieAuth: []}]
       requestBody:
         required: true
@@ -494,6 +883,71 @@ paths:
         '400': {$ref: '#/components/responses/InvalidRequest'}
         '401': {$ref: '#/components/responses/Unauthorized'}
         '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+  /api/v1/asset-label-templates:
+    get:
+      summary: List versioned Atlas Codes label templates
+      operationId: listAssetLabelTemplates
+      tags: [Atlas Codes]
+      x-requirement: REQ-ATLAS-CODES-001
+      description: Lists active physical label definitions derived directly from immutable Patterns `atlas.label-template` versions. Each definition exposes configured dimensions, margins, quiet zones, credential-free payload source, human-readable text, organization branding, and the explicit safe asset-field allowlist. At least one assets.read grant in the current organization is required, including a site, department, or resource-scoped grant.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200':
+          description: Available Code 128 and QR label definitions and output bounds
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AssetLabelTemplateCollection'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+  /api/v1/asset-label-batches:
+    post:
+      summary: Generate a bounded print-ready label artifact
+      operationId: createAssetLabelBatch
+      tags: [Atlas Codes]
+      x-requirement: REQ-ATLAS-CODES-001
+      description: Generates one label or a bounded selected batch without creating or changing identifier associations. Every selected asset is rechecked for current assets.read, assets.write, matching scope, and imported-resource ownership before cached or newly rendered bytes are returned. Within the bounded replay window, repeating the exact request with the same idempotency key returns identical snapshot bytes and reusing a key for different input is rejected; an expired replay requires a new key. Request cancellation stops generation. SVG is a one-label vector browser/OS artifact and PDF preserves one physical page per selected label. Printable label text is bounded ASCII across both public renderers so no output silently substitutes unsupported characters. Device-language renderers remain internal qualification seams and are not accepted by this API until dated real-device validation exists.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+        - in: header
+          name: Idempotency-Key
+          required: true
+          description: Stable retry key scoped to this authenticated organization; 1–128 safe identifier characters.
+          schema: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateAssetLabelBatchRequest'}
+      responses:
+        '200':
+          description: Print-ready vector SVG or PDF output
+          headers:
+            Content-Disposition: {description: Inline browser review for SVG or PDF., schema: {type: string}}
+            X-Label-Batch-ID: {description: Deterministic batch identity for this exact input., schema: {type: string}}
+            X-Label-Template-Version: {description: Resolved immutable Patterns-backed template version., schema: {type: integer, format: int64, minimum: 1}}
+            X-Label-Width-MM: {description: Physical width of each label in millimeters., schema: {type: number, format: double, minimum: 12, maximum: 300}}
+            X-Label-Height-MM: {description: Physical height of each label in millimeters., schema: {type: number, format: double, minimum: 12, maximum: 300}}
+            X-Label-Item-Count: {description: Number of labels in the bounded artifact., schema: {type: integer, minimum: 1, maximum: 50}}
+            X-Content-SHA256: {description: SHA-256 digest of the exact returned artifact bytes., schema: {type: string, pattern: '^[a-f0-9]{64}$'}}
+            X-Label-Created-At: {description: UTC creation time of the immutable artifact snapshot., schema: {type: string, format: date-time}}
+            X-Idempotent-Replay: {description: True when returning an exact prior result for the same request key., schema: {type: boolean}}
+          content:
+            image/svg+xml:
+              schema: {type: string, format: binary}
+            application/pdf:
+              schema: {type: string, format: binary}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '423': {$ref: '#/components/responses/Locked'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
   /api/v1/asset-models:
     get:
       summary: List asset models
@@ -623,6 +1077,34 @@ paths:
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/asset-models/{modelId}/inventory:
+    parameters:
+      - $ref: '#/components/parameters/AssetModelID'
+    get:
+      summary: Filter and group assets linked to an asset model
+      operationId: getAssetModelInventory
+      tags: [Atlas]
+      x-requirement: REQ-ATLAS-MODELS-001
+      description: Returns uncapped total and filtered counts using the same current instance fields as the Atlas asset repository. departmentId and userId match the asset's current Atlas references, not effective-dated People assignment history. The limit caps only the returned asset details, not counts or groups.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - {in: query, name: status, schema: {$ref: '#/components/schemas/AssetStatus'}}
+        - {in: query, name: siteId, schema: {$ref: '#/components/schemas/DirectoryReferenceID'}}
+        - {in: query, name: departmentId, description: Exact current Atlas asset department reference., schema: {$ref: '#/components/schemas/DirectoryReferenceID'}}
+        - {in: query, name: userId, description: Exact current Atlas asset primary-user reference., schema: {$ref: '#/components/schemas/DirectoryReferenceID'}}
+        - {in: query, name: deploymentContext, description: Case-insensitive substring matched against hostname and deployment notes., schema: {type: string, maxLength: 200}}
+        - {in: query, name: groupBy, schema: {$ref: '#/components/schemas/AssetModelInventoryGroupBy'}}
+        - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 100, default: 50}}
+      responses:
+        '200':
+          description: Exact model inventory totals, optional groups, and a bounded asset detail list
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AssetModelInventory'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
   /api/v1/asset-models/{modelId}/assets/bulk:
     parameters:
       - $ref: '#/components/parameters/AssetModelID'
@@ -666,6 +1148,7 @@ paths:
         - {in: query, name: siteId, schema: {$ref: '#/components/schemas/DirectoryReferenceID'}}
         - {in: query, name: departmentId, schema: {$ref: '#/components/schemas/DirectoryReferenceID'}}
         - {in: query, name: userId, schema: {$ref: '#/components/schemas/DirectoryReferenceID'}}
+        - {in: query, name: deploymentContext, description: Case-insensitive substring matched against hostname and deployment notes., schema: {type: string, maxLength: 200}}
         - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 100, default: 50}}
       responses:
         '200':
@@ -796,6 +1279,7 @@ paths:
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
     post:
       summary: Associate an identifier with an asset
       operationId: createAssetIdentifier
@@ -831,6 +1315,7 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
         '423': {$ref: '#/components/responses/Locked'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
   /api/v1/assets/{assetId}/identifiers/{identifierId}/replace:
     parameters:
       - $ref: '#/components/parameters/AssetID'
@@ -865,6 +1350,7 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
         '423': {$ref: '#/components/responses/Locked'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
   /api/v1/assets/{assetId}/identifiers/{identifierId}/deactivate:
     parameters:
       - $ref: '#/components/parameters/AssetID'
@@ -895,6 +1381,7 @@ paths:
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
         '423': {$ref: '#/components/responses/Locked'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
   /api/v1/departments:
     get:
       summary: List departments
@@ -1068,6 +1555,239 @@ paths:
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/directory-import-sources:
+    get:
+      summary: List configured read-only directory sources
+      operationId: listDirectoryImportSources
+      tags: [Bridge]
+      x-requirement: REQ-DIRECTORY-EXPANSION-002
+      x-required-permission: integrations.read
+      description: Requires organization-scoped `integrations.read`. Returns only stable source identity, provider name, and non-secret configuration revision; Entra tenants, SailPoint endpoints, Grouper URLs, PeopleSoft endpoints/query mappings, credentials, and tokens remain server-side.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200':
+          description: Configured credential-free source identities
+          headers:
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DirectoryImportSourceCollection'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+  /api/v1/graph:
+    get:
+      summary: Read the permission-scoped relationship graph
+      operationId: getRelationshipGraph
+      tags: [People]
+      x-requirement: REQ-DIRECTORY-EXPANSION-008
+      x-required-permission: directory.read
+      description: Projects visible People, location, imported-group, and permitted Atlas records into a bounded typed graph. Directory and asset visibility are derived exclusively from authenticated Guard grants and cannot be supplied by the client.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - name: search
+          in: query
+          schema: {type: string, maxLength: 200}
+          description: Case-insensitive record-label anchor search. When relationship is set, connected endpoint records are retained as context within the response limit.
+        - name: kind
+          in: query
+          schema: {$ref: '#/components/schemas/RelationshipGraphNodeKind'}
+          description: Anchor record type. When relationship is set, connected endpoint records of other types are retained as context within the response limit.
+        - name: relationship
+          in: query
+          schema: {$ref: '#/components/schemas/RelationshipGraphEdgeKind'}
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 500, default: 100}
+      responses:
+        '200':
+          description: Typed records and relationships restricted to the caller's intersected visibility scopes
+          headers:
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RelationshipGraph'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+  /api/v1/directory-imports:
+    get:
+      summary: List directory import batches
+      operationId: listDirectoryImports
+      tags: [Bridge]
+      x-requirement: REQ-DIRECTORY-EXPANSION-002
+      x-required-permission: integrations.read
+      description: Requires organization-scoped `integrations.read`. Results contain durable plan and reconciliation metadata, never raw provider payloads.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - in: query
+          name: limit
+          required: false
+          schema: {type: integer, minimum: 1, maximum: 100, default: 50}
+        - in: query
+          name: cursor
+          required: false
+          description: Opaque cursor returned by the preceding page.
+          schema: {$ref: '#/components/schemas/DirectoryImportBatchID'}
+      responses:
+        '200':
+          description: Most recent matching organization-owned import batches
+          headers:
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DirectoryImportBatchPage'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '500': {$ref: '#/components/responses/InternalError'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+  /api/v1/directory-imports/preview:
+    post:
+      summary: Preview a directory import
+      operationId: previewDirectoryImport
+      tags: [Bridge]
+      x-requirement: REQ-DIRECTORY-EXPANSION-002
+      x-required-permission: integrations.write
+      description: |
+        Requires organization-scoped `integrations.write`. Pulls one configured read-only
+        source, normalizes a snapshot bounded to 100 pages and a 5,000-item plan,
+        and durably stores an immutable reconciliation
+        plan without mutating directory records. Neither the request nor the response accepts
+        or exposes raw provider payloads. Reusing the same idempotency key with the same source
+        returns the original preview; reusing it for another source is a conflict.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+        - $ref: '#/components/parameters/DirectoryImportIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PreviewDirectoryImportRequest'}
+      responses:
+        '201':
+          description: New or safely replayed immutable preview plan
+          headers:
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DirectoryImportOperationResult'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404':
+          description: The configured source system was not found
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '409':
+          description: The idempotency key was already used for a different preview request, or the bounded source snapshot could not be planned safely
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '500': {$ref: '#/components/responses/InternalError'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+  /api/v1/directory-imports/{batchID}:
+    get:
+      summary: Get a directory import batch
+      operationId: getDirectoryImport
+      tags: [Bridge]
+      x-requirement: REQ-DIRECTORY-EXPANSION-002
+      x-required-permission: integrations.read
+      description: Requires organization-scoped `integrations.read`. Returns the immutable plan, mapping-safe item detail, conflicts, and complete attempt history.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/DirectoryImportBatchID'
+      responses:
+        '200':
+          description: Organization-owned import batch detail
+          headers:
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DirectoryImportBatchDetail'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+  /api/v1/directory-imports/{batchID}/apply:
+    post:
+      summary: Apply a directory import preview
+      operationId: applyDirectoryImport
+      tags: [Bridge]
+      x-requirement: REQ-DIRECTORY-EXPANSION-002
+      x-required-permission: integrations.write
+      description: |
+        Requires organization-scoped `integrations.write`. Applies only the exact immutable plan
+        persisted by preview; it never re-pulls the provider and accepts no replacement records or
+        mappings. Conflicts remain visible instead of silently overwriting local or externally
+        owned records. Safe retries with the same idempotency key return the original attempt.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/DirectoryImportBatchID'
+        - $ref: '#/components/parameters/CSRFToken'
+        - $ref: '#/components/parameters/DirectoryImportIdempotencyKey'
+      responses:
+        '200':
+          description: Applied, partially applied, failed, or safely replayed persisted plan
+          headers:
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DirectoryImportOperationResult'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409':
+          description: The batch is not in the previewed state, is already running, reached the 100-attempt history limit, or the idempotency key conflicts with another operation
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '500': {$ref: '#/components/responses/InternalError'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+  /api/v1/directory-imports/{batchID}/retry:
+    post:
+      summary: Retry a directory import attempt
+      operationId: retryDirectoryImport
+      tags: [Bridge]
+      x-requirement: REQ-DIRECTORY-EXPANSION-002
+      x-required-permission: integrations.write
+      description: |
+        Requires organization-scoped `integrations.write`. Retries only retryable failed actions
+        from the exact persisted plan and preserves all earlier outcomes and attempts. After a
+        successful preview, retry never re-pulls the source. A transient connector failure that
+        prevented plan creation may resume the same failed batch using its pinned configuration
+        revision and durably install the recovered plan. Retry never accepts amended records,
+        mappings, or provider payloads.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/DirectoryImportBatchID'
+        - $ref: '#/components/parameters/CSRFToken'
+        - $ref: '#/components/parameters/DirectoryImportIdempotencyKey'
+      responses:
+        '200':
+          description: Retried or safely replayed persisted plan with complete attempt history
+          headers:
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DirectoryImportOperationResult'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409':
+          description: The batch has no retryable failed actions, is already running, reached the 100-attempt history limit, or the idempotency key conflicts with another operation
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '500': {$ref: '#/components/responses/InternalError'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
   /api/v1/identities:
     get:
       summary: Search directory identities
@@ -2009,6 +2729,903 @@ paths:
         '400': {$ref: '#/components/responses/InvalidRequest'}
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
+  /api/v1/stack:
+    get:
+      summary: List the organization Stack snapshot
+      operationId: getStackSnapshot
+      tags: [Stack]
+      x-requirement: REQ-STACK-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200':
+          description: Software products, versions, installations, licenses, and assignments
+          headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}
+          content: {application/json: {schema: {$ref: '#/components/schemas/StackSnapshot'}}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /api/v1/stack/analytics:
+    get:
+      summary: Calculate software entitlement and compliance analytics
+      operationId: getStackAnalytics
+      tags: [Stack]
+      x-requirement: REQ-STACK-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - in: query
+          name: asOf
+          schema: {type: string, format: date-time}
+        - in: query
+          name: expiringWithinDays
+          description: Zero or omission uses the 90-day default.
+          schema: {type: integer, format: int64, minimum: 0, maximum: 3660}
+      responses:
+        '200':
+          description: Current entitlement totals and deterministic compliance conditions
+          headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}
+          content: {application/json: {schema: {$ref: '#/components/schemas/StackAnalytics'}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /api/v1/stack/products:
+    post:
+      summary: Define a software product
+      operationId: createStackProduct
+      tags: [Stack]
+      x-requirement: REQ-STACK-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CreateStackProductRequest'}}}}
+      responses:
+        '201': {description: Software product created or idempotently replayed, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/StackProduct'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/stack/versions:
+    post:
+      summary: Define a product version
+      operationId: createStackVersion
+      tags: [Stack]
+      x-requirement: REQ-STACK-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CreateStackVersionRequest'}}}}
+      responses:
+        '201': {description: Product version created or idempotently replayed, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/StackVersion'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/UnprocessableEntity'}
+  /api/v1/stack/products/{productId}/status:
+    parameters: [{in: path, name: productId, required: true, schema: {$ref: '#/components/schemas/StackID'}}]
+    put:
+      summary: Update software product lifecycle status
+      operationId: updateStackProductStatus
+      tags: [Stack]
+      x-requirement: REQ-STACK-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UpdateStackProductStatusRequest'}}}}
+      responses:
+        '200': {description: Product status updated, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/StackProduct'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/stack/versions/{versionId}/status:
+    parameters: [{in: path, name: versionId, required: true, schema: {$ref: '#/components/schemas/StackID'}}]
+    put:
+      summary: Update software version support status
+      operationId: updateStackVersionStatus
+      tags: [Stack]
+      x-requirement: REQ-STACK-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UpdateStackVersionStatusRequest'}}}}
+      responses:
+        '200': {description: Version status updated, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/StackVersion'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/stack/installations:
+    post:
+      summary: Associate installed software with an Atlas asset
+      operationId: recordStackInstallation
+      tags: [Stack]
+      x-requirement: REQ-STACK-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/RecordStackInstallationRequest'}}}}
+      responses:
+        '201': {description: Software installation recorded or idempotently replayed, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/StackInstallation'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/UnprocessableEntity'}
+  /api/v1/stack/licenses:
+    post:
+      summary: Create a software license entitlement
+      operationId: createStackLicense
+      tags: [Stack]
+      x-requirement: REQ-STACK-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CreateStackLicenseRequest'}}}}
+      responses:
+        '201': {description: License created or idempotently replayed, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/StackLicense'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/UnprocessableEntity'}
+  /api/v1/stack/installations/{installationId}:
+    parameters: [{in: path, name: installationId, required: true, schema: {$ref: '#/components/schemas/StackID'}}]
+    put:
+      summary: Update installation usage or record removal
+      operationId: updateStackInstallationState
+      tags: [Stack]
+      x-requirement: REQ-STACK-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UpdateStackInstallationStateRequest'}}}}
+      responses:
+        '200': {description: Installation state updated, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/StackInstallation'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/stack/licenses/{licenseId}/entitlement:
+    parameters: [{in: path, name: licenseId, required: true, schema: {$ref: '#/components/schemas/StackID'}}]
+    put:
+      summary: Update license quantity, effective dates, or lifecycle status
+      operationId: updateStackLicenseEntitlement
+      tags: [Stack]
+      x-requirement: REQ-STACK-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UpdateStackLicenseEntitlementRequest'}}}}
+      responses:
+        '200': {description: License entitlement updated, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/StackLicense'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/stack/assignments:
+    post:
+      summary: Assign license seats to an asset or People directory record
+      operationId: createStackAssignment
+      tags: [Stack]
+      x-requirement: REQ-STACK-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CreateStackAssignmentRequest'}}}}
+      responses:
+        '201': {description: License assignment created or idempotently replayed, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/StackAssignment'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/UnprocessableEntity'}
+  /api/v1/stack/assignments/{assignmentId}/usage:
+    parameters:
+      - in: path
+        name: assignmentId
+        required: true
+        schema: {$ref: '#/components/schemas/StackID'}
+    put:
+      summary: Update license assignment usage with optimistic concurrency
+      operationId: updateStackAssignmentUsage
+      tags: [Stack]
+      x-requirement: REQ-STACK-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UpdateStackAssignmentUsageRequest'}}}}
+      responses:
+        '200': {description: Assignment usage updated, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/StackAssignment'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/stack/exchange:
+    get:
+      summary: Export dependency-aware portable Stack records
+      operationId: exportStackRecords
+      tags: [Stack]
+      x-requirement: REQ-STACK-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200': {description: Bounded provider-neutral Stack records, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/StackExchangeExport'}}}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /api/v1/stack/assignments/{assignmentId}/end:
+    parameters: [{in: path, name: assignmentId, required: true, schema: {$ref: '#/components/schemas/StackID'}}]
+    put:
+      summary: End an active license assignment
+      operationId: endStackAssignment
+      tags: [Stack]
+      x-requirement: REQ-STACK-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/EndStackAssignmentRequest'}}}}
+      responses:
+        '200': {description: Assignment ended, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/StackAssignment'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/stack/exchange/import:
+    post:
+      summary: Idempotently import dependency-aware portable Stack records
+      description: The legacy JSON envelope omits schema identity and is permanently pinned to the five v1 built-in Stack templates so exact retries remain byte-identical across later built-in schema releases.
+      operationId: importStackRecords
+      tags: [Stack]
+      x-requirement: REQ-STACK-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/StackExchangeImportRequest'}}}}
+      responses:
+        '200': {description: 'Durable Exchange receipt projection with created, unchanged, holding, ownership-lock, and replay outcomes', headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}, X-Exchange-Package-ID: {schema: {$ref: '#/components/schemas/ExchangeStableID'}}, X-Idempotent-Replay: {schema: {type: boolean}}}, content: {application/json: {schema: {$ref: '#/components/schemas/StackImportResult'}}}}
+        '400':
+          description: Invalid request before reservation, or a durable validation failure after reservation
+          headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}, X-Exchange-Package-ID: {schema: {$ref: '#/components/schemas/ExchangeStableID'}}, X-Idempotent-Replay: {schema: {type: boolean}}}
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - {$ref: '#/components/schemas/Error'}
+                  - {$ref: '#/components/schemas/StackImportFailure'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {description: Durable history or current Stack data conflicts with the package, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}, X-Exchange-Package-ID: {schema: {$ref: '#/components/schemas/ExchangeStableID'}}, X-Idempotent-Replay: {schema: {type: boolean}}}, content: {application/json: {schema: {$ref: '#/components/schemas/StackImportFailure'}}}}
+        '413': {description: Stack import exceeds a configured limit, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}, X-Exchange-Package-ID: {schema: {$ref: '#/components/schemas/ExchangeStableID'}}, X-Idempotent-Replay: {schema: {type: boolean}}}, content: {application/json: {schema: {$ref: '#/components/schemas/StackImportFailure'}}}}
+        '422': {description: Stack import dependency or integrity failure, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}, X-Exchange-Package-ID: {schema: {$ref: '#/components/schemas/ExchangeStableID'}}, X-Idempotent-Replay: {schema: {type: boolean}}}, content: {application/json: {schema: {$ref: '#/components/schemas/StackImportFailure'}}}}
+        '500': {description: 'Import failed after reservation; packageId, checkpointed outcomes, and pending ownership make the exact request safely resumable', headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}, X-Exchange-Package-ID: {schema: {$ref: '#/components/schemas/ExchangeStableID'}}, X-Idempotent-Replay: {schema: {type: boolean}}}, content: {application/json: {schema: {$ref: '#/components/schemas/StackImportFailure'}}}}
+  /api/v1/signals/rules:
+    get:
+      summary: List organization alert rules
+      operationId: listSignalRules
+      tags: [Signals]
+      x-requirement: REQ-SIGNALS-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200': {description: Bounded alert rules, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/SignalRuleCollection'}}}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+    post:
+      summary: Create an operational or financial alert rule
+      operationId: createSignalRule
+      tags: [Signals]
+      x-requirement: REQ-SIGNALS-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CreateSignalRuleRequest'}}}}
+      responses:
+        '201': {description: Alert rule created, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/SignalRule'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/signals/rules/{ruleId}:
+    parameters: [{in: path, name: ruleId, required: true, schema: {$ref: '#/components/schemas/SignalID'}}]
+    put:
+      summary: Update an alert rule with optimistic concurrency
+      operationId: updateSignalRule
+      tags: [Signals]
+      x-requirement: REQ-SIGNALS-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UpdateSignalRuleRequest'}}}}
+      responses:
+        '200': {description: Alert rule updated, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/SignalRule'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/signals/alerts:
+    get:
+      summary: List deduplicated organization alerts
+      operationId: listSignalAlerts
+      tags: [Signals]
+      x-requirement: REQ-SIGNALS-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - {in: query, name: status, required: false, schema: {$ref: '#/components/schemas/SignalAlertStatus'}}
+        - {in: query, name: severity, required: false, schema: {$ref: '#/components/schemas/SignalSeverity'}}
+        - {in: query, name: condition, required: false, schema: {$ref: '#/components/schemas/SignalCondition'}}
+        - {in: query, name: limit, required: false, schema: {type: integer, minimum: 1, maximum: 500, default: 100}}
+      responses:
+        '200': {description: Filtered alert queue, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/SignalAlertCollection'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /api/v1/signals/alerts/{alertId}/history:
+    parameters: [{in: path, name: alertId, required: true, schema: {$ref: '#/components/schemas/SignalID'}}]
+    get:
+      summary: List immutable alert action history
+      operationId: listSignalAlertHistory
+      tags: [Signals]
+      x-requirement: REQ-SIGNALS-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200': {description: Alert history newest first, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/SignalAlertHistoryCollection'}}}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/signals/evaluate:
+    post:
+      summary: Evaluate every enabled alert rule at a UTC instant
+      operationId: evaluateSignals
+      tags: [Signals]
+      x-requirement: REQ-SIGNALS-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/EvaluateSignalsRequest'}}}}
+      responses:
+        '200': {description: 'Deterministic creation, refresh, and resolution totals', headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/SignalEvaluationResult'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/signals/alerts/{alertId}/acknowledge:
+    parameters: [{in: path, name: alertId, required: true, schema: {$ref: '#/components/schemas/SignalID'}}]
+    post:
+      summary: Acknowledge an active alert
+      operationId: acknowledgeSignalAlert
+      tags: [Signals]
+      x-requirement: REQ-SIGNALS-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/SignalRevisionRequest'}}}}
+      responses:
+        '200': {description: Alert acknowledged, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/SignalAlert'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/signals/alerts/{alertId}/assignment:
+    parameters: [{in: path, name: alertId, required: true, schema: {$ref: '#/components/schemas/SignalID'}}]
+    put:
+      summary: Assign an active or acknowledged alert
+      operationId: assignSignalAlert
+      tags: [Signals]
+      x-requirement: REQ-SIGNALS-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/AssignSignalAlertRequest'}}}}
+      responses:
+        '200': {description: Alert assignment updated, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/SignalAlert'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/signals/subscription-targets:
+    get:
+      summary: List enabled Reach targets available for new Signals subscriptions
+      description: Returns same-organization groups and webhooks whose Reach provider, endpoint, template, and recipient configuration is currently valid. Network routes and credentials are omitted.
+      operationId: listSignalSubscriptionTargets
+      tags: [Signals]
+      x-requirement: REQ-SIGNALS-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200': {description: 'Safe, currently available subscription targets', headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/SignalSubscriptionTargetCollection'}}}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /api/v1/signals/subscriptions:
+    get:
+      summary: List configured Signals subscriber references
+      operationId: listSignalSubscriptions
+      tags: [Signals]
+      x-requirement: REQ-SIGNALS-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200': {description: Credential-free subscriber references, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/SignalSubscriptionCollection'}}}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+    post:
+      summary: Subscribe a configured group or webhook target
+      description: The target must exactly match an enabled target currently returned by /api/v1/signals/subscription-targets. Raw URLs, disabled targets, wrong-kind IDs, and provider credentials are not accepted.
+      operationId: createSignalSubscription
+      tags: [Signals]
+      x-requirement: REQ-SIGNALS-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CreateSignalSubscriptionRequest'}}}}
+      responses:
+        '201': {description: Subscriber reference created, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/SignalSubscription'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/signals/subscriptions/{subscriptionId}:
+    parameters: [{in: path, name: subscriptionId, required: true, schema: {$ref: '#/components/schemas/SignalID'}}]
+    delete:
+      summary: Remove a Signals subscriber reference
+      operationId: deleteSignalSubscription
+      tags: [Signals]
+      x-requirement: REQ-SIGNALS-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      responses:
+        '204': {description: Subscriber reference removed, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/signals/deliveries/pending:
+    get:
+      summary: List bounded due Signals delivery work
+      description: Provider-neutral Reach handoff containing stable configured target references and sanitized state only. Provider URLs, credentials, response bodies, and organization selection are never accepted or returned.
+      operationId: listPendingSignalDeliveries
+      tags: [Signals]
+      x-requirement: REQ-SIGNALS-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - {in: query, name: asOf, required: false, schema: {type: string, format: date-time}, description: Omission uses the service UTC clock.}
+        - {in: query, name: limit, required: false, schema: {type: integer, minimum: 1, maximum: 500, default: 100}}
+      responses:
+        '200': {description: Due provider-neutral delivery records, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/SignalDeliveryCollection'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+  /api/v1/signals/deliveries/{deliveryId}/attempts:
+    parameters: [{in: path, name: deliveryId, required: true, schema: {$ref: '#/components/schemas/SignalID'}}]
+    post:
+      summary: Record one sanitized Signals delivery attempt
+      description: Records only success/retry disposition and an allowlisted stable error code. Raw provider errors and response bodies are rejected.
+      operationId: recordSignalDeliveryAttempt
+      tags: [Signals]
+      x-requirement: REQ-SIGNALS-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/RecordSignalDeliveryAttemptRequest'}}}}
+      responses:
+        '200': {description: Updated provider-neutral delivery record, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/SignalDelivery'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+  /api/v1/signals/report.csv:
+    get:
+      summary: Export the filtered Signals queue as spreadsheet-safe CSV
+      operationId: exportSignalsReport
+      tags: [Signals]
+      x-requirement: REQ-SIGNALS-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - {in: query, name: status, required: false, schema: {$ref: '#/components/schemas/SignalAlertStatus'}}
+        - {in: query, name: severity, required: false, schema: {$ref: '#/components/schemas/SignalSeverity'}}
+        - {in: query, name: condition, required: false, schema: {$ref: '#/components/schemas/SignalCondition'}}
+        - {in: query, name: limit, required: false, schema: {type: integer, minimum: 1, maximum: 500, default: 100}}
+      responses:
+        '200': {description: RFC 4180-compatible alert report with formula-significant cells escaped, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {text/csv: {schema: {type: string}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /api/v1/exchange/records:
+    get:
+      summary: List records available for an Exchange package
+      description: Returns the bounded, provider-neutral record catalog for the authenticated organization. Requires organization-scoped `integrations.read`; package payloads and file bytes are not returned.
+      operationId: listExchangeRecords
+      tags: [Exchange]
+      x-requirement: REQ-EXCHANGE-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200':
+          description: Portable record descriptors and server-enforced package limits
+          headers:
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ExchangeRecordCollection'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '500': {$ref: '#/components/responses/InternalError'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+  /api/v1/exchange/packages:
+    get:
+      summary: List Exchange package receipts
+      description: Returns bounded export and import receipts without archive payloads, file bytes, credentials, signed URLs, object keys, or operator identity. Requires organization-scoped `integrations.read`.
+      operationId: listExchangePackages
+      tags: [Exchange]
+      x-requirement: REQ-EXCHANGE-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - in: query
+          name: limit
+          required: false
+          description: Maximum recent receipts to return. Defaults to 25.
+          schema: {type: integer, minimum: 1, maximum: 100, default: 25}
+      responses:
+        '200':
+          description: Most recent durable package receipts
+          headers:
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ExchangePackageCollection'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '500': {$ref: '#/components/responses/InternalError'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+  /api/v1/exchange/export:
+    post:
+      summary: Export a dependency-aware .openinventory package
+      description: Selects up to 1,000 organization records, optionally closes over available dependencies, and returns one checksummed ZIP package. Requires organization-scoped `integrations.write` and synchronized CSRF validation. Vault records explicitly choose metadata-only or included bytes; credentials, signed URLs, private object keys, and session material are never package fields.
+      operationId: exportExchangePackage
+      tags: [Exchange]
+      x-requirement: REQ-EXCHANGE-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ExchangeExportRequest'}
+      responses:
+        '200':
+          description: A bounded, compressed package with a durable export receipt
+          headers:
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+            Content-Disposition:
+              description: Fixed server-generated attachment filename ending in `.openinventory`.
+              schema: {type: string, pattern: '^attachment; filename="stewardmesh-[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\\.openinventory"$'}
+            X-Content-SHA256:
+              description: Lowercase SHA-256 digest of the complete archive bytes.
+              schema: {$ref: '#/components/schemas/ExchangeSHA256'}
+            X-Exchange-Package-ID:
+              description: Server-generated package identity also stored in the manifest and receipt.
+              schema: {$ref: '#/components/schemas/ExchangeStableID'}
+          content:
+            application/vnd.stewardmesh.openinventory+zip:
+              schema:
+                type: string
+                format: binary
+                minLength: 1
+                maxLength: 33554432
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '413': {$ref: '#/components/responses/ExchangePayloadTooLarge'}
+        '500': {$ref: '#/components/responses/InternalError'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+  /api/v1/exchange/import:
+    post:
+      summary: Verify and import a .openinventory package
+      description: Strictly verifies the bounded ZIP structure, manifest schema, checksums, payload safety, dependency order, source provenance, and exact package replay before writing through registered domain providers. New or unchanged imported records are readable and Guard write-locked until explicit ownership claim; unresolved records remain in holding and are not written. Requires organization-scoped `integrations.write` and synchronized CSRF validation.
+      operationId: importExchangePackage
+      tags: [Exchange]
+      x-requirement: REQ-EXCHANGE-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/vnd.stewardmesh.openinventory+zip:
+            schema:
+              type: string
+              format: binary
+              minLength: 1
+              maxLength: 33554432
+      responses:
+        '200':
+          description: Exact completed package replay; no duplicate domain writes occurred
+          headers:
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+            X-Idempotent-Replay:
+              schema: {type: string, const: 'true'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ExchangeImportResult'}
+        '201':
+          description: Package import completed or produced explicit holding outcomes
+          headers:
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+            X-Idempotent-Replay:
+              schema: {type: string, const: 'false'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ExchangeImportResult'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '413': {$ref: '#/components/responses/ExchangePayloadTooLarge'}
+        '415':
+          description: The request is not an unencoded StewardMesh .openinventory package
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '422': {$ref: '#/components/responses/ExchangeUnprocessableEntity'}
+        '500': {$ref: '#/components/responses/InternalError'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+
+  /api/v1/reach/endpoints:
+    get:
+      summary: List deployment-owned Reach endpoint choices
+      description: Network locations and credentials are excluded from this response.
+      operationId: listReachEndpoints
+      tags: [Reach]
+      x-requirement: REQ-REACH-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200': {description: Safe endpoint metadata, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/ReachEndpointCollection'}}}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /api/v1/reach/providers:
+    get:
+      summary: List redacted messaging provider configurations
+      operationId: listReachProviders
+      tags: [Reach]
+      x-requirement: REQ-REACH-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200': {description: Provider configurations without secret references or endpoint addresses, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/ReachProviderCollection'}}}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+    post:
+      summary: Configure a provider using fixed endpoint and external secret references
+      operationId: createReachProvider
+      tags: [Reach]
+      x-requirement: REQ-REACH-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CreateReachProviderRequest'}}}}
+      responses:
+        '201': {description: Redacted provider configuration created, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/ReachProvider'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '423': {$ref: '#/components/responses/Locked'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+  /api/v1/reach/providers/{providerId}:
+    parameters: [{in: path, name: providerId, required: true, schema: {$ref: '#/components/schemas/ReachID'}}]
+    put:
+      summary: Update non-secret provider metadata
+      operationId: updateReachProvider
+      tags: [Reach]
+      x-requirement: REQ-REACH-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UpdateReachProviderRequest'}}}}
+      responses:
+        '200': {description: Provider updated, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/ReachProvider'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '423': {$ref: '#/components/responses/Locked'}
+  /api/v1/reach/providers/{providerId}/rotate-secret:
+    parameters: [{in: path, name: providerId, required: true, schema: {$ref: '#/components/schemas/ReachID'}}]
+    post:
+      summary: Rotate an external provider secret reference
+      operationId: rotateReachProviderSecret
+      tags: [Reach]
+      x-requirement: REQ-REACH-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/RotateReachSecretRequest'}}}}
+      responses:
+        '200': {description: Secret reference rotated and response redacted, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/ReachProvider'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '423': {$ref: '#/components/responses/Locked'}
+  /api/v1/reach/providers/{providerId}/test:
+    parameters: [{in: path, name: providerId, required: true, schema: {$ref: '#/components/schemas/ReachID'}}]
+    post:
+      summary: Explicitly test a configured provider connection
+      operationId: testReachProvider
+      tags: [Reach]
+      x-requirement: REQ-REACH-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ReachConfirmedAction'}}}}
+      responses:
+        '200': {description: Sanitized connection result, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/ReachProviderTest'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '423': {$ref: '#/components/responses/Locked'}
+  /api/v1/reach/providers/{providerId}/tests:
+    parameters: [{in: path, name: providerId, required: true, schema: {$ref: '#/components/schemas/ReachID'}}]
+    get:
+      summary: List sanitized provider connection history
+      operationId: listReachProviderTests
+      tags: [Reach]
+      x-requirement: REQ-REACH-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200': {description: Provider test history, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/ReachProviderTestCollection'}}}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/reach/templates:
+    get:
+      summary: List plain-text Reach templates
+      operationId: listReachTemplates
+      tags: [Reach]
+      x-requirement: REQ-REACH-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200': {description: Bounded templates, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/ReachTemplateCollection'}}}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+    post:
+      summary: Create an allowlisted plain-text template
+      operationId: createReachTemplate
+      tags: [Reach]
+      x-requirement: REQ-REACH-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CreateReachTemplateRequest'}}}}
+      responses:
+        '201': {description: Template created, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/ReachTemplate'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '423': {$ref: '#/components/responses/Locked'}
+  /api/v1/reach/templates/{templateId}:
+    parameters: [{in: path, name: templateId, required: true, schema: {$ref: '#/components/schemas/ReachID'}}]
+    put:
+      summary: Update a Reach template with optimistic concurrency
+      operationId: updateReachTemplate
+      tags: [Reach]
+      x-requirement: REQ-REACH-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UpdateReachTemplateRequest'}}}}
+      responses:
+        '200': {description: Template updated, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/ReachTemplate'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '423': {$ref: '#/components/responses/Locked'}
+  /api/v1/reach/groups:
+    get:
+      summary: List Reach subscriber groups
+      operationId: listReachGroups
+      tags: [Reach]
+      x-requirement: REQ-REACH-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200': {description: Subscriber groups and safe recipients, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/ReachGroupCollection'}}}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+    post:
+      summary: Create a provider-backed subscriber group
+      operationId: createReachGroup
+      tags: [Reach]
+      x-requirement: REQ-REACH-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CreateReachGroupRequest'}}}}
+      responses:
+        '201': {description: Subscriber group created, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/ReachGroup'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '423': {$ref: '#/components/responses/Locked'}
+  /api/v1/reach/groups/{groupId}:
+    parameters: [{in: path, name: groupId, required: true, schema: {$ref: '#/components/schemas/ReachID'}}]
+    put:
+      summary: Update a Reach subscriber group
+      operationId: updateReachGroup
+      tags: [Reach]
+      x-requirement: REQ-REACH-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UpdateReachGroupRequest'}}}}
+      responses:
+        '200': {description: Subscriber group updated, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/ReachGroup'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '423': {$ref: '#/components/responses/Locked'}
+  /api/v1/reach/messages:
+    get:
+      summary: List Reach delivery history
+      operationId: listReachMessages
+      tags: [Reach]
+      x-requirement: REQ-REACH-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{in: query, name: limit, required: false, schema: {type: integer, minimum: 1, maximum: 500, default: 100}}]
+      responses:
+        '200': {description: Redacted delivery history, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/ReachMessageCollection'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /api/v1/reach/messages/send:
+    post:
+      summary: Explicitly render and send a group message
+      operationId: sendReachMessage
+      tags: [Reach]
+      x-requirement: REQ-REACH-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}, {$ref: '#/components/parameters/ReachIdempotencyKey'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/SendReachMessageRequest'}}}}
+      responses:
+        '202': {description: Message attempted or returned from an idempotent replay, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/ReachMessage'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/reach/messages/{messageId}/retry:
+    parameters: [{in: path, name: messageId, required: true, schema: {$ref: '#/components/schemas/ReachID'}}]
+    post:
+      summary: Explicitly retry a non-delivered message
+      operationId: retryReachMessage
+      tags: [Reach]
+      x-requirement: REQ-REACH-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ReachConfirmedAction'}}}}
+      responses:
+        '200': {description: Updated delivery result, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/ReachMessage'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/reach/messages/{messageId}/attempts:
+    parameters: [{in: path, name: messageId, required: true, schema: {$ref: '#/components/schemas/ReachID'}}]
+    get:
+      summary: List immutable sanitized delivery attempts
+      operationId: listReachMessageAttempts
+      tags: [Reach]
+      x-requirement: REQ-REACH-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200': {description: Delivery attempt history, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/ReachAttemptCollection'}}}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/reach/signals/process:
+    post:
+      summary: Explicitly process due Signals delivery work
+      operationId: processReachSignals
+      tags: [Reach]
+      x-requirement: REQ-REACH-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters: [{$ref: '#/components/parameters/CSRFToken'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ProcessReachSignalsRequest'}}}}
+      responses:
+        '200': {description: Sanitized delivery totals, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/ReachProcessResult'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
 components:
   securitySchemes:
     localCookieAuth:
@@ -2021,11 +3638,36 @@ components:
       in: cookie
       name: __Host-stewardmesh_session
       description: Opaque, Secure, host-only server-side session identifier used by HTTPS deployments.
+    bridgeBearerAuth:
+      type: oauth2
+      description: Audience-bound, short-lived Bridge access token sent only in the Authorization header.
+      flows:
+        authorizationCode:
+          authorizationUrl: /oauth/authorize
+          tokenUrl: /oauth/token
+          scopes:
+            mcp:resources: Discover Bridge resources and tools.
+            assets:read: Read authorized, redacted Atlas asset data.
+            directory:read: Read authorized directory data without email or provider identifiers.
+            signals:read: Read authorized, redacted Signals alerts.
+            signals:acknowledge: Prepare and confirm alert acknowledgement.
   headers:
     NoStore:
-      description: Horizon planning data is never stored by shared or browser caches.
+      description: Protected feature, planning, and integration data is never stored by shared or browser caches.
       schema: {type: string, const: no-store}
   parameters:
+    PatternsTemplateID:
+      in: path
+      name: templateId
+      required: true
+      description: Stable built-in or organization-owned template identity.
+      schema: {$ref: '#/components/schemas/PatternsTemplateID'}
+    PatternsVersion:
+      in: query
+      name: version
+      required: false
+      description: Exact immutable version. When omitted, the latest version is resolved.
+      schema: {type: integer, format: int64, minimum: 1}
     AssetID:
       in: path
       name: assetId
@@ -2148,6 +3790,28 @@ components:
         type: string
         minLength: 32
         maxLength: 128
+    DirectoryImportBatchID:
+      in: path
+      name: batchID
+      required: true
+      description: Stable organization-owned directory import batch identity.
+      schema: {$ref: '#/components/schemas/DirectoryImportBatchID'}
+    DirectoryImportIdempotencyKey:
+      in: header
+      name: Idempotency-Key
+      required: true
+      description: Caller-generated key scoped to the organization and exact preview, apply, or retry operation. Only its SHA-256 digest is retained; neither the raw key nor its digest is returned.
+      schema:
+        type: string
+        minLength: 8
+        maxLength: 200
+    ReachIdempotencyKey:
+      in: header
+      name: Idempotency-Key
+      required: false
+      description: Optional caller-generated stable identifier that prevents a confirmed manual send from invoking its provider more than once.
+      schema:
+        $ref: '#/components/schemas/ReachID'
   responses:
     InvalidRequest:
       description: Invalid or malformed request
@@ -2161,6 +3825,15 @@ components:
           schema: {$ref: '#/components/schemas/Error'}
     Forbidden:
       description: CSRF, origin, bootstrap-token, or permission validation failed
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    TooManyRequests:
+      description: The authenticated principal exceeded a bounded request window
+      headers:
+        Retry-After:
+          description: Seconds until the current Atlas Codes request window expires.
+          schema: {type: integer, minimum: 1, maximum: 86400}
       content:
         application/json:
           schema: {$ref: '#/components/schemas/Error'}
@@ -2189,12 +3862,133 @@ components:
       content:
         application/json:
           schema: {$ref: '#/components/schemas/Error'}
+    ExchangePayloadTooLarge:
+      description: The compressed archive, expanded archive, manifest, record payloads, file bytes, selection, or record count exceeds an Exchange limit
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    ExchangeUnprocessableEntity:
+      description: The archive is corrupt, a checksum failed, or a dependency cannot be safely processed
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
     InternalError:
       description: Internal service error
       content:
         application/json:
           schema: {$ref: '#/components/schemas/Error'}
+    ServiceUnavailable:
+      description: The requested subsystem is not configured or is temporarily unavailable
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
   schemas:
+    BridgeID: {type: string, pattern: '^[a-f0-9]{32}$'}
+    BridgeScope: {type: string, enum: ['mcp:resources', 'assets:read', 'directory:read', 'signals:read', 'signals:acknowledge']}
+    BridgeProtectedResourceMetadata:
+      type: object
+      required: [resource, authorization_servers, scopes_supported, bearer_methods_supported, resource_name]
+      properties:
+        resource: {type: string, format: uri}
+        authorization_servers: {type: array, minItems: 1, maxItems: 1, items: {type: string, format: uri}}
+        scopes_supported: {type: array, minItems: 1, maxItems: 5, items: {$ref: '#/components/schemas/BridgeScope'}}
+        bearer_methods_supported: {type: array, items: {type: string, const: header}}
+        resource_name: {type: string, maxLength: 120}
+    BridgeAuthorizationServerMetadata:
+      type: object
+      required: [issuer, authorization_endpoint, token_endpoint, revocation_endpoint, response_types_supported, grant_types_supported, code_challenge_methods_supported, token_endpoint_auth_methods_supported, scopes_supported]
+      properties:
+        issuer: {type: string, format: uri}
+        authorization_endpoint: {type: string, format: uri}
+        token_endpoint: {type: string, format: uri}
+        revocation_endpoint: {type: string, format: uri}
+        response_types_supported: {type: array, items: {type: string, const: code}}
+        grant_types_supported: {type: array, items: {type: string, enum: [authorization_code, refresh_token]}}
+        code_challenge_methods_supported: {type: array, items: {type: string, const: S256}}
+        token_endpoint_auth_methods_supported: {type: array, items: {type: string, const: none}}
+        scopes_supported: {type: array, items: {$ref: '#/components/schemas/BridgeScope'}}
+        authorization_response_iss_parameter_supported: {type: boolean}
+    BridgeTokenRequest:
+      type: object
+      additionalProperties: false
+      required: [grant_type, client_id, resource]
+      properties:
+        grant_type: {type: string, enum: [authorization_code, refresh_token]}
+        code: {type: string, maxLength: 512, writeOnly: true}
+        refresh_token: {type: string, maxLength: 512, writeOnly: true}
+        client_id: {$ref: '#/components/schemas/BridgeID'}
+        redirect_uri: {type: string, format: uri, maxLength: 2048}
+        resource: {type: string, format: uri}
+        code_verifier: {type: string, minLength: 43, maxLength: 128, writeOnly: true}
+    BridgeTokenResponse:
+      type: object
+      additionalProperties: false
+      required: [access_token, token_type, expires_in, refresh_token, scope]
+      properties:
+        access_token: {type: string, minLength: 40, maxLength: 512, writeOnly: true}
+        token_type: {type: string, const: Bearer}
+        expires_in: {type: integer, minimum: 300, maximum: 3600}
+        refresh_token: {type: string, minLength: 40, maxLength: 512, writeOnly: true}
+        scope: {type: string, maxLength: 256}
+    CreateBridgeClientRequest:
+      type: object
+      additionalProperties: false
+      required: [name, redirectUris, allowedScopes]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 120}
+        redirectUris: {type: array, minItems: 1, maxItems: 10, uniqueItems: true, items: {type: string, format: uri, maxLength: 2048}}
+        allowedScopes: {type: array, minItems: 1, maxItems: 5, uniqueItems: true, contains: {const: 'mcp:resources'}, items: {$ref: '#/components/schemas/BridgeScope'}}
+    BridgeClient:
+      allOf:
+        - {$ref: '#/components/schemas/CreateBridgeClientRequest'}
+        - type: object
+          required: [id, organizationId, createdBy, createdAt]
+          properties:
+            id: {$ref: '#/components/schemas/BridgeID'}
+            organizationId: {type: string, minLength: 1, maxLength: 128}
+            createdBy: {type: string, minLength: 1, maxLength: 128}
+            createdAt: {type: string, format: date-time}
+            revokedAt: {type: string, format: date-time}
+    BridgeClientCollection:
+      type: object
+      required: [items]
+      properties:
+        items: {type: array, maxItems: 100, items: {$ref: '#/components/schemas/BridgeClient'}}
+        nextCursor: {$ref: '#/components/schemas/BridgePageCursor'}
+    BridgeGrant:
+      type: object
+      additionalProperties: false
+      required: [id, organizationId, clientId, actorId, resourceUri, scopes, accessExpiresAt, refreshExpiresAt, createdAt]
+      properties:
+        id: {$ref: '#/components/schemas/BridgeID'}
+        organizationId: {type: string, minLength: 1, maxLength: 128}
+        clientId: {$ref: '#/components/schemas/BridgeID'}
+        clientName: {type: string, maxLength: 120}
+        actorId: {type: string, minLength: 1, maxLength: 128}
+        resourceUri: {type: string, format: uri}
+        scopes: {type: array, minItems: 1, maxItems: 5, items: {$ref: '#/components/schemas/BridgeScope'}}
+        accessExpiresAt: {type: string, format: date-time}
+        refreshExpiresAt: {type: string, format: date-time}
+        createdAt: {type: string, format: date-time}
+        lastUsedAt: {type: string, format: date-time}
+        revokedAt: {type: string, format: date-time}
+    BridgeGrantCollection:
+      type: object
+      required: [items]
+      properties:
+        items: {type: array, maxItems: 100, items: {$ref: '#/components/schemas/BridgeGrant'}}
+        nextCursor: {$ref: '#/components/schemas/BridgePageCursor'}
+    BridgePageCursor: {type: string, pattern: '^[a-f0-9]{32}$'}
+    BridgeConsent:
+      type: object
+      additionalProperties: false
+      required: [id, clientId, clientName, scopes, expiresAt]
+      properties:
+        id: {$ref: '#/components/schemas/BridgeID'}
+        clientId: {$ref: '#/components/schemas/BridgeID'}
+        clientName: {type: string, minLength: 1, maxLength: 120}
+        scopes: {type: array, minItems: 1, maxItems: 5, items: {$ref: '#/components/schemas/BridgeScope'}}
+        expiresAt: {type: string, format: date-time}
     BootstrapStatus:
       type: object
       required: [required, tokenRequired, minimumPasswordCharacters, oidcEnabled, samlEnabled]
@@ -2415,6 +4209,216 @@ components:
         name: {type: string, minLength: 1, maxLength: 200}
         createdAt: {type: string, format: date-time}
         updatedAt: {type: string, format: date-time}
+    PatternsTemplateID:
+      type: string
+      description: Stable identity shared by schema discovery, validation, CSV tooling, and Exchange.
+      pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+    PatternsRecordType:
+      type: string
+      description: Provider-neutral record family addressed by a template.
+      pattern: '^[a-z][a-z0-9.-]{1,79}$'
+    PatternsFieldType:
+      type: string
+      description: Seven portable field types supported by form, CSV, and Exchange validation clients.
+      enum: [text, number, date, money, enum, attachment, reference]
+    PatternsTemplateStatus:
+      type: string
+      enum: [active, retired]
+    PatternsValidationStatus:
+      type: string
+      enum: [valid, holding, invalid]
+    PatternsField:
+      type: object
+      additionalProperties: false
+      required: [key, label, type, required]
+      properties:
+        key:
+          type: string
+          pattern: '^[A-Za-z][A-Za-z0-9_.-]{0,63}$'
+        label: {type: string, minLength: 1, maxLength: 120}
+        help:
+          type: string
+          maxLength: 500
+          description: Optional concise guidance rendered beside the generated control.
+        type: {$ref: '#/components/schemas/PatternsFieldType'}
+        required: {type: boolean}
+        allowHolding:
+          type: boolean
+          default: false
+          description: For reference and attachment fields, permits missing targets to enter the holding workflow when requested by the validator.
+        referenceType:
+          allOf:
+            - $ref: '#/components/schemas/PatternsRecordType'
+          description: Required target record family for reference and attachment fields.
+        options:
+          type: array
+          maxItems: 100
+          uniqueItems: true
+          items: {type: string, minLength: 1, maxLength: 160}
+          description: Non-empty only for enum fields.
+        minimum:
+          type: number
+          description: Inclusive lower bound for number or money fields.
+        maximum:
+          type: number
+          description: Inclusive upper bound for number or money fields.
+        maximumLength:
+          type: integer
+          minimum: 0
+          maximum: 100000
+          description: Optional text length bound; zero selects the service default.
+        currencyField:
+          type: string
+          pattern: '^[A-Za-z][A-Za-z0-9_.-]{0,63}$'
+          description: Companion text or enum field containing an ISO 4217 currency code for a money field.
+        accessibleLabel:
+          type: string
+          minLength: 1
+          maxLength: 160
+          description: Accessible control name and prefix used in field validation messages; defaults to label when omitted on writes.
+        csvHeader:
+          type: string
+          minLength: 1
+          maxLength: 160
+          description: Header emitted by the CSV template in field order; defaults to key when omitted on writes.
+    PatternsTemplate:
+      type: object
+      additionalProperties: false
+      required: [id, recordType, name, version, builtIn, status, fields, createdBy, createdAt]
+      properties:
+        id: {$ref: '#/components/schemas/PatternsTemplateID'}
+        organizationId:
+          type: string
+          maxLength: 128
+          description: Owning organization for custom templates; omitted from code-versioned built-ins.
+        recordType: {$ref: '#/components/schemas/PatternsRecordType'}
+        name: {type: string, minLength: 1, maxLength: 160}
+        description: {type: string, maxLength: 1000}
+        version:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Immutable schema version used by validation, CSV, and Exchange consumers.
+        builtIn:
+          type: boolean
+          description: Code-versioned templates are immutable and must be copied before customization.
+        status: {$ref: '#/components/schemas/PatternsTemplateStatus'}
+        fields:
+          type: array
+          minItems: 1
+          maxItems: 64
+          items: {$ref: '#/components/schemas/PatternsField'}
+        createdBy: {type: string, minLength: 1, maxLength: 128}
+        createdAt: {type: string, format: date-time}
+    PatternsTemplateCollection:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/PatternsTemplate'}
+    CreatePatternsTemplateRequest:
+      type: object
+      additionalProperties: false
+      required: [recordType, name, fields]
+      properties:
+        id: {$ref: '#/components/schemas/PatternsTemplateID'}
+        recordType: {$ref: '#/components/schemas/PatternsRecordType'}
+        name: {type: string, minLength: 1, maxLength: 160}
+        description: {type: string, maxLength: 1000}
+        fields:
+          type: array
+          minItems: 1
+          maxItems: 64
+          items: {$ref: '#/components/schemas/PatternsField'}
+    CopyPatternsTemplateRequest:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        id: {$ref: '#/components/schemas/PatternsTemplateID'}
+        name: {type: string, minLength: 1, maxLength: 160}
+        description:
+          type: string
+          maxLength: 1000
+          description: Defaults to the source version description when empty.
+    CreatePatternsTemplateVersionRequest:
+      type: object
+      additionalProperties: false
+      required: [fields]
+      properties:
+        description:
+          type: string
+          maxLength: 1000
+          description: Defaults to the current version description when empty.
+        fields:
+          type: array
+          minItems: 1
+          maxItems: 64
+          items: {$ref: '#/components/schemas/PatternsField'}
+    PatternsValues:
+      type: object
+      description: Provider-neutral values keyed by field key. Values are strings for text, enum, date, attachment, and reference fields; JSON numbers for number fields; and exact integer minor units for money fields.
+      maxProperties: 128
+      additionalProperties: true
+    PatternsValidationRequest:
+      type: object
+      additionalProperties: false
+      required: [values]
+      properties:
+        values: {$ref: '#/components/schemas/PatternsValues'}
+        missingReferences:
+          type: array
+          maxItems: 64
+          description: Reference field keys whose resolved target is missing or not visible. This explicit seam lets Exchange perform provider-specific lookups before portable validation.
+          items: {type: string, pattern: '^[A-Za-z][A-Za-z0-9_.-]{0,63}$'}
+        allowHoldingRecord:
+          type: boolean
+          default: false
+          description: Allows missing references on fields marked allowHolding to produce a holding result instead of an error.
+    PatternsFieldError:
+      type: object
+      additionalProperties: false
+      required: [field, code, message]
+      properties:
+        field:
+          type: string
+          description: Defined field key, or the unrecognized input key for an unknown_field error.
+        code: {type: string, pattern: '^[a-z][a-z0-9_]{0,63}$'}
+        message:
+          type: string
+          minLength: 1
+          maxLength: 500
+          description: Accessible-label-prefixed correction guidance suitable for inline and summary presentation.
+    PatternsHoldingReference:
+      type: object
+      additionalProperties: false
+      required: [field, referenceType]
+      properties:
+        field: {type: string, pattern: '^[A-Za-z][A-Za-z0-9_.-]{0,63}$'}
+        referenceType: {$ref: '#/components/schemas/PatternsRecordType'}
+        value:
+          type: string
+          maxLength: 128
+          description: Stable target identity when supplied; omitted when a required reference itself is absent.
+    PatternsValidationResult:
+      type: object
+      additionalProperties: false
+      required: [status, normalizedValues, errors, holdingReferences]
+      properties:
+        status:
+          allOf:
+            - $ref: '#/components/schemas/PatternsValidationStatus'
+          description: holding means typed values are otherwise valid but one or more allowed references require reconciliation.
+        normalizedValues: {$ref: '#/components/schemas/PatternsValues'}
+        errors:
+          type: array
+          items: {$ref: '#/components/schemas/PatternsFieldError'}
+        holdingReferences:
+          type: array
+          description: Deterministically field-sorted references for the Exchange holding workflow.
+          items: {$ref: '#/components/schemas/PatternsHoldingReference'}
     Error:
       type: object
       required: [error]
@@ -2560,6 +4564,61 @@ components:
         items:
           type: array
           items: {$ref: '#/components/schemas/AssetIdentifier'}
+    AssetLabelTemplate:
+      type: object
+      additionalProperties: false
+      required: [id, patternTemplateId, patternVersion, name, version, widthMm, heightMm, marginMm, quietZoneMm, symbology, payloadSource, humanReadableField]
+      properties:
+        id: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$', description: Exact immutable Patterns template ID; symbology and geometry are read from the versioned schema fields rather than parsed from this identifier.}
+        patternTemplateId: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        patternVersion: {type: integer, format: int64, minimum: 1}
+        name: {type: string, minLength: 1, maxLength: 200}
+        description: {type: string, maxLength: 1000}
+        version: {type: integer, format: int64, minimum: 1}
+        widthMm: {type: number, format: double, minimum: 12, maximum: 300}
+        heightMm: {type: number, format: double, minimum: 12, maximum: 300}
+        marginMm: {type: number, format: double, minimum: 0}
+        quietZoneMm: {type: number, format: double, minimum: 1}
+        symbology: {$ref: '#/components/schemas/AssetIdentifierSymbology'}
+        payloadSource: {type: string, enum: [identifier_value, organization_route]}
+        humanReadableField: {type: string, enum: [identifier.displayValue]}
+        safeAssetFields:
+          type: array
+          uniqueItems: true
+          maxItems: 2
+          items: {type: string, enum: [asset.name, asset.assetTag]}
+        organizationBranding: {type: string, maxLength: 80}
+    AssetLabelTemplateCollection:
+      type: object
+      additionalProperties: false
+      required: [items, maximumBatchSize, outputs]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/AssetLabelTemplate'}
+        maximumBatchSize: {type: integer, enum: [50]}
+        outputs:
+          type: array
+          uniqueItems: true
+          items: {$ref: '#/components/schemas/AssetLabelOutput'}
+    AssetLabelOutput:
+      type: string
+      enum: [svg, pdf]
+    CreateAssetLabelBatchRequest:
+      type: object
+      additionalProperties: false
+      required: [templateId, templateVersion, identifierIds, output]
+      properties:
+        templateId: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$', description: Exact immutable Patterns template ID returned by the template-list endpoint.}
+        templateVersion: {type: integer, format: int64, minimum: 1}
+        identifierIds:
+          type: array
+          minItems: 1
+          maxItems: 50
+          uniqueItems: true
+          items: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        output: {$ref: '#/components/schemas/AssetLabelOutput', description: SVG accepts exactly one identifier; PDF accepts one to fifty.}
+        testPrint: {type: boolean, default: false}
     CreateAssetIdentifierResponse:
       type: object
       additionalProperties: false
@@ -2665,12 +4724,9 @@ components:
         revision: {type: integer, format: int64, minimum: 1}
         createdAt: {type: string, format: date-time}
         updatedAt: {type: string, format: date-time}
-    CreateAssetModelRequest:
+    AssetModelWriteFields:
       type: object
-      additionalProperties: false
-      required: [manufacturer, name, kind]
       properties:
-        id: {$ref: '#/components/schemas/AssetModelID'}
         manufacturer: {type: string, minLength: 1, maxLength: 120}
         name: {type: string, minLength: 1, maxLength: 160}
         modelNumber: {type: string, maxLength: 120}
@@ -2685,11 +4741,22 @@ components:
         usefulLifeMonths: {type: integer, minimum: 0, maximum: 1200}
         sourceSystemId: {type: string, maxLength: 120}
         sourceRecordId: {type: string, maxLength: 160}
-    UpdateAssetModelRequest:
+    CreateAssetModelRequest:
+      type: object
+      unevaluatedProperties: false
+      required: [manufacturer, name, kind]
       allOf:
-        - $ref: '#/components/schemas/CreateAssetModelRequest'
+        - $ref: '#/components/schemas/AssetModelWriteFields'
         - type: object
-          required: [revision]
+          properties:
+            id: {$ref: '#/components/schemas/AssetModelID'}
+    UpdateAssetModelRequest:
+      type: object
+      unevaluatedProperties: false
+      required: [manufacturer, name, kind, revision]
+      allOf:
+        - $ref: '#/components/schemas/AssetModelWriteFields'
+        - type: object
           properties:
             revision: {type: integer, format: int64, minimum: 1}
     AssetModelCollection:
@@ -2700,9 +4767,80 @@ components:
         items:
           type: array
           items: {$ref: '#/components/schemas/AssetModel'}
+    AssetModelInventoryGroupBy:
+      type: string
+      enum: [status, site, department, user, deployment]
+    AssetModelInventoryGroup:
+      type: object
+      additionalProperties: false
+      required: [key, count]
+      properties:
+        key:
+          type: string
+          description: Group value. An empty value represents an unassigned reference or missing deployment context.
+        count: {type: integer, minimum: 1}
+    AssetModelInventory:
+      type: object
+      additionalProperties: false
+      required: [modelId, totalCount, filteredCount, groups, items]
+      properties:
+        modelId: {$ref: '#/components/schemas/AssetModelID'}
+        totalCount: {type: integer, minimum: 0}
+        filteredCount: {type: integer, minimum: 0}
+        groupBy: {$ref: '#/components/schemas/AssetModelInventoryGroupBy'}
+        groups:
+          type: array
+          items: {$ref: '#/components/schemas/AssetModelInventoryGroup'}
+        items:
+          type: array
+          maxItems: 100
+          items: {$ref: '#/components/schemas/Asset'}
     DirectoryReferenceID:
       type: string
       pattern: '^[a-f0-9]{32}$'
+    RelationshipGraphNodeKind:
+      type: string
+      enum: [organization, site, building, room, department, person, shared, public, lab, group, subject, asset]
+    RelationshipGraphEdgeKind:
+      type: string
+      enum: [contains, belongs_to, located_at, member_of, assigned_to]
+    RelationshipGraphAttributes:
+      type: object
+      maxProperties: 8
+      propertyNames: {pattern: '^[a-z][a-z0-9_-]{0,63}$'}
+      additionalProperties: {type: string, maxLength: 200}
+    RelationshipGraphNode:
+      type: object
+      additionalProperties: false
+      required: [id, kind, label]
+      properties:
+        id: {type: string, pattern: '^[a-z][a-z0-9_-]{0,63}:[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$'}
+        kind: {$ref: '#/components/schemas/RelationshipGraphNodeKind'}
+        label: {type: string, minLength: 1, maxLength: 320}
+        attributes: {$ref: '#/components/schemas/RelationshipGraphAttributes'}
+    RelationshipGraphEdge:
+      type: object
+      additionalProperties: false
+      required: [id, from, to, kind]
+      properties:
+        id: {type: string, minLength: 1, maxLength: 320}
+        from: {type: string, pattern: '^[a-z][a-z0-9_-]{0,63}:[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$'}
+        to: {type: string, pattern: '^[a-z][a-z0-9_-]{0,63}:[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$'}
+        kind: {$ref: '#/components/schemas/RelationshipGraphEdgeKind'}
+        attributes: {$ref: '#/components/schemas/RelationshipGraphAttributes'}
+    RelationshipGraph:
+      type: object
+      additionalProperties: false
+      required: [nodes, edges]
+      properties:
+        nodes:
+          type: array
+          maxItems: 500
+          items: {$ref: '#/components/schemas/RelationshipGraphNode'}
+        edges:
+          type: array
+          maxItems: 2000
+          items: {$ref: '#/components/schemas/RelationshipGraphEdge'}
     AssetLifecycleEvent:
       type: object
       required: [id, organizationId, assetId, toStatus, revision, actorId, occurredAt]
@@ -2829,6 +4967,202 @@ components:
       required: [items]
       properties:
         items: {type: array, items: {$ref: '#/components/schemas/Room'}}
+    DirectoryImportBatchID:
+      type: string
+      pattern: '^[a-f0-9]{32}$'
+    DirectoryImportSourceSystemID:
+      type: string
+      description: Stable provider-neutral identity of a configured read-only source system.
+      pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+    DirectoryImportProvider:
+      type: string
+      description: Provider adapter name recorded for operations and audit; the stable contract remains source-system neutral.
+      pattern: '^[a-z0-9][a-z0-9._-]{0,63}$'
+    DirectoryImportSource:
+      type: object
+      additionalProperties: false
+      description: Credential-free identity of one server-configured read-only directory connector.
+      required: [id, provider, configRevision]
+      properties:
+        id: {$ref: '#/components/schemas/DirectoryImportSourceSystemID'}
+        provider: {$ref: '#/components/schemas/DirectoryImportProvider'}
+        configRevision: {type: string, minLength: 1, maxLength: 128}
+    DirectoryImportSourceCollection:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          maxItems: 100
+          items: {$ref: '#/components/schemas/DirectoryImportSource'}
+    DirectoryImportBatchStatus:
+      type: string
+      enum: [previewed, applying, applied, partially_applied, failed]
+    DirectoryImportAction:
+      type: string
+      description: Immutable action selected while the bounded source snapshot is previewed.
+      enum: [create, update, deactivate, unchanged, conflict]
+    DirectoryImportOutcome:
+      type: string
+      description: Durable reconciliation outcome for one immutable planned action.
+      enum: [pending, applied, unchanged, conflict, failed]
+    DirectoryImportOperation:
+      type: string
+      enum: [preview, apply, retry]
+    DirectoryImportFailureClass:
+      type: string
+      enum: [transient, permanent, conflict]
+    PreviewDirectoryImportRequest:
+      type: object
+      additionalProperties: false
+      description: Selects a server-configured source. Provider records, credentials, mappings, and payloads are never accepted from the caller.
+      required: [sourceSystemId]
+      properties:
+        sourceSystemId: {$ref: '#/components/schemas/DirectoryImportSourceSystemID'}
+    DirectoryImportCounts:
+      type: object
+      additionalProperties: false
+      required: [created, updated, unchanged, deactivated, conflicts, failed]
+      properties:
+        created: {type: integer, minimum: 0, maximum: 5000}
+        updated: {type: integer, minimum: 0, maximum: 5000}
+        unchanged: {type: integer, minimum: 0, maximum: 5000}
+        deactivated: {type: integer, minimum: 0, maximum: 5000}
+        conflicts: {type: integer, minimum: 0, maximum: 5000}
+        failed: {type: integer, minimum: 0, maximum: 5000}
+    DirectoryImportRecord:
+      type: object
+      additionalProperties: false
+      description: Bounded normalized identity, group, or membership record safe for reconciliation detail. It contains only allowlisted directory attributes, metadata, and source references, never raw provider payloads, arbitrary provider properties, endpoints, credentials, or internal mapping digests.
+      required: [sourceRecordId, kind, displayName, status]
+      properties:
+        sourceRecordId: {type: string, minLength: 1, maxLength: 255}
+        kind:
+          type: string
+          enum: [identity, group, membership]
+        identityKind:
+          type: string
+          enum: [person, shared, public, lab]
+        displayName: {type: string, minLength: 1, maxLength: 200}
+        email: {type: string, format: email, maxLength: 320}
+        groupName: {type: string, minLength: 1, maxLength: 512}
+        description: {type: string, maxLength: 2000}
+        groupSourceId: {type: string, minLength: 1, maxLength: 255}
+        memberSourceId: {type: string, minLength: 1, maxLength: 255}
+        memberKind:
+          type: string
+          enum: [subject, group]
+        metadata:
+          type: object
+          maxProperties: 16
+          propertyNames: {pattern: '^[a-z0-9][a-z0-9._-]{0,63}$', maxLength: 64}
+          additionalProperties: {type: string, maxLength: 500}
+          description: Allowlisted normalized string metadata; raw provider extension objects are never exposed.
+        status:
+          type: string
+          enum: [active, inactive]
+        department: {type: string, maxLength: 200}
+        directoryAttributes:
+          type: object
+          maxProperties: 16
+          additionalProperties: {type: string, minLength: 1, maxLength: 500}
+        groupSourceIds:
+          type: array
+          maxItems: 256
+          uniqueItems: true
+          items: {type: string, minLength: 1, maxLength: 255}
+    DirectoryImportItem:
+      type: object
+      additionalProperties: false
+      description: Mapping-safe item from the exact persisted plan. Internal source/target digests and authoritative mapping rows are not returned.
+      required: [id, ordinal, record, action, outcome, updatedAt]
+      properties:
+        id: {type: string, pattern: '^[a-f0-9]{32}$'}
+        ordinal: {type: integer, minimum: 0, maximum: 4999}
+        record: {$ref: '#/components/schemas/DirectoryImportRecord'}
+        targetId: {$ref: '#/components/schemas/DirectoryImportBatchID'}
+        expectedRevision: {type: integer, format: int64, minimum: 1}
+        action: {$ref: '#/components/schemas/DirectoryImportAction'}
+        outcome: {$ref: '#/components/schemas/DirectoryImportOutcome'}
+        failureClass: {$ref: '#/components/schemas/DirectoryImportFailureClass'}
+        retryable: {type: boolean}
+        error:
+          type: string
+          maxLength: 240
+          description: Sanitized conflict or failure guidance without raw provider content.
+        updatedAt: {type: string, format: date-time}
+    DirectoryImportAttempt:
+      type: object
+      additionalProperties: false
+      description: Immutable preview, apply, or retry history. Raw and digested idempotency keys and request fingerprints are not returned.
+      required: [id, operation, number, status, correlationId, startedAt]
+      properties:
+        id: {type: string, pattern: '^[a-f0-9]{32}$'}
+        number: {type: integer, minimum: 1, maximum: 100}
+        operation: {$ref: '#/components/schemas/DirectoryImportOperation'}
+        status: {$ref: '#/components/schemas/DirectoryImportBatchStatus'}
+        failureClass: {$ref: '#/components/schemas/DirectoryImportFailureClass'}
+        retryable: {type: boolean}
+        error:
+          type: string
+          maxLength: 240
+          description: Sanitized failure guidance.
+        correlationId: {type: string, minLength: 1, maxLength: 128}
+        startedAt: {type: string, format: date-time}
+        completedAt: {type: string, format: date-time}
+    DirectoryImportBatch:
+      type: object
+      additionalProperties: false
+      description: Durable organization-owned preview and reconciliation summary. PostgreSQL or another authoritative store owns this state; Valkey never does.
+      required: [id, sourceSystemId, provider, configRevision, status, completeSnapshot, counts, createdAt, updatedAt]
+      properties:
+        id: {$ref: '#/components/schemas/DirectoryImportBatchID'}
+        sourceSystemId: {$ref: '#/components/schemas/DirectoryImportSourceSystemID'}
+        provider: {$ref: '#/components/schemas/DirectoryImportProvider'}
+        configRevision: {type: string, minLength: 1, maxLength: 128}
+        status: {$ref: '#/components/schemas/DirectoryImportBatchStatus'}
+        completeSnapshot:
+          type: boolean
+          description: Whether the connector declared the bounded snapshot complete. Missing-source deactivations are planned only when true.
+        counts: {$ref: '#/components/schemas/DirectoryImportCounts'}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+        completedAt: {type: string, format: date-time}
+    DirectoryImportBatchDetail:
+      type: object
+      additionalProperties: false
+      description: Complete mapping-safe item plan and append-only attempt history for one batch.
+      required: [batch, items, attempts]
+      properties:
+        batch: {$ref: '#/components/schemas/DirectoryImportBatch'}
+        items:
+          type: array
+          maxItems: 5000
+          items: {$ref: '#/components/schemas/DirectoryImportItem'}
+        attempts:
+          type: array
+          maxItems: 100
+          items: {$ref: '#/components/schemas/DirectoryImportAttempt'}
+    DirectoryImportOperationResult:
+      type: object
+      additionalProperties: false
+      required: [batch, replay]
+      properties:
+        batch: {$ref: '#/components/schemas/DirectoryImportBatch'}
+        replay:
+          type: boolean
+          description: True when this exact idempotent operation returned its original persisted result.
+    DirectoryImportBatchPage:
+      type: object
+      additionalProperties: false
+      required: [batches]
+      properties:
+        batches:
+          type: array
+          maxItems: 100
+          items: {$ref: '#/components/schemas/DirectoryImportBatch'}
+        nextCursor: {$ref: '#/components/schemas/DirectoryImportBatchID'}
     Department:
       type: object
       required: [id, organizationId, name, status, revision, createdAt, updatedAt]
@@ -3413,6 +5747,1031 @@ components:
         amountsByKindMinor:
           type: object
           additionalProperties: {type: integer, format: int64, minimum: 0}
+    StackID:
+      type: string
+      pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+    StackSourceRecordID:
+      type: string
+      pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,254}$'
+    StackProductStatus: {type: string, enum: [active, retired]}
+    StackVersionStatus: {type: string, enum: [active, unsupported, retired]}
+    StackInstallationStatus: {type: string, enum: [installed, removed]}
+    StackLicenseStatus: {type: string, enum: [active, expired, retired]}
+    StackUsageState: {type: string, enum: [unknown, used, unused]}
+    StackEntitlementMetric: {type: string, enum: [device, user, concurrent, site, enterprise]}
+    StackAssigneeKind: {type: string, enum: [asset, identity, department, site]}
+    StackProduct:
+      type: object
+      additionalProperties: false
+      required: [id, organizationId, name, publisher, status, revision, createdAt, updatedAt]
+      properties:
+        id: {$ref: '#/components/schemas/StackID'}
+        organizationId: {$ref: '#/components/schemas/StackID'}
+        name: {type: string, minLength: 1, maxLength: 200}
+        publisher: {type: string, minLength: 1, maxLength: 200}
+        category: {type: string, maxLength: 100}
+        status: {$ref: '#/components/schemas/StackProductStatus'}
+        sourceSystemId: {$ref: '#/components/schemas/StackID'}
+        sourceRecordId: {$ref: '#/components/schemas/StackSourceRecordID'}
+        revision: {type: integer, format: int64, minimum: 1}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    CreateStackProductRequest:
+      type: object
+      additionalProperties: false
+      required: [name, publisher]
+      properties:
+        id: {$ref: '#/components/schemas/StackID'}
+        name: {type: string, minLength: 1, maxLength: 200}
+        publisher: {type: string, minLength: 1, maxLength: 200}
+        category: {type: string, maxLength: 100}
+        status: {$ref: '#/components/schemas/StackProductStatus'}
+        sourceSystemId: {$ref: '#/components/schemas/StackID'}
+        sourceRecordId: {$ref: '#/components/schemas/StackSourceRecordID'}
+      dependentRequired: {sourceSystemId: [sourceRecordId], sourceRecordId: [sourceSystemId]}
+    UpdateStackProductStatusRequest:
+      type: object
+      additionalProperties: false
+      required: [status, revision]
+      properties:
+        status: {$ref: '#/components/schemas/StackProductStatus'}
+        revision: {type: integer, format: int64, minimum: 1}
+    StackVersion:
+      type: object
+      additionalProperties: false
+      required: [id, organizationId, productId, name, status, revision, createdAt, updatedAt]
+      properties:
+        id: {$ref: '#/components/schemas/StackID'}
+        organizationId: {$ref: '#/components/schemas/StackID'}
+        productId: {$ref: '#/components/schemas/StackID'}
+        name: {type: string, minLength: 1, maxLength: 100}
+        releasedOn: {type: string, format: date-time}
+        status: {$ref: '#/components/schemas/StackVersionStatus'}
+        sourceSystemId: {$ref: '#/components/schemas/StackID'}
+        sourceRecordId: {$ref: '#/components/schemas/StackSourceRecordID'}
+        revision: {type: integer, format: int64, minimum: 1}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    CreateStackVersionRequest:
+      type: object
+      additionalProperties: false
+      required: [productId, name]
+      properties:
+        id: {$ref: '#/components/schemas/StackID'}
+        productId: {$ref: '#/components/schemas/StackID'}
+        name: {type: string, minLength: 1, maxLength: 100}
+        releasedOn: {type: string, format: date-time}
+        status: {$ref: '#/components/schemas/StackVersionStatus'}
+        sourceSystemId: {$ref: '#/components/schemas/StackID'}
+        sourceRecordId: {$ref: '#/components/schemas/StackSourceRecordID'}
+      dependentRequired: {sourceSystemId: [sourceRecordId], sourceRecordId: [sourceSystemId]}
+    UpdateStackVersionStatusRequest:
+      type: object
+      additionalProperties: false
+      required: [status, revision]
+      properties:
+        status: {$ref: '#/components/schemas/StackVersionStatus'}
+        revision: {type: integer, format: int64, minimum: 1}
+    StackInstallation:
+      type: object
+      additionalProperties: false
+      required: [id, organizationId, versionId, assetId, status, usageState, installedAt, revision, createdAt, updatedAt]
+      properties:
+        id: {$ref: '#/components/schemas/StackID'}
+        organizationId: {$ref: '#/components/schemas/StackID'}
+        versionId: {$ref: '#/components/schemas/StackID'}
+        assetId: {$ref: '#/components/schemas/StackID'}
+        status: {$ref: '#/components/schemas/StackInstallationStatus'}
+        usageState: {$ref: '#/components/schemas/StackUsageState'}
+        installedAt: {type: string, format: date-time}
+        lastUsedAt: {type: string, format: date-time}
+        removedAt: {type: string, format: date-time}
+        sourceSystemId: {$ref: '#/components/schemas/StackID'}
+        sourceRecordId: {$ref: '#/components/schemas/StackSourceRecordID'}
+        revision: {type: integer, format: int64, minimum: 1}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    RecordStackInstallationRequest:
+      type: object
+      additionalProperties: false
+      required: [versionId, assetId, installedAt]
+      properties:
+        id: {$ref: '#/components/schemas/StackID'}
+        versionId: {$ref: '#/components/schemas/StackID'}
+        assetId: {$ref: '#/components/schemas/StackID'}
+        status: {$ref: '#/components/schemas/StackInstallationStatus'}
+        usageState: {$ref: '#/components/schemas/StackUsageState'}
+        installedAt: {type: string, format: date-time}
+        lastUsedAt: {type: string, format: date-time}
+        removedAt: {type: string, format: date-time}
+        sourceSystemId: {$ref: '#/components/schemas/StackID'}
+        sourceRecordId: {$ref: '#/components/schemas/StackSourceRecordID'}
+      dependentRequired: {sourceSystemId: [sourceRecordId], sourceRecordId: [sourceSystemId]}
+    UpdateStackInstallationStateRequest:
+      type: object
+      additionalProperties: false
+      required: [status, usageState, revision]
+      properties:
+        status: {$ref: '#/components/schemas/StackInstallationStatus'}
+        usageState: {$ref: '#/components/schemas/StackUsageState'}
+        lastUsedAt: {type: string, format: date-time}
+        removedAt: {type: string, format: date-time}
+        revision: {type: integer, format: int64, minimum: 1}
+    StackLicense:
+      type: object
+      additionalProperties: false
+      required: [id, organizationId, productId, name, entitlementMetric, quantity, status, documentIds, revision, createdAt, updatedAt]
+      properties:
+        id: {$ref: '#/components/schemas/StackID'}
+        organizationId: {$ref: '#/components/schemas/StackID'}
+        productId: {$ref: '#/components/schemas/StackID'}
+        versionId: {$ref: '#/components/schemas/StackID'}
+        name: {type: string, minLength: 1, maxLength: 200}
+        entitlementMetric: {$ref: '#/components/schemas/StackEntitlementMetric'}
+        quantity: {type: integer, format: int64, minimum: 1, maximum: 1000000000}
+        status: {$ref: '#/components/schemas/StackLicenseStatus'}
+        startsOn: {type: string, format: date-time}
+        expiresOn: {type: string, format: date-time}
+        vendorId: {$ref: '#/components/schemas/StackID'}
+        purchaseOrderId: {$ref: '#/components/schemas/StackID'}
+        contractId: {$ref: '#/components/schemas/StackID'}
+        costRecordId: {$ref: '#/components/schemas/StackID'}
+        documentIds: {type: array, maxItems: 100, uniqueItems: true, items: {$ref: '#/components/schemas/StackID'}}
+        sourceSystemId: {$ref: '#/components/schemas/StackID'}
+        sourceRecordId: {$ref: '#/components/schemas/StackSourceRecordID'}
+        revision: {type: integer, format: int64, minimum: 1}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    CreateStackLicenseRequest:
+      type: object
+      additionalProperties: false
+      required: [productId, name, entitlementMetric, quantity]
+      properties:
+        id: {$ref: '#/components/schemas/StackID'}
+        productId: {$ref: '#/components/schemas/StackID'}
+        versionId: {$ref: '#/components/schemas/StackID'}
+        name: {type: string, minLength: 1, maxLength: 200}
+        entitlementMetric: {$ref: '#/components/schemas/StackEntitlementMetric'}
+        quantity: {type: integer, format: int64, minimum: 1, maximum: 1000000000}
+        status: {$ref: '#/components/schemas/StackLicenseStatus'}
+        startsOn: {type: string, format: date-time}
+        expiresOn: {type: string, format: date-time}
+        vendorId: {$ref: '#/components/schemas/StackID'}
+        purchaseOrderId: {$ref: '#/components/schemas/StackID'}
+        contractId: {$ref: '#/components/schemas/StackID'}
+        costRecordId: {$ref: '#/components/schemas/StackID'}
+        documentIds: {type: array, maxItems: 100, uniqueItems: true, items: {$ref: '#/components/schemas/StackID'}}
+        sourceSystemId: {$ref: '#/components/schemas/StackID'}
+        sourceRecordId: {$ref: '#/components/schemas/StackSourceRecordID'}
+      dependentRequired: {sourceSystemId: [sourceRecordId], sourceRecordId: [sourceSystemId]}
+    UpdateStackLicenseEntitlementRequest:
+      type: object
+      additionalProperties: false
+      required: [quantity, status, revision]
+      properties:
+        quantity: {type: integer, format: int64, minimum: 1, maximum: 1000000000}
+        status: {$ref: '#/components/schemas/StackLicenseStatus'}
+        startsOn: {type: string, format: date-time}
+        expiresOn: {type: string, format: date-time}
+        revision: {type: integer, format: int64, minimum: 1}
+    StackAssignment:
+      type: object
+      additionalProperties: false
+      required: [id, organizationId, licenseId, assigneeKind, assigneeId, seats, usageState, assignedAt, revision, createdAt, updatedAt]
+      properties:
+        id: {$ref: '#/components/schemas/StackID'}
+        organizationId: {$ref: '#/components/schemas/StackID'}
+        licenseId: {$ref: '#/components/schemas/StackID'}
+        assigneeKind: {$ref: '#/components/schemas/StackAssigneeKind'}
+        assigneeId: {$ref: '#/components/schemas/StackID'}
+        seats: {type: integer, format: int64, minimum: 1, maximum: 1000000000}
+        usageState: {$ref: '#/components/schemas/StackUsageState'}
+        assignedAt: {type: string, format: date-time}
+        lastUsedAt: {type: string, format: date-time}
+        endedAt: {type: string, format: date-time}
+        sourceSystemId: {$ref: '#/components/schemas/StackID'}
+        sourceRecordId: {$ref: '#/components/schemas/StackSourceRecordID'}
+        revision: {type: integer, format: int64, minimum: 1}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    CreateStackAssignmentRequest:
+      type: object
+      additionalProperties: false
+      required: [licenseId, assigneeKind, assigneeId, seats, assignedAt]
+      properties:
+        id: {$ref: '#/components/schemas/StackID'}
+        licenseId: {$ref: '#/components/schemas/StackID'}
+        assigneeKind: {$ref: '#/components/schemas/StackAssigneeKind'}
+        assigneeId: {$ref: '#/components/schemas/StackID'}
+        seats: {type: integer, format: int64, minimum: 1, maximum: 1000000000}
+        usageState: {$ref: '#/components/schemas/StackUsageState'}
+        assignedAt: {type: string, format: date-time}
+        lastUsedAt: {type: string, format: date-time}
+        endedAt: {type: string, format: date-time}
+        sourceSystemId: {$ref: '#/components/schemas/StackID'}
+        sourceRecordId: {$ref: '#/components/schemas/StackSourceRecordID'}
+      dependentRequired: {sourceSystemId: [sourceRecordId], sourceRecordId: [sourceSystemId]}
+    UpdateStackAssignmentUsageRequest:
+      type: object
+      additionalProperties: false
+      required: [usageState, revision]
+      properties:
+        usageState: {$ref: '#/components/schemas/StackUsageState'}
+        lastUsedAt: {type: string, format: date-time}
+        revision: {type: integer, format: int64, minimum: 1}
+    EndStackAssignmentRequest:
+      type: object
+      additionalProperties: false
+      required: [endedAt, revision]
+      properties:
+        endedAt: {type: string, format: date-time}
+        revision: {type: integer, format: int64, minimum: 1}
+    StackSnapshot:
+      type: object
+      additionalProperties: false
+      required: [products, versions, installations, licenses, assignments]
+      properties:
+        products: {type: array, items: {$ref: '#/components/schemas/StackProduct'}}
+        versions: {type: array, items: {$ref: '#/components/schemas/StackVersion'}}
+        installations: {type: array, items: {$ref: '#/components/schemas/StackInstallation'}}
+        licenses: {type: array, items: {$ref: '#/components/schemas/StackLicense'}}
+        assignments: {type: array, items: {$ref: '#/components/schemas/StackAssignment'}}
+    StackCondition:
+      type: object
+      additionalProperties: false
+      required: [code, severity, productId, humanReadableState]
+      properties:
+        code: {type: string, enum: [expired, expiring, over_assigned, under_used, missing_license]}
+        severity: {type: string, enum: [critical, warning, info]}
+        productId: {$ref: '#/components/schemas/StackID'}
+        versionId: {$ref: '#/components/schemas/StackID'}
+        licenseId: {$ref: '#/components/schemas/StackID'}
+        assetId: {$ref: '#/components/schemas/StackID'}
+        entitledQuantity: {type: integer, format: int64, minimum: 0}
+        assignedQuantity: {type: integer, format: int64, minimum: 0}
+        underusedQuantity: {type: integer, format: int64, minimum: 0}
+        daysUntilExpiry: {type: integer, format: int64}
+        humanReadableState: {type: string, minLength: 1, maxLength: 500}
+    StackAnalytics:
+      type: object
+      additionalProperties: false
+      required: [asOf, expiringWithinDays, products, activeInstallations, activeLicenses, entitledQuantity, assignedQuantity, underusedAssignments, complianceConditions]
+      properties:
+        asOf: {type: string, format: date-time}
+        expiringWithinDays: {type: integer, format: int64, minimum: 1, maximum: 3660}
+        products: {type: integer, minimum: 0}
+        activeInstallations: {type: integer, minimum: 0}
+        activeLicenses: {type: integer, minimum: 0}
+        entitledQuantity: {type: integer, format: int64, minimum: 0}
+        assignedQuantity: {type: integer, format: int64, minimum: 0}
+        underusedAssignments: {type: integer, minimum: 0}
+        complianceConditions: {type: array, items: {$ref: '#/components/schemas/StackCondition'}}
+    StackExchangeRecord:
+      type: object
+      additionalProperties: false
+      required: [type, id, revision, dependencies, payload]
+      properties:
+        type: {type: string, enum: [stack.product, stack.version, stack.license, stack.installation, stack.assignment]}
+        id: {$ref: '#/components/schemas/StackID'}
+        revision: {type: integer, format: int64, minimum: 1}
+        dependencies: {type: array, maxItems: 102, uniqueItems: true, items: {type: string, minLength: 3, maxLength: 256}}
+        sourceSystemId:
+          allOf: [{$ref: '#/components/schemas/StackID'}]
+          description: Earliest known source system identity when this record was imported.
+        sourceRecordId:
+          allOf: [{$ref: '#/components/schemas/StackSourceRecordID'}]
+          description: Earliest known source record identity paired with sourceSystemId.
+        payload: {type: object}
+      dependentRequired: {sourceSystemId: [sourceRecordId], sourceRecordId: [sourceSystemId]}
+    StackExchangeExport:
+      type: object
+      additionalProperties: false
+      required: [records]
+      properties:
+        records: {type: array, maxItems: 100000, items: {$ref: '#/components/schemas/StackExchangeRecord'}}
+    StackExchangeImportRequest:
+      type: object
+      additionalProperties: false
+      description: Schema-less legacy Stack import request pinned to the v1 built-in Stack templates.
+      required: [sourceSystemId, records]
+      properties:
+        sourceSystemId: {$ref: '#/components/schemas/StackID'}
+        records: {type: array, minItems: 1, maxItems: 10000, items: {$ref: '#/components/schemas/StackExchangeRecord'}}
+    StackImportResult:
+      type: object
+      additionalProperties: false
+      description: Durable Exchange projection. A failed response includes the same shape under import so any committed prefix is explicit and the exact request can resume by deterministic packageId.
+      required: [packageId, status, created, unchanged, holding, replay, records, pendingOwnership]
+      properties:
+        packageId: {$ref: '#/components/schemas/ExchangeStableID'}
+        status: {$ref: '#/components/schemas/ExchangePackageStatus'}
+        created: {type: integer, minimum: 0, maximum: 10000}
+        unchanged: {type: integer, minimum: 0, maximum: 10000}
+        holding: {type: integer, minimum: 0, maximum: 10000}
+        replay: {type: boolean}
+        errorCode: {type: string, pattern: '^[a-z][a-z0-9_]{0,63}$'}
+        records: {type: array, maxItems: 10000, items: {$ref: '#/components/schemas/ExchangeRecordOutcome'}}
+        pendingOwnership:
+          type: array
+          maxItems: 10000
+          description: Guard locks that exist while a provider outcome still awaits deterministic recovery. Empty after every terminal success.
+          items: {$ref: '#/components/schemas/StackImportOwnership'}
+    StackImportOwnership:
+      type: object
+      additionalProperties: false
+      required: [type, id, writeLocked]
+      properties:
+        type: {$ref: '#/components/schemas/ExchangeRecordType'}
+        id: {$ref: '#/components/schemas/ExchangeStableID'}
+        writeLocked: {type: boolean}
+    StackImportFailure:
+      type: object
+      additionalProperties: false
+      required: [error, import]
+      properties:
+        error: {$ref: '#/components/schemas/Error/properties/error'}
+        import: {$ref: '#/components/schemas/StackImportResult'}
+    SignalID:
+      type: string
+      pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+    SignalCondition:
+      type: string
+      enum: [over_budget, forecast_over_budget, unpaid, overdue, expiration, renewal, unused_commitment, reconciliation]
+    SignalSeverity:
+      type: string
+      enum: [info, warning, critical]
+    SignalAlertStatus:
+      type: string
+      enum: [active, acknowledged, resolved]
+    SignalThresholdDays:
+      type: array
+      maxItems: 8
+      uniqueItems: true
+      items: {type: integer, minimum: 0, maximum: 3660}
+    SignalRule:
+      type: object
+      additionalProperties: false
+      required: [id, organizationId, name, condition, severity, enabled, thresholdDays, createdBy, revision, createdAt, updatedAt]
+      properties:
+        id: {$ref: '#/components/schemas/SignalID'}
+        organizationId: {$ref: '#/components/schemas/SignalID'}
+        name: {type: string, minLength: 1, maxLength: 160}
+        condition: {$ref: '#/components/schemas/SignalCondition'}
+        severity: {$ref: '#/components/schemas/SignalSeverity'}
+        enabled: {type: boolean}
+        thresholdDays: {$ref: '#/components/schemas/SignalThresholdDays'}
+        fiscalPeriod: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,31}$'}
+        scenario: {type: string, pattern: '^[a-z0-9][a-z0-9._-]{0,63}$'}
+        createdBy: {type: string, minLength: 1, maxLength: 200}
+        revision: {type: integer, format: int64, minimum: 1}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    SignalRuleCollection:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items: {type: array, maxItems: 100, items: {$ref: '#/components/schemas/SignalRule'}}
+    CreateSignalRuleRequest:
+      type: object
+      additionalProperties: false
+      required: [name, condition, severity]
+      properties:
+        id: {$ref: '#/components/schemas/SignalID'}
+        name: {type: string, minLength: 1, maxLength: 160}
+        condition: {$ref: '#/components/schemas/SignalCondition'}
+        severity: {$ref: '#/components/schemas/SignalSeverity'}
+        enabled: {type: boolean, default: true}
+        thresholdDays: {$ref: '#/components/schemas/SignalThresholdDays'}
+        fiscalPeriod: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,31}$'}
+        scenario: {type: string, pattern: '^[a-z0-9][a-z0-9._-]{0,63}$'}
+    UpdateSignalRuleRequest:
+      type: object
+      additionalProperties: false
+      required: [name, condition, severity, enabled, revision]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 160}
+        condition: {$ref: '#/components/schemas/SignalCondition'}
+        severity: {$ref: '#/components/schemas/SignalSeverity'}
+        enabled: {type: boolean}
+        thresholdDays: {$ref: '#/components/schemas/SignalThresholdDays'}
+        fiscalPeriod: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,31}$'}
+        scenario: {type: string, pattern: '^[a-z0-9][a-z0-9._-]{0,63}$'}
+        revision: {type: integer, format: int64, minimum: 1}
+    SignalAlert:
+      type: object
+      additionalProperties: false
+      required: [id, organizationId, ruleId, condition, severity, status, title, summary, targetType, targetId, thresholdDays, firstDetectedAt, lastObservedAt, revision]
+      properties:
+        id: {$ref: '#/components/schemas/SignalID'}
+        organizationId: {$ref: '#/components/schemas/SignalID'}
+        ruleId: {$ref: '#/components/schemas/SignalID'}
+        condition: {$ref: '#/components/schemas/SignalCondition'}
+        severity: {$ref: '#/components/schemas/SignalSeverity'}
+        status: {$ref: '#/components/schemas/SignalAlertStatus'}
+        title: {type: string, minLength: 1, maxLength: 200}
+        summary: {type: string, minLength: 1, maxLength: 500}
+        targetType: {type: string, pattern: '^[a-z][a-z0-9._-]{0,63}$'}
+        targetId: {$ref: '#/components/schemas/SignalID'}
+        dueAt: {type: string, format: date-time}
+        thresholdDays: {type: integer, minimum: 0, maximum: 3660}
+        assignedKind: {type: string, enum: [identity, group]}
+        assignedId: {$ref: '#/components/schemas/SignalID'}
+        acknowledgedBy: {type: string, minLength: 1, maxLength: 200}
+        acknowledgedAt: {type: string, format: date-time}
+        firstDetectedAt: {type: string, format: date-time}
+        lastObservedAt: {type: string, format: date-time}
+        resolvedAt: {type: string, format: date-time}
+        revision: {type: integer, format: int64, minimum: 1}
+    SignalAlertCollection:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items: {type: array, maxItems: 500, items: {$ref: '#/components/schemas/SignalAlert'}}
+    SignalAlertHistory:
+      type: object
+      additionalProperties: false
+      required: [id, alertId, action, actorId, occurredAt, revision]
+      properties:
+        id: {type: string, pattern: '^[a-f0-9]{32}$'}
+        alertId: {$ref: '#/components/schemas/SignalID'}
+        action: {type: string, enum: [created, refreshed, reopened, resolved, acknowledged, assigned]}
+        actorId: {type: string, minLength: 1, maxLength: 200}
+        occurredAt: {type: string, format: date-time}
+        revision: {type: integer, format: int64, minimum: 1}
+    SignalAlertHistoryCollection:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items: {type: array, maxItems: 10000, items: {$ref: '#/components/schemas/SignalAlertHistory'}}
+    SignalRevisionRequest:
+      type: object
+      additionalProperties: false
+      required: [revision]
+      properties:
+        revision: {type: integer, format: int64, minimum: 1}
+    AssignSignalAlertRequest:
+      type: object
+      additionalProperties: false
+      required: [kind, targetId, revision]
+      properties:
+        kind: {type: string, enum: [identity, group]}
+        targetId: {$ref: '#/components/schemas/SignalID'}
+        revision: {type: integer, format: int64, minimum: 1}
+    EvaluateSignalsRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        asOf: {type: string, format: date-time, description: Omission uses the service UTC clock.}
+    SignalEvaluationResult:
+      type: object
+      additionalProperties: false
+      required: [asOf, rules, created, refreshed, resolved]
+      properties:
+        asOf: {type: string, format: date-time}
+        rules: {type: integer, minimum: 0, maximum: 100}
+        created: {type: integer, minimum: 0}
+        refreshed: {type: integer, minimum: 0}
+        resolved: {type: integer, minimum: 0}
+    SignalSubscription:
+      type: object
+      additionalProperties: false
+      required: [id, organizationId, targetKind, targetId, enabled, createdBy, revision, createdAt, updatedAt]
+      properties:
+        id: {$ref: '#/components/schemas/SignalID'}
+        organizationId: {$ref: '#/components/schemas/SignalID'}
+        ruleId: {$ref: '#/components/schemas/SignalID'}
+        targetKind: {type: string, enum: [group, webhook]}
+        targetId: {$ref: '#/components/schemas/SignalID'}
+        enabled: {type: boolean}
+        createdBy: {type: string, minLength: 1, maxLength: 200}
+        revision: {type: integer, format: int64, minimum: 1}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    SignalSubscriptionCollection:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items: {type: array, maxItems: 100, items: {$ref: '#/components/schemas/SignalSubscription'}}
+    SignalSubscriptionTarget:
+      type: object
+      additionalProperties: false
+      required: [targetKind, targetId, label]
+      properties:
+        targetKind: {type: string, enum: [group, webhook]}
+        targetId: {$ref: '#/components/schemas/SignalID'}
+        label: {type: string, minLength: 1, maxLength: 160, description: Safe human label without route or credential data.}
+    SignalSubscriptionTargetCollection:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items: {type: array, maxItems: 150, items: {$ref: '#/components/schemas/SignalSubscriptionTarget'}}
+    CreateSignalSubscriptionRequest:
+      type: object
+      additionalProperties: false
+      required: [targetKind, targetId]
+      properties:
+        id: {$ref: '#/components/schemas/SignalID'}
+        ruleId: {$ref: '#/components/schemas/SignalID'}
+        targetKind: {type: string, enum: [group, webhook]}
+        targetId:
+          allOf: [{$ref: '#/components/schemas/SignalID'}]
+          description: Stable configured target reference, never a URL or provider credential.
+    SignalDelivery:
+      type: object
+      additionalProperties: false
+      required: [id, alertId, subscriptionId, targetKind, targetId, status, attempts, createdAt, updatedAt]
+      properties:
+        id: {$ref: '#/components/schemas/SignalID'}
+        alertId: {$ref: '#/components/schemas/SignalID'}
+        subscriptionId: {$ref: '#/components/schemas/SignalID'}
+        targetKind: {type: string, enum: [group, webhook]}
+        targetId: {$ref: '#/components/schemas/SignalID'}
+        status: {type: string, enum: [pending, delivered, failed]}
+        attempts: {type: integer, minimum: 0, maximum: 8}
+        nextAttemptAt: {type: string, format: date-time}
+        lastErrorCode: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    SignalDeliveryCollection:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items: {type: array, maxItems: 500, items: {$ref: '#/components/schemas/SignalDelivery'}}
+    RecordSignalDeliveryAttemptRequest:
+      type: object
+      additionalProperties: false
+      required: [succeeded, retryable]
+      properties:
+        succeeded: {type: boolean}
+        retryable: {type: boolean}
+        errorCode: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+    ExchangeStableID:
+      type: string
+      pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+    ExchangeRecordType:
+      type: string
+      pattern: '^[a-z][a-z0-9._-]{0,63}$'
+    ExchangeSHA256:
+      type: string
+      pattern: '^[a-f0-9]{64}$'
+    ExchangeReference:
+      type: object
+      additionalProperties: false
+      required: [type, id]
+      properties:
+        type: {$ref: '#/components/schemas/ExchangeRecordType'}
+        id: {$ref: '#/components/schemas/ExchangeStableID'}
+    ExchangeRecordDescriptor:
+      type: object
+      additionalProperties: false
+      required: [type, id, revision, templateId, templateVersion, dependencies, hasFile]
+      properties:
+        type: {$ref: '#/components/schemas/ExchangeRecordType'}
+        id: {$ref: '#/components/schemas/ExchangeStableID'}
+        revision: {type: integer, format: int64, minimum: 1}
+        templateId:
+          allOf: [{$ref: '#/components/schemas/PatternsTemplateID'}]
+          description: Exact immutable Patterns schema used to validate this portable projection.
+        templateVersion:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Exact Patterns version; Exchange never resolves latest during import.
+        dependencies:
+          type: array
+          maxItems: 128
+          uniqueItems: true
+          items: {$ref: '#/components/schemas/ExchangeReference'}
+        hasFile:
+          type: boolean
+          description: True when the domain provider can contribute portable file metadata; included bytes still require fileMode `include`.
+    ExchangeExcludedRecordType:
+      type: object
+      additionalProperties: false
+      required: [type, reason]
+      properties:
+        type: {$ref: '#/components/schemas/ExchangeRecordType'}
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 500
+          description: Stable operator-facing reason this security, deployment, derived, operational, or self-referential family is not portable.
+    ExchangeLimits:
+      type: object
+      additionalProperties: false
+      required: [maximumArchiveBytes, maximumSelections]
+      properties:
+        maximumArchiveBytes: {type: integer, format: int64, const: 33554432}
+        maximumSelections: {type: integer, const: 1000}
+    ExchangeRecordCollection:
+      type: object
+      additionalProperties: false
+      required: [items, excludedRecordTypes, portableRecordTypes, registeredRecordTypes, providerRegistryComplete, limits]
+      properties:
+        items:
+          type: array
+          maxItems: 10000
+          items: {$ref: '#/components/schemas/ExchangeRecordDescriptor'}
+        excludedRecordTypes:
+          type: array
+          minItems: 1
+          maxItems: 51
+          uniqueItems: true
+          items: {$ref: '#/components/schemas/ExchangeExcludedRecordType'}
+        portableRecordTypes:
+          type: array
+          minItems: 1
+          maxItems: 51
+          uniqueItems: true
+          description: Complete policy list of record families that require an owning provider for phase one.
+          items: {$ref: '#/components/schemas/ExchangeRecordType'}
+        registeredRecordTypes:
+          type: array
+          maxItems: 51
+          uniqueItems: true
+          description: Portable record families actually owned by providers in this running application.
+          items: {$ref: '#/components/schemas/ExchangeRecordType'}
+        providerRegistryComplete:
+          type: boolean
+          description: True only when every portable phase-one record family has exactly one registered provider.
+        limits: {$ref: '#/components/schemas/ExchangeLimits'}
+    ExchangeFileMode:
+      type: string
+      enum: [metadata, include]
+      description: "metadata keeps names, media types, sizes, checksums, provider metadata, provenance, and relationships without bytes; include adds checksummed package-internal file entries."
+    ExchangePackageDirection:
+      type: string
+      enum: [export, import]
+    ExchangePackageStatus:
+      type: string
+      enum: [processing, completed, holding, failed]
+    ExchangeOutcomeStatus:
+      type: string
+      enum: [created, unchanged, holding]
+    ExchangeRecordOutcome:
+      type: object
+      additionalProperties: false
+      required: [type, id, revision, checksum, status, missingDependencies, writeLocked]
+      properties:
+        type: {$ref: '#/components/schemas/ExchangeRecordType'}
+        id: {$ref: '#/components/schemas/ExchangeStableID'}
+        revision: {type: integer, format: int64, minimum: 1}
+        checksum: {$ref: '#/components/schemas/ExchangeSHA256'}
+        status: {$ref: '#/components/schemas/ExchangeOutcomeStatus'}
+        missingDependencies:
+          type: array
+          maxItems: 130
+          uniqueItems: true
+          description: Stable unresolved relationships or bounded provider/file diagnostics. Empty for created and unchanged records.
+          items: {$ref: '#/components/schemas/ExchangeReference'}
+        writeLocked:
+          type: boolean
+          description: True when an imported record is readable but Guard blocks writes until explicit ownership claim. Holding records are not written.
+    ExchangePackage:
+      type: object
+      additionalProperties: false
+      description: Durable organization-scoped receipt. Processing and failed receipts retain checkpointed created and unchanged outcomes for safe recovery; completed and holding receipts contain exactly recordCount outcomes. holdingCount is nonzero only for holding status and errorCode is present only for failed status.
+      required: [packageId, direction, schemaVersion, sourceSystemId, archiveSha256, sizeBytes, fileMode, status, recordCount, fileCount, createdCount, unchangedCount, holdingCount, records, createdAt, updatedAt]
+      properties:
+        packageId: {$ref: '#/components/schemas/ExchangeStableID'}
+        direction: {$ref: '#/components/schemas/ExchangePackageDirection'}
+        schemaVersion:
+          type: string
+          enum: ['1.0', '1.1']
+          description: Durable history may contain legacy 1.0 receipts. Every new export/import requires 1.1, whose manifest has a sorted schema registry and an exact Patterns template ID/version on every checksummed record; 1.0 archives fail closed and must be re-exported.
+        sourceSystemId: {$ref: '#/components/schemas/ExchangeStableID'}
+        archiveSha256: {$ref: '#/components/schemas/ExchangeSHA256'}
+        sizeBytes: {type: integer, format: int64, minimum: 1, maximum: 33554432}
+        fileMode: {$ref: '#/components/schemas/ExchangeFileMode'}
+        status: {$ref: '#/components/schemas/ExchangePackageStatus'}
+        recordCount: {type: integer, minimum: 1, maximum: 10000}
+        fileCount: {type: integer, minimum: 0, maximum: 1000}
+        createdCount: {type: integer, minimum: 0, maximum: 10000}
+        unchangedCount: {type: integer, minimum: 0, maximum: 10000}
+        holdingCount: {type: integer, minimum: 0, maximum: 10000}
+        records:
+          type: array
+          maxItems: 10000
+          items: {$ref: '#/components/schemas/ExchangeRecordOutcome'}
+        errorCode: {type: string, pattern: '^[a-z][a-z0-9_]{0,63}$'}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    ExchangePackageCollection:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          maxItems: 100
+          items: {$ref: '#/components/schemas/ExchangePackage'}
+    ExchangeExportRequest:
+      type: object
+      additionalProperties: false
+      required: [selection, includeDependencies, fileMode]
+      properties:
+        selection:
+          type: array
+          minItems: 1
+          maxItems: 1000
+          uniqueItems: true
+          description: Explicit organization records. The dependency closure may contain up to 10,000 total records.
+          items: {$ref: '#/components/schemas/ExchangeReference'}
+        includeDependencies:
+          type: boolean
+          description: Includes every available transitive dependency and orders it before records that consume it. Missing external relationships remain visible on import.
+        fileMode: {$ref: '#/components/schemas/ExchangeFileMode'}
+    ExchangeImportResult:
+      type: object
+      additionalProperties: false
+      required: [package, replay]
+      properties:
+        package:
+          allOf: [{$ref: '#/components/schemas/ExchangePackage'}]
+          description: Import-direction receipt containing created, unchanged, holding, and write-lock outcomes.
+        replay:
+          type: boolean
+          description: True only for the exact package ID and archive digest after an earlier completed import. Holding and failed receipts may safely retry the exact archive after dependencies or transient errors are resolved.
+    ReachID:
+      type: string
+      pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+    ReachProviderKind:
+      type: string
+      enum: [smtp, ses, gmail_oauth, outlook_oauth, teams, webhook]
+    ReachEndpoint:
+      type: object
+      additionalProperties: false
+      required: [id, label, kind]
+      properties:
+        id: {$ref: '#/components/schemas/ReachID'}
+        label: {type: string, minLength: 1, maxLength: 160}
+        kind: {$ref: '#/components/schemas/ReachProviderKind'}
+        destinationKey:
+          allOf: [{$ref: '#/components/schemas/ReachID'}]
+          description: Stable non-secret destination key required only for Teams. It maps one-to-one to the fixed deployment-owned channel route and is the only valid channel recipient for that endpoint.
+    ReachEndpointCollection:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items: {type: array, maxItems: 50, items: {$ref: '#/components/schemas/ReachEndpoint'}}
+    ReachProvider:
+      type: object
+      additionalProperties: false
+      required: [id, organizationId, name, kind, secretConfigured, enabled, revision, createdBy, updatedBy, createdAt, updatedAt]
+      properties:
+        id: {$ref: '#/components/schemas/ReachID'}
+        organizationId: {$ref: '#/components/schemas/ReachID'}
+        name: {type: string, minLength: 1, maxLength: 160}
+        kind: {$ref: '#/components/schemas/ReachProviderKind'}
+        endpointId:
+          type: string
+          pattern: '^$|^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+          description: Empty only for a safely inert imported provider awaiting an explicit local endpoint selection after ownership claim.
+        sender: {type: string, format: email, maxLength: 320}
+        secretConfigured: {type: boolean, description: Indicates an external reference exists; the reference and secret value are never returned.}
+        enabled: {type: boolean}
+        revision: {type: integer, format: int64, minimum: 1}
+        createdBy: {type: string, minLength: 1, maxLength: 200}
+        updatedBy: {type: string, minLength: 1, maxLength: 200}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    ReachProviderCollection:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items: {type: array, maxItems: 50, items: {$ref: '#/components/schemas/ReachProvider'}}
+    CreateReachProviderRequest:
+      type: object
+      additionalProperties: false
+      required: [name, kind, endpointId, secretRef]
+      properties:
+        id: {$ref: '#/components/schemas/ReachID'}
+        name: {type: string, minLength: 1, maxLength: 160}
+        kind: {$ref: '#/components/schemas/ReachProviderKind'}
+        endpointId: {$ref: '#/components/schemas/ReachID'}
+        sender: {type: string, format: email, maxLength: 320}
+        secretRef:
+          type: string
+          pattern: '^(env|external):[A-Za-z0-9][A-Za-z0-9._-]{0,95}$'
+          description: Explicit environment or injected external secret reference; never a credential value.
+        enabled: {type: boolean, default: true}
+    UpdateReachProviderRequest:
+      type: object
+      additionalProperties: false
+      required: [name, enabled, revision]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 160}
+        sender: {type: string, format: email, maxLength: 320}
+        endpointId:
+          allOf: [{$ref: '#/components/schemas/ReachID'}]
+          description: Optional deployment-approved route selection. Secret references remain exclusive to the confirmed rotation endpoint.
+        enabled: {type: boolean}
+        revision: {type: integer, format: int64, minimum: 1}
+    RotateReachSecretRequest:
+      type: object
+      additionalProperties: false
+      required: [secretRef, revision, confirm]
+      properties:
+        secretRef:
+          type: string
+          pattern: '^(env|external):[A-Za-z0-9][A-Za-z0-9._-]{0,95}$'
+          description: New explicit environment or injected external reference; raw secret material is not accepted.
+        revision: {type: integer, format: int64, minimum: 1}
+        confirm: {type: boolean, const: true}
+    ReachConfirmedAction:
+      type: object
+      additionalProperties: false
+      required: [confirm]
+      properties:
+        confirm: {type: boolean, const: true}
+    ReachProviderTest:
+      type: object
+      additionalProperties: false
+      required: [id, providerId, outcome, testedBy, testedAt]
+      properties:
+        id: {$ref: '#/components/schemas/ReachID'}
+        providerId: {$ref: '#/components/schemas/ReachID'}
+        outcome: {type: string, enum: [succeeded, failed]}
+        errorCode: {type: string, pattern: '^[a-z][a-z0-9_]{0,63}$'}
+        testedBy: {type: string, minLength: 1, maxLength: 200}
+        testedAt: {type: string, format: date-time}
+    ReachProviderTestCollection:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items: {type: array, maxItems: 100, items: {$ref: '#/components/schemas/ReachProviderTest'}}
+    ReachTemplate:
+      type: object
+      additionalProperties: false
+      required: [id, organizationId, name, subject, body, revision, createdBy, updatedBy, createdAt, updatedAt]
+      properties:
+        id: {$ref: '#/components/schemas/ReachID'}
+        organizationId: {$ref: '#/components/schemas/ReachID'}
+        name: {type: string, minLength: 1, maxLength: 160}
+        subject: {type: string, minLength: 1, maxLength: 200}
+        body: {type: string, minLength: 1, maxLength: 4000}
+        revision: {type: integer, format: int64, minimum: 1}
+        createdBy: {type: string, minLength: 1, maxLength: 200}
+        updatedBy: {type: string, minLength: 1, maxLength: 200}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    ReachTemplateCollection:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items: {type: array, maxItems: 100, items: {$ref: '#/components/schemas/ReachTemplate'}}
+    CreateReachTemplateRequest:
+      type: object
+      additionalProperties: false
+      required: [name, subject, body]
+      properties:
+        id: {$ref: '#/components/schemas/ReachID'}
+        name: {type: string, minLength: 1, maxLength: 160}
+        subject: {type: string, minLength: 1, maxLength: 200, description: Plain text with allowlisted double-brace variables.}
+        body: {type: string, minLength: 1, maxLength: 4000, description: Plain text with allowlisted double-brace variables; HTML is never interpreted.}
+    UpdateReachTemplateRequest:
+      type: object
+      additionalProperties: false
+      required: [name, subject, body, revision]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 160}
+        subject: {type: string, minLength: 1, maxLength: 200}
+        body: {type: string, minLength: 1, maxLength: 4000}
+        revision: {type: integer, format: int64, minimum: 1}
+    ReachRecipient:
+      type: object
+      additionalProperties: false
+      required: [kind, address]
+      properties:
+        kind: {type: string, enum: [email, channel]}
+        address: {type: string, minLength: 1, maxLength: 320, description: Validated email address or stable configured channel identifier.}
+    ReachGroup:
+      type: object
+      additionalProperties: false
+      required: [id, organizationId, name, providerId, templateId, recipients, revision, createdBy, updatedBy, createdAt, updatedAt]
+      properties:
+        id: {$ref: '#/components/schemas/ReachID'}
+        organizationId: {$ref: '#/components/schemas/ReachID'}
+        name: {type: string, minLength: 1, maxLength: 160}
+        providerId: {$ref: '#/components/schemas/ReachID'}
+        templateId: {$ref: '#/components/schemas/ReachID'}
+        recipients: {type: array, minItems: 1, maxItems: 100, uniqueItems: true, items: {$ref: '#/components/schemas/ReachRecipient'}}
+        revision: {type: integer, format: int64, minimum: 1}
+        createdBy: {type: string, minLength: 1, maxLength: 200}
+        updatedBy: {type: string, minLength: 1, maxLength: 200}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    ReachGroupCollection:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items: {type: array, maxItems: 100, items: {$ref: '#/components/schemas/ReachGroup'}}
+    CreateReachGroupRequest:
+      type: object
+      additionalProperties: false
+      required: [name, providerId, templateId, recipients]
+      properties:
+        id: {$ref: '#/components/schemas/ReachID'}
+        name: {type: string, minLength: 1, maxLength: 160}
+        providerId: {$ref: '#/components/schemas/ReachID'}
+        templateId: {$ref: '#/components/schemas/ReachID'}
+        recipients: {type: array, minItems: 1, maxItems: 100, uniqueItems: true, items: {$ref: '#/components/schemas/ReachRecipient'}}
+    UpdateReachGroupRequest:
+      type: object
+      additionalProperties: false
+      required: [name, providerId, templateId, recipients, revision]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 160}
+        providerId: {$ref: '#/components/schemas/ReachID'}
+        templateId: {$ref: '#/components/schemas/ReachID'}
+        recipients: {type: array, minItems: 1, maxItems: 100, uniqueItems: true, items: {$ref: '#/components/schemas/ReachRecipient'}}
+        revision: {type: integer, format: int64, minimum: 1}
+    ReachMessage:
+      type: object
+      additionalProperties: false
+      required: [id, organizationId, providerId, sourceKind, subject, body, recipients, status, attempts, createdBy, createdAt, updatedAt]
+      properties:
+        id: {$ref: '#/components/schemas/ReachID'}
+        organizationId: {$ref: '#/components/schemas/ReachID'}
+        groupId: {$ref: '#/components/schemas/ReachID'}
+        providerId: {$ref: '#/components/schemas/ReachID'}
+        templateId: {$ref: '#/components/schemas/ReachID'}
+        sourceKind: {type: string, enum: [manual, signals]}
+        sourceId: {$ref: '#/components/schemas/ReachID'}
+        subject: {type: string, minLength: 1, maxLength: 200}
+        body: {type: string, minLength: 1, maxLength: 4000}
+        recipients: {type: array, maxItems: 100, items: {$ref: '#/components/schemas/ReachRecipient'}}
+        status: {type: string, enum: [queued, retrying, delivered, failed]}
+        attempts: {type: integer, minimum: 0, maximum: 8}
+        nextAttemptAt: {type: string, format: date-time}
+        lastErrorCode: {type: string, pattern: '^[a-z][a-z0-9_]{0,63}$'}
+        createdBy: {type: string, minLength: 1, maxLength: 200}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    ReachMessageCollection:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items: {type: array, maxItems: 500, items: {$ref: '#/components/schemas/ReachMessage'}}
+    SendReachMessageRequest:
+      type: object
+      additionalProperties: false
+      required: [groupId, confirm]
+      properties:
+        groupId: {$ref: '#/components/schemas/ReachID'}
+        variables:
+          type: object
+          maxProperties: 5
+          propertyNames: {enum: [title, summary, severity, record_id, organization]}
+          additionalProperties: {type: string, minLength: 1, maxLength: 500}
+        confirm: {type: boolean, const: true}
+    ReachDeliveryAttempt:
+      type: object
+      additionalProperties: false
+      required: [id, messageId, attempt, outcome, retryable, occurredAt]
+      properties:
+        id: {type: string, pattern: '^[a-f0-9]{32}$'}
+        messageId: {$ref: '#/components/schemas/ReachID'}
+        attempt: {type: integer, minimum: 1, maximum: 8}
+        outcome: {type: string, enum: [succeeded, retrying, failed]}
+        errorCode: {type: string, pattern: '^[a-z][a-z0-9_]{0,63}$'}
+        retryable: {type: boolean}
+        nextAttemptAt: {type: string, format: date-time}
+        occurredAt: {type: string, format: date-time}
+    ReachAttemptCollection:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items: {type: array, maxItems: 8, items: {$ref: '#/components/schemas/ReachDeliveryAttempt'}}
+    ProcessReachSignalsRequest:
+      type: object
+      additionalProperties: false
+      required: [confirm]
+      properties:
+        confirm: {type: boolean, const: true}
+        limit: {type: integer, minimum: 1, maximum: 500, default: 100}
+    ReachProcessResult:
+      type: object
+      additionalProperties: false
+      required: [examined, delivered, retrying, failed]
+      properties:
+        examined: {type: integer, minimum: 0, maximum: 500}
+        delivered: {type: integer, minimum: 0, maximum: 500}
+        retrying: {type: integer, minimum: 0, maximum: 500}
+        failed: {type: integer, minimum: 0, maximum: 500}
     Tag:
       type: object
       additionalProperties: false

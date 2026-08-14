@@ -102,6 +102,35 @@ test('creates hierarchy records and manages guarded asset relationships with CSR
   }
 })
 
+test('creates the first direct tag rule with the revision zero sentinel', async () => {
+  let created = false
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input)
+    if (path === '/api/v1/tags') return jsonResponse({ items: [governance, security] })
+    if (path === '/api/v1/goals') return jsonResponse({ items: [goal] })
+    if (path === '/api/v1/threads/asset/asset-1/tags' && !init?.method) {
+      return jsonResponse({ items: created ? [{ tag: security, state: 'explicit', rule: { tagId: security.id, mode: 'include', revision: 1 } }] : [] })
+    }
+    if (path === '/api/v1/threads/asset/asset-1/goals' && !init?.method) return jsonResponse({ items: [] })
+    if (path === '/api/v1/threads/asset/asset-1/tags/security' && init?.method === 'PUT') {
+      created = true
+      return jsonResponse({ tagId: security.id, mode: 'include', revision: 1 })
+    }
+    throw new Error(`unexpected request: ${path} ${init?.method ?? 'GET'}`)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+
+  render(<ThreadsManager assets={[asset]} csrfToken="csrf-value" permissions={permissions} />)
+  const hierarchy = await screen.findByRole('list', { name: 'Organization tag hierarchy' })
+  const securityRow = within(hierarchy).getByText('Security').closest('div.rounded-lg')
+  if (!securityRow) throw new Error('security row missing')
+  fireEvent.click(within(securityRow as HTMLElement).getByRole('button', { name: 'Apply' }))
+
+  expect(await screen.findByText('Security explicitly applied.')).toBeInTheDocument()
+  const createRuleCall = fetchMock.mock.calls.find(([path, init]) => path === '/api/v1/threads/asset/asset-1/tags/security' && init?.method === 'PUT')
+  expect(createRuleCall?.[1]?.body).toBe('{"mode":"include","revision":0}')
+})
+
 test('renders nothing when goals read permission is absent', () => {
   const fetchMock = installThreadsFetch()
   const { container } = render(<ThreadsManager assets={[asset]} csrfToken="csrf-value" permissions={[]} />)

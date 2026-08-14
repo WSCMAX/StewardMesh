@@ -55,7 +55,7 @@ REST endpoints:
 - `GET|PUT /api/v1/assets/{assetId}`
 - `GET /api/v1/assets/{assetId}/lifecycle`
 
-List filters include bounded search, model, kind, status, site, department, user, and limit. Search covers name, asset tag, serial number, and hostname. OpenAPI and protobuf contracts carry the same fields and optimistic revision boundary.
+List filters include bounded search, model, kind, status, site, current asset department, current primary-user reference, deployment context, and limit. Search covers name, asset tag, serial number, and hostname; deployment context is a case-insensitive hostname or deployment-note match shared with model inventory detail. The Atlas `departmentId` and `userId` fields are current instance metadata and do not replace People's effective-dated assignment history. OpenAPI and protobuf contracts carry the same fields and optimistic revision boundary.
 
 The `atlas.Store` interface is the adapter contract for memory, PostgreSQL, and a future DynamoDB implementation. Repository conformance tests cover create, retrieve, search, update, stale revisions, conflicts, and lifecycle ordering. Exchange and future provider imports must call the Atlas service rather than bypassing normalization, reference checks, revision behavior, or audits.
 

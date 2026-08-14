@@ -1,7 +1,7 @@
 package traceability
 
-// Requirements: REQ-FOUNDATION-001, REQ-ATLAS-CATALOG-001.
-// Features: platform.foundation, inventory.catalog.
+// Requirements: REQ-FOUNDATION-001, REQ-ATLAS-CATALOG-001, REQ-DIRECTORY-EXPANSION-009.
+// Features: platform.foundation, inventory.catalog, experience.help.
 
 import (
 	"os"
@@ -106,6 +106,27 @@ func TestRequirementIDPatternSupportsCatalogFormats(t *testing.T) {
 		if !requirementIDPattern.MatchString(id) {
 			t.Fatalf("expected %q to be supported", id)
 		}
+	}
+}
+
+func TestDirectoryExpansionPhaseOneTraceRequiresEveryRequirementFrom001Through009(t *testing.T) {
+	catalog := []byte(strings.Join(directoryExpansionPhaseOneRequirements, "\n"))
+	seen := make(map[string]struct{}, len(directoryExpansionPhaseOneRequirements))
+	for _, requirementID := range directoryExpansionPhaseOneRequirements {
+		seen[requirementID] = struct{}{}
+	}
+	delete(seen, "REQ-DIRECTORY-EXPANSION-008")
+
+	problems := verifyDeclaredSeriesCompleteness(catalog, seen, directoryExpansionPhaseOneRequirements)
+	if len(problems) != 1 || !strings.Contains(problems[0].Error(), "REQ-DIRECTORY-EXPANSION-008 is missing") {
+		t.Fatalf("expected exact 001-009 completeness failure, got %v", problems)
+	}
+}
+
+func TestDirectoryExpansionPhaseOneTraceWaitsForCompleteCatalog(t *testing.T) {
+	catalog := []byte(strings.Join(directoryExpansionPhaseOneRequirements[:8], "\n"))
+	if problems := verifyDeclaredSeriesCompleteness(catalog, map[string]struct{}{}, directoryExpansionPhaseOneRequirements); len(problems) != 0 {
+		t.Fatalf("partial feature branch unexpectedly failed the integrated completeness gate: %v", problems)
 	}
 }
 

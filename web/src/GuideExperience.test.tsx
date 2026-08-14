@@ -2,7 +2,7 @@ import axe from 'axe-core'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { expect, test, vi } from 'vitest'
 import GuideExperience, { GuideInvitation, type GuideDestination } from './GuideExperience'
-import { resolveBranding } from './guide'
+import { buildIssueReportUrl, collectIssueContext, resolveBranding } from './guide'
 
 // Requirements: REQ-WORKSPACE-001, REQ-HORIZON-001, A11Y-001, DOC-001, DOC-002. Features: experience.workspace, lifecycle.planning, experience.help.
 
@@ -77,6 +77,36 @@ test('prepares a sanitized issue URL without identity or session data', () => {
   expect(body).not.toContain('private@example.test')
   expect(body).not.toContain('Administrator')
   expect(body).not.toContain('csrf')
+})
+
+test('allow-lists Workspace reporting context while excluding private directory values', () => {
+  window.history.replaceState(null, '', '/people?email=alex.private@example.test#workspace-people')
+  const context = collectIssueContext('People', '1.2.3', 'workspace-request:abc_123')
+  const report = new URL(buildIssueReportUrl('https://github.com/WSCMAX/StewardMesh/issues', {
+    ...context,
+    // Treat every supplied field as hostile because no future caller should be
+    // able to bypass the final report serialization boundary.
+    page: '/people?email=alex.private@example.test#workspace-people',
+    component: 'People\nPrivate Person',
+    version: '1.2.3\nprivate@example.test',
+    browser: 'Chrome 140\nprivate@example.test',
+    viewport: '320x640\nprivate@example.test',
+    system: 'macOS\nprivate@example.test',
+    correlationId: 'workspace-request:abc_123\nprivate@example.test',
+  }))
+  const body = report.searchParams.get('body') ?? ''
+
+  expect(context.page).toBe('/people')
+  expect(body).toContain('Component: Workspace')
+  expect(body).toContain('Version: development')
+  expect(body).toContain('Browser: Other browser')
+  expect(body).toContain('Viewport: 0x0')
+  expect(body).toContain('System: Other system')
+  expect(body).toContain('Correlation ID: Unavailable')
+  expect(body).not.toContain('?email=')
+  expect(body).not.toContain('@')
+  expect(body).not.toContain('privateexample.test')
+  expect(body).not.toContain('#workspace-people')
 })
 
 test('closes on Escape and restores focus to the opener', async () => {

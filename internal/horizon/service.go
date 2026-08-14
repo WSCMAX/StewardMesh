@@ -5,6 +5,7 @@ package horizon
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/csv"
 	"errors"
 	"fmt"
@@ -39,26 +40,95 @@ type Service struct {
 	assets         AssetReader
 	finance        FinanceReader
 	relationships  RelationshipReader
+	writes         WriteGate
 	auditor        foundation.Auditor
 	organizationID string
 	now            func() time.Time
 }
 
+type exchangeImporter struct{ service *Service }
+
+type exchangeImportContextKey struct{}
+
+type exchangeImportContext struct {
+	operation ExchangeImportOperation
+	revision  int64
+}
+
 func NewService(store Store, assets AssetReader, finance FinanceReader, relationships RelationshipReader, auditor foundation.Auditor, configuration ServiceConfig) (*Service, error) {
+	service, _, err := NewServiceWithExchangeImporter(store, assets, finance, relationships, nil, auditor, configuration)
+	return service, err
+}
+
+func NewServiceWithExchangeImporter(store Store, assets AssetReader, finance FinanceReader, relationships RelationshipReader, writes WriteGate, auditor foundation.Auditor, configuration ServiceConfig) (*Service, ExchangeImporter, error) {
 	if store == nil || assets == nil || finance == nil || relationships == nil || auditor == nil {
-		return nil, errors.New("Horizon store, Atlas, Ledger, Threads, and auditor are required")
+		return nil, nil, errors.New("Horizon store, Atlas, Ledger, Threads, and auditor are required")
 	}
 	configuration.OrganizationID = strings.TrimSpace(configuration.OrganizationID)
 	if configuration.OrganizationID == "" {
-		return nil, errors.New("Horizon organization id is required")
+		return nil, nil, errors.New("Horizon organization id is required")
 	}
 	if configuration.Now == nil {
 		configuration.Now = func() time.Time { return time.Now().UTC() }
 	}
-	return &Service{
-		store: store, assets: assets, finance: finance, relationships: relationships, auditor: auditor,
+	service := &Service{
+		store: store, assets: assets, finance: finance, relationships: relationships, writes: writes, auditor: auditor,
 		organizationID: configuration.OrganizationID, now: configuration.Now,
-	}, nil
+	}
+	return service, &exchangeImporter{service: service}, nil
+}
+
+func (*exchangeImporter) horizonExchangeImporter() {}
+
+func (s *Service) OwnsExchangeImporter(candidate ExchangeImporter) bool {
+	importer, ok := candidate.(*exchangeImporter)
+	return ok && importer != nil && importer.service == s
+}
+
+func (i *exchangeImporter) ImportPlan(ctx context.Context, operation ExchangeImportOperation, candidate Plan) (ExchangeImportResult, error) {
+	operation, err := normalizeExchangeImportOperation(operation)
+	if err != nil || candidate.Revision < 1 || candidate.OrganizationID != "" ||
+		!candidate.CreatedAt.IsZero() || !candidate.UpdatedAt.IsZero() || candidate.DerivedReplacementDate != nil {
+		return ExchangeImportResult{}, ErrInvalidInput
+	}
+	normalized, err := normalizePlanInput(CreatePlanInput{
+		ID: candidate.ID, AssetID: candidate.AssetID, Scenario: candidate.Scenario,
+		ExpectedUsefulLifeMonths: candidate.ExpectedUsefulLifeMonths, ReplacementDate: candidate.ReplacementDate,
+		LifecycleStage: candidate.LifecycleStage, ReplacementCostMinor: candidate.ReplacementCostMinor,
+		Currency: candidate.Currency, EffectiveFrom: candidate.EffectiveFrom,
+	})
+	if err != nil || !stableIDPattern.MatchString(strings.TrimSpace(candidate.ID)) || !samePlanInput(candidate, normalized) {
+		return ExchangeImportResult{}, ErrInvalidInput
+	}
+	ctx = context.WithValue(ctx, exchangeImportContextKey{}, exchangeImportContext{operation: operation, revision: candidate.Revision})
+	existing, err := i.service.store.GetPlan(ctx, i.service.organizationID, candidate.ID)
+	if err == nil {
+		if !sameExchangePlan(existing, candidate) {
+			return ExchangeImportResult{}, ErrConflict
+		}
+		err = i.service.audit(ctx, "horizon.plan.created", existing.ID, horizonAuditMetadata(existing))
+		return ExchangeImportResult{Committed: true}, err
+	}
+	if !errors.Is(err, ErrNotFound) {
+		return ExchangeImportResult{}, err
+	}
+	_, err = i.service.CreatePlan(ctx, normalized)
+	if err == nil {
+		return ExchangeImportResult{Committed: true, Created: true}, nil
+	}
+	if observed, readErr := i.service.store.GetPlan(ctx, i.service.organizationID, candidate.ID); readErr == nil && sameExchangePlan(observed, candidate) {
+		return ExchangeImportResult{Committed: true, Created: true}, err
+	}
+	return ExchangeImportResult{}, err
+}
+
+func normalizeExchangeImportOperation(operation ExchangeImportOperation) (ExchangeImportOperation, error) {
+	operation.Token = strings.TrimSpace(operation.Token)
+	operation.OccurredAt = operation.OccurredAt.UTC()
+	if !stableIDPattern.MatchString(operation.Token) || operation.OccurredAt.IsZero() || operation.OccurredAt.Year() < 2000 || operation.OccurredAt.Year() > 9999 {
+		return ExchangeImportOperation{}, ErrInvalidInput
+	}
+	return operation, nil
 }
 
 func (s *Service) ListPlans(ctx context.Context, query ListPlansQuery) ([]Plan, error) {
@@ -80,6 +150,18 @@ func (s *Service) ListPlans(ctx context.Context, query ListPlansQuery) ([]Plan, 
 	return plans, nil
 }
 
+func (s *Service) GetPlan(ctx context.Context, id string) (Plan, error) {
+	id = strings.TrimSpace(id)
+	if !stableIDPattern.MatchString(id) {
+		return Plan{}, ErrInvalidInput
+	}
+	plan, err := s.store.GetPlan(ctx, s.organizationID, id)
+	if err != nil {
+		return Plan{}, err
+	}
+	return s.enrichPlan(ctx, plan)
+}
+
 func (s *Service) CreatePlan(ctx context.Context, input CreatePlanInput) (Plan, error) {
 	normalized, err := normalizePlanInput(input)
 	if err != nil {
@@ -96,22 +178,19 @@ func (s *Service) CreatePlan(ctx context.Context, input CreatePlanInput) (Plan, 
 			return Plan{}, fmt.Errorf("create Horizon plan id: %w", err)
 		}
 	}
-	now := s.now().UTC()
+	now, revision := s.creationState(ctx)
 	plan := Plan{
 		ID: id, OrganizationID: s.organizationID, AssetID: normalized.AssetID, Scenario: normalized.Scenario,
 		ExpectedUsefulLifeMonths: normalized.ExpectedUsefulLifeMonths, ReplacementDate: cloneDate(normalized.ReplacementDate),
 		LifecycleStage: normalized.LifecycleStage, ReplacementCostMinor: normalized.ReplacementCostMinor,
-		Currency: normalized.Currency, EffectiveFrom: normalized.EffectiveFrom, Revision: 1, CreatedAt: now, UpdatedAt: now,
+		Currency: normalized.Currency, EffectiveFrom: normalized.EffectiveFrom, Revision: revision, CreatedAt: now, UpdatedAt: now,
 	}
 	version := versionFromPlan(plan, actorFromContext(ctx), now)
 	created, err := s.store.CreatePlan(ctx, plan, version)
 	if err != nil {
 		return Plan{}, err
 	}
-	if err := s.audit(ctx, "horizon.plan.created", created.ID, map[string]string{
-		"assetId": created.AssetID, "scenario": created.Scenario, "lifecycleStage": created.LifecycleStage,
-		"effectiveFrom": created.EffectiveFrom.Format(time.RFC3339), "currency": created.Currency, "revision": "1",
-	}); err != nil {
+	if err := s.audit(ctx, "horizon.plan.created", created.ID, horizonAuditMetadata(created)); err != nil {
 		return Plan{}, fmt.Errorf("audit Horizon plan creation: %w", err)
 	}
 	return deriveReplacementDate(created, asset), nil
@@ -128,6 +207,9 @@ func (s *Service) UpdatePlan(ctx context.Context, input UpdatePlanInput) (Plan, 
 		ReplacementCostMinor: input.ReplacementCostMinor, Currency: input.Currency, EffectiveFrom: input.EffectiveFrom,
 	})
 	if err != nil {
+		return Plan{}, err
+	}
+	if err := s.checkWrite(ctx, input.ID); err != nil {
 		return Plan{}, err
 	}
 	existing, err := s.store.GetPlan(ctx, s.organizationID, input.ID)
@@ -637,6 +719,9 @@ func mapAssetError(err error) error {
 }
 
 func actorFromContext(ctx context.Context) string {
+	if _, ok := ctx.Value(exchangeImportContextKey{}).(exchangeImportContext); ok {
+		return "system:exchange"
+	}
 	if scope, ok := foundation.ScopeFromContext(ctx); ok && strings.TrimSpace(scope.ActorID) != "" {
 		return scope.ActorID
 	}
@@ -645,6 +730,11 @@ func actorFromContext(ctx context.Context) string {
 
 func (s *Service) audit(ctx context.Context, action, resourceID string, metadata map[string]string) error {
 	scope, ok := foundation.ScopeFromContext(ctx)
+	state, importing := ctx.Value(exchangeImportContextKey{}).(exchangeImportContext)
+	if importing {
+		scope = foundation.Scope{OrganizationID: s.organizationID, ActorID: "system:exchange", CorrelationID: state.operation.Token}
+		ok = true
+	}
 	if !ok || scope.CorrelationID == "" {
 		correlationID, err := foundation.NewCorrelationID()
 		if err != nil {
@@ -654,12 +744,61 @@ func (s *Service) audit(ctx context.Context, action, resourceID string, metadata
 		ctx = foundation.WithScope(ctx, scope)
 	}
 	metadata["requirementId"] = RequirementID
-	eventID, err := foundation.NewCorrelationID()
-	if err != nil {
-		return err
+	eventID := ""
+	occurredAt := s.now().UTC()
+	if importing {
+		digest := sha256.Sum256([]byte(strings.Join([]string{s.organizationID, state.operation.Token, action, "lifecycle_plan", resourceID}, "\x00")))
+		eventID = fmt.Sprintf("%x", digest[:])
+		occurredAt = state.operation.OccurredAt.UTC()
+	} else {
+		var err error
+		eventID, err = foundation.NewCorrelationID()
+		if err != nil {
+			return err
+		}
 	}
 	return s.auditor.Record(ctx, foundation.AuditEvent{
 		ID: eventID, OrganizationID: s.organizationID, ActorID: actorFromContext(ctx), CorrelationID: scope.CorrelationID,
-		Action: action, ResourceType: "lifecycle_plan", ResourceID: resourceID, OccurredAt: s.now().UTC(), Metadata: metadata,
+		Action: action, ResourceType: "lifecycle_plan", ResourceID: resourceID, OccurredAt: occurredAt, Metadata: metadata,
 	})
+}
+
+func (s *Service) creationState(ctx context.Context) (time.Time, int64) {
+	if state, ok := ctx.Value(exchangeImportContextKey{}).(exchangeImportContext); ok && state.revision > 0 && !state.operation.OccurredAt.IsZero() {
+		return state.operation.OccurredAt.UTC(), state.revision
+	}
+	return s.now().UTC(), 1
+}
+
+func (s *Service) checkWrite(ctx context.Context, id string) error {
+	if _, importing := ctx.Value(exchangeImportContextKey{}).(exchangeImportContext); importing || s.writes == nil {
+		return nil
+	}
+	return s.writes.CheckResourceWrite(ctx, "horizon.plan", id)
+}
+
+func samePlanInput(candidate Plan, normalized CreatePlanInput) bool {
+	return candidate.ID == normalized.ID && candidate.AssetID == normalized.AssetID && candidate.Scenario == normalized.Scenario &&
+		candidate.ExpectedUsefulLifeMonths == normalized.ExpectedUsefulLifeMonths && equalOptionalDate(candidate.ReplacementDate, normalized.ReplacementDate) &&
+		candidate.LifecycleStage == normalized.LifecycleStage && candidate.ReplacementCostMinor == normalized.ReplacementCostMinor &&
+		candidate.Currency == normalized.Currency && candidate.EffectiveFrom.Equal(normalized.EffectiveFrom)
+}
+
+func sameExchangePlan(left, right Plan) bool {
+	return left.ID == right.ID && left.AssetID == right.AssetID && left.Scenario == right.Scenario &&
+		left.ExpectedUsefulLifeMonths == right.ExpectedUsefulLifeMonths && equalOptionalDate(left.ReplacementDate, right.ReplacementDate) &&
+		left.LifecycleStage == right.LifecycleStage && left.ReplacementCostMinor == right.ReplacementCostMinor &&
+		left.Currency == right.Currency && left.EffectiveFrom.Equal(right.EffectiveFrom) && left.Revision == right.Revision
+}
+
+func equalOptionalDate(left, right *time.Time) bool {
+	return left == nil && right == nil || left != nil && right != nil && left.Equal(*right)
+}
+
+func horizonAuditMetadata(plan Plan) map[string]string {
+	return map[string]string{
+		"assetId": plan.AssetID, "scenario": plan.Scenario, "lifecycleStage": plan.LifecycleStage,
+		"effectiveFrom": plan.EffectiveFrom.Format(time.RFC3339), "currency": plan.Currency,
+		"revision": strconv.FormatInt(plan.Revision, 10),
+	}
 }

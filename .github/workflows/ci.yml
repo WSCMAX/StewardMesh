@@ -1,3 +1,5 @@
+# Requirements: REQ-DIRECTORY-EXPANSION-007, REQ-DIRECTORY-EXPANSION-009.
+# Features: platform.foundation, experience.help.
 name: CI
 
 on:
@@ -30,7 +32,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.26.5'
+          go-version: '1.26.6'
       - run: go test -race ./...
       - run: go vet ./...
       - run: go tool govulncheck ./...
@@ -54,15 +56,68 @@ jobs:
       - run: npm test
       - run: npm run build
 
+  browser:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18.4-alpine
+        env:
+          POSTGRES_USER: stewardmesh
+          POSTGRES_PASSWORD: stewardmesh
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U stewardmesh -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      STEWARDMESH_E2E_POSTGRES_ADMIN_URL: postgres://stewardmesh:stewardmesh@127.0.0.1:5432/postgres?sslmode=disable
+      STEWARDMESH_E2E_DATABASE_URL_PREFIX: postgres://stewardmesh:stewardmesh@127.0.0.1:5432/
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.6'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.15.0
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install locked web dependencies
+        working-directory: web
+        run: npm ci
+      - name: Install pinned Chromium
+        working-directory: web
+        run: ./node_modules/.bin/playwright-cli install-browser chromium --with-deps
+      - name: Run phase-one browser gate
+        working-directory: web
+        run: npm run e2e:phase-one
+      - name: Upload non-secret browser diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase-one-browser-diagnostics
+          path: output/playwright/phase-one-gate/
+          if-no-files-found: warn
+          retention-days: 7
+
   documentation:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.26.5'
+          go-version: '1.26.6'
       - name: Verify core documentation
         run: test -f README.md && test -f docs/features/dictionary.md && test -f docs/requirements/initial.md
+      - name: Install protobuf compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes protobuf-compiler
+      - name: Validate protobuf contract
+        run: protoc --proto_path=api/proto --descriptor_set_out=/tmp/stewardmesh.pb api/proto/stewardmesh.proto
       - name: Verify requirement traceability
         run: go run ./cmd/tracecheck
 
@@ -74,6 +129,16 @@ jobs:
         run: docker compose -f deploy/docker-compose.yml config --quiet
       - name: Validate cache Compose profile
         run: docker compose -f deploy/docker-compose.yml --profile cache config --quiet
+      - name: Validate synthetic demo Compose profile
+        run: docker compose -f deploy/docker-compose.yml --profile demo config --quiet
+      - name: Validate integrations Compose profile
+        run: docker compose -f deploy/docker-compose.yml --profile integrations config --quiet
+      - name: Build application container
+        run: docker build --file deploy/Dockerfile --target stewardmesh --tag stewardmesh:ci .
+      - name: Build all-domain gRPC container
+        run: docker build --file deploy/Dockerfile --target stewardmesh-grpc --tag stewardmesh-grpc:ci .
+      - name: Build Grouper fixture container
+        run: docker build --file deploy/Dockerfile --target grouper-fixture --tag stewardmesh-grouper-fixture:ci .
 
   security:
     runs-on: ubuntu-latest

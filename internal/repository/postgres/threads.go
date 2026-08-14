@@ -25,6 +25,99 @@ func NewThreadsStore(database *sql.DB) (*ThreadsStore, error) {
 	return &ThreadsStore{database: database}, nil
 }
 
+func (s *ThreadsStore) Snapshot(ctx context.Context, organizationID string) (threads.Snapshot, error) {
+	result := threads.Snapshot{Tags: []threads.Tag{}, Goals: []threads.Goal{}, TagRules: []threads.TagRule{}, GoalLinks: []threads.GoalLink{}}
+	transaction, err := s.database.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	if err != nil {
+		return threads.Snapshot{}, fmt.Errorf("begin Threads snapshot: %w", err)
+	}
+	defer transaction.Rollback()
+	tagRows, err := transaction.QueryContext(ctx, `
+		SELECT organization_id, id, name, parent_id, inherit_by_default, revision, created_at, updated_at
+		FROM threads_tags WHERE organization_id = $1 ORDER BY normalized_name, id
+	`, organizationID)
+	if err != nil {
+		return threads.Snapshot{}, fmt.Errorf("snapshot Threads tags: %w", err)
+	}
+	for tagRows.Next() {
+		item, scanErr := scanThreadsTag(tagRows)
+		if scanErr != nil {
+			tagRows.Close()
+			return threads.Snapshot{}, fmt.Errorf("scan Threads tag snapshot: %w", scanErr)
+		}
+		result.Tags = append(result.Tags, item)
+	}
+	if err = tagRows.Err(); err != nil {
+		tagRows.Close()
+		return threads.Snapshot{}, fmt.Errorf("iterate Threads tag snapshot: %w", err)
+	}
+	tagRows.Close()
+	goalRows, err := transaction.QueryContext(ctx, `
+		SELECT organization_id, id, name, description, parent_id, revision, created_at, updated_at
+		FROM threads_goals WHERE organization_id = $1 ORDER BY normalized_name, id
+	`, organizationID)
+	if err != nil {
+		return threads.Snapshot{}, fmt.Errorf("snapshot Threads goals: %w", err)
+	}
+	for goalRows.Next() {
+		item, scanErr := scanThreadsGoal(goalRows)
+		if scanErr != nil {
+			goalRows.Close()
+			return threads.Snapshot{}, fmt.Errorf("scan Threads goal snapshot: %w", scanErr)
+		}
+		result.Goals = append(result.Goals, item)
+	}
+	if err = goalRows.Err(); err != nil {
+		goalRows.Close()
+		return threads.Snapshot{}, fmt.Errorf("iterate Threads goal snapshot: %w", err)
+	}
+	goalRows.Close()
+	ruleRows, err := transaction.QueryContext(ctx, `
+		SELECT organization_id, target_type, target_id, tag_id, mode, revision, updated_by, created_at, updated_at
+		FROM threads_tag_rules WHERE organization_id = $1 ORDER BY target_type, target_id, tag_id
+	`, organizationID)
+	if err != nil {
+		return threads.Snapshot{}, fmt.Errorf("snapshot Threads tag rules: %w", err)
+	}
+	for ruleRows.Next() {
+		item, scanErr := scanThreadsTagRule(ruleRows)
+		if scanErr != nil {
+			ruleRows.Close()
+			return threads.Snapshot{}, fmt.Errorf("scan Threads tag rule snapshot: %w", scanErr)
+		}
+		result.TagRules = append(result.TagRules, item)
+	}
+	if err = ruleRows.Err(); err != nil {
+		ruleRows.Close()
+		return threads.Snapshot{}, fmt.Errorf("iterate Threads tag rule snapshot: %w", err)
+	}
+	ruleRows.Close()
+	linkRows, err := transaction.QueryContext(ctx, `
+		SELECT organization_id, goal_id, target_type, target_id, created_by, created_at
+		FROM threads_goal_links WHERE organization_id = $1 ORDER BY target_type, target_id, goal_id
+	`, organizationID)
+	if err != nil {
+		return threads.Snapshot{}, fmt.Errorf("snapshot Threads goal links: %w", err)
+	}
+	for linkRows.Next() {
+		item, scanErr := scanThreadsGoalLink(linkRows)
+		if scanErr != nil {
+			linkRows.Close()
+			return threads.Snapshot{}, fmt.Errorf("scan Threads goal link snapshot: %w", scanErr)
+		}
+		result.GoalLinks = append(result.GoalLinks, item)
+	}
+	if err = linkRows.Err(); err != nil {
+		linkRows.Close()
+		return threads.Snapshot{}, fmt.Errorf("iterate Threads goal link snapshot: %w", err)
+	}
+	linkRows.Close()
+	if err := transaction.Commit(); err != nil {
+		return threads.Snapshot{}, fmt.Errorf("commit Threads snapshot: %w", err)
+	}
+	return result, nil
+}
+
 func (s *ThreadsStore) ListTags(ctx context.Context, organizationID string) ([]threads.Tag, error) {
 	rows, err := s.database.QueryContext(ctx, `
 		SELECT organization_id, id, name, parent_id, inherit_by_default, revision, created_at, updated_at
@@ -181,6 +274,19 @@ func (s *ThreadsStore) ListTagRules(ctx context.Context, organizationID string, 
 		return nil, fmt.Errorf("iterate Threads tag rules: %w", err)
 	}
 	return items, nil
+}
+
+func (s *ThreadsStore) CreateTagRule(ctx context.Context, rule threads.TagRule) (threads.TagRule, error) {
+	stored, err := scanThreadsTagRule(s.database.QueryRowContext(ctx, `
+		INSERT INTO threads_tag_rules (
+			organization_id, target_type, target_id, tag_id, mode, revision, updated_by, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		RETURNING organization_id, target_type, target_id, tag_id, mode, revision, updated_by, created_at, updated_at
+	`, rule.OrganizationID, rule.TargetType, rule.TargetID, rule.TagID, rule.Mode, rule.Revision, rule.UpdatedBy, rule.CreatedAt, rule.UpdatedAt))
+	if err != nil {
+		return threads.TagRule{}, translateThreadsWriteError("create Threads tag rule", err)
+	}
+	return stored, nil
 }
 
 func (s *ThreadsStore) PutTagRule(ctx context.Context, rule threads.TagRule, expectedRevision int64) (threads.TagRule, error) {

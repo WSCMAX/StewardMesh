@@ -25,23 +25,36 @@ type ServiceConfig struct {
 type Service struct {
 	store          Store
 	targets        TargetValidator
+	writes         WriteGate
 	auditor        foundation.Auditor
 	organizationID string
 	now            func() time.Time
 }
 
 func NewService(store Store, targets TargetValidator, auditor foundation.Auditor, configuration ServiceConfig) (*Service, error) {
+	service, _, err := NewServiceWithExchangeImporter(store, targets, nil, auditor, configuration)
+	return service, err
+}
+
+func NewServiceWithExchangeImporter(store Store, targets TargetValidator, writes WriteGate, auditor foundation.Auditor, configuration ServiceConfig) (*Service, ExchangeImporter, error) {
 	if store == nil || targets == nil || auditor == nil {
-		return nil, errors.New("Threads store, target validator, and auditor are required")
+		return nil, nil, errors.New("Threads store, target validator, and auditor are required")
 	}
 	configuration.OrganizationID = strings.TrimSpace(configuration.OrganizationID)
 	if configuration.OrganizationID == "" {
-		return nil, errors.New("Threads organization id is required")
+		return nil, nil, errors.New("Threads organization id is required")
 	}
 	if configuration.Now == nil {
 		configuration.Now = func() time.Time { return time.Now().UTC() }
 	}
-	return &Service{store: store, targets: targets, auditor: auditor, organizationID: configuration.OrganizationID, now: configuration.Now}, nil
+	service := &Service{store: store, targets: targets, writes: writes, auditor: auditor, organizationID: configuration.OrganizationID, now: configuration.Now}
+	return service, &exchangeImporter{service: service}, nil
+}
+
+// Snapshot returns the complete durable Threads state for the provider. The
+// Exchange layer applies the independent package-wide bound.
+func (s *Service) Snapshot(ctx context.Context) (Snapshot, error) {
+	return s.store.Snapshot(ctx, s.organizationID)
 }
 
 func (s *Service) ListTags(ctx context.Context) ([]Tag, error) {
@@ -73,15 +86,20 @@ func (s *Service) CreateTag(ctx context.Context, input CreateTagInput) (Tag, err
 			return Tag{}, fmt.Errorf("create tag id: %w", err)
 		}
 	}
-	now := s.now().UTC()
+	if err := s.checkWrite(ctx, "threads.tag", id); err != nil {
+		return Tag{}, err
+	}
+	now, revision := s.creationState(ctx)
 	created, err := s.store.CreateTag(ctx, Tag{
 		ID: id, OrganizationID: s.organizationID, Name: normalized.Name, ParentID: normalized.ParentID,
-		InheritByDefault: normalized.InheritByDefault, Revision: 1, CreatedAt: now, UpdatedAt: now,
+		InheritByDefault: normalized.InheritByDefault, Revision: revision, CreatedAt: now, UpdatedAt: now,
 	})
 	if err != nil {
 		return Tag{}, err
 	}
-	if err := s.audit(ctx, "threads.tag.created", "tag", created.ID, map[string]string{"parentId": created.ParentID}); err != nil {
+	if err := s.audit(ctx, "threads.tag.created", "tag", created.ID, map[string]string{
+		"parentId": created.ParentID, "revision": fmt.Sprint(created.Revision),
+	}); err != nil {
 		return Tag{}, fmt.Errorf("audit tag creation: %w", err)
 	}
 	return created, nil
@@ -91,6 +109,9 @@ func (s *Service) UpdateTag(ctx context.Context, input UpdateTagInput) (Tag, err
 	input.ID = strings.TrimSpace(input.ID)
 	if !stableIDPattern.MatchString(input.ID) || input.Revision < 1 {
 		return Tag{}, ErrInvalidInput
+	}
+	if err := s.checkWrite(ctx, "threads.tag", input.ID); err != nil {
+		return Tag{}, err
 	}
 	normalized, err := normalizeTagInput(CreateTagInput{Name: input.Name, ParentID: input.ParentID, InheritByDefault: input.InheritByDefault})
 	if err != nil {
@@ -153,15 +174,20 @@ func (s *Service) CreateGoal(ctx context.Context, input CreateGoalInput) (Goal, 
 			return Goal{}, fmt.Errorf("create goal id: %w", err)
 		}
 	}
-	now := s.now().UTC()
+	if err := s.checkWrite(ctx, "threads.goal", id); err != nil {
+		return Goal{}, err
+	}
+	now, revision := s.creationState(ctx)
 	created, err := s.store.CreateGoal(ctx, Goal{
 		ID: id, OrganizationID: s.organizationID, Name: normalized.Name, Description: normalized.Description,
-		ParentID: normalized.ParentID, Revision: 1, CreatedAt: now, UpdatedAt: now,
+		ParentID: normalized.ParentID, Revision: revision, CreatedAt: now, UpdatedAt: now,
 	})
 	if err != nil {
 		return Goal{}, err
 	}
-	if err := s.audit(ctx, "threads.goal.created", "goal", created.ID, map[string]string{"parentId": created.ParentID}); err != nil {
+	if err := s.audit(ctx, "threads.goal.created", "goal", created.ID, map[string]string{
+		"parentId": created.ParentID, "revision": fmt.Sprint(created.Revision),
+	}); err != nil {
 		return Goal{}, fmt.Errorf("audit goal creation: %w", err)
 	}
 	return created, nil
@@ -171,6 +197,9 @@ func (s *Service) UpdateGoal(ctx context.Context, input UpdateGoalInput) (Goal, 
 	input.ID = strings.TrimSpace(input.ID)
 	if !stableIDPattern.MatchString(input.ID) || input.Revision < 1 {
 		return Goal{}, ErrInvalidInput
+	}
+	if err := s.checkWrite(ctx, "threads.goal", input.ID); err != nil {
+		return Goal{}, err
 	}
 	normalized, err := normalizeGoalInput(CreateGoalInput{Name: input.Name, Description: input.Description, ParentID: input.ParentID})
 	if err != nil {
@@ -211,6 +240,9 @@ func (s *Service) SetTagRule(ctx context.Context, input SetTagRuleInput) (TagRul
 		(input.Mode != RuleInclude && input.Mode != RuleSuppress) || input.Revision < 0 {
 		return TagRule{}, ErrInvalidInput
 	}
+	if err := s.checkWrite(ctx, "threads.tag-rule", TagRuleRecordID(input.TargetType, input.TargetID, input.TagID)); err != nil {
+		return TagRule{}, err
+	}
 	if _, err := s.store.GetTag(ctx, s.organizationID, input.TagID); err != nil {
 		return TagRule{}, err
 	}
@@ -239,6 +271,9 @@ func (s *Service) DeleteTagRule(ctx context.Context, targetType TargetType, targ
 	targetID, tagID = strings.TrimSpace(targetID), strings.TrimSpace(tagID)
 	if !validTagTarget(targetType) || !stableIDPattern.MatchString(targetID) || !stableIDPattern.MatchString(tagID) || revision < 1 {
 		return ErrInvalidInput
+	}
+	if err := s.checkWrite(ctx, "threads.tag-rule", TagRuleRecordID(targetType, targetID, tagID)); err != nil {
+		return err
 	}
 	if err := s.store.DeleteTagRule(ctx, s.organizationID, targetType, targetID, tagID, revision); err != nil {
 		return err
@@ -269,6 +304,9 @@ func (s *Service) LinkGoal(ctx context.Context, input LinkGoalInput) (GoalLink, 
 	input.GoalID, input.TargetID = strings.TrimSpace(input.GoalID), strings.TrimSpace(input.TargetID)
 	if !validGoalTarget(input.TargetType) || !stableIDPattern.MatchString(input.GoalID) || !stableIDPattern.MatchString(input.TargetID) {
 		return GoalLink{}, ErrInvalidInput
+	}
+	if err := s.checkWrite(ctx, "threads.goal-link", GoalLinkRecordID(input.TargetType, input.TargetID, input.GoalID)); err != nil {
+		return GoalLink{}, err
 	}
 	if _, err := s.store.GetGoal(ctx, s.organizationID, input.GoalID); err != nil {
 		return GoalLink{}, err
@@ -304,6 +342,9 @@ func (s *Service) UnlinkGoal(ctx context.Context, targetType TargetType, targetI
 	targetID, goalID = strings.TrimSpace(targetID), strings.TrimSpace(goalID)
 	if !validGoalTarget(targetType) || !stableIDPattern.MatchString(targetID) || !stableIDPattern.MatchString(goalID) {
 		return ErrInvalidInput
+	}
+	if err := s.checkWrite(ctx, "threads.goal-link", GoalLinkRecordID(targetType, targetID, goalID)); err != nil {
+		return err
 	}
 	removed, err := s.store.DeleteGoalLink(ctx, s.organizationID, targetType, targetID, goalID)
 	if err != nil {
@@ -466,6 +507,17 @@ func actorFromContext(ctx context.Context) string {
 }
 
 func (s *Service) audit(ctx context.Context, action, resourceType, resourceID string, metadata map[string]string) error {
+	if state, importing := exchangeImportState(ctx); importing {
+		metadata = cloneAuditMetadata(metadata)
+		metadata["requirementId"] = RequirementID
+		return s.auditor.Record(foundation.WithScope(ctx, foundation.Scope{
+			OrganizationID: s.organizationID, ActorID: "system:exchange", CorrelationID: state.operation.Token,
+		}), foundation.AuditEvent{
+			ID: s.exchangeAuditEventID(state.operation, action, resourceType, resourceID), OrganizationID: s.organizationID,
+			ActorID: "system:exchange", CorrelationID: state.operation.Token, Action: action,
+			ResourceType: resourceType, ResourceID: resourceID, OccurredAt: state.operation.OccurredAt, Metadata: metadata,
+		})
+	}
 	scope, ok := foundation.ScopeFromContext(ctx)
 	if !ok || scope.CorrelationID == "" {
 		correlationID, err := foundation.NewCorrelationID()
@@ -487,4 +539,12 @@ func (s *Service) audit(ctx context.Context, action, resourceType, resourceID st
 		ID: eventID, OrganizationID: s.organizationID, ActorID: actorFromContext(ctx), CorrelationID: scope.CorrelationID,
 		Action: action, ResourceType: resourceType, ResourceID: resourceID, OccurredAt: s.now().UTC(), Metadata: metadata,
 	})
+}
+
+func cloneAuditMetadata(value map[string]string) map[string]string {
+	result := make(map[string]string, len(value)+1)
+	for key, item := range value {
+		result[key] = item
+	}
+	return result
 }

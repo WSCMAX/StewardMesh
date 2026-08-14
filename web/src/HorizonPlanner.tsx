@@ -1,6 +1,6 @@
 import { type FormEvent, type ReactNode, useEffect, useId, useRef, useState } from 'react'
 import type { Asset } from './AtlasInventory'
-import { ApiRequestError, requestJSON } from './api'
+import { ApiRequestError, isRevision, requestJSON, type Revision } from './api'
 import { buttonClass, inputClass, panelClass, secondaryButtonClass, subpanelClass, tableWrapClass } from './ui'
 
 // Requirement: REQ-HORIZON-001. Feature: lifecycle.planning.
@@ -19,7 +19,7 @@ type HorizonPlan = {
   replacementCostMinor: number
   currency: string
   effectiveFrom: string
-  revision: number
+  revision: Revision
 }
 
 type HorizonPlanVersion = Omit<HorizonPlan, 'id'> & {
@@ -95,7 +95,7 @@ function isPlan(value: unknown): value is HorizonPlan {
     && isSafeNonNegativeInteger(value.replacementCostMinor)
     && typeof value.currency === 'string' && /^[A-Z]{3}$/.test(value.currency)
     && typeof value.effectiveFrom === 'string' && value.effectiveFrom.length > 0
-    && isSafeNonNegativeInteger(value.revision) && value.revision >= 1
+    && isRevision(value.revision)
 }
 
 function isPlanVersion(value: unknown): value is HorizonPlanVersion {
@@ -110,7 +110,7 @@ function isPlanVersion(value: unknown): value is HorizonPlanVersion {
     && isSafeNonNegativeInteger(value.replacementCostMinor)
     && typeof value.currency === 'string' && /^[A-Z]{3}$/.test(value.currency)
     && typeof value.effectiveFrom === 'string' && value.effectiveFrom.length > 0
-    && isSafeNonNegativeInteger(value.revision) && value.revision >= 1
+    && isRevision(value.revision)
     && typeof value.recordedAt === 'string' && value.recordedAt.length > 0
     && typeof value.actorId === 'string' && value.actorId.length > 0
 }
@@ -506,7 +506,7 @@ function PlanEditor({ assets, busy, editing, onCancel, onSubmit }: { assets: rea
       <div className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="text-lg font-semibold" id="horizon-plan-editor-heading">{editing ? `Edit lifecycle plan for ${assetName(assets, editing.assetId)}` : 'Add lifecycle plan'}</h3><p className="mt-1 text-sm leading-6 text-steward-mist-muted">A replacement date is optional when Atlas has a purchase date; Horizon derives it using whole useful-life months.</p></div><button className={secondaryButtonClass} onClick={onCancel} type="button">Cancel</button></div>
       <form className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-3" key={editing?.id ?? 'new-plan'} onSubmit={onSubmit}>
         <Field id={assetID} label="Atlas asset"><select className={inputClass} defaultValue={editing?.assetId ?? ''} disabled={Boolean(editing)} id={assetID} name="assetId" required><option value="">{assets.length === 0 ? 'No Atlas assets available' : 'Select an asset'}</option>{selectedAssetMissing && <option value={editing.assetId}>{editing.assetId}</option>}{assets.map((asset) => <option key={asset.id} value={asset.id}>{asset.name} · {label(asset.kind)}</option>)}</select>{editing && <input name="assetId" type="hidden" value={editing.assetId} />}</Field>
-        <Field id={scenarioID} label="Scenario"><input className={inputClass} defaultValue={editing?.scenario ?? 'baseline'} id={scenarioID} maxLength={64} name="scenario" pattern="[A-Za-z0-9][A-Za-z0-9._-]{0,63}" required /></Field>
+        <Field id={scenarioID} label="Scenario"><input className={inputClass} defaultValue={editing?.scenario ?? 'baseline'} id={scenarioID} maxLength={64} name="scenario" pattern="[A-Za-z0-9][A-Za-z0-9._\-]{0,63}" required /></Field>
         <Field id={stageID} label="Lifecycle stage"><select className={inputClass} defaultValue={editing?.lifecycleStage ?? 'planned'} id={stageID} name="lifecycleStage" required>{lifecycleStages.map((stage) => <option key={stage} value={stage}>{label(stage)}</option>)}</select></Field>
         <Field id={usefulLifeID} label="Expected useful life (months)"><input className={inputClass} defaultValue={editing?.expectedUsefulLifeMonths ?? 60} id={usefulLifeID} max={1200} min={1} name="expectedUsefulLifeMonths" required type="number" /></Field>
         <Field help="Optional. Leave blank to derive from the Atlas purchase date." id={replacementDateID} label="Manual replacement date"><input aria-describedby={`${replacementDateID}-help`} className={inputClass} defaultValue={editing?.replacementDate?.slice(0, 10) ?? ''} id={replacementDateID} name="replacementDate" type="date" /></Field>

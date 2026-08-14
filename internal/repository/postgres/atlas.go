@@ -1,6 +1,6 @@
 package postgres
 
-// Requirements: REQ-ATLAS-001, REQ-ATLAS-MODELS-001. Features: inventory.assets, inventory.models.
+// Requirements: REQ-ATLAS-001, REQ-ATLAS-MODELS-001, REQ-DIRECTORY-EXPANSION-008. Features: inventory.assets, inventory.models, threads.relationships.
 
 import (
 	"context"
@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
+	"sort"
 	"strings"
 	"time"
 
@@ -27,6 +29,89 @@ func NewAtlasStore(database *sql.DB) (*AtlasStore, error) {
 		return nil, errors.New("database is required")
 	}
 	return &AtlasStore{database: database}, nil
+}
+
+func (s *AtlasStore) ExchangeSnapshot(ctx context.Context, organizationID string, maximum int) (atlas.ExchangeSnapshot, error) {
+	if strings.TrimSpace(organizationID) == "" || maximum < 1 {
+		return atlas.ExchangeSnapshot{}, atlas.ErrInvalidInput
+	}
+	tx, err := s.database.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	if err != nil {
+		return atlas.ExchangeSnapshot{}, fmt.Errorf("begin Atlas Exchange snapshot: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	result := atlas.ExchangeSnapshot{Models: []domain.AssetModel{}, Assets: []domain.Asset{}, LifecycleEvents: []domain.AssetLifecycleEvent{}}
+	modelRows, err := tx.QueryContext(ctx, `SELECT `+atlasModelColumns+` FROM atlas_models WHERE organization_id = $1 ORDER BY id LIMIT $2`, organizationID, maximum+1)
+	if err != nil {
+		return atlas.ExchangeSnapshot{}, fmt.Errorf("list Atlas Exchange models: %w", err)
+	}
+	for modelRows.Next() {
+		model, scanErr := scanAtlasModel(modelRows, false)
+		if scanErr != nil {
+			_ = modelRows.Close()
+			return atlas.ExchangeSnapshot{}, fmt.Errorf("scan Atlas Exchange model: %w", scanErr)
+		}
+		result.Models = append(result.Models, model)
+	}
+	if err := modelRows.Close(); err != nil {
+		return atlas.ExchangeSnapshot{}, fmt.Errorf("close Atlas Exchange models: %w", err)
+	}
+	if err := modelRows.Err(); err != nil {
+		return atlas.ExchangeSnapshot{}, fmt.Errorf("iterate Atlas Exchange models: %w", err)
+	}
+	if len(result.Models) > maximum {
+		return atlas.ExchangeSnapshot{}, atlas.ErrTooLarge
+	}
+	assetRows, err := tx.QueryContext(ctx, `SELECT `+atlasAssetColumns+` FROM atlas_assets WHERE organization_id = $1 ORDER BY id LIMIT $2`, organizationID, maximum-len(result.Models)+1)
+	if err != nil {
+		return atlas.ExchangeSnapshot{}, fmt.Errorf("list Atlas Exchange assets: %w", err)
+	}
+	for assetRows.Next() {
+		asset, scanErr := scanAtlasAsset(assetRows)
+		if scanErr != nil {
+			_ = assetRows.Close()
+			return atlas.ExchangeSnapshot{}, fmt.Errorf("scan Atlas Exchange asset: %w", scanErr)
+		}
+		result.Assets = append(result.Assets, asset)
+	}
+	if err := assetRows.Close(); err != nil {
+		return atlas.ExchangeSnapshot{}, fmt.Errorf("close Atlas Exchange assets: %w", err)
+	}
+	if err := assetRows.Err(); err != nil {
+		return atlas.ExchangeSnapshot{}, fmt.Errorf("iterate Atlas Exchange assets: %w", err)
+	}
+	if len(result.Models)+len(result.Assets) > maximum {
+		return atlas.ExchangeSnapshot{}, atlas.ErrTooLarge
+	}
+	remaining := maximum - len(result.Models) - len(result.Assets)
+	eventRows, err := tx.QueryContext(ctx, `
+		SELECT organization_id, id, asset_id, from_status, to_status, note, revision, actor_id, occurred_at
+		FROM atlas_asset_lifecycle_events WHERE organization_id = $1 ORDER BY id LIMIT $2`, organizationID, remaining+1)
+	if err != nil {
+		return atlas.ExchangeSnapshot{}, fmt.Errorf("list Atlas Exchange lifecycle: %w", err)
+	}
+	for eventRows.Next() {
+		var event domain.AssetLifecycleEvent
+		if scanErr := eventRows.Scan(&event.OrganizationID, &event.ID, &event.AssetID, &event.FromStatus, &event.ToStatus,
+			&event.Note, &event.Revision, &event.ActorID, &event.OccurredAt); scanErr != nil {
+			_ = eventRows.Close()
+			return atlas.ExchangeSnapshot{}, fmt.Errorf("scan Atlas Exchange lifecycle: %w", scanErr)
+		}
+		result.LifecycleEvents = append(result.LifecycleEvents, event)
+	}
+	if err := eventRows.Close(); err != nil {
+		return atlas.ExchangeSnapshot{}, fmt.Errorf("close Atlas Exchange lifecycle: %w", err)
+	}
+	if err := eventRows.Err(); err != nil {
+		return atlas.ExchangeSnapshot{}, fmt.Errorf("iterate Atlas Exchange lifecycle: %w", err)
+	}
+	if len(result.LifecycleEvents) > remaining {
+		return atlas.ExchangeSnapshot{}, atlas.ErrTooLarge
+	}
+	if err := tx.Commit(); err != nil {
+		return atlas.ExchangeSnapshot{}, fmt.Errorf("complete Atlas Exchange snapshot: %w", err)
+	}
+	return result, nil
 }
 
 const atlasAssetColumns = `
@@ -192,10 +277,7 @@ func (s *AtlasStore) RetireModel(ctx context.Context, organizationID, id string,
 	return retired, nil
 }
 
-func (s *AtlasStore) ListAssets(ctx context.Context, organizationID string, query atlas.Query) ([]domain.Asset, error) {
-	rows, err := s.database.QueryContext(ctx, `
-		SELECT `+atlasAssetColumns+`
-		FROM atlas_assets
+const atlasAssetFilterWhere = `
 		WHERE organization_id = $1
 		  AND ($2 = '' OR strpos(lower(name), $2) > 0 OR strpos(normalized_asset_tag, $2) > 0
 		       OR strpos(normalized_serial_number, $2) > 0 OR strpos(hostname, $2) > 0)
@@ -205,9 +287,241 @@ func (s *AtlasStore) ListAssets(ctx context.Context, organizationID string, quer
 		  AND ($6 = '' OR site_id = $6)
 		  AND ($7 = '' OR department_id = $7)
 		  AND ($8 = '' OR user_id = $8)
+		  AND ($9 = '' OR strpos(lower(hostname), $9) > 0 OR strpos(lower(deployment_notes), $9) > 0)`
+
+func (s *AtlasStore) GetModelInventory(ctx context.Context, organizationID, modelID string, query atlas.ModelInventoryQuery) (atlas.ModelInventory, error) {
+	tx, err := s.database.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	if err != nil {
+		return atlas.ModelInventory{}, fmt.Errorf("begin Atlas model inventory: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	var exists bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (
+		SELECT 1 FROM atlas_models WHERE organization_id = $1 AND id = $2
+	)`, organizationID, modelID).Scan(&exists); err != nil {
+		return atlas.ModelInventory{}, fmt.Errorf("check Atlas model inventory: %w", err)
+	}
+	if !exists {
+		return atlas.ModelInventory{}, atlas.ErrNotFound
+	}
+	assetQuery := atlas.Query{
+		Status: query.Status, ModelID: modelID, SiteID: query.SiteID, DepartmentID: query.DepartmentID,
+		UserID: query.UserID, DeploymentContext: query.DeploymentContext, Limit: query.Limit,
+	}
+	result := atlas.ModelInventory{
+		ModelID: modelID, GroupBy: query.GroupBy, Groups: []atlas.ModelInventoryGroup{}, Items: []domain.Asset{},
+	}
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM atlas_assets WHERE organization_id = $1 AND model_id = $2`, organizationID, modelID).Scan(&result.TotalCount); err != nil {
+		return atlas.ModelInventory{}, fmt.Errorf("count Atlas model instances: %w", err)
+	}
+	filterArguments := atlasAssetFilterArguments(organizationID, assetQuery)
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM atlas_assets `+atlasAssetFilterWhere, filterArguments...).Scan(&result.FilteredCount); err != nil {
+		return atlas.ModelInventory{}, fmt.Errorf("count filtered Atlas model instances: %w", err)
+	}
+	if query.GroupBy != "" {
+		expression := atlasModelInventoryGroupExpression(query.GroupBy)
+		rows, err := tx.QueryContext(ctx, `SELECT `+expression+`, count(*) FROM atlas_assets `+atlasAssetFilterWhere+
+			` GROUP BY `+expression+` ORDER BY count(*) DESC, lower(`+expression+`), `+expression, filterArguments...)
+		if err != nil {
+			return atlas.ModelInventory{}, fmt.Errorf("group Atlas model instances: %w", err)
+		}
+		for rows.Next() {
+			var group atlas.ModelInventoryGroup
+			if err := rows.Scan(&group.Key, &group.Count); err != nil {
+				_ = rows.Close()
+				return atlas.ModelInventory{}, fmt.Errorf("scan Atlas model inventory group: %w", err)
+			}
+			result.Groups = append(result.Groups, group)
+		}
+		if err := rows.Close(); err != nil {
+			return atlas.ModelInventory{}, fmt.Errorf("close Atlas model inventory groups: %w", err)
+		}
+		if err := rows.Err(); err != nil {
+			return atlas.ModelInventory{}, fmt.Errorf("iterate Atlas model inventory groups: %w", err)
+		}
+	}
+	result.Items, err = listAtlasAssets(ctx, tx, organizationID, assetQuery)
+	if err != nil {
+		return atlas.ModelInventory{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return atlas.ModelInventory{}, fmt.Errorf("complete Atlas model inventory: %w", err)
+	}
+	return result, nil
+}
+
+func (s *AtlasStore) ListAssets(ctx context.Context, organizationID string, query atlas.Query) ([]domain.Asset, error) {
+	return listAtlasAssets(ctx, s.database, organizationID, query)
+}
+
+func (s *AtlasStore) ListAuthorizedAssets(ctx context.Context, organizationID string, filter atlas.AuthorizedAssetQuery) ([]domain.Asset, error) {
+	if organizationID == "" || filter.Limit < 1 || filter.Limit > 100 || !filter.Visibility.Valid() {
+		return nil, atlas.ErrInvalidInput
+	}
+	query := strings.Builder{}
+	query.WriteString("SELECT " + atlasAssetColumns + " FROM atlas_assets WHERE organization_id = $1")
+	arguments := []any{organizationID}
+	if filter.Search != "" {
+		arguments = append(arguments, strings.ToLower(filter.Search))
+		position := len(arguments)
+		query.WriteString(fmt.Sprintf(` AND (strpos(lower(name), $%d) > 0 OR strpos(normalized_asset_tag, $%d) > 0
+			OR strpos(normalized_serial_number, $%d) > 0 OR strpos(lower(hostname), $%d) > 0)`, position, position, position, position))
+	}
+	if filter.Cursor != "" {
+		arguments = append(arguments, filter.Cursor)
+		query.WriteString(fmt.Sprintf(" AND id > $%d", len(arguments)))
+	}
+	if !filter.Visibility.All {
+		visibility := make([]string, 0, 3)
+		if len(filter.Visibility.ResourceIDs) > 0 {
+			visibility = append(visibility, atlasInPredicate("id", filter.Visibility.ResourceIDs, &arguments))
+		}
+		if len(filter.Visibility.SiteIDs) > 0 {
+			visibility = append(visibility, atlasInPredicate("site_id", filter.Visibility.SiteIDs, &arguments))
+		}
+		if len(filter.Visibility.DepartmentIDs) > 0 {
+			visibility = append(visibility, atlasInPredicate("department_id", filter.Visibility.DepartmentIDs, &arguments))
+		}
+		if len(visibility) == 0 {
+			return nil, atlas.ErrInvalidInput
+		}
+		query.WriteString(" AND (" + strings.Join(visibility, " OR ") + ")")
+	}
+	arguments = append(arguments, filter.Limit)
+	query.WriteString(fmt.Sprintf(" ORDER BY id LIMIT $%d", len(arguments)))
+	rows, err := s.database.QueryContext(ctx, query.String(), arguments...)
+	if err != nil {
+		return nil, fmt.Errorf("list authorized Atlas assets: %w", err)
+	}
+	defer rows.Close()
+	items := make([]domain.Asset, 0, filter.Limit)
+	for rows.Next() {
+		asset, scanErr := scanAtlasAsset(rows)
+		if scanErr != nil {
+			return nil, fmt.Errorf("scan authorized Atlas asset: %w", scanErr)
+		}
+		items = append(items, asset)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate authorized Atlas assets: %w", err)
+	}
+	return items, nil
+}
+
+func (s *AtlasStore) ListGraphAssets(ctx context.Context, organizationID string, filter atlas.GraphAssetQuery) ([]domain.Asset, error) {
+	if organizationID == "" || !filter.Valid() {
+		return nil, atlas.ErrInvalidInput
+	}
+	query := strings.Builder{}
+	query.WriteString("SELECT " + atlasAssetColumns + " FROM atlas_assets WHERE organization_id = $1")
+	arguments := []any{organizationID}
+	if filter.LabelSearch != "" {
+		arguments = append(arguments, strings.ToLower(filter.LabelSearch))
+		query.WriteString(fmt.Sprintf(" AND strpos(lower(name), $%d) > 0", len(arguments)))
+	}
+	if !filter.Visibility.All {
+		visibility := make([]string, 0, 3)
+		if len(filter.Visibility.ResourceIDs) > 0 {
+			visibility = append(visibility, atlasInPredicate("id", filter.Visibility.ResourceIDs, &arguments))
+		}
+		if len(filter.Visibility.SiteIDs) > 0 {
+			visibility = append(visibility, atlasInPredicate("site_id", filter.Visibility.SiteIDs, &arguments))
+		}
+		if len(filter.Visibility.DepartmentIDs) > 0 {
+			visibility = append(visibility, atlasInPredicate("department_id", filter.Visibility.DepartmentIDs, &arguments))
+		}
+		if len(visibility) == 0 {
+			return nil, atlas.ErrInvalidInput
+		}
+		query.WriteString(" AND (" + strings.Join(visibility, " OR ") + ")")
+	}
+	if !filter.Directory.All {
+		directory := make([]string, 0, 4)
+		if len(filter.Directory.SiteIDs) > 0 {
+			directory = append(directory, atlasInPredicate("site_id", filter.Directory.SiteIDs, &arguments))
+		}
+		if len(filter.Directory.DepartmentIDs) > 0 {
+			directory = append(directory, atlasInPredicate("department_id", filter.Directory.DepartmentIDs, &arguments))
+		}
+		if len(filter.Directory.UserIDs) > 0 {
+			directory = append(directory, atlasInPredicate("user_id", filter.Directory.UserIDs, &arguments))
+		}
+		if filter.Directory.MatchUserDirectory && len(filter.Directory.SiteIDs)+len(filter.Directory.DepartmentIDs) > 0 {
+			identityPredicates := make([]string, 0, 2)
+			if len(filter.Directory.SiteIDs) > 0 {
+				identityPredicates = append(identityPredicates, atlasInPredicate("graph_identity.site_id", filter.Directory.SiteIDs, &arguments))
+			}
+			if len(filter.Directory.DepartmentIDs) > 0 {
+				identityPredicates = append(identityPredicates, atlasInPredicate("graph_identity.department_id", filter.Directory.DepartmentIDs, &arguments))
+			}
+			directory = append(directory, `EXISTS (SELECT 1 FROM people_identities graph_identity
+				WHERE graph_identity.organization_id = atlas_assets.organization_id AND graph_identity.id = atlas_assets.user_id
+				AND graph_identity.status = 'active' AND (`+strings.Join(identityPredicates, " OR ")+`))`)
+		}
+		query.WriteString(" AND (" + strings.Join(directory, " OR ") + ")")
+	}
+	references := make([]string, 0, 6)
+	for _, reference := range []struct {
+		column string
+		values []string
+	}{
+		{"id", filter.References.ResourceIDs}, {"site_id", filter.References.SiteIDs},
+		{"building_id", filter.References.BuildingIDs}, {"room_id", filter.References.RoomIDs},
+		{"department_id", filter.References.DepartmentIDs}, {"user_id", filter.References.UserIDs},
+	} {
+		if len(reference.values) > 0 {
+			references = append(references, atlasInPredicate(reference.column, reference.values, &arguments))
+		}
+	}
+	if len(references) > 0 {
+		sort.Strings(references)
+		query.WriteString(" AND (" + strings.Join(references, " OR ") + ")")
+	}
+	if filter.DirectOrganizationChildren {
+		query.WriteString(" AND site_id IS NULL AND building_id IS NULL AND room_id IS NULL AND department_id IS NULL AND user_id IS NULL")
+	}
+	arguments = append(arguments, filter.Limit)
+	query.WriteString(fmt.Sprintf(" ORDER BY lower(name), id LIMIT $%d", len(arguments)))
+	rows, err := s.database.QueryContext(ctx, query.String(), arguments...)
+	if err != nil {
+		return nil, fmt.Errorf("list graph assets: %w", err)
+	}
+	defer rows.Close()
+	items := make([]domain.Asset, 0)
+	for rows.Next() {
+		asset, err := scanAtlasAsset(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan graph asset: %w", err)
+		}
+		items = append(items, asset)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate graph assets: %w", err)
+	}
+	return items, nil
+}
+
+func atlasInPredicate(column string, values []string, arguments *[]any) string {
+	placeholders := make([]string, 0, len(values))
+	for _, value := range values {
+		*arguments = append(*arguments, value)
+		placeholders = append(placeholders, fmt.Sprintf("$%d", len(*arguments)))
+	}
+	return column + " IN (" + strings.Join(placeholders, ", ") + ")"
+}
+
+type atlasRowsQueryer interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}
+
+func listAtlasAssets(ctx context.Context, queryer atlasRowsQueryer, organizationID string, query atlas.Query) ([]domain.Asset, error) {
+	arguments := append(atlasAssetFilterArguments(organizationID, query), query.Limit)
+	rows, err := queryer.QueryContext(ctx, `
+		SELECT `+atlasAssetColumns+`
+		FROM atlas_assets `+atlasAssetFilterWhere+`
 		ORDER BY lower(name), id
-		LIMIT $9
-	`, organizationID, strings.ToLower(query.Search), query.Kind, query.Status, query.ModelID, query.SiteID, query.DepartmentID, query.UserID, query.Limit)
+		LIMIT $10
+	`, arguments...)
 	if err != nil {
 		return nil, fmt.Errorf("list Atlas assets: %w", err)
 	}
@@ -224,6 +538,30 @@ func (s *AtlasStore) ListAssets(ctx context.Context, organizationID string, quer
 		return nil, fmt.Errorf("iterate Atlas assets: %w", err)
 	}
 	return items, nil
+}
+
+func atlasAssetFilterArguments(organizationID string, query atlas.Query) []any {
+	return []any{
+		organizationID, strings.ToLower(query.Search), query.Kind, query.Status, query.ModelID,
+		query.SiteID, query.DepartmentID, query.UserID, strings.ToLower(query.DeploymentContext),
+	}
+}
+
+func atlasModelInventoryGroupExpression(groupBy string) string {
+	switch groupBy {
+	case atlas.ModelInventoryGroupStatus:
+		return "status"
+	case atlas.ModelInventoryGroupSite:
+		return "COALESCE(site_id, '')"
+	case atlas.ModelInventoryGroupDepartment:
+		return "COALESCE(department_id, '')"
+	case atlas.ModelInventoryGroupUser:
+		return "COALESCE(user_id, '')"
+	case atlas.ModelInventoryGroupDeployment:
+		return "CASE WHEN btrim(deployment_notes) <> '' THEN deployment_notes ELSE hostname END"
+	default:
+		return "''"
+	}
 }
 
 func (s *AtlasStore) GetAsset(ctx context.Context, organizationID, id string) (domain.Asset, error) {
@@ -370,6 +708,121 @@ func (s *AtlasStore) ListAssetLifecycle(ctx context.Context, organizationID, ass
 		return nil, fmt.Errorf("iterate Atlas lifecycle: %w", err)
 	}
 	return items, nil
+}
+
+func (s *AtlasStore) GetAssetLifecycleEvent(ctx context.Context, organizationID, eventID string) (domain.AssetLifecycleEvent, error) {
+	var event domain.AssetLifecycleEvent
+	err := s.database.QueryRowContext(ctx, `
+		SELECT organization_id, id, asset_id, from_status, to_status, note, revision, actor_id, occurred_at
+		FROM atlas_asset_lifecycle_events WHERE organization_id = $1 AND id = $2`, organizationID, eventID).Scan(
+		&event.OrganizationID, &event.ID, &event.AssetID, &event.FromStatus, &event.ToStatus,
+		&event.Note, &event.Revision, &event.ActorID, &event.OccurredAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.AssetLifecycleEvent{}, atlas.ErrNotFound
+	}
+	if err != nil {
+		return domain.AssetLifecycleEvent{}, fmt.Errorf("get Atlas lifecycle event: %w", err)
+	}
+	return event, nil
+}
+
+func (s *AtlasStore) ImportModel(ctx context.Context, model domain.AssetModel) (domain.AssetModel, bool, error) {
+	specifications, err := marshalAtlasSpecifications(model.Specifications)
+	if err != nil {
+		return domain.AssetModel{}, false, fmt.Errorf("marshal imported Atlas model specifications: %w", err)
+	}
+	created, err := scanAtlasModel(s.database.QueryRowContext(ctx, `
+		INSERT INTO atlas_models (
+			organization_id, id, manufacturer, name, model_number, normalized_manufacturer,
+			normalized_name, normalized_model_number, kind, vendor_identifier, specifications,
+			support_url, warranty_months, useful_life_months, status, source_system_id,
+			source_record_id, revision, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, lower(btrim($3)), lower(btrim($4)), lower(btrim($5)),
+			$6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+		ON CONFLICT (organization_id, id) DO NOTHING
+		RETURNING `+atlasModelColumns,
+		model.OrganizationID, model.ID, model.Manufacturer, model.Name, model.ModelNumber, model.Kind,
+		model.VendorIdentifier, specifications, model.SupportURL, model.WarrantyMonths, model.UsefulLifeMonths,
+		model.Status, model.SourceSystemID, model.SourceRecordID, model.Revision, model.CreatedAt, model.UpdatedAt), false)
+	if err == nil {
+		return created, true, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return domain.AssetModel{}, false, translateAtlasWriteError("import Atlas model", err)
+	}
+	existing, readErr := scanAtlasModel(s.database.QueryRowContext(ctx, `SELECT `+atlasModelColumns+` FROM atlas_models WHERE organization_id = $1 AND id = $2`, model.OrganizationID, model.ID), false)
+	model.InstanceCount = 0
+	if readErr == nil && reflect.DeepEqual(existing, model) {
+		return existing, false, nil
+	}
+	if readErr != nil {
+		return domain.AssetModel{}, false, fmt.Errorf("read imported Atlas model: %w", readErr)
+	}
+	return domain.AssetModel{}, false, atlas.ErrConflict
+}
+
+func (s *AtlasStore) ImportAsset(ctx context.Context, asset domain.Asset) (domain.Asset, bool, error) {
+	modelContext, err := marshalAtlasModelContext(asset.ModelContext)
+	if err != nil {
+		return domain.Asset{}, false, err
+	}
+	created, err := scanAtlasAsset(s.database.QueryRowContext(ctx, `
+		INSERT INTO atlas_assets (
+			organization_id, id, model_id, model_context, name, kind, asset_tag, normalized_asset_tag,
+			serial_number, normalized_serial_number, hostname, deployment_notes, site_id, building_id,
+			room_id, department_id, user_id, status, purchase_date, revision, created_at, updated_at
+		) VALUES ($1, $2, NULLIF($3, ''), $4, $5, $6, $7, lower(btrim($7)), $8, lower(btrim($8)),
+			$9, $10, NULLIF($11, ''), NULLIF($12, ''), NULLIF($13, ''), NULLIF($14, ''), NULLIF($15, ''),
+			$16, $17, $18, $19, $20)
+		ON CONFLICT (organization_id, id) DO NOTHING
+		RETURNING `+atlasAssetColumns,
+		asset.OrganizationID, asset.ID, asset.ModelID, modelContext, asset.Name, asset.Kind, asset.AssetTag,
+		asset.SerialNumber, asset.Hostname, asset.DeploymentNotes, asset.SiteID, asset.BuildingID, asset.RoomID,
+		asset.DepartmentID, asset.UserID, asset.Status, asset.PurchaseDate, asset.Revision, asset.CreatedAt, asset.UpdatedAt))
+	if err == nil {
+		return created, true, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return domain.Asset{}, false, translateAtlasWriteError("import Atlas asset", err)
+	}
+	existing, readErr := s.GetAsset(ctx, asset.OrganizationID, asset.ID)
+	if readErr == nil && reflect.DeepEqual(existing, asset) {
+		return existing, false, nil
+	}
+	if readErr != nil {
+		return domain.Asset{}, false, fmt.Errorf("read imported Atlas asset: %w", readErr)
+	}
+	return domain.Asset{}, false, atlas.ErrConflict
+}
+
+func (s *AtlasStore) ImportAssetLifecycleEvent(ctx context.Context, event domain.AssetLifecycleEvent) (domain.AssetLifecycleEvent, bool, error) {
+	var created domain.AssetLifecycleEvent
+	err := s.database.QueryRowContext(ctx, `
+		INSERT INTO atlas_asset_lifecycle_events (
+			organization_id, id, asset_id, from_status, to_status, note, revision, actor_id, occurred_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		ON CONFLICT (organization_id, id) DO NOTHING
+		RETURNING organization_id, id, asset_id, from_status, to_status, note, revision, actor_id, occurred_at`,
+		event.OrganizationID, event.ID, event.AssetID, event.FromStatus, event.ToStatus, event.Note,
+		event.Revision, event.ActorID, event.OccurredAt).Scan(
+		&created.OrganizationID, &created.ID, &created.AssetID, &created.FromStatus, &created.ToStatus,
+		&created.Note, &created.Revision, &created.ActorID, &created.OccurredAt,
+	)
+	if err == nil {
+		return created, true, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return domain.AssetLifecycleEvent{}, false, translateAtlasWriteError("import Atlas lifecycle event", err)
+	}
+	existing, readErr := s.GetAssetLifecycleEvent(ctx, event.OrganizationID, event.ID)
+	if readErr == nil && reflect.DeepEqual(existing, event) {
+		return existing, false, nil
+	}
+	if readErr != nil {
+		return domain.AssetLifecycleEvent{}, false, readErr
+	}
+	return domain.AssetLifecycleEvent{}, false, atlas.ErrConflict
 }
 
 type atlasScanner interface {

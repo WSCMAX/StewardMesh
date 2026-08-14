@@ -5,6 +5,8 @@ package storage
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"io"
 	"strings"
@@ -86,6 +88,44 @@ func TestServiceCreatesMetadataAndVerifiesContent(t *testing.T) {
 	}
 }
 
+func TestAuthorizeAndOpenBlobBindsAuditContentAndCancellation(t *testing.T) {
+	metadata := newServiceMetadataStore()
+	objects, err := NewLocalBlobStore(t.TempDir(), 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	auditor := &storageTestAuditor{}
+	service, err := NewService(metadata, objects, auditor, ServiceConfig{OrganizationID: "example-org"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := foundation.WithScope(context.Background(), foundation.Scope{OrganizationID: "example-org", ActorID: "account-1", CorrelationID: "request-1"})
+	created, err := service.CreateBlob(ctx, CreateBlobInput{Name: "evidence.txt", MediaType: "text/plain", Content: strings.NewReader("verified")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	auditor.events = nil
+	blob, content, err := service.AuthorizeAndOpenBlob(ctx, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := io.ReadAll(content)
+	_ = content.Close()
+	if err != nil || blob.ID != created.ID || string(loaded) != "verified" {
+		t.Fatalf("blob=%#v content=%q err=%v", blob, loaded, err)
+	}
+	if len(auditor.events) != 1 || auditor.events[0].Action != "vault.blob.download_authorized" || auditor.events[0].Metadata["delivery"] != "in_process" {
+		t.Fatalf("audit=%#v", auditor.events)
+	}
+
+	canceled, cancel := context.WithCancel(context.Background())
+	reader := &integrityReader{ctx: canceled, reader: &cancelingStorageReader{cancel: cancel}, expected: strings.Repeat("0", 64), hash: sha256.New()}
+	_, err = io.ReadAll(reader)
+	if !errors.Is(err, context.Canceled) || reader.reader.(*cancelingStorageReader).reads != 1 {
+		t.Fatalf("cancellation error=%v reads=%d", err, reader.reader.(*cancelingStorageReader).reads)
+	}
+}
+
 func TestServiceRejectsUnsafeMetadata(t *testing.T) {
 	objects, err := NewLocalBlobStore(t.TempDir(), 1024)
 	if err != nil {
@@ -107,3 +147,86 @@ func TestServiceRejectsUnsafeMetadata(t *testing.T) {
 		}
 	}
 }
+
+func TestImportBlobVerifiesStoredBytesBeforeReturningUnchanged(t *testing.T) {
+	original := []byte("original")
+	digest := sha256.Sum256(original)
+	checksum := hex.EncodeToString(digest[:])
+	for _, metadataOnly := range []bool{false, true} {
+		mode := "included"
+		if metadataOnly {
+			mode = "metadata-only"
+		}
+		for _, failure := range []string{"missing", "same-size-tamper"} {
+			t.Run(mode+"/"+failure, func(t *testing.T) {
+				objects, err := NewLocalBlobStore(t.TempDir(), 1024)
+				if err != nil {
+					t.Fatal(err)
+				}
+				service, err := NewService(newServiceMetadataStore(), objects, foundation.NopAuditor{}, ServiceConfig{OrganizationID: "replay-org"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				base := ImportBlobInput{
+					ID: strings.Repeat("a", 32), Name: "replay.txt", MediaType: "text/plain", SizeBytes: int64(len(original)), SHA256: checksum,
+					SourceSystemID: "archive", SourceRecordID: "archive:replay", Content: bytes.NewReader(original),
+				}
+				created, wasCreated, err := service.ImportBlob(context.Background(), base)
+				if err != nil || !wasCreated {
+					t.Fatalf("seed imported blob: created=%t blob=%#v err=%v", wasCreated, created, err)
+				}
+				if err := objects.Delete(context.Background(), created.objectKey); err != nil {
+					t.Fatal(err)
+				}
+				if failure == "same-size-tamper" {
+					if _, err := objects.Put(context.Background(), created.objectKey, "text/plain", strings.NewReader("tampered")); err != nil {
+						t.Fatal(err)
+					}
+				}
+				replay := base
+				replay.MetadataOnly = metadataOnly
+				if metadataOnly {
+					replay.Content = nil
+				} else {
+					replay.Content = bytes.NewReader(original)
+				}
+				_, replayCreated, replayErr := service.ImportBlob(context.Background(), replay)
+				want := ErrNotFound
+				if failure == "same-size-tamper" {
+					want = ErrIntegrity
+				}
+				if !errors.Is(replayErr, want) || replayCreated {
+					t.Fatalf("unsafe unchanged replay: created=%t err=%v want=%v", replayCreated, replayErr, want)
+				}
+				exact, inspectErr := service.ImportedBlobExists(context.Background(), replay)
+				if inspectErr != nil || exact {
+					t.Fatalf("read-only replay inspection trusted stale metadata: exact=%t err=%v", exact, inspectErr)
+				}
+			})
+		}
+	}
+}
+
+type storageTestAuditor struct{ events []foundation.AuditEvent }
+
+func (a *storageTestAuditor) Record(_ context.Context, event foundation.AuditEvent) error {
+	a.events = append(a.events, event)
+	return nil
+}
+
+type cancelingStorageReader struct {
+	cancel context.CancelFunc
+	reads  int
+}
+
+func (r *cancelingStorageReader) Read(p []byte) (int, error) {
+	r.reads++
+	r.cancel()
+	if len(p) == 0 {
+		return 0, nil
+	}
+	p[0] = 'x'
+	return 1, nil
+}
+
+func (*cancelingStorageReader) Close() error { return nil }

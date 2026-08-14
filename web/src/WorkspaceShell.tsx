@@ -3,7 +3,7 @@ import type { GuideTopicID } from './guide'
 import { AreaIcon, MenuIcon, cx, panelClass, plainButtonClass, secondaryButtonClass, type AreaIconName } from './ui'
 import { scopeSummary, type PermissionAccess } from './workspaceAccess'
 
-// Requirement: REQ-WORKSPACE-001. Feature: experience.workspace.
+// Requirements: REQ-WORKSPACE-001, REQ-SIGNALS-001, REQ-REACH-001, REQ-EXCHANGE-001. Features: experience.workspace, alerts.rules, messaging.delivery, migration.packages.
 
 export type WorkspaceAreaID = 'overview' | Exclude<GuideTopicID, 'workspace' | 'guide'>
 
@@ -31,7 +31,7 @@ type WorkspaceShellProps = {
   visitedAreas: ReadonlySet<WorkspaceAreaID>
 }
 
-const workspaceAreaIDs: readonly WorkspaceAreaID[] = ['overview', 'atlas', 'horizon', 'ledger', 'threads', 'vault', 'people', 'guard']
+const workspaceAreaIDs: readonly WorkspaceAreaID[] = ['overview', 'atlas', 'horizon', 'ledger', 'stack', 'signals', 'reach', 'threads', 'vault', 'exchange', 'people', 'bridge', 'guard']
 
 export function workspaceAreaFromHash(hash: string): WorkspaceAreaID {
   const candidate = hash.replace(/^#workspace-/, '')
@@ -93,7 +93,7 @@ export default function WorkspaceShell({ activeArea, areas, assetCount, healthLa
   const navigation = <WorkspaceNavigation active={active} areas={areas} onNavigate={navigate} onOpenHelp={onOpenHelp} onReportIssue={onReportIssue} />
 
   return (
-    <section className="lg:grid lg:grid-cols-[17.5rem_minmax(0,1fr)] lg:items-start lg:gap-7" data-feature="experience.workspace" data-requirement="REQ-WORKSPACE-001">
+    <section className="min-w-0 max-w-full lg:grid lg:grid-cols-[17.5rem_minmax(0,1fr)] lg:items-start lg:gap-7" data-feature="experience.workspace" data-requirement="REQ-WORKSPACE-001">
       <aside aria-label="Workspace navigation" className={`${panelClass} steward-scrollbar sticky top-[5.75rem] hidden max-h-[calc(100vh-7rem)] overflow-y-auto p-3 lg:block`}>
         {navigation}
       </aside>
@@ -133,15 +133,16 @@ export default function WorkspaceShell({ activeArea, areas, assetCount, healthLa
 
         <div className="mt-5 min-w-0">
           {healthLabel === 'Unavailable' && <p className="mb-4 rounded-xl border border-steward-warning/40 bg-steward-warning/10 p-4 text-sm leading-6 text-steward-mist-muted" role="status"><strong className="text-steward-mist">Service unavailable.</strong> Previously loaded context may be stale, and protected reads or changes may fail until the Go service reconnects.</p>}
-          {areas.map((area) => <div
+          {areas.map((area) => <section
             aria-labelledby="workspace-context-heading"
             className="min-w-0"
             hidden={area.id !== active.id}
             id={area.id === 'overview' ? 'workspace-overview' : `guide-${area.id}`}
             key={area.id}
+            role="region"
           >
             {visitedAreas.has(area.id) ? area.content : <p className={`${panelClass} p-5 text-steward-mist-muted`} role="status">Opening {area.name}…</p>}
-          </div>)}
+          </section>)}
         </div>
 
         {active.id === 'overview' && <dl className="sr-only"><dt>Tracked assets</dt><dd>{assetCount}</dd></dl>}
@@ -194,5 +195,5 @@ function WorkspaceNavigation({ active, areas, onNavigate, onOpenHelp, onReportIs
 }
 
 function ContextItem({ label, value }: { label: string; value: string }) {
-  return <div className="min-w-0 border-b border-white/[0.07] px-4 py-3 last:col-span-2 last:border-b-0 lg:col-span-1 lg:border-b-0 lg:last:col-span-1"><dt className="text-[0.6875rem] font-semibold uppercase tracking-wide text-steward-slate">{label}</dt><dd className="mt-1 text-sm font-semibold leading-5 text-steward-mist">{value}</dd></div>
+  return <div className="min-w-0 border-b border-white/[0.07] px-4 py-3 last:col-span-2 last:border-b-0 lg:col-span-1 lg:border-b-0 lg:last:col-span-1"><dt className="text-[0.6875rem] font-semibold uppercase tracking-wide text-steward-slate">{label}</dt><dd className="mt-1 break-words text-sm font-semibold leading-5 text-steward-mist">{value}</dd></div>
 }

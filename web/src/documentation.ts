@@ -1,4 +1,6 @@
-export type DocumentationTopicID = 'overview' | 'workspace' | 'atlas' | 'horizon' | 'ledger' | 'threads' | 'vault' | 'people' | 'guard' | 'guide'
+// Requirements: REQ-API-001, SEC-MCP-001, REQ-DIRECTORY-EXPANSION-005, REQ-DIRECTORY-EXPANSION-007, REQ-DIRECTORY-EXPANSION-008, REQ-PATTERNS-001, REQ-SIGNALS-001, REQ-REACH-001, REQ-EXCHANGE-001, DOC-001. Features: platform.foundation, integrations.protocols, threads.relationships, templates.schemas, alerts.rules, messaging.delivery, migration.packages, experience.help.
+
+export type DocumentationTopicID = 'overview' | 'workspace' | 'atlas' | 'horizon' | 'ledger' | 'stack' | 'signals' | 'reach' | 'threads' | 'vault' | 'exchange' | 'people' | 'bridge' | 'guard' | 'guide'
 
 export type DocumentationStep = {
   title: string
@@ -41,7 +43,7 @@ export const documentationPages: readonly DocumentationPage[] = [
       {
         id: 'start',
         title: 'Start with one focused task',
-        paragraphs: ['StewardMesh organizes inventory, planning, finance, relationships, files, people, and access into focused product areas. Begin in Workspace, choose the area that owns the task, and use Guide when you need contextual help.'],
+        paragraphs: ['StewardMesh organizes inventory, planning, finance, software, alerts, relationships, files, people, and access into focused product areas. Begin in Workspace, choose the area that owns the task, and use Guide when you need contextual help.'],
         steps: [
           { title: 'Sign in through Guard', body: 'Use your organization account. A new local installation first asks an authorized operator to create the initial administrator.' },
           { title: 'Choose a product area', body: 'Open Atlas, Horizon, Ledger, Threads, Vault, People, or Guard from Workspace. Your current grants determine which records and actions are available.' },
@@ -55,8 +57,12 @@ export const documentationPages: readonly DocumentationPage[] = [
           'Atlas owns assets, reusable product models, identifiers, locations on asset records, and lifecycle history.',
           'Horizon owns useful-life assumptions, replacement timing, scenarios, and forecasts.',
           'Ledger owns vendors, purchases, contracts, commitments, costs, and budgets.',
+          'Stack owns software products, installations, entitlements, assignments, and compliance conditions.',
+          'Signals owns operational and financial alert rules, acknowledgment, assignment, and delivery handoffs.',
+          'Reach owns approved delivery adapters, templates, subscriber groups, confirmed sends, retries, and sanitized history.',
           'Threads owns hierarchical tags, strategic goals, links, and inheritance provenance.',
           'Vault owns private evidence metadata, integrity checks, and authorized downloads.',
+          'Exchange owns bounded migration package assembly, validation, import receipts, and holding outcomes.',
           'People owns sites, buildings, rooms, departments, identities, and assignments.',
           'Guard owns authentication, roles, scoped grants, ownership controls, and authorization policy.',
         ],
@@ -91,6 +97,12 @@ export const documentationPages: readonly DocumentationPage[] = [
         title: 'Understand access labels',
         bullets: ['Read and change means organization-wide read and write grants are present.', 'Read only means records can be viewed but feature-owned mutation actions stay unavailable.', 'Scoped means access is limited to assigned sites, departments, or resources; broad collections remain closed.', 'Limited means the required read grant is absent. The product stays discoverable without mounting protected content.'],
         callout: { title: 'Server authorization stays authoritative', body: 'Workspace uses session hints to compose the interface, but every API request is still authenticated and authorized by Guard.', tone: 'info' },
+      },
+      {
+        id: 'related-records',
+        title: 'Connect related records safely',
+        paragraphs: ['Guided related-record tasks preserve and validate the source draft, let you select an existing related record or create one when authorized, return to earlier steps, and ask for explicit confirmation. Loading, failure, retry, and cancellation are announced without moving record ownership into Workspace.'],
+        callout: { title: 'Owning features keep control', body: 'Each task identifies the source and related feature APIs and permissions. Those APIs still enforce validation, authorization, organization scope, and audit behavior.', tone: 'info' },
       },
       {
         id: 'recover',
@@ -195,6 +207,124 @@ export const documentationPages: readonly DocumentationPage[] = [
     related: ['horizon', 'vault', 'atlas'],
   },
   {
+    id: 'stack',
+    group: 'Product areas',
+    kicker: 'Software and licenses',
+    title: 'Stack',
+    summary: 'Connect installed software to Atlas assets, preserve purchased entitlements, assign seats, and review explicit license conditions.',
+    appHref: '#workspace-stack',
+    appLabel: 'Open Stack',
+    searchTerms: ['software', 'license', 'entitlement', 'installation', 'version', 'assignment', 'expiration', 'compliance'],
+    sections: [
+      {
+        id: 'inventory',
+        title: 'Connect software to inventory',
+        steps: [
+          { title: 'Define the product', body: 'Record the publisher and product once, then add the versions your organization installs or uses.' },
+          { title: 'Associate an installation', body: 'Choose a version and an organization-visible Atlas asset. Stack preserves installation time and usage state without copying the asset record.' },
+          { title: 'Review coverage', body: 'The compliance summary identifies an active installation that lacks a matching asset, identity, department, site, or enterprise entitlement.' },
+        ],
+      },
+      {
+        id: 'entitlements',
+        title: 'Preserve the purchased entitlement',
+        paragraphs: ['A license records its device, user, concurrent, site, or enterprise metric, positive quantity, effective dates, and optional version scope. Device seats assign to assets, user seats to identities, and site seats to sites. Ledger vendor, purchase order, contract, and cost references explain the purchase while Vault document IDs preserve supporting evidence.'],
+        callout: { title: 'References stay authoritative', body: 'Stack validates every Atlas, People, Ledger, and Vault reference through the owning feature before saving it.', tone: 'info' },
+      },
+      {
+        id: 'conditions',
+        title: 'Act on explicit conditions',
+        bullets: ['Expiring and expired conditions include the remaining day count.', 'Over-assigned conditions compare assigned seats with purchased quantity.', 'Under-used conditions identify assignments explicitly marked unused.', 'Missing-license conditions identify installed assets without a matching entitlement.'],
+      },
+      {
+        id: 'lifecycle',
+        title: 'Keep lifecycle history explicit',
+        paragraphs: ['Revise entitlement quantities and dates, mark unsupported or retired software, remove installations, update usage, and end assignments from the record table. Every change carries the current revision; retirement, removal, and assignment end cannot be silently reopened.'],
+      },
+      {
+        id: 'portable-records',
+        title: 'Move records safely',
+        paragraphs: ['Portable export keeps stable IDs, revisions, typed dependencies, and bounded typed payloads. Import validates every envelope and dependency set before writing, orders dependencies, and uses the supplied source identity for exact replay: unchanged data is not duplicated and changed data conflicts for review.'],
+      },
+    ],
+    related: ['atlas', 'ledger', 'people'],
+  },
+  {
+    id: 'signals',
+    group: 'Product areas',
+    kicker: 'Alerts and action queue',
+    title: 'Signals',
+    summary: 'Evaluate operational and financial conditions, keep repeated observations deduplicated, and preserve action history until each alert is resolved.',
+    appHref: '#workspace-signals',
+    appLabel: 'Open Signals',
+    searchTerms: ['alert', 'rule', 'renewal', 'expiration', 'over budget', 'overdue', 'unpaid', 'reconciliation', 'subscription'],
+    sections: [
+      {
+        id: 'rules',
+        title: 'Configure bounded rules',
+        paragraphs: ['Rules evaluate over-budget, forecast-over-budget, unpaid, overdue, expiration, renewal, unused-commitment, and reconciliation conditions against authoritative Ledger, Horizon, and Stack records. Optional fiscal period and scenario filters keep evaluation explicit.'],
+        bullets: ['Renewal and expiration rules default to 180, 90, 60, and 30 days.', 'Unpaid, overdue, and unused-commitment rules default to 30 days.', 'An administrator may provide up to eight unique thresholds from 0 through 3660 days.', 'Disabled rules remain visible but do not evaluate.'],
+      },
+      {
+        id: 'queue',
+        title: 'Work the alert queue',
+        paragraphs: ['The same rule and target produce one durable alert. A repeated observation refreshes that alert; a missing observation resolves it; and a later recurrence reopens it with history intact.'],
+        bullets: ['Severity and status always include readable labels.', 'Acknowledgment records the actor and timestamp.', 'Assignments name an existing identity or group by configured ID.', 'CSV exports protect formula-significant cells before spreadsheet use.'],
+      },
+      {
+        id: 'delivery',
+        title: 'Route through Reach safely',
+        paragraphs: ['Signals creates durable provider-neutral delivery work for enabled group and webhook subscriptions. Reach can process pending work with bounded exponential retries while Signals retains only stable target references and sanitized error codes.'],
+        callout: { title: 'Do not paste delivery secrets', body: 'The Signals interface accepts configured subscriber IDs, never webhook URLs, OAuth tokens, provider credentials, or provider response bodies.', tone: 'warning' },
+      },
+      {
+        id: 'access',
+        title: 'Respect access and audit boundaries',
+        paragraphs: ['Signals reads require signals.read and every rule, evaluation, acknowledgment, assignment, and subscription change requires signals.write plus the current CSRF token. Audit records identify the requirement and feature without copying sensitive source payloads.'],
+      },
+    ],
+    related: ['reach', 'ledger', 'horizon'],
+  },
+  {
+    id: 'reach',
+    group: 'Product areas',
+    kicker: 'Message delivery',
+    title: 'Reach',
+    summary: 'Configure approved delivery adapters, reusable plain-text templates, subscriber groups, confirmed sends, and sanitized retry history.',
+    appHref: '#workspace-reach',
+    appLabel: 'Open Reach',
+    searchTerms: ['email', 'smtp', 'ses', 'gmail', 'outlook', 'teams', 'webhook', 'delivery', 'retry', 'subscriber', 'template'],
+    sections: [
+      {
+        id: 'providers',
+        title: 'Select deployment-approved providers',
+        paragraphs: ['Operators choose endpoint IDs from deployment configuration. The browser cannot submit or discover provider URLs, SMTP addresses, cloud regions, OAuth tokens, or credentials. Gmail and Outlook use OAuth bearer references; SES uses SigV4 credentials; SMTP uses a structured external credential; Teams and generic webhooks use fixed routes.'],
+        callout: { title: 'References, never secrets', body: 'Enter a stable env: or external: reference. Secret values remain in the deployment secret system and are resolved only for the outbound call.', tone: 'warning' },
+      },
+      {
+        id: 'compose',
+        title: 'Compose reusable delivery policy',
+        steps: [
+          { title: 'Create a plain-text template', body: 'Use only title, summary, severity, record_id, and organization tokens. HTML and unknown template expressions are rejected.' },
+          { title: 'Create a subscriber group', body: 'Pair one enabled provider and template with validated email recipients or configured Teams channel IDs.' },
+          { title: 'Confirm the external action', body: 'Provider tests, manual sends, secret-reference rotations, retries, and pending Signals processing require an explicit confirmation and messaging.write access.' },
+        ],
+      },
+      {
+        id: 'history',
+        title: 'Review bounded retry history',
+        paragraphs: ['Each attempt records a provider-neutral outcome and sanitized error code. Retryable failures use exponential delays beginning at five minutes, capped at 24 hours, and stop after eight attempts. Provider response bodies, exception text, endpoint routes, and credentials are never retained in delivery history.'],
+      },
+      {
+        id: 'security',
+        title: 'Understand outbound protections',
+        bullets: ['Fixed HTTPS endpoints prevent callers from turning Reach into an arbitrary network client; HTTP and relaxed SMTP TLS are restricted to explicit loopback fixtures.', 'Webhook deliveries carry a timestamp, nonce, and HMAC-SHA256 signature; receivers should reject stale timestamps and repeated nonces.', 'Outbound clients use bounded timeouts, reject redirects, and discard bounded response bodies.', 'messaging.read protects configuration and history; messaging.write plus CSRF protects every mutation.'],
+        callout: { title: 'Adapter status', body: 'StewardMesh validates adapter request contracts with deterministic mocks. These adapters are not claimed as externally certified against every provider tenant or licensing configuration.', tone: 'info' },
+      },
+    ],
+    related: ['signals', 'guard', 'guide'],
+  },
+  {
     id: 'threads',
     group: 'Product areas',
     kicker: 'Tags and strategic goals',
@@ -256,6 +386,45 @@ export const documentationPages: readonly DocumentationPage[] = [
     related: ['ledger', 'atlas', 'guard'],
   },
   {
+    id: 'exchange',
+    group: 'Product areas',
+    kicker: 'Portable migration packages',
+    title: 'Exchange',
+    summary: 'Export and import bounded, dependency-aware .openinventory packages with checksums, provenance, ownership metadata, and visible holding outcomes.',
+    appHref: '#workspace-exchange',
+    appLabel: 'Open Exchange',
+    searchTerms: ['migration', 'import', 'export', 'openinventory', 'package', 'checksum', 'dependency', 'holding', 'ownership'],
+    sections: [
+      {
+        id: 'export',
+        title: 'Build a complete export',
+        steps: [
+          { title: 'Select explicit records', body: 'Choose only the records the receiving organization needs. Exchange keeps stable record types, IDs, revisions, provenance, and relationships.' },
+          { title: 'Include required dependencies', body: 'Leave dependency inclusion enabled for a complete round trip. The package orders dependencies before the records that use them.' },
+          { title: 'Choose file handling', body: 'Metadata mode carries checksums and relationships without file bytes. Include mode embeds bounded, checksummed Vault content.' },
+        ],
+        callout: { title: 'No cloud secrets in packages', body: 'Exchange never exports credentials, access tokens, private keys, object-store credentials, or signed download URLs.', tone: 'success' },
+      },
+      {
+        id: 'import',
+        title: 'Verify before writing',
+        paragraphs: ['Exchange accepts only bounded .openinventory archives. It validates the schema version, archive structure, package identity, record and file checksums, typed relationships, duplicate identity, and dependency graph before importing records through their owning domain service.'],
+        bullets: ['Exact replays are idempotent and report unchanged records.', 'The same package identity with changed bytes is rejected as a conflict.', 'Corrupt archives, failed checksums, unsafe metadata, and oversized content are rejected.', 'Missing external references and unavailable file bytes produce visible holding outcomes; an exact existing Vault record remains unchanged without package bytes.'],
+      },
+      {
+        id: 'ownership',
+        title: 'Claim ownership explicitly',
+        paragraphs: ['Successfully imported records preserve their original source identity and are readable but write-protected. An authorized administrator must explicitly claim each record in Guard before local updates are allowed. A holding record has not been written and lists the dependencies that need resolution.'],
+      },
+      {
+        id: 'history',
+        title: 'Use receipts for review and recovery',
+        paragraphs: ['Package history shows direction, checksum, source system, record and file counts, checkpointed created and unchanged totals, holding outcomes, and write-lock state. An expired processing lease can resume after a crash without repeating checkpointed work. History intentionally excludes package payloads, credentials, signed URLs, and operator identity.'],
+      },
+    ],
+    related: ['vault', 'guard', 'stack'],
+  },
+  {
     id: 'people',
     group: 'Product areas',
     kicker: 'Users and departments',
@@ -263,7 +432,7 @@ export const documentationPages: readonly DocumentationPage[] = [
     summary: 'Organize places, departments, identities, and effective-dated asset assignments without mixing directory ownership into Atlas.',
     appHref: '#workspace-people',
     appLabel: 'Open People',
-    searchTerms: ['person', 'identity', 'site', 'building', 'room', 'department', 'assignment', 'location'],
+    searchTerms: ['person', 'identity', 'site', 'building', 'room', 'department', 'assignment', 'location', 'grouper', 'nested group', 'peoplesoft', 'campus solutions', 'query access service', 'directory import', 'relationship graph', 'connected records', 'cycles', 'synthetic demo', 'demo seed'],
     sections: [
       {
         id: 'directory',
@@ -284,10 +453,64 @@ export const documentationPages: readonly DocumentationPage[] = [
         title: 'Preserve assignment history',
         paragraphs: ['Asset assignments are effective-dated and support primary user, additional user, and responsible department roles. Ending an assignment preserves the prior stewardship record.'],
       },
+      {
+        id: 'relationship-graph',
+        title: 'Explore visible record relationships',
+        paragraphs: ['The permission-scoped graph connects visible people, locations, departments, imported groups, and permitted assets without becoming a second source of truth. Filter by record name, record type, relationship type, or result limit.'],
+        bullets: ['The visual is a compact overview; the relationship and disconnected-record tables are the complete keyboard and screen-reader view.', 'Cycles and disconnected records remain visible, while repeated semantic relationships are shown once.', 'Directory and asset grants are intersected by the server. A filter can narrow results but never reveal a record outside your scope.'],
+        callout: { title: 'Scope stays server-owned', body: 'Graph requests do not accept an organization, site, department, resource, or visibility scope. Guard derives access from the signed-in principal.', tone: 'info' },
+      },
+      {
+        id: 'grouper-sync',
+        title: 'Review optional Grouper synchronization',
+        paragraphs: ['Administrators can preview a configured, read-only Internet2 Grouper source before applying its normalized groups, nested groups, and memberships. The default local setup does not start or require Grouper.'],
+        bullets: ['Use preview counts and item actions to review creates, updates, deactivations, and conflicts before apply.', 'Nested groups and direct subjects appear as semantic member-of relationships in the permission-scoped graph.', 'Provider credentials, endpoints, and raw responses stay server-side and never appear in browser forms or import detail.'],
+        callout: { title: 'Source reads remain read-only', body: 'StewardMesh uses GET-only source reads. Fixture create and delete routes exist only in the explicit local integrations profile.', tone: 'info' },
+      },
+      {
+        id: 'synthetic-demo',
+        title: 'Initialize an isolated synthetic demo',
+        paragraphs: ['Synthetic locations, people, groups, mappings, and relationships are disabled by default. Operators must set the strict seed flag and use a demo-prefixed organization ID; repeated startup replays the same versioned dataset.'],
+        bullets: ['Every visible name starts with [Synthetic Demo], email addresses use the non-routable example.invalid domain, and provider mappings use a dedicated synthetic source.', 'A mismatched local record with a reserved demo label stops setup instead of being changed.', 'The one-shot Compose demo initializer needs PostgreSQL but does not contact or require Grouper or Valkey.'],
+        callout: { title: 'Never enable in production', body: 'The application rejects synthetic seeding for any organization ID that does not begin with demo-. Keep the flag false in normal deployments.', tone: 'warning' },
+      },
+      {
+        id: 'peoplesoft-sync',
+        title: 'Review optional PeopleSoft Campus Solutions synchronization',
+        paragraphs: ['Administrators can preview a configured, read-only PeopleSoft source that maps institution-owned organization, location, building, and department queries into the shared directory graph.'],
+        bullets: ['Deployment configuration owns the fixed Query Access Service endpoint, credential, query names, and qualified-selector to JSON-alias mappings; none enter the browser.', 'Review the returned hierarchy, explicit inactive rows, updates, and local-ownership conflicts before applying the exact persisted plan.', 'QAS previews remain partial: missing rows never trigger implicit deactivation, while source mappings and audit attempts remain durable and raw responses are discarded.'],
+        callout: { title: 'PeopleSoft remains read-only', body: 'The adapter executes only synchronous JSON/NONFILE GET queries and has no PeopleSoft write operation.', tone: 'info' },
+      },
     ],
     related: ['atlas', 'workspace', 'guard'],
   },
   {
+	  id: 'bridge',
+	  group: 'Administration',
+	  kicker: 'MCP and OAuth integration',
+	  title: 'Bridge',
+	  summary: 'Expose bounded StewardMesh resources through local stdio or authenticated Streamable HTTP without bypassing Guard.',
+	  appHref: '#workspace-bridge',
+	  appLabel: 'Open Bridge',
+	  searchTerms: ['mcp', 'oauth', 'pkce', 'client', 'scope', 'token', 'stdio', 'streamable http'],
+	  sections: [
+		{
+		  id: 'clients', title: 'Register public clients',
+		  paragraphs: ['Bridge clients have exact redirect URIs and granular scopes. Authorization code flow always uses S256 PKCE and the exact MCP resource audience. Client secrets are not issued or stored.'],
+		  callout: { title: 'Token safety', body: 'Only hashes of authorization codes, access tokens, refresh tokens, and confirmation tokens are stored. Tokens never appear in resources, logs, or this administration screen.', tone: 'success' },
+		},
+		{
+		  id: 'writes', title: 'Confirm every write',
+		  paragraphs: ['The phase-one MCP write surface is intentionally tiny: alert acknowledgement. A prepare tool validates current Guard scope and ownership, then returns a server-generated token bound to organization, actor, action, and exact arguments. The confirm tool consumes it once before writing.'],
+		},
+		{
+		  id: 'transports', title: 'Choose a transport',
+		  bullets: ['Remote clients use stateless Streamable HTTP at /mcp and discover OAuth metadata from the well-known endpoints.', 'Local stdio requires an explicit Guard session and scope list in the process environment; stdout remains protocol-only.', 'Resources and tools are bounded, paginated, redacted, deadline-limited, and treat stored text as data rather than instructions.'],
+		},
+	  ],
+	  related: ['guard', 'signals', 'atlas'],
+	},
+	{
     id: 'guard',
     group: 'Administration',
     kicker: 'Authentication and authorization',
@@ -295,7 +518,7 @@ export const documentationPages: readonly DocumentationPage[] = [
     summary: 'Sign in securely, administer roles and scoped grants, and understand the authorization boundary around every StewardMesh record.',
     appHref: '#workspace-guard',
     appLabel: 'Open Guard',
-    searchTerms: ['login', 'bootstrap', 'administrator', 'role', 'permission', 'scope', 'session', 'authorization'],
+    searchTerms: ['login', 'bootstrap', 'administrator', 'role', 'permission', 'scope', 'session', 'authorization', 'patterns', 'template', 'schema', 'csv'],
     sections: [
       {
         id: 'first-admin',
@@ -307,6 +530,16 @@ export const documentationPages: readonly DocumentationPage[] = [
         id: 'roles',
         title: 'Assign the narrowest useful access',
         bullets: ['Roles group permission strings into reusable policy bundles.', 'Assignments can be organization-, site-, department-, or resource-scoped.', 'Ownership controls protect externally managed records until an authorized user claims them.', 'The interface may hide unavailable actions, but server checks remain authoritative.'],
+      },
+      {
+        id: 'patterns',
+        title: 'Validate records with Patterns',
+        steps: [
+          { title: 'Choose an exact template version', body: 'Built-in schemas cover every phase-one record family. Copies and new versions remain immutable once created.' },
+          { title: 'Use the generated workbench', body: 'Required state, bounds, options, help, accessible labels, and all seven field types come from the selected schema. Validate against the server before using the row.' },
+          { title: 'Move one bounded CSV row', body: 'Paste exactly one matching header row and one data row, or prepare the current form as CSV. Formula-like cells, header drift, extra rows, unsafe money, and files over 128 KiB are rejected.' },
+        ],
+        callout: { title: 'Exchange pins the same schema', body: 'Exchange schema 1.1 preflights every Stack and Vault portable record against its exact Patterns ID and version before any record intent, ownership call, or provider write.', tone: 'success' },
       },
       {
         id: 'session',

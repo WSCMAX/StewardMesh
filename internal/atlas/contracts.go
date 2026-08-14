@@ -1,11 +1,14 @@
 // Package atlas implements the organization-scoped asset registry.
-// Requirement: REQ-ATLAS-001. Feature: inventory.assets.
+// Requirements: REQ-ATLAS-001, REQ-DIRECTORY-EXPANSION-008. Features: inventory.assets, threads.relationships.
 package atlas
 
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/maxlemke/stewardmesh/internal/domain"
 )
@@ -22,17 +25,137 @@ var (
 	ErrNotFound         = errors.New("Atlas record not found")
 	ErrConflict         = errors.New("Atlas record conflicts with existing data")
 	ErrReferenceMissing = errors.New("Atlas reference does not exist")
+	ErrTooLarge         = errors.New("Atlas snapshot exceeds its bounded limit")
 )
 
 type Query struct {
-	Search       string
-	Kind         string
-	Status       string
-	ModelID      string
-	SiteID       string
-	DepartmentID string
-	UserID       string
-	Limit        int
+	Search            string
+	Kind              string
+	Status            string
+	ModelID           string
+	SiteID            string
+	DepartmentID      string
+	UserID            string
+	DeploymentContext string
+	Limit             int
+}
+
+// AuthorizedAssetQuery is the bounded keyset query used by non-browser
+// integration transports. Visibility is an authenticated server-derived
+// predicate and is applied by the repository before ordering and limiting, so
+// records outside the caller's Guard grants cannot crowd visible assets out of
+// a page. Cursor is the last asset ID returned by the preceding ID-ordered
+// page; callers never supply authorization selectors.
+// Requirements: REQ-API-001, SEC-MCP-001. Feature: integrations.protocols.
+type AuthorizedAssetQuery struct {
+	Search     string
+	Cursor     string
+	Limit      int
+	Visibility GraphAssetVisibility
+}
+
+// GraphAssetVisibility and GraphAssetReferences are separate predicates: a
+// graph asset must satisfy one authenticated visibility selector and, when
+// supplied, one relationship-context selector. Keeping the predicates separate
+// prevents a contextual site or user ID from widening an assets.read grant.
+// Requirement: REQ-DIRECTORY-EXPANSION-008. Feature: threads.relationships.
+type GraphAssetVisibility struct {
+	All           bool
+	ResourceIDs   []string
+	SiteIDs       []string
+	DepartmentIDs []string
+}
+
+func (v GraphAssetVisibility) Empty() bool {
+	return !v.All && len(v.ResourceIDs) == 0 && len(v.SiteIDs) == 0 && len(v.DepartmentIDs) == 0
+}
+
+func (v GraphAssetVisibility) Valid() bool {
+	return !v.Empty() && len(v.ResourceIDs)+len(v.SiteIDs)+len(v.DepartmentIDs) <= MaximumGraphAssetLimit &&
+		validGraphAssetIDs(v.ResourceIDs) && validGraphAssetIDs(v.SiteIDs) && validGraphAssetIDs(v.DepartmentIDs)
+}
+
+type GraphAssetReferences struct {
+	ResourceIDs   []string
+	SiteIDs       []string
+	BuildingIDs   []string
+	RoomIDs       []string
+	DepartmentIDs []string
+	UserIDs       []string
+}
+
+// GraphAssetDirectoryVisibility is a second, independent authorization
+// predicate applied before the graph source limit. MatchUserDirectory permits
+// an adapter to match an asset's user identity against the same site and
+// department selectors; it never widens the authenticated Atlas visibility.
+type GraphAssetDirectoryVisibility struct {
+	All                bool
+	SiteIDs            []string
+	DepartmentIDs      []string
+	UserIDs            []string
+	MatchUserDirectory bool
+}
+
+func (v GraphAssetDirectoryVisibility) Empty() bool {
+	return !v.All && len(v.SiteIDs)+len(v.DepartmentIDs)+len(v.UserIDs) == 0
+}
+
+func (v GraphAssetDirectoryVisibility) Valid() bool {
+	return !v.Empty() && len(v.SiteIDs)+len(v.DepartmentIDs)+len(v.UserIDs) <= MaximumGraphAssetLimit &&
+		(!v.MatchUserDirectory || len(v.SiteIDs)+len(v.DepartmentIDs) > 0) &&
+		validGraphAssetIDs(v.SiteIDs) && validGraphAssetIDs(v.DepartmentIDs) && validGraphAssetIDs(v.UserIDs)
+}
+
+func (r GraphAssetReferences) Empty() bool {
+	return len(r.ResourceIDs)+len(r.SiteIDs)+len(r.BuildingIDs)+len(r.RoomIDs)+len(r.DepartmentIDs)+len(r.UserIDs) == 0
+}
+
+func (r GraphAssetReferences) Valid() bool {
+	return len(r.ResourceIDs)+len(r.SiteIDs)+len(r.BuildingIDs)+len(r.RoomIDs)+len(r.DepartmentIDs)+len(r.UserIDs) <= MaximumGraphAssetLimit &&
+		validGraphAssetIDs(r.ResourceIDs) && validGraphAssetIDs(r.SiteIDs) && validGraphAssetIDs(r.BuildingIDs) &&
+		validGraphAssetIDs(r.RoomIDs) && validGraphAssetIDs(r.DepartmentIDs) && validGraphAssetIDs(r.UserIDs)
+}
+
+type GraphAssetQuery struct {
+	LabelSearch                string
+	Visibility                 GraphAssetVisibility
+	Directory                  GraphAssetDirectoryVisibility
+	References                 GraphAssetReferences
+	DirectOrganizationChildren bool
+	Limit                      int
+}
+
+const MaximumGraphAssetLimit = 500
+
+func (q GraphAssetQuery) Valid() bool {
+	return q.Limit >= 1 && q.Limit <= MaximumGraphAssetLimit && q.Visibility.Valid() && q.Directory.Valid() && q.References.Valid() &&
+		validGraphAssetText(q.LabelSearch, 200)
+}
+
+func validGraphAssetText(value string, maximum int) bool {
+	if !utf8.ValidString(value) || utf8.RuneCountInString(value) > maximum {
+		return false
+	}
+	for _, character := range value {
+		if unicode.IsControl(character) {
+			return false
+		}
+	}
+	return true
+}
+
+func validGraphAssetIDs(values []string) bool {
+	for _, value := range values {
+		if strings.TrimSpace(value) == "" || !utf8.ValidString(value) || utf8.RuneCountInString(value) > 128 {
+			return false
+		}
+		for _, character := range value {
+			if unicode.IsControl(character) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 type ModelQuery struct {
@@ -46,6 +169,40 @@ type ModelIdentity struct {
 	Manufacturer string `json:"manufacturer"`
 	Name         string `json:"name"`
 	ModelNumber  string `json:"modelNumber,omitempty"`
+}
+
+const (
+	ModelInventoryGroupStatus     = "status"
+	ModelInventoryGroupSite       = "site"
+	ModelInventoryGroupDepartment = "department"
+	ModelInventoryGroupUser       = "user"
+	ModelInventoryGroupDeployment = "deployment"
+)
+
+// ModelInventoryQuery applies the same instance filters as Atlas asset
+// listing while allowing model detail to request one explicit grouping.
+type ModelInventoryQuery struct {
+	Status            string
+	SiteID            string
+	DepartmentID      string
+	UserID            string
+	DeploymentContext string
+	GroupBy           string
+	Limit             int
+}
+
+type ModelInventoryGroup struct {
+	Key   string `json:"key"`
+	Count int    `json:"count"`
+}
+
+type ModelInventory struct {
+	ModelID       string                `json:"modelId"`
+	TotalCount    int                   `json:"totalCount"`
+	FilteredCount int                   `json:"filteredCount"`
+	GroupBy       string                `json:"groupBy,omitempty"`
+	Groups        []ModelInventoryGroup `json:"groups"`
+	Items         []domain.Asset        `json:"items"`
 }
 
 type References struct {
@@ -126,19 +283,65 @@ type UpdateModelInput struct {
 	Revision         int64             `json:"revision"`
 }
 
+// ExchangeSnapshot is an organization-consistent, bounded view used only by
+// the Exchange provider. InstanceCount is derived and is therefore cleared by
+// adapters before returning Models.
+type ExchangeSnapshot struct {
+	Models          []domain.AssetModel
+	Assets          []domain.Asset
+	LifecycleEvents []domain.AssetLifecycleEvent
+}
+
+// ExchangeImportOperation is the deterministic mutation identity issued by
+// Exchange after durable intent and imported ownership have been reserved.
+type ExchangeImportOperation struct {
+	Token      string
+	OccurredAt time.Time
+}
+
+type ExchangeImportResult struct {
+	Committed bool
+	Created   bool
+}
+
+// ExchangeImporter is an opaque construction-time capability. It is the only
+// supported way to preserve source revisions, timestamps, immutable model
+// context, and lifecycle provenance during an Exchange import.
+type ExchangeImporter interface {
+	ImportModel(context.Context, ExchangeImportOperation, domain.AssetModel) (ExchangeImportResult, error)
+	ImportAsset(context.Context, ExchangeImportOperation, domain.Asset) (ExchangeImportResult, error)
+	ImportLifecycleEvent(context.Context, ExchangeImportOperation, domain.AssetLifecycleEvent) (ExchangeImportResult, error)
+	atlasExchangeImporter()
+}
+
+// WriteGate is the service-layer imported-ownership fence. Exchange receives
+// a private capability that bypasses the ordinary mutation gate only after its
+// own durable intent and ownership workflow has completed.
+type WriteGate interface {
+	CheckResourceWrite(context.Context, string, string) error
+}
+
 type Store interface {
+	ExchangeSnapshot(ctx context.Context, organizationID string, maximum int) (ExchangeSnapshot, error)
 	ListModels(ctx context.Context, organizationID string, query ModelQuery) ([]domain.AssetModel, error)
 	GetModel(ctx context.Context, organizationID, id string) (domain.AssetModel, error)
 	ResolveModel(ctx context.Context, organizationID string, identity ModelIdentity) (domain.AssetModel, error)
 	CreateModel(ctx context.Context, model domain.AssetModel) (domain.AssetModel, error)
 	UpdateModel(ctx context.Context, model domain.AssetModel, expectedRevision int64) (domain.AssetModel, error)
 	RetireModel(ctx context.Context, organizationID, id string, expectedRevision int64, retiredAt time.Time) (domain.AssetModel, error)
+	GetModelInventory(ctx context.Context, organizationID, modelID string, query ModelInventoryQuery) (ModelInventory, error)
 	ListAssets(ctx context.Context, organizationID string, query Query) ([]domain.Asset, error)
+	ListAuthorizedAssets(ctx context.Context, organizationID string, query AuthorizedAssetQuery) ([]domain.Asset, error)
+	ListGraphAssets(ctx context.Context, organizationID string, query GraphAssetQuery) ([]domain.Asset, error)
 	GetAsset(ctx context.Context, organizationID, id string) (domain.Asset, error)
 	CreateAsset(ctx context.Context, asset domain.Asset, initialEvent domain.AssetLifecycleEvent) (domain.Asset, error)
 	CreateAssets(ctx context.Context, assets []domain.Asset, initialEvents []domain.AssetLifecycleEvent) ([]domain.Asset, error)
 	UpdateAsset(ctx context.Context, asset domain.Asset, expectedRevision int64, lifecycleEvent *domain.AssetLifecycleEvent) (domain.Asset, error)
 	ListAssetLifecycle(ctx context.Context, organizationID, assetID string) ([]domain.AssetLifecycleEvent, error)
+	GetAssetLifecycleEvent(ctx context.Context, organizationID, eventID string) (domain.AssetLifecycleEvent, error)
+	ImportModel(ctx context.Context, model domain.AssetModel) (domain.AssetModel, bool, error)
+	ImportAsset(ctx context.Context, asset domain.Asset) (domain.Asset, bool, error)
+	ImportAssetLifecycleEvent(ctx context.Context, event domain.AssetLifecycleEvent) (domain.AssetLifecycleEvent, bool, error)
 }
 
 type ReferenceValidator interface {

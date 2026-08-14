@@ -3,7 +3,8 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, expect, test, vi } from 'vitest'
 import PeopleDirectory from './PeopleDirectory'
 
-// Requirements: REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, REQ-WORKSPACE-001, A11Y-001, DOC-001, DOC-002.
+// Requirements: REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-008, REQ-WORKSPACE-001, A11Y-001, DOC-001, DOC-002.
+// Feature: threads.relationships.
 
 const timestamp = '2026-08-09T12:00:00Z'
 const site = {
@@ -41,7 +42,8 @@ function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
 }
 
-function installPeopleFetch(options: { assignments?: unknown[]; buildings?: unknown[]; rooms?: unknown[]; sites?: unknown[] } = {}) {
+function installPeopleFetch(options: { assignments?: unknown[]; buildings?: unknown[]; rooms?: unknown[]; roomCreateFailures?: number; sites?: unknown[] } = {}) {
+  let roomCreateAttempts = 0
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input)
     if (path === '/api/v1/sites' && init?.method === 'POST') {
@@ -55,6 +57,8 @@ function installPeopleFetch(options: { assignments?: unknown[]; buildings?: unkn
     }
     if (path === '/api/v1/buildings') return jsonResponse({ items: options.buildings ?? [building] })
     if (path === '/api/v1/rooms' && init?.method === 'POST') {
+      roomCreateAttempts += 1
+      if (roomCreateAttempts <= (options.roomCreateFailures ?? 0)) return jsonResponse({ error: { message: 'Location service is temporarily unavailable.' } }, 503)
       const body = JSON.parse(String(init.body)) as Record<string, unknown>
       return jsonResponse({ ...room, id: 'room-created', siteId: body.siteId, buildingId: body.buildingId, number: body.number, name: body.name }, 201)
     }
@@ -72,6 +76,7 @@ function installPeopleFetch(options: { assignments?: unknown[]; buildings?: unkn
       }, 201)
     }
     if (path.startsWith('/api/v1/identities?')) return jsonResponse({ items: [person] })
+    if (path.startsWith('/api/v1/graph?')) return jsonResponse({ nodes: [], edges: [] })
     if (path === '/api/v1/assets/asset-1/assignments' && init?.method === 'POST') return jsonResponse(assignment, 201)
     if (path === '/api/v1/assets/asset-1/assignments') return jsonResponse({ items: options.assignments ?? [] })
     if (path === '/api/v1/assets/asset-1/assignments/assignment-1' && init?.method === 'PATCH') {
@@ -107,6 +112,8 @@ test('renders a scoped People directory and guided help without automated WCAG v
   }
   const results = await axe.run(container)
   expect(results.violations).toEqual([])
+  expect(screen.getByRole('region', { name: 'Directory results' })).toBeInTheDocument()
+  expect(screen.getByRole('region', { name: 'Asset assignment history' })).toBeInTheDocument()
 })
 
 test('guides a person through an existing room without losing their draft', async () => {
@@ -115,6 +122,7 @@ test('guides a person through an existing room without losing their draft', asyn
   await screen.findByRole('heading', { name: 'Innovation Hall' })
 
   fireEvent.click(screen.getByRole('button', { name: 'Start person workflow' }))
+  await waitFor(() => expect(screen.getByRole('heading', { name: 'Step 1 — Person details' })).toHaveFocus())
   fireEvent.change(screen.getByLabelText('Person display name'), { target: { value: 'Jordan Lee' } })
   fireEvent.change(screen.getByLabelText('Person email address'), { target: { value: 'jordan@example.test' } })
   fireEvent.change(screen.getByLabelText('Person department (optional)'), { target: { value: department.id } })
@@ -135,6 +143,7 @@ test('guides a person through an existing room without losing their draft', asyn
 
   fireEvent.click(screen.getByRole('button', { name: 'Create person' }))
   expect(await screen.findByText(/Jordan Lee was created at Room 101/)).toBeInTheDocument()
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Start person workflow' })).toHaveFocus())
   const createCall = fetchMock.mock.calls.find(([path, init]) => path === '/api/v1/identities' && init?.method === 'POST')
   expect(JSON.parse(String(createCall?.[1]?.body))).toEqual({
     kind: 'person',
@@ -154,7 +163,9 @@ test('identifies the failing step and creates a missing room before the person',
   fireEvent.click(screen.getByRole('button', { name: 'Start person workflow' }))
   fireEvent.change(screen.getByLabelText('Person display name'), { target: { value: 'Morgan Chen' } })
   fireEvent.click(screen.getByRole('button', { name: 'Continue to location' }))
-  expect(await screen.findByRole('alert')).toHaveTextContent('Person details: enter a valid email address')
+  const validationAlert = await screen.findByRole('alert')
+  expect(validationAlert).toHaveTextContent('Person details: enter a valid email address')
+  await waitFor(() => expect(validationAlert).toHaveFocus())
   expect(screen.getByLabelText('Person display name')).toHaveValue('Morgan Chen')
 
   fireEvent.change(screen.getByLabelText('Person email address'), { target: { value: 'morgan@example.test' } })
@@ -178,6 +189,44 @@ test('identifies the failing step and creates a missing room before the person',
   })
   fireEvent.click(screen.getByRole('button', { name: 'Create person' }))
   expect(await screen.findByText(/Morgan Chen was created at Room 205/)).toBeInTheDocument()
+})
+
+test('preserves the person and location draft while retrying a failed related-record creation', async () => {
+  const fetchMock = installPeopleFetch({ roomCreateFailures: 1 })
+
+  render(<PeopleDirectory assets={[]} csrfToken="csrf-value" issuesUrl="https://github.com/WSCMAX/StewardMesh/issues" permissions={permissions} />)
+  await screen.findByRole('heading', { name: 'Innovation Hall' })
+  fireEvent.click(screen.getByRole('button', { name: 'Start person workflow' }))
+  fireEvent.change(screen.getByLabelText('Person display name'), { target: { value: 'Riley Park' } })
+  fireEvent.change(screen.getByLabelText('Person email address'), { target: { value: 'riley@example.test' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Continue to location' }))
+  fireEvent.click(screen.getByLabelText('Create a missing location'))
+  fireEvent.change(screen.getByLabelText('New location type'), { target: { value: 'room' } })
+  fireEvent.change(screen.getByLabelText('New room building'), { target: { value: building.id } })
+  fireEvent.change(screen.getByLabelText('New room number'), { target: { value: '303' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Create and review' }))
+
+  expect(await screen.findByRole('alert')).toHaveTextContent('Location service is temporarily unavailable.')
+  expect(screen.getByLabelText('New room number')).toHaveValue('303')
+  fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+  expect(await screen.findByText('Room 303 — Innovation Hall · Main Campus')).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Edit person details' }))
+  expect(screen.getByLabelText('Person display name')).toHaveValue('Riley Park')
+  expect(fetchMock.mock.calls.filter(([path, init]) => path === '/api/v1/rooms' && init?.method === 'POST')).toHaveLength(2)
+})
+
+test('cancels the reusable workflow explicitly and clears its temporary draft', async () => {
+  installPeopleFetch()
+  render(<PeopleDirectory assets={[]} csrfToken="csrf-value" issuesUrl="https://github.com/WSCMAX/StewardMesh/issues" permissions={permissions} />)
+  await screen.findByRole('heading', { name: 'Innovation Hall' })
+  fireEvent.click(screen.getByRole('button', { name: 'Start person workflow' }))
+  fireEvent.change(screen.getByLabelText('Person display name'), { target: { value: 'Discarded draft' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel workflow' }))
+  expect(screen.getByText('Person workflow cancelled and its draft was cleared. Any location already created remains available in People.')).toHaveAttribute('role', 'status')
+  const restart = screen.getByRole('button', { name: 'Start person workflow' })
+  await waitFor(() => expect(restart).toHaveFocus())
+  fireEvent.click(restart)
+  expect(screen.getByLabelText('Person display name')).toHaveValue('')
 })
 
 test('gives read-only users a clear alternative instead of creation controls', async () => {

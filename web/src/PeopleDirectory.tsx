@@ -1,11 +1,14 @@
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Asset } from './AtlasInventory'
-import { ApiRequestError, requestJSON } from './api'
+import { ApiRequestError, isRevision, requestJSON, type Revision } from './api'
+import DirectoryImportManager from './DirectoryImportManager'
+import RelationshipGraphView from './RelationshipGraphView'
 import { documentationHref } from './documentation'
+import { RelatedRecordModeChooser, RelatedRecordWorkflowFrame, useRelatedRecordWorkflow } from './RelatedRecordWorkflow'
 import { buttonClass, inputClass, labelClass, panelClass, plainButtonClass, secondaryButtonClass, subpanelClass } from './ui'
 
-// Requirements: REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, REQ-WORKSPACE-001, A11Y-001, DOC-001, DOC-002.
-// Features: identity.directory, experience.workspace.
+// Requirements: REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-008, REQ-WORKSPACE-001, A11Y-001, DOC-001, DOC-002.
+// Features: identity.directory, threads.relationships, experience.workspace.
 
 type RecordStatus = 'active' | 'inactive'
 type IdentityKind = 'person' | 'shared' | 'public' | 'lab'
@@ -27,7 +30,7 @@ type Site = {
   name: string
   address?: SiteAddress
   status: RecordStatus
-  revision: number
+  revision: Revision
   createdAt: string
   updatedAt: string
 }
@@ -38,7 +41,7 @@ type Building = {
   siteId: string
   name: string
   status: RecordStatus
-  revision: number
+  revision: Revision
   createdAt: string
   updatedAt: string
 }
@@ -51,7 +54,7 @@ type Room = {
   number: string
   name?: string
   status: RecordStatus
-  revision: number
+  revision: Revision
   createdAt: string
   updatedAt: string
 }
@@ -62,7 +65,7 @@ type Department = {
   name: string
   siteId?: string
   status: RecordStatus
-  revision: number
+  revision: Revision
   createdAt: string
   updatedAt: string
 }
@@ -78,7 +81,7 @@ type Identity = {
   status: RecordStatus
   provider?: string
   providerSubject?: string
-  revision: number
+  revision: Revision
   createdAt: string
   updatedAt: string
 }
@@ -132,6 +135,20 @@ type PeopleDirectoryProps = {
 const peopleHelpUrl = documentationHref('people')
 const emptyFilters: Filters = { search: '', kind: '', status: '', departmentId: '', siteId: '' }
 const emptyGuidedPerson: GuidedPersonDraft = { displayName: '', email: '', departmentId: '' }
+const personLocationBoundaries = {
+  source: {
+    label: 'Person record',
+    owner: 'People — Users, locations, departments, and assignments',
+    api: 'POST /api/v1/identities',
+    authorization: 'directory.write',
+  },
+  related: {
+    label: 'Location record',
+    owner: 'People — Users, locations, departments, and assignments',
+    api: 'GET/POST /api/v1/sites, /buildings, /rooms',
+    authorization: 'directory.read; directory.write to create',
+  },
+} as const
 
 const kindLabels: Record<IdentityKind, string> = {
   person: 'Person',
@@ -155,7 +172,7 @@ function isBaseRecord(value: unknown): value is Record<string, unknown> {
   const record = value as Record<string, unknown>
   return isString(record.id) && record.id.length > 0
     && isString(record.organizationId) && record.organizationId.length > 0
-    && typeof record.revision === 'number' && record.revision > 0
+    && isRevision(record.revision)
     && isString(record.createdAt) && isString(record.updatedAt)
 }
 
@@ -328,77 +345,78 @@ type PersonLocationWorkflowProps = {
 }
 
 function PersonLocationWorkflow({ buildings, canWrite, departments, rooms, sites, onCreateBuilding, onCreatePerson, onCreateRoom, onCreateSite }: PersonLocationWorkflowProps) {
-  const [step, setStep] = useState<'intro' | 'person' | 'location' | 'review'>('intro')
   const [person, setPerson] = useState<GuidedPersonDraft>(emptyGuidedPerson)
-  const [locationMode, setLocationMode] = useState<'existing' | 'create'>('existing')
+  const [locationMode, setLocationMode] = useState<'select' | 'create'>('select')
   const [selectedLocationKey, setSelectedLocationKey] = useState('')
-  const [selectedLocation, setSelectedLocation] = useState<GuidedLocationChoice | null>(null)
   const [createKind, setCreateKind] = useState<GuidedLocationKind>('site')
   const [createParentId, setCreateParentId] = useState('')
   const [createName, setCreateName] = useState('')
   const [createRoomName, setCreateRoomName] = useState('')
-  const [submitting, setSubmitting] = useState(false)
-  const [workflowError, setWorkflowError] = useState('')
-  const [workflowStatus, setWorkflowStatus] = useState('')
+  const startButtonRef = useRef<HTMLButtonElement>(null)
   const stepHeadingRef = useRef<HTMLHeadingElement>(null)
-  const workflowErrorRef = useRef<HTMLDivElement>(null)
   const choices = useMemo(() => locationChoices(sites, buildings, rooms), [buildings, rooms, sites])
 
-  useEffect(() => {
-    if (workflowError) workflowErrorRef.current?.focus()
-  }, [workflowError])
-
-  useEffect(() => {
-    if (step !== 'intro' && !workflowError) stepHeadingRef.current?.focus()
-  }, [step, workflowError])
-
-  function moveTo(nextStep: 'person' | 'location' | 'review') {
-    setWorkflowError('')
-    setStep(nextStep)
+  function resetWorkflowDraft() {
+    setPerson(emptyGuidedPerson)
+    setSelectedLocationKey('')
+    setLocationMode('select')
+    setCreateKind('site')
+    setCreateParentId('')
+    setCreateName('')
+    setCreateRoomName('')
   }
 
-  function startWorkflow() {
-    setWorkflowStatus('')
-    moveTo('person')
-  }
+  const workflow = useRelatedRecordWorkflow<GuidedLocationChoice>({
+    cancellationMessage: 'Person workflow cancelled and its draft was cleared. Any location already created remains available in People.',
+    onReset: resetWorkflowDraft,
+  })
+  const previousStepRef = useRef(workflow.step)
+
+  useEffect(() => {
+    const previousStep = previousStepRef.current
+    previousStepRef.current = workflow.step
+    if (workflow.failure) return
+    if (workflow.step === 'intro') {
+      if (previousStep !== 'intro') startButtonRef.current?.focus()
+      return
+    }
+    stepHeadingRef.current?.focus()
+  }, [workflow.failure, workflow.step])
 
   function handlePersonNext(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const displayName = person.displayName.trim()
     const email = person.email.trim()
     if (!displayName) {
-      setWorkflowError('Person details: enter a display name before continuing.')
+      workflow.failValidation('Person details: enter a display name before continuing.')
       return
     }
     if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      setWorkflowError('Person details: enter a valid email address before continuing.')
+      workflow.failValidation('Person details: enter a valid email address before continuing.')
       return
     }
     setPerson((current) => ({ ...current, displayName, email }))
-    moveTo('location')
+    workflow.moveTo('related')
   }
 
   async function handleLocationNext(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    setWorkflowError('')
-    if (locationMode === 'existing') {
+    if (locationMode === 'select') {
       const choice = choices.find((candidate) => candidate.key === selectedLocationKey)
       if (!choice) {
-        setWorkflowError('Location: select a visible site, building, or room before continuing.')
+        workflow.failValidation('Location: select a visible site, building, or room before continuing.')
         return
       }
-      setSelectedLocation(choice)
-      moveTo('review')
+      workflow.selectRelated(choice)
       return
     }
 
     const name = createName.trim()
     if (!name) {
-      setWorkflowError(`Location: enter a ${createKind === 'room' ? 'room number' : `${createKind} name`} before continuing.`)
+      workflow.failValidation(`Location: enter a ${createKind === 'room' ? 'room number' : `${createKind} name`} before continuing.`)
       return
     }
-    setSubmitting(true)
-    try {
+    await workflow.createRelated(async () => {
       let choice: GuidedLocationChoice
       if (createKind === 'site') {
         const site = await onCreateSite(name)
@@ -422,69 +440,45 @@ function PersonLocationWorkflow({ buildings, canWrite, departments, rooms, sites
         }
       }
       setSelectedLocationKey(choice.key)
-      setSelectedLocation(choice)
       setCreateName('')
       setCreateRoomName('')
-      moveTo('review')
-    } catch (creationError) {
-      setWorkflowError(creationError instanceof ApiRequestError ? `Location: ${creationError.message}` : creationError instanceof Error ? creationError.message : 'Location: the new location could not be created.')
-    } finally {
-      setSubmitting(false)
-    }
+      return choice
+    }, (creationError) => creationError instanceof ApiRequestError ? `Location: ${creationError.message}` : creationError instanceof Error ? creationError.message : 'Location: the new location could not be created.', (creationError) => !(creationError instanceof ApiRequestError) || creationError.status >= 500)
   }
 
   async function handleCreatePerson(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (!selectedLocation) {
-      setWorkflowError('Review: return to the location step and choose a location.')
-      return
-    }
-    setSubmitting(true)
-    setWorkflowError('')
-    try {
+    await workflow.confirm(async (selectedLocation) => {
       const identity = await onCreatePerson(person, selectedLocation)
-      setWorkflowStatus(`${identity.displayName} was created at ${selectedLocation.label}.`)
-      setPerson(emptyGuidedPerson)
-      setSelectedLocationKey('')
-      setSelectedLocation(null)
-      setLocationMode('existing')
-      setCreateKind('site')
-      setCreateParentId('')
-      setCreateName('')
-      setCreateRoomName('')
-      setStep('intro')
-    } catch (creationError) {
-      setWorkflowError(creationError instanceof ApiRequestError ? `Review: ${creationError.message}` : creationError instanceof Error ? `Review: ${creationError.message}` : 'Review: the person could not be created.')
-    } finally {
-      setSubmitting(false)
-    }
+      return `${identity.displayName} was created at ${selectedLocation.label}.`
+    }, (creationError) => creationError instanceof ApiRequestError ? `Review: ${creationError.message}` : creationError instanceof Error ? `Review: ${creationError.message}` : 'Review: the person could not be created.', (creationError) => !(creationError instanceof ApiRequestError) || creationError.status >= 500)
   }
 
   return (
-    <section aria-labelledby="person-location-workflow-heading" className={`${subpanelClass} border-steward-blue/35 p-4 sm:p-5`} data-feature="experience.workspace" data-requirement="REQ-WORKSPACE-001">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div className="max-w-3xl">
-          <p className="text-sm font-semibold text-steward-blue">Guided People task</p>
-          <h3 className="mt-1 text-lg font-semibold" id="person-location-workflow-heading">Add a person with a location</h3>
-          <p className="mt-1 text-sm leading-6 text-steward-mist-muted">Keep the person draft in place while you select an existing location or create the missing site, building, or room.</p>
-        </div>
-        {step !== 'intro' && <p className="rounded-full border border-steward-ink-800 px-3 py-1 text-sm text-steward-mist-muted">Step {step === 'person' ? '1' : step === 'location' ? '2' : '3'} of 3</p>}
-      </div>
-
-      {workflowError && <div className="mt-4 rounded-lg border border-steward-danger/50 bg-steward-danger/15 p-3 text-[#ffccd1]" ref={workflowErrorRef} role="alert" tabIndex={-1}>{workflowError}</div>}
-      {workflowStatus && <div className="mt-4 rounded-lg border border-steward-teal/40 bg-steward-teal/10 p-3 text-steward-mist" role="status">{workflowStatus}</div>}
-
+    <RelatedRecordWorkflowFrame
+      boundaries={personLocationBoundaries}
+      busy={workflow.busy}
+      description="Keep the person draft in place while you select an existing location or create the missing site, building, or room."
+      failure={workflow.failure}
+      failureRef={workflow.failureRef}
+      headingId="person-location-workflow-heading"
+      kicker="Guided People task"
+      onRetry={workflow.retry}
+      status={workflow.status}
+      step={workflow.step}
+      title="Add a person with a location"
+    >
       {!canWrite ? (
-        <div className="mt-4 rounded-lg border border-steward-ink-800 p-4 text-sm leading-6 text-steward-mist-muted">
+        <div className="mt-4 rounded-lg border border-steward-ink-800 p-4 text-sm leading-6 text-steward-mist-muted" role="note">
           <p>Your role can review the visible locations below but cannot add a person or create a missing location.</p>
           <p className="mt-2">Ask an administrator for the <code>directory.write</code> permission, or send them the person and location details for completion.</p>
         </div>
-      ) : step === 'intro' ? (
+      ) : workflow.step === 'intro' ? (
         <div className="mt-4 flex flex-wrap items-center gap-3">
-          <button className={buttonClass} onClick={startWorkflow} type="button">Start person workflow</button>
+          <button className={buttonClass} onClick={workflow.start} ref={startButtonRef} type="button">Start person workflow</button>
           <p className="text-sm text-steward-mist-muted">You can go back between steps without losing entered values.</p>
         </div>
-      ) : step === 'person' ? (
+      ) : workflow.step === 'source' ? (
         <form className="mt-5 space-y-4" noValidate onSubmit={handlePersonNext}>
           <h4 className="text-base font-semibold" ref={stepHeadingRef} tabIndex={-1}>Step 1 — Person details</h4>
           <div className="grid gap-4 md:grid-cols-2">
@@ -492,17 +486,22 @@ function PersonLocationWorkflow({ buildings, canWrite, departments, rooms, sites
             <div><label className={labelClass} htmlFor="guided-person-email">Person email address</label><input autoComplete="email" className={inputClass} id="guided-person-email" maxLength={320} onChange={(event) => setPerson((current) => ({ ...current, email: event.target.value }))} required type="email" value={person.email} /></div>
             <div className="md:col-span-2"><label className={labelClass} htmlFor="guided-person-department">Person department (optional)</label><select className={inputClass} id="guided-person-department" onChange={(event) => setPerson((current) => ({ ...current, departmentId: event.target.value }))} value={person.departmentId}><option value="">No department</option>{departments.map((department) => <option key={department.id} value={department.id}>{department.name}</option>)}</select></div>
           </div>
-          <div className="flex flex-wrap gap-3"><button className={buttonClass} type="submit">Continue to location</button><button className={secondaryButtonClass} onClick={() => { setWorkflowError(''); setStep('intro') }} type="button">Cancel</button></div>
+          <div className="flex flex-wrap gap-3"><button className={buttonClass} type="submit">Continue to location</button><button className={secondaryButtonClass} onClick={workflow.cancel} type="button">Cancel workflow</button></div>
         </form>
-      ) : step === 'location' ? (
+      ) : workflow.step === 'related' ? (
         <form className="mt-5 space-y-4" noValidate onSubmit={handleLocationNext}>
           <h4 className="text-base font-semibold" ref={stepHeadingRef} tabIndex={-1}>Step 2 — Choose or create a location</h4>
-          <fieldset className="grid gap-3 sm:grid-cols-2">
-            <legend className="text-sm font-semibold text-steward-mist-muted">Location path</legend>
-            <label className="flex min-h-11 cursor-pointer items-center gap-3 rounded-lg border border-steward-ink-800 p-3"><input checked={locationMode === 'existing'} name="guidedLocationMode" onChange={() => setLocationMode('existing')} type="radio" /> Select a visible location</label>
-            <label className="flex min-h-11 cursor-pointer items-center gap-3 rounded-lg border border-steward-ink-800 p-3"><input checked={locationMode === 'create'} name="guidedLocationMode" onChange={() => setLocationMode('create')} type="radio" /> Create a missing location</label>
-          </fieldset>
-          {locationMode === 'existing' ? (
+          <RelatedRecordModeChooser
+            canCreate={canWrite}
+            createLabel="Create a missing location"
+            fallbackMessage="Location creation is unavailable with your current grant. You can still select any visible existing location."
+            legend="Location path"
+            mode={locationMode}
+            name="guidedLocationMode"
+            onChange={setLocationMode}
+            selectLabel="Select a visible location"
+          />
+          {locationMode === 'select' ? (
             <div>
               <label className={labelClass} htmlFor="guided-existing-location">Existing location</label>
               <select className={inputClass} id="guided-existing-location" onChange={(event) => setSelectedLocationKey(event.target.value)} required value={selectedLocationKey}><option value="">Select a site, building, or room</option>{choices.map((choice) => <option key={choice.key} value={choice.key}>{choice.label}</option>)}</select>
@@ -517,7 +516,11 @@ function PersonLocationWorkflow({ buildings, canWrite, departments, rooms, sites
               {createKind === 'room' && <div><label className={labelClass} htmlFor="guided-room-name">New room name (optional)</label><input className={inputClass} id="guided-room-name" maxLength={200} onChange={(event) => setCreateRoomName(event.target.value)} value={createRoomName} /></div>}
             </div>
           )}
-          <div className="flex flex-wrap gap-3"><button className={buttonClass} disabled={submitting} type="submit">{submitting ? 'Creating location…' : locationMode === 'create' ? 'Create and review' : 'Continue to review'}</button><button className={secondaryButtonClass} disabled={submitting} onClick={() => moveTo('person')} type="button">Back to person details</button></div>
+          <div className="flex flex-wrap gap-3">
+            <button className={buttonClass} disabled={workflow.busy !== null} type="submit">{workflow.busy === 'related' ? 'Creating location…' : locationMode === 'create' ? 'Create and review' : 'Continue to review'}</button>
+            <button className={secondaryButtonClass} disabled={workflow.busy !== null} onClick={() => workflow.moveTo('source')} type="button">Back to person details</button>
+            <button className={secondaryButtonClass} disabled={workflow.busy !== null} onClick={workflow.cancel} type="button">Cancel workflow</button>
+          </div>
         </form>
       ) : (
         <form className="mt-5 space-y-4" onSubmit={handleCreatePerson}>
@@ -525,12 +528,17 @@ function PersonLocationWorkflow({ buildings, canWrite, departments, rooms, sites
           <dl className="grid gap-4 rounded-lg border border-steward-ink-800 p-4 sm:grid-cols-2">
             <div><dt className="text-sm font-semibold text-steward-mist-muted">Person</dt><dd className="mt-1 text-steward-mist">{person.displayName}</dd><dd className="mt-1 break-all text-sm text-steward-mist-muted">{person.email}</dd></div>
             <div><dt className="text-sm font-semibold text-steward-mist-muted">Department</dt><dd className="mt-1 text-steward-mist">{person.departmentId ? departments.find((department) => department.id === person.departmentId)?.name ?? 'Department no longer visible' : 'No department'}</dd></div>
-            <div className="sm:col-span-2"><dt className="text-sm font-semibold text-steward-mist-muted">Selected location</dt><dd className="mt-1 text-steward-mist">{selectedLocation?.label}</dd><dd className="mt-1 text-sm text-steward-mist-muted">The person record will be linked to the containing site: {selectedLocation?.siteLabel}.</dd></div>
+            <div className="sm:col-span-2"><dt className="text-sm font-semibold text-steward-mist-muted">Selected location</dt><dd className="mt-1 text-steward-mist">{workflow.related?.label}</dd><dd className="mt-1 text-sm text-steward-mist-muted">The person record will be linked to the containing site: {workflow.related?.siteLabel}.</dd></div>
           </dl>
-          <div className="flex flex-wrap gap-3"><button className={buttonClass} disabled={submitting} type="submit">{submitting ? 'Creating person…' : 'Create person'}</button><button className={secondaryButtonClass} disabled={submitting} onClick={() => moveTo('location')} type="button">Back to location</button><button className={secondaryButtonClass} disabled={submitting} onClick={() => moveTo('person')} type="button">Edit person details</button></div>
+          <div className="flex flex-wrap gap-3">
+            <button className={buttonClass} disabled={workflow.busy !== null} type="submit">{workflow.busy === 'confirm' ? 'Creating person…' : 'Create person'}</button>
+            <button className={secondaryButtonClass} disabled={workflow.busy !== null} onClick={() => workflow.moveTo('related')} type="button">Back to location</button>
+            <button className={secondaryButtonClass} disabled={workflow.busy !== null} onClick={() => workflow.moveTo('source')} type="button">Edit person details</button>
+            <button className={secondaryButtonClass} disabled={workflow.busy !== null} onClick={workflow.cancel} type="button">Cancel workflow</button>
+          </div>
         </form>
       )}
-    </section>
+    </RelatedRecordWorkflowFrame>
   )
 }
 
@@ -867,7 +875,7 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
   }
 
   return (
-    <section aria-labelledby="people-heading" className={`${panelClass} space-y-6 p-5 sm:p-6`} data-feature="identity.directory experience.workspace" data-requirement="REQ-PEOPLE-001 REQ-DIRECTORY-EXPANSION-001 REQ-WORKSPACE-001">
+    <section aria-labelledby="people-heading" className={`${panelClass} space-y-6 p-5 sm:p-6`} data-feature="identity.directory threads.relationships experience.workspace" data-requirement="REQ-PEOPLE-001 REQ-DIRECTORY-EXPANSION-001 REQ-DIRECTORY-EXPANSION-008 REQ-WORKSPACE-001">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="max-w-3xl">
           <p className="text-sm font-semibold text-steward-teal">People — Users, locations, departments, and assignments</p>
@@ -883,7 +891,7 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
       {error && <div ref={errorRef} className="rounded-xl border border-steward-danger/50 bg-steward-danger/15 p-4 text-[#ffccd1]" role="alert" tabIndex={-1}>{error}</div>}
       <p className="sr-only" aria-live="polite" role="status">{status}</p>
 
-      <aside aria-labelledby="people-guide-heading" className={`${subpanelClass} border-steward-teal/20 p-4`}>
+      <section aria-labelledby="people-guide-heading" className={`${subpanelClass} border-steward-teal/20 p-4`}>
         <h3 id="people-guide-heading" className="font-semibold text-steward-mist">Quick guide</h3>
         <ol className="mt-2 list-decimal space-y-1 pl-5 text-sm leading-6 text-steward-mist-muted">
           <li>Use the guided task to add a person and resolve their location together.</li>
@@ -891,7 +899,11 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
           <li>Review the scoped directory and location inventory.</li>
           <li>Choose an asset to add primary, additional-user, and department assignments.</li>
         </ol>
-      </aside>
+      </section>
+
+      <DirectoryImportManager csrfToken={csrfToken} onApplied={() => loadDirectory(filters)} permissions={permissions} />
+
+      <RelationshipGraphView permissions={permissions} />
 
       <form aria-label="Filter People directory" className={`${subpanelClass} p-4`} onSubmit={handleSearch} role="search">
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
@@ -927,7 +939,7 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
         </div>
       </form>
 
-      <div aria-busy={loading} aria-labelledby="people-results-heading">
+      <div aria-busy={loading} aria-labelledby="people-results-heading" role="region">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
             <h3 id="people-results-heading" className="text-lg font-semibold">Directory results</h3>
@@ -1206,7 +1218,7 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
               </form>
             )}
 
-            <div aria-busy={assignmentsLoading} aria-labelledby="assignment-history-heading" className="mt-4">
+            <div aria-busy={assignmentsLoading} aria-labelledby="assignment-history-heading" className="mt-4" role="region">
               {assignmentsLoading ? <p className="text-sm text-steward-mist-muted">Loading assignment history…</p> : assignments.length === 0 ? <p className="rounded-xl border border-dashed border-steward-ink-800 p-5 text-sm text-steward-mist-muted">No assignments recorded for this asset.</p> : (
                 <ol className="space-y-3">
                   {assignments.map((assignment) => (

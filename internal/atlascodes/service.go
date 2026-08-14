@@ -18,12 +18,14 @@ import (
 	"github.com/maxlemke/stewardmesh/internal/atlas"
 	"github.com/maxlemke/stewardmesh/internal/domain"
 	"github.com/maxlemke/stewardmesh/internal/foundation"
+	"github.com/maxlemke/stewardmesh/internal/portabletime"
 )
 
 const (
 	maximumCode128Bytes = 128
 	maximumQRBytes      = 512
 	maximumDisplayBytes = 512
+	labelRoutePrefix    = "/atlas/codes/"
 )
 
 var stableIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
@@ -36,26 +38,35 @@ type ServiceConfig struct {
 type Service struct {
 	store          Store
 	assets         AssetReader
+	writes         WriteGate
 	auditor        foundation.Auditor
 	organizationID string
 	now            func() time.Time
 }
 
 func NewService(store Store, assets AssetReader, auditor foundation.Auditor, configuration ServiceConfig) (*Service, error) {
+	service, _, err := NewServiceWithExchangeImporter(store, assets, nil, auditor, configuration)
+	return service, err
+}
+
+func NewServiceWithExchangeImporter(store Store, assets AssetReader, writes WriteGate, auditor foundation.Auditor, configuration ServiceConfig) (*Service, ExchangeImporter, error) {
 	if store == nil || assets == nil || auditor == nil {
-		return nil, errors.New("Atlas Codes store, asset reader, and auditor are required")
+		return nil, nil, errors.New("Atlas Codes store, asset reader, and auditor are required")
 	}
 	configuration.OrganizationID = strings.TrimSpace(configuration.OrganizationID)
 	if configuration.OrganizationID == "" {
-		return nil, errors.New("Atlas Codes organization id is required")
+		return nil, nil, errors.New("Atlas Codes organization id is required")
 	}
-	if configuration.Now == nil {
-		configuration.Now = func() time.Time { return time.Now().UTC() }
+	clock := configuration.Now
+	if clock == nil {
+		clock = time.Now
 	}
-	return &Service{
-		store: store, assets: assets, auditor: auditor,
-		organizationID: configuration.OrganizationID, now: configuration.Now,
-	}, nil
+	service := &Service{
+		store: store, assets: assets, writes: writes, auditor: auditor,
+		organizationID: configuration.OrganizationID,
+		now:            func() time.Time { return portabletime.Normalize(clock()) },
+	}
+	return service, &exchangeImporter{service: service}, nil
 }
 
 func (s *Service) ResolveIdentifier(ctx context.Context, symbology Symbology, value string) (Identifier, error) {
@@ -63,17 +74,37 @@ func (s *Service) ResolveIdentifier(ctx context.Context, symbology Symbology, va
 	if err != nil {
 		return Identifier{}, err
 	}
-	identifier, err := s.store.ResolveIdentifier(ctx, s.organizationID, normalizedSymbology, normalizedValue)
+	var identifier Identifier
+	if normalizedSymbology == SymbologyQR && strings.HasPrefix(normalizedValue, labelRoutePrefix) {
+		identifierID := strings.TrimPrefix(normalizedValue, labelRoutePrefix)
+		if !stableIDPattern.MatchString(identifierID) || strings.Contains(identifierID, "/") {
+			return Identifier{}, ErrInvalidInput
+		}
+		identifier, err = s.store.GetIdentifierByID(ctx, s.organizationID, identifierID)
+	} else {
+		identifier, err = s.store.ResolveIdentifier(ctx, s.organizationID, normalizedSymbology, normalizedValue)
+	}
 	if err != nil {
 		return Identifier{}, err
 	}
-	if identifier.OrganizationID != s.organizationID || identifier.Status != StatusActive {
+	if identifier.OrganizationID != s.organizationID || identifier.Status != StatusActive || identifier.Symbology != normalizedSymbology {
 		return Identifier{}, ErrNotFound
 	}
 	if _, err := s.asset(ctx, identifier.AssetID); err != nil {
 		return Identifier{}, err
 	}
 	return cloneIdentifier(identifier), nil
+}
+
+// LabelRoute is the credential-free, organization-scoped application route
+// encoded in generated QR labels. The current authenticated organization is
+// resolved server-side; no session, grant, or asset detail enters the payload.
+func LabelRoute(identifierID string) (string, error) {
+	identifierID = strings.TrimSpace(identifierID)
+	if !stableIDPattern.MatchString(identifierID) || strings.Contains(identifierID, "/") {
+		return "", ErrInvalidInput
+	}
+	return labelRoutePrefix + identifierID, nil
 }
 
 func (s *Service) ListIdentifiers(ctx context.Context, assetID string) ([]Identifier, error) {
@@ -114,11 +145,17 @@ func (s *Service) CreateIdentifier(ctx context.Context, input CreateIdentifierIn
 	if err != nil {
 		return Identifier{}, false, err
 	}
+	if err := s.checkWrite(ctx, "atlas.asset", normalized.AssetID); err != nil {
+		return Identifier{}, false, err
+	}
+	if err := s.checkWrite(ctx, "atlas.identifier", id); err != nil {
+		return Identifier{}, false, err
+	}
 	actorID, correlationID, err := mutationProvenance(ctx)
 	if err != nil {
 		return Identifier{}, false, err
 	}
-	now := s.now().UTC()
+	now := s.now()
 	identifier := Identifier{
 		ID: id, OrganizationID: s.organizationID, AssetID: normalized.AssetID,
 		Symbology: normalized.Symbology, NormalizedValue: normalized.Value,
@@ -154,6 +191,12 @@ func (s *Service) ReplaceIdentifier(ctx context.Context, input ReplaceIdentifier
 		(input.ReplacementID != "" && !stableIDPattern.MatchString(input.ReplacementID)) || input.Revision < 1 {
 		return Identifier{}, false, ErrInvalidInput
 	}
+	if err := s.checkWrite(ctx, "atlas.asset", input.AssetID); err != nil {
+		return Identifier{}, false, err
+	}
+	if err := s.checkWrite(ctx, "atlas.identifier", input.IdentifierID); err != nil {
+		return Identifier{}, false, err
+	}
 	if _, err := s.asset(ctx, input.AssetID); err != nil {
 		return Identifier{}, false, err
 	}
@@ -167,6 +210,9 @@ func (s *Service) ReplaceIdentifier(ctx context.Context, input ReplaceIdentifier
 	normalizedSymbology, normalizedValue, err := normalizeCode(input.ReplacementSymbology, input.ReplacementValue)
 	if err != nil {
 		return Identifier{}, false, err
+	}
+	if normalizedSymbology == SymbologyQR && strings.HasPrefix(normalizedValue, labelRoutePrefix) {
+		return Identifier{}, false, ErrInvalidInput
 	}
 	displayValue, err := normalizeDisplay(input.DisplayValue, normalizedValue)
 	if err != nil {
@@ -183,11 +229,14 @@ func (s *Service) ReplaceIdentifier(ctx context.Context, input ReplaceIdentifier
 	if err != nil {
 		return Identifier{}, false, err
 	}
+	if err := s.checkWrite(ctx, "atlas.identifier", replacementID); err != nil {
+		return Identifier{}, false, err
+	}
 	actorID, correlationID, err := mutationProvenance(ctx)
 	if err != nil {
 		return Identifier{}, false, err
 	}
-	now := s.now().UTC()
+	now := portabletime.Max(s.now(), existing.UpdatedAt)
 	replacement := Identifier{
 		ID: replacementID, OrganizationID: s.organizationID, AssetID: input.AssetID,
 		Symbology: normalizedSymbology, NormalizedValue: normalizedValue, DisplayValue: displayValue,
@@ -219,14 +268,24 @@ func (s *Service) DeactivateIdentifier(ctx context.Context, input DeactivateIden
 	if !stableIDPattern.MatchString(input.AssetID) || !stableIDPattern.MatchString(input.IdentifierID) || input.Revision < 1 {
 		return Identifier{}, false, ErrInvalidInput
 	}
+	if err := s.checkWrite(ctx, "atlas.asset", input.AssetID); err != nil {
+		return Identifier{}, false, err
+	}
+	if err := s.checkWrite(ctx, "atlas.identifier", input.IdentifierID); err != nil {
+		return Identifier{}, false, err
+	}
 	if _, err := s.asset(ctx, input.AssetID); err != nil {
+		return Identifier{}, false, err
+	}
+	existing, err := s.store.GetIdentifier(ctx, s.organizationID, input.AssetID, input.IdentifierID)
+	if err != nil {
 		return Identifier{}, false, err
 	}
 	actorID, correlationID, err := mutationProvenance(ctx)
 	if err != nil {
 		return Identifier{}, false, err
 	}
-	now := s.now().UTC()
+	now := portabletime.Max(s.now(), existing.UpdatedAt)
 	persisted, changed, err := s.store.DeactivateIdentifier(
 		ctx, s.organizationID, input.AssetID, input.IdentifierID, input.Revision, now,
 		actorID, correlationID,
@@ -258,6 +317,9 @@ func normalizeCreateInput(input CreateIdentifierInput) (CreateIdentifierInput, e
 	symbology, value, err := normalizeCode(input.Symbology, input.Value)
 	if err != nil {
 		return CreateIdentifierInput{}, err
+	}
+	if symbology == SymbologyQR && strings.HasPrefix(value, labelRoutePrefix) {
+		return CreateIdentifierInput{}, ErrInvalidInput
 	}
 	display, err := normalizeDisplay(input.DisplayValue, value)
 	if err != nil {

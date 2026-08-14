@@ -1,12 +1,13 @@
 package postgres
 
-// Requirement: REQ-PEOPLE-001. Feature: identity.directory.
+// Requirements: REQ-PEOPLE-001, REQ-EXCHANGE-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-008. Features: identity.directory, migration.packages, integrations.protocols, threads.relationships.
 
 import (
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -25,6 +26,114 @@ func NewPeopleStore(database *sql.DB) (*PeopleStore, error) {
 		return nil, errors.New("database is required")
 	}
 	return &PeopleStore{database: database}, nil
+}
+
+func (s *PeopleStore) ExchangeSnapshot(ctx context.Context, organizationID string, maximum int) (people.ExchangeSnapshot, error) {
+	if organizationID == "" || maximum < 1 {
+		return people.ExchangeSnapshot{}, people.ErrInvalidInput
+	}
+	transaction, err := s.database.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	if err != nil {
+		return people.ExchangeSnapshot{}, fmt.Errorf("begin People Exchange snapshot: %w", err)
+	}
+	defer transaction.Rollback()
+	result := people.ExchangeSnapshot{}
+	remaining := maximum
+	result.Sites, err = queryPeopleExchangeRows(ctx, transaction, `
+		SELECT id, organization_id, name, normalized_name, address_line1, address_line2,
+		       address_city, address_region, address_postal_code, address_country,
+		       status, revision, created_at, updated_at
+		FROM people_sites WHERE organization_id = $1 ORDER BY id LIMIT $2
+	`, organizationID, remaining+1, scanPeopleSite)
+	if err != nil {
+		return people.ExchangeSnapshot{}, fmt.Errorf("list People Exchange sites: %w", err)
+	}
+	if len(result.Sites) > remaining {
+		return people.ExchangeSnapshot{}, people.ErrTooLarge
+	}
+	remaining -= len(result.Sites)
+	result.Buildings, err = queryPeopleExchangeRows(ctx, transaction, `
+		SELECT id, organization_id, site_id, name, normalized_name, status, revision, created_at, updated_at
+		FROM people_buildings WHERE organization_id = $1 ORDER BY id LIMIT $2
+	`, organizationID, remaining+1, scanPeopleBuilding)
+	if err != nil {
+		return people.ExchangeSnapshot{}, fmt.Errorf("list People Exchange buildings: %w", err)
+	}
+	if len(result.Buildings) > remaining {
+		return people.ExchangeSnapshot{}, people.ErrTooLarge
+	}
+	remaining -= len(result.Buildings)
+	result.Rooms, err = queryPeopleExchangeRows(ctx, transaction, `
+		SELECT id, organization_id, site_id, building_id, room_number, normalized_number,
+		       name, status, revision, created_at, updated_at
+		FROM people_rooms WHERE organization_id = $1 ORDER BY id LIMIT $2
+	`, organizationID, remaining+1, scanPeopleRoom)
+	if err != nil {
+		return people.ExchangeSnapshot{}, fmt.Errorf("list People Exchange rooms: %w", err)
+	}
+	if len(result.Rooms) > remaining {
+		return people.ExchangeSnapshot{}, people.ErrTooLarge
+	}
+	remaining -= len(result.Rooms)
+	result.Departments, err = queryPeopleExchangeRows(ctx, transaction, `
+		SELECT id, organization_id, name, normalized_name, COALESCE(site_id, ''), status, revision, created_at, updated_at
+		FROM people_departments WHERE organization_id = $1 ORDER BY id LIMIT $2
+	`, organizationID, remaining+1, scanPeopleDepartment)
+	if err != nil {
+		return people.ExchangeSnapshot{}, fmt.Errorf("list People Exchange departments: %w", err)
+	}
+	if len(result.Departments) > remaining {
+		return people.ExchangeSnapshot{}, people.ErrTooLarge
+	}
+	remaining -= len(result.Departments)
+	result.Identities, err = queryPeopleExchangeRows(ctx, transaction, `
+		SELECT id, organization_id, kind, display_name, normalized_name, email, normalized_email,
+		       COALESCE(department_id, ''), COALESCE(site_id, ''), status, provider, provider_subject,
+		       revision, created_at, updated_at
+		FROM people_identities WHERE organization_id = $1 ORDER BY id LIMIT $2
+	`, organizationID, remaining+1, scanPeopleIdentity)
+	if err != nil {
+		return people.ExchangeSnapshot{}, fmt.Errorf("list People Exchange identities: %w", err)
+	}
+	if len(result.Identities) > remaining {
+		return people.ExchangeSnapshot{}, people.ErrTooLarge
+	}
+	remaining -= len(result.Identities)
+	result.Assignments, err = queryPeopleExchangeRows(ctx, transaction, `
+		SELECT id, organization_id, asset_id, assignee_kind, COALESCE(identity_id, department_id),
+		       role, effective_from, effective_to, created_by, created_at
+		FROM people_asset_assignments WHERE organization_id = $1 ORDER BY id LIMIT $2
+	`, organizationID, remaining+1, scanPeopleAssignment)
+	if err != nil {
+		return people.ExchangeSnapshot{}, fmt.Errorf("list People Exchange assignments: %w", err)
+	}
+	if len(result.Assignments) > remaining {
+		return people.ExchangeSnapshot{}, people.ErrTooLarge
+	}
+	if err := transaction.Commit(); err != nil {
+		return people.ExchangeSnapshot{}, fmt.Errorf("complete People Exchange snapshot: %w", err)
+	}
+	return result, nil
+}
+
+func queryPeopleExchangeRows[T any](ctx context.Context, transaction *sql.Tx, query, organizationID string, limit int, scan func(peopleRowScanner) (T, error)) ([]T, error) {
+	rows, err := transaction.QueryContext(ctx, query, organizationID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make([]T, 0)
+	for rows.Next() {
+		item, scanErr := scan(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		result = append(result, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 func (s *PeopleStore) CreateSite(ctx context.Context, site people.Site) (people.Site, error) {
@@ -348,6 +457,314 @@ func (s *PeopleStore) ListDepartments(ctx context.Context, organizationID string
 	return result, nil
 }
 
+func (s *PeopleStore) ListGraphLocations(ctx context.Context, organizationID string, filter people.GraphLocationQuery, visibility people.Visibility) (people.GraphLocations, error) {
+	if organizationID == "" || visibility.Empty() || !filter.Valid() {
+		return people.GraphLocations{}, people.ErrInvalidInput
+	}
+	result := people.GraphLocations{Sites: []people.Site{}, Buildings: []people.Building{}, Rooms: []people.Room{}, Departments: []people.Department{}}
+	hasSelector := filter.DirectOrganizationChildren || len(filter.SiteIDs)+len(filter.BuildingIDs)+len(filter.RoomIDs)+
+		len(filter.DepartmentIDs)+len(filter.ParentSiteIDs)+len(filter.ParentBuildingIDs) > 0
+	if filter.Kind == "" || filter.Kind == people.GraphLocationSite {
+		selected := !hasSelector || filter.DirectOrganizationChildren || len(filter.SiteIDs) > 0
+		if selected {
+			items, err := s.listGraphSites(ctx, organizationID, filter, visibility, hasSelector)
+			if err != nil {
+				return people.GraphLocations{}, err
+			}
+			result.Sites = items
+		}
+	}
+	if filter.Kind == "" || filter.Kind == people.GraphLocationBuilding {
+		selected := !hasSelector || len(filter.BuildingIDs)+len(filter.ParentSiteIDs) > 0
+		if selected {
+			items, err := s.listGraphBuildings(ctx, organizationID, filter, visibility, hasSelector)
+			if err != nil {
+				return people.GraphLocations{}, err
+			}
+			result.Buildings = items
+		}
+	}
+	if filter.Kind == "" || filter.Kind == people.GraphLocationRoom {
+		selected := !hasSelector || len(filter.RoomIDs)+len(filter.ParentSiteIDs)+len(filter.ParentBuildingIDs) > 0
+		if selected {
+			items, err := s.listGraphRooms(ctx, organizationID, filter, visibility, hasSelector)
+			if err != nil {
+				return people.GraphLocations{}, err
+			}
+			result.Rooms = items
+		}
+	}
+	if filter.Kind == "" || filter.Kind == people.GraphLocationDepartment {
+		selected := !hasSelector || filter.DirectOrganizationChildren || len(filter.DepartmentIDs)+len(filter.ParentSiteIDs) > 0
+		if selected {
+			items, err := s.listGraphDepartments(ctx, organizationID, filter, visibility, hasSelector)
+			if err != nil {
+				return people.GraphLocations{}, err
+			}
+			result.Departments = items
+		}
+	}
+	return limitGraphLocations(result, filter.Limit), nil
+}
+
+func (s *PeopleStore) listGraphSites(ctx context.Context, organizationID string, filter people.GraphLocationQuery, visibility people.Visibility, hasSelector bool) ([]people.Site, error) {
+	query := strings.Builder{}
+	query.WriteString(`SELECT s.id, s.organization_id, s.name, s.normalized_name, s.address_line1, s.address_line2,
+		s.address_city, s.address_region, s.address_postal_code, s.address_country,
+		s.status, s.revision, s.created_at, s.updated_at FROM people_sites s
+		WHERE s.organization_id = $1 AND s.status = 'active'`)
+	arguments := []any{organizationID}
+	if !visibility.All {
+		predicates := make([]string, 0, 2)
+		if len(visibility.SiteIDs) > 0 {
+			predicates = append(predicates, inPredicate("s.id", visibility.SiteIDs, &arguments))
+		}
+		if len(visibility.DepartmentIDs) > 0 {
+			departmentPredicate := inPredicate("visible_department.id", visibility.DepartmentIDs, &arguments)
+			predicates = append(predicates, `EXISTS (SELECT 1 FROM people_departments visible_department
+				WHERE visible_department.organization_id = s.organization_id AND visible_department.site_id = s.id AND `+departmentPredicate+`)`)
+		}
+		if len(predicates) == 0 {
+			return nil, people.ErrScopeRequired
+		}
+		query.WriteString(" AND (" + strings.Join(predicates, " OR ") + ")")
+	}
+	if filter.LabelSearch != "" {
+		arguments = append(arguments, strings.ToLower(filter.LabelSearch))
+		query.WriteString(fmt.Sprintf(" AND strpos(lower(s.name), $%d) > 0", len(arguments)))
+	}
+	if hasSelector && !filter.DirectOrganizationChildren {
+		query.WriteString(" AND " + inPredicate("s.id", filter.SiteIDs, &arguments))
+	}
+	arguments = append(arguments, filter.Limit)
+	query.WriteString(fmt.Sprintf(" ORDER BY lower(s.name), s.id LIMIT $%d", len(arguments)))
+	rows, err := s.database.QueryContext(ctx, query.String(), arguments...)
+	if err != nil {
+		return nil, fmt.Errorf("list graph sites: %w", err)
+	}
+	defer rows.Close()
+	items := make([]people.Site, 0)
+	for rows.Next() {
+		item, err := scanPeopleSite(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan graph site: %w", err)
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate graph sites: %w", err)
+	}
+	return items, nil
+}
+
+func (s *PeopleStore) listGraphBuildings(ctx context.Context, organizationID string, filter people.GraphLocationQuery, visibility people.Visibility, hasSelector bool) ([]people.Building, error) {
+	query := strings.Builder{}
+	query.WriteString(`SELECT b.id, b.organization_id, b.site_id, b.name, b.normalized_name,
+		b.status, b.revision, b.created_at, b.updated_at FROM people_buildings b
+		WHERE b.organization_id = $1 AND b.status = 'active'`)
+	arguments := []any{organizationID}
+	if !visibility.All {
+		predicate, ok := locationVisibilityPredicate("b.organization_id", "b.site_id", visibility, &arguments)
+		if !ok {
+			return nil, people.ErrScopeRequired
+		}
+		query.WriteString(" AND (" + predicate + ")")
+	}
+	if filter.LabelSearch != "" {
+		arguments = append(arguments, strings.ToLower(filter.LabelSearch))
+		query.WriteString(fmt.Sprintf(" AND strpos(lower(b.name), $%d) > 0", len(arguments)))
+	}
+	if hasSelector {
+		selectors := make([]string, 0, 2)
+		if len(filter.BuildingIDs) > 0 {
+			selectors = append(selectors, inPredicate("b.id", filter.BuildingIDs, &arguments))
+		}
+		if len(filter.ParentSiteIDs) > 0 {
+			selectors = append(selectors, inPredicate("b.site_id", filter.ParentSiteIDs, &arguments))
+		}
+		query.WriteString(" AND (" + strings.Join(selectors, " OR ") + ")")
+	}
+	arguments = append(arguments, filter.Limit)
+	query.WriteString(fmt.Sprintf(" ORDER BY lower(b.name), b.id LIMIT $%d", len(arguments)))
+	rows, err := s.database.QueryContext(ctx, query.String(), arguments...)
+	if err != nil {
+		return nil, fmt.Errorf("list graph buildings: %w", err)
+	}
+	defer rows.Close()
+	items := make([]people.Building, 0)
+	for rows.Next() {
+		item, err := scanPeopleBuilding(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan graph building: %w", err)
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate graph buildings: %w", err)
+	}
+	return items, nil
+}
+
+func (s *PeopleStore) listGraphRooms(ctx context.Context, organizationID string, filter people.GraphLocationQuery, visibility people.Visibility, hasSelector bool) ([]people.Room, error) {
+	query := strings.Builder{}
+	query.WriteString(`SELECT r.id, r.organization_id, r.site_id, r.building_id, r.room_number, r.normalized_number,
+		r.name, r.status, r.revision, r.created_at, r.updated_at FROM people_rooms r
+		WHERE r.organization_id = $1 AND r.status = 'active'`)
+	arguments := []any{organizationID}
+	if !visibility.All {
+		predicate, ok := locationVisibilityPredicate("r.organization_id", "r.site_id", visibility, &arguments)
+		if !ok {
+			return nil, people.ErrScopeRequired
+		}
+		query.WriteString(" AND (" + predicate + ")")
+	}
+	if filter.LabelSearch != "" {
+		arguments = append(arguments, strings.ToLower(filter.LabelSearch))
+		query.WriteString(fmt.Sprintf(" AND strpos(lower('Room ' || r.room_number || CASE WHEN r.name <> '' THEN ' · ' || r.name ELSE '' END), $%d) > 0", len(arguments)))
+	}
+	if hasSelector {
+		selectors := make([]string, 0, 3)
+		if len(filter.RoomIDs) > 0 {
+			selectors = append(selectors, inPredicate("r.id", filter.RoomIDs, &arguments))
+		}
+		if len(filter.ParentSiteIDs) > 0 {
+			selectors = append(selectors, inPredicate("r.site_id", filter.ParentSiteIDs, &arguments))
+		}
+		if len(filter.ParentBuildingIDs) > 0 {
+			selectors = append(selectors, inPredicate("r.building_id", filter.ParentBuildingIDs, &arguments))
+		}
+		query.WriteString(" AND (" + strings.Join(selectors, " OR ") + ")")
+	}
+	arguments = append(arguments, filter.Limit)
+	query.WriteString(fmt.Sprintf(" ORDER BY lower(r.room_number), r.id LIMIT $%d", len(arguments)))
+	rows, err := s.database.QueryContext(ctx, query.String(), arguments...)
+	if err != nil {
+		return nil, fmt.Errorf("list graph rooms: %w", err)
+	}
+	defer rows.Close()
+	items := make([]people.Room, 0)
+	for rows.Next() {
+		item, err := scanPeopleRoom(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan graph room: %w", err)
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate graph rooms: %w", err)
+	}
+	return items, nil
+}
+
+func (s *PeopleStore) listGraphDepartments(ctx context.Context, organizationID string, filter people.GraphLocationQuery, visibility people.Visibility, hasSelector bool) ([]people.Department, error) {
+	query := strings.Builder{}
+	query.WriteString(`SELECT d.id, d.organization_id, d.name, d.normalized_name, COALESCE(d.site_id, ''),
+		d.status, d.revision, d.created_at, d.updated_at FROM people_departments d
+		WHERE d.organization_id = $1 AND d.status = 'active'`)
+	arguments := []any{organizationID}
+	if !visibility.All {
+		predicates := make([]string, 0, 2)
+		if len(visibility.DepartmentIDs) > 0 {
+			predicates = append(predicates, inPredicate("d.id", visibility.DepartmentIDs, &arguments))
+		}
+		if len(visibility.SiteIDs) > 0 {
+			predicates = append(predicates, inPredicate("d.site_id", visibility.SiteIDs, &arguments))
+		}
+		if len(predicates) == 0 {
+			return nil, people.ErrScopeRequired
+		}
+		query.WriteString(" AND (" + strings.Join(predicates, " OR ") + ")")
+	}
+	if filter.LabelSearch != "" {
+		arguments = append(arguments, strings.ToLower(filter.LabelSearch))
+		query.WriteString(fmt.Sprintf(" AND strpos(lower(d.name), $%d) > 0", len(arguments)))
+	}
+	if hasSelector {
+		selectors := make([]string, 0, 3)
+		if len(filter.DepartmentIDs) > 0 {
+			selectors = append(selectors, inPredicate("d.id", filter.DepartmentIDs, &arguments))
+		}
+		if len(filter.ParentSiteIDs) > 0 {
+			selectors = append(selectors, inPredicate("d.site_id", filter.ParentSiteIDs, &arguments))
+		}
+		if filter.DirectOrganizationChildren {
+			selectors = append(selectors, "d.site_id IS NULL")
+		}
+		query.WriteString(" AND (" + strings.Join(selectors, " OR ") + ")")
+	}
+	arguments = append(arguments, filter.Limit)
+	query.WriteString(fmt.Sprintf(" ORDER BY lower(d.name), d.id LIMIT $%d", len(arguments)))
+	rows, err := s.database.QueryContext(ctx, query.String(), arguments...)
+	if err != nil {
+		return nil, fmt.Errorf("list graph departments: %w", err)
+	}
+	defer rows.Close()
+	items := make([]people.Department, 0)
+	for rows.Next() {
+		item, err := scanPeopleDepartment(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan graph department: %w", err)
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate graph departments: %w", err)
+	}
+	return items, nil
+}
+
+func limitGraphLocations(input people.GraphLocations, limit int) people.GraphLocations {
+	type candidate struct {
+		kind      people.GraphLocationKind
+		id, label string
+		index     int
+	}
+	candidates := make([]candidate, 0, len(input.Sites)+len(input.Buildings)+len(input.Rooms)+len(input.Departments))
+	for index, item := range input.Sites {
+		candidates = append(candidates, candidate{people.GraphLocationSite, item.ID, item.Name, index})
+	}
+	for index, item := range input.Buildings {
+		candidates = append(candidates, candidate{people.GraphLocationBuilding, item.ID, item.Name, index})
+	}
+	for index, item := range input.Rooms {
+		label := "Room " + item.Number
+		if item.Name != "" {
+			label += " · " + item.Name
+		}
+		candidates = append(candidates, candidate{people.GraphLocationRoom, item.ID, label, index})
+	}
+	for index, item := range input.Departments {
+		candidates = append(candidates, candidate{people.GraphLocationDepartment, item.ID, item.Name, index})
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].kind != candidates[j].kind {
+			return candidates[i].kind < candidates[j].kind
+		}
+		left, right := strings.ToLower(candidates[i].label), strings.ToLower(candidates[j].label)
+		if left != right {
+			return left < right
+		}
+		return candidates[i].id < candidates[j].id
+	})
+	if len(candidates) > limit {
+		candidates = candidates[:limit]
+	}
+	result := people.GraphLocations{Sites: []people.Site{}, Buildings: []people.Building{}, Rooms: []people.Room{}, Departments: []people.Department{}}
+	for _, item := range candidates {
+		switch item.kind {
+		case people.GraphLocationSite:
+			result.Sites = append(result.Sites, input.Sites[item.index])
+		case people.GraphLocationBuilding:
+			result.Buildings = append(result.Buildings, input.Buildings[item.index])
+		case people.GraphLocationRoom:
+			result.Rooms = append(result.Rooms, input.Rooms[item.index])
+		case people.GraphLocationDepartment:
+			result.Departments = append(result.Departments, input.Departments[item.index])
+		}
+	}
+	return result
+}
+
 func (s *PeopleStore) CreateIdentity(ctx context.Context, identity people.Identity) (people.Identity, error) {
 	row := s.database.QueryRowContext(ctx, `
 		INSERT INTO people_identities (
@@ -383,6 +800,81 @@ func (s *PeopleStore) GetIdentity(ctx context.Context, organizationID, id string
 		return people.Identity{}, fmt.Errorf("get identity: %w", err)
 	}
 	return identity, nil
+}
+
+func (s *PeopleStore) GetIdentityByProvider(ctx context.Context, organizationID, provider, providerSubject string) (people.Identity, error) {
+	row := s.database.QueryRowContext(ctx, `
+		SELECT id, organization_id, kind, display_name, normalized_name, email, normalized_email,
+		       COALESCE(department_id, ''), COALESCE(site_id, ''), status, provider, provider_subject,
+		       revision, created_at, updated_at
+		FROM people_identities WHERE organization_id = $1 AND provider = $2 AND provider_subject = $3
+	`, organizationID, provider, providerSubject)
+	identity, err := scanPeopleIdentity(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return people.Identity{}, people.ErrNotFound
+	}
+	if err != nil {
+		return people.Identity{}, fmt.Errorf("get identity by provider: %w", err)
+	}
+	return identity, nil
+}
+
+func (s *PeopleStore) GetIdentityByEmail(ctx context.Context, organizationID, normalizedEmail string) (people.Identity, error) {
+	row := s.database.QueryRowContext(ctx, `
+		SELECT id, organization_id, kind, display_name, normalized_name, email, normalized_email,
+		       COALESCE(department_id, ''), COALESCE(site_id, ''), status, provider, provider_subject,
+		       revision, created_at, updated_at
+		FROM people_identities WHERE organization_id = $1 AND normalized_email = $2
+	`, organizationID, normalizedEmail)
+	identity, err := scanPeopleIdentity(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return people.Identity{}, people.ErrNotFound
+	}
+	if err != nil {
+		return people.Identity{}, fmt.Errorf("get identity by email: %w", err)
+	}
+	return identity, nil
+}
+
+func (s *PeopleStore) ReconcileIdentity(ctx context.Context, identity people.Identity, expectedRevision uint64) (people.Identity, error) {
+	if expectedRevision == 0 || identity.Revision != expectedRevision+1 {
+		return people.Identity{}, people.ErrConflict
+	}
+	row := s.database.QueryRowContext(ctx, `
+		UPDATE people_identities SET
+			kind = $4, display_name = $5, normalized_name = $6, email = $7, normalized_email = $8,
+			department_id = NULLIF($9, ''), site_id = NULLIF($10, ''), status = $11,
+			revision = $12, updated_at = $13
+		WHERE organization_id = $1 AND id = $2 AND revision = $3 AND provider = $14 AND provider_subject = $15 AND created_at = $16
+		RETURNING id, organization_id, kind, display_name, normalized_name, email, normalized_email,
+		          COALESCE(department_id, ''), COALESCE(site_id, ''), status, provider, provider_subject,
+		          revision, created_at, updated_at
+	`, identity.OrganizationID, identity.ID, expectedRevision, identity.Kind, identity.DisplayName, identity.NormalizedName,
+		identity.Email, identity.NormalizedEmail, identity.DepartmentID, identity.SiteID, identity.Status,
+		identity.Revision, identity.UpdatedAt, identity.Provider, identity.ProviderSubject, identity.CreatedAt)
+	updated, err := scanPeopleIdentity(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return people.Identity{}, people.ErrConflict
+	}
+	if err != nil {
+		return people.Identity{}, mapPeopleStoreError("reconcile identity", err)
+	}
+	return updated, nil
+}
+
+func (s *PeopleStore) DeleteIdentity(ctx context.Context, organizationID, id string, expectedRevision uint64) error {
+	result, err := s.database.ExecContext(ctx, `DELETE FROM people_identities WHERE organization_id=$1 AND id=$2 AND revision=$3`, organizationID, id, expectedRevision)
+	if err != nil {
+		return mapPeopleStoreError("delete identity", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("inspect identity deletion: %w", err)
+	}
+	if rows == 0 {
+		return people.ErrConflict
+	}
+	return nil
 }
 
 func (s *PeopleStore) SearchIdentities(ctx context.Context, organizationID string, filter people.IdentityQuery, visibility people.Visibility) ([]people.Identity, error) {
@@ -452,6 +944,76 @@ func (s *PeopleStore) SearchIdentities(ctx context.Context, organizationID strin
 	return result, nil
 }
 
+func (s *PeopleStore) ListGraphIdentities(ctx context.Context, organizationID string, filter people.GraphIdentityQuery, visibility people.Visibility) ([]people.Identity, error) {
+	if organizationID == "" || visibility.Empty() || !filter.Valid() {
+		return nil, people.ErrInvalidInput
+	}
+	query := strings.Builder{}
+	query.WriteString(`
+		SELECT id, organization_id, kind, display_name, normalized_name, email, normalized_email,
+		       COALESCE(department_id, ''), COALESCE(site_id, ''), status, provider, provider_subject,
+		       revision, created_at, updated_at
+		FROM people_identities
+		WHERE organization_id = $1 AND status = 'active'`)
+	arguments := []any{organizationID}
+	if !visibility.All {
+		predicates := make([]string, 0, 2)
+		if len(visibility.DepartmentIDs) > 0 {
+			predicates = append(predicates, inPredicate("department_id", visibility.DepartmentIDs, &arguments))
+		}
+		if len(visibility.SiteIDs) > 0 {
+			predicates = append(predicates, inPredicate("site_id", visibility.SiteIDs, &arguments))
+		}
+		if len(predicates) == 0 {
+			return nil, people.ErrScopeRequired
+		}
+		query.WriteString(" AND (" + strings.Join(predicates, " OR ") + ")")
+	}
+	if filter.LabelSearch != "" {
+		arguments = append(arguments, strings.ToLower(filter.LabelSearch))
+		query.WriteString(fmt.Sprintf(" AND strpos(lower(display_name), $%d) > 0", len(arguments)))
+	}
+	if filter.Kind != "" {
+		arguments = append(arguments, filter.Kind)
+		query.WriteString(fmt.Sprintf(" AND kind = $%d", len(arguments)))
+	}
+	if filter.DirectOrganizationChildren {
+		query.WriteString(" AND department_id IS NULL AND site_id IS NULL")
+	}
+	selectors := make([]string, 0, 3)
+	if len(filter.IdentityIDs) > 0 {
+		selectors = append(selectors, inPredicate("id", filter.IdentityIDs, &arguments))
+	}
+	if len(filter.DepartmentIDs) > 0 {
+		selectors = append(selectors, inPredicate("department_id", filter.DepartmentIDs, &arguments))
+	}
+	if len(filter.SiteIDs) > 0 {
+		selectors = append(selectors, inPredicate("site_id", filter.SiteIDs, &arguments))
+	}
+	if len(selectors) > 0 {
+		query.WriteString(" AND (" + strings.Join(selectors, " OR ") + ")")
+	}
+	arguments = append(arguments, filter.Limit)
+	query.WriteString(fmt.Sprintf(" ORDER BY lower(display_name), id LIMIT $%d", len(arguments)))
+	rows, err := s.database.QueryContext(ctx, query.String(), arguments...)
+	if err != nil {
+		return nil, fmt.Errorf("list graph identities: %w", err)
+	}
+	defer rows.Close()
+	result := make([]people.Identity, 0)
+	for rows.Next() {
+		identity, err := scanPeopleIdentity(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan graph identity: %w", err)
+		}
+		result = append(result, identity)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate graph identities: %w", err)
+	}
+	return result, nil
+}
+
 func (s *PeopleStore) CreateAssetAssignment(ctx context.Context, assignment people.AssetAssignment, replaceActiveRole bool) (people.AssetAssignment, error) {
 	transaction, err := s.database.BeginTx(ctx, nil)
 	if err != nil {
@@ -511,6 +1073,47 @@ func (s *PeopleStore) CreateAssetAssignment(ctx context.Context, assignment peop
 		return people.AssetAssignment{}, fmt.Errorf("commit asset assignment: %w", err)
 	}
 	return created, nil
+}
+
+func (s *PeopleStore) ImportAssetAssignment(ctx context.Context, assignment people.AssetAssignment) (people.AssetAssignment, error) {
+	var identityID any
+	var departmentID any
+	if assignment.AssigneeKind == people.AssigneeIdentity {
+		identityID = assignment.AssigneeID
+	} else {
+		departmentID = assignment.AssigneeID
+	}
+	row := s.database.QueryRowContext(ctx, `
+		INSERT INTO people_asset_assignments (
+			id, organization_id, asset_id, assignee_kind, identity_id, department_id,
+			role, effective_from, effective_to, created_by, created_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		RETURNING id, organization_id, asset_id, assignee_kind, COALESCE(identity_id, department_id),
+		          role, effective_from, effective_to, created_by, created_at
+	`, assignment.ID, assignment.OrganizationID, assignment.AssetID, assignment.AssigneeKind,
+		identityID, departmentID, assignment.Role, assignment.EffectiveFrom, assignment.EffectiveTo,
+		assignment.CreatedBy, assignment.CreatedAt)
+	created, err := scanPeopleAssignment(row)
+	if err != nil {
+		return people.AssetAssignment{}, mapPeopleStoreError("import asset assignment", err)
+	}
+	return created, nil
+}
+
+func (s *PeopleStore) GetAssetAssignment(ctx context.Context, organizationID, assignmentID string) (people.AssetAssignment, error) {
+	assignment, err := scanPeopleAssignment(s.database.QueryRowContext(ctx, `
+		SELECT id, organization_id, asset_id, assignee_kind, COALESCE(identity_id, department_id),
+		       role, effective_from, effective_to, created_by, created_at
+		FROM people_asset_assignments
+		WHERE organization_id = $1 AND id = $2
+	`, organizationID, assignmentID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return people.AssetAssignment{}, people.ErrNotFound
+	}
+	if err != nil {
+		return people.AssetAssignment{}, fmt.Errorf("get asset assignment: %w", err)
+	}
+	return assignment, nil
 }
 
 func (s *PeopleStore) EndAssetAssignment(ctx context.Context, organizationID, assetID, assignmentID string, effectiveTo time.Time) (people.AssetAssignment, error) {

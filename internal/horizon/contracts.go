@@ -92,6 +92,26 @@ type UpdatePlanInput struct {
 	Revision                 int64      `json:"revision"`
 }
 
+// ExchangeImportOperation is the deterministic mutation identity issued by
+// Exchange after it has reserved durable intent and external ownership.
+type ExchangeImportOperation struct {
+	Token      string
+	OccurredAt time.Time
+}
+
+type ExchangeImportResult struct {
+	Committed bool
+	Created   bool
+}
+
+// ExchangeImporter is an opaque construction-time capability. Ordinary
+// Horizon callers cannot select an imported revision or deterministic audit
+// identity, and implementations outside this package cannot forge the seam.
+type ExchangeImporter interface {
+	ImportPlan(context.Context, ExchangeImportOperation, Plan) (ExchangeImportResult, error)
+	horizonExchangeImporter()
+}
+
 type ForecastQuery struct {
 	Scenarios            []string
 	AsOf                 time.Time
@@ -142,4 +162,11 @@ type RelationshipReader interface {
 	ListGoals(ctx context.Context) ([]threads.Goal, error)
 	EvaluateTags(ctx context.Context, targetType threads.TargetType, targetID string) ([]threads.EffectiveTag, error)
 	ListGoalLinks(ctx context.Context, targetType threads.TargetType, targetID string) ([]threads.GoalLink, error)
+}
+
+// WriteGate is the service-layer imported-ownership fence. Transports and
+// background jobs pass an authenticated operation context; Exchange alone
+// receives the opaque importer capability that bypasses this gate.
+type WriteGate interface {
+	CheckResourceWrite(context.Context, string, string) error
 }

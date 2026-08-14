@@ -146,7 +146,7 @@ func (s *LocalBlobStore) Open(ctx context.Context, key string) (io.ReadCloser, e
 	if err != nil {
 		return nil, fmt.Errorf("open blob: %w", err)
 	}
-	return file, nil
+	return &contextReadCloser{Reader: readerWithContext(ctx, file), Closer: file}, nil
 }
 
 func (s *LocalBlobStore) Delete(_ context.Context, key string) error {
@@ -224,6 +224,11 @@ func (s *LocalBlobStore) verifyDirectory(directory string) error {
 type contextReader struct {
 	ctx context.Context
 	r   io.Reader
+}
+
+type contextReadCloser struct {
+	io.Reader
+	io.Closer
 }
 
 func readerWithContext(ctx context.Context, r io.Reader) io.Reader {

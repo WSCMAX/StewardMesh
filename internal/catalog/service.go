@@ -4,8 +4,10 @@ package catalog
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	"maps"
 	"regexp"
 	"sort"
 	"strconv"
@@ -32,23 +34,238 @@ type ServiceConfig struct {
 type Service struct {
 	store          Store
 	models         ModelReader
+	writes         WriteGate
 	auditor        foundation.Auditor
 	organizationID string
 	now            func() time.Time
 }
 
+type exchangeImporter struct{ service *Service }
+
+type exchangeImportContextKey struct{}
+
+type exchangeImportContext struct {
+	operation ExchangeImportOperation
+	revision  int64
+}
+
 func NewService(store Store, models ModelReader, auditor foundation.Auditor, configuration ServiceConfig) (*Service, error) {
+	service, _, err := NewServiceWithExchangeImporter(store, models, nil, auditor, configuration)
+	return service, err
+}
+
+func NewServiceWithExchangeImporter(store Store, models ModelReader, writes WriteGate, auditor foundation.Auditor, configuration ServiceConfig) (*Service, ExchangeImporter, error) {
 	if store == nil || models == nil || auditor == nil {
-		return nil, errors.New("Atlas Catalog store, Atlas Models reader, and auditor are required")
+		return nil, nil, errors.New("Atlas Catalog store, Atlas Models reader, and auditor are required")
 	}
 	configuration.OrganizationID = strings.TrimSpace(configuration.OrganizationID)
 	if configuration.OrganizationID == "" {
-		return nil, errors.New("Atlas Catalog organization id is required")
+		return nil, nil, errors.New("Atlas Catalog organization id is required")
 	}
 	if configuration.Now == nil {
 		configuration.Now = func() time.Time { return time.Now().UTC() }
 	}
-	return &Service{store: store, models: models, auditor: auditor, organizationID: configuration.OrganizationID, now: configuration.Now}, nil
+	service := &Service{store: store, models: models, writes: writes, auditor: auditor, organizationID: configuration.OrganizationID, now: configuration.Now}
+	return service, &exchangeImporter{service: service}, nil
+}
+
+// Snapshot returns every durable Catalog record without weakening normal
+// model-scoped list validation. Exchange applies its independent 10,000-record
+// package/catalog bound to this transport-neutral snapshot.
+func (s *Service) Snapshot(ctx context.Context) (Snapshot, error) {
+	return s.store.Snapshot(ctx, s.organizationID)
+}
+
+func (s *Service) GetConfiguration(ctx context.Context, id string) (Configuration, error) {
+	id = strings.TrimSpace(id)
+	if !stableIDPattern.MatchString(id) {
+		return Configuration{}, ErrInvalidInput
+	}
+	return s.store.GetConfiguration(ctx, s.organizationID, id)
+}
+
+func (s *Service) GetPrice(ctx context.Context, id string) (Price, error) {
+	id = strings.TrimSpace(id)
+	if !stableIDPattern.MatchString(id) {
+		return Price{}, ErrInvalidInput
+	}
+	return s.store.GetPrice(ctx, s.organizationID, id)
+}
+
+func (s *Service) GetUpgradePath(ctx context.Context, id string) (UpgradePath, error) {
+	id = strings.TrimSpace(id)
+	if !stableIDPattern.MatchString(id) {
+		return UpgradePath{}, ErrInvalidInput
+	}
+	return s.store.GetUpgradePath(ctx, s.organizationID, id)
+}
+
+// ExchangeDependencyExists resolves Catalog's Atlas Model references without
+// exposing Atlas repositories to the Exchange package.
+func (s *Service) ExchangeDependencyExists(ctx context.Context, recordType, id string) (bool, bool, error) {
+	if recordType != "atlas.model" {
+		return false, false, nil
+	}
+	id = strings.TrimSpace(id)
+	if !stableIDPattern.MatchString(id) {
+		return true, false, ErrInvalidInput
+	}
+	err := s.validateModel(ctx, id)
+	if errors.Is(err, ErrNotFound) {
+		return true, false, nil
+	}
+	return true, err == nil, err
+}
+
+func (s *Service) OwnsExchangeImporter(candidate ExchangeImporter) bool {
+	importer, ok := candidate.(*exchangeImporter)
+	return ok && importer != nil && importer.service == s
+}
+
+func (i *exchangeImporter) ImportConfiguration(ctx context.Context, operation ExchangeImportOperation, candidate Configuration) (ExchangeImportResult, error) {
+	operation, err := normalizeExchangeImportOperation(operation)
+	if err != nil || candidate.Revision < 1 {
+		return ExchangeImportResult{}, ErrInvalidInput
+	}
+	ctx = context.WithValue(ctx, exchangeImportContextKey{}, exchangeImportContext{operation: operation, revision: candidate.Revision})
+	existing, err := i.service.GetConfiguration(ctx, candidate.ID)
+	if err == nil {
+		if !sameExchangeConfiguration(existing, candidate) {
+			return ExchangeImportResult{}, ErrConflict
+		}
+		err = i.service.audit(ctx, "atlas.catalog.configuration.created", "catalog_configuration", existing.ID, map[string]string{
+			"modelId": existing.ModelID, "status": string(existing.Status), "revision": strconv.FormatInt(existing.Revision, 10),
+		})
+		return ExchangeImportResult{Committed: true}, err
+	}
+	if !errors.Is(err, ErrNotFound) {
+		return ExchangeImportResult{}, err
+	}
+	_, err = i.service.CreateConfiguration(ctx, CreateConfigurationInput{
+		ID: candidate.ID, ModelID: candidate.ModelID, Name: candidate.Name, SKU: candidate.SKU,
+		Status: candidate.Status, Specifications: candidate.Specifications,
+	})
+	if err == nil {
+		return ExchangeImportResult{Committed: true, Created: true}, nil
+	}
+	if observed, readErr := i.service.GetConfiguration(ctx, candidate.ID); readErr == nil && sameExchangeConfiguration(observed, candidate) {
+		return ExchangeImportResult{Committed: true, Created: true}, err
+	}
+	return ExchangeImportResult{}, err
+}
+
+func (i *exchangeImporter) ImportPrice(ctx context.Context, operation ExchangeImportOperation, candidate Price) (ExchangeImportResult, error) {
+	operation, err := normalizeExchangeImportOperation(operation)
+	if err != nil || candidate.Revision != 1 {
+		return ExchangeImportResult{}, ErrInvalidInput
+	}
+	ctx = context.WithValue(ctx, exchangeImportContextKey{}, exchangeImportContext{operation: operation, revision: candidate.Revision})
+	existing, err := i.service.GetPrice(ctx, candidate.ID)
+	if err == nil {
+		if !sameExchangePrice(existing, candidate) {
+			return ExchangeImportResult{}, ErrConflict
+		}
+		err = i.service.audit(ctx, "atlas.catalog.price.recorded", "catalog_price", existing.ID, map[string]string{
+			"modelId": existing.ModelID, "configurationId": existing.ConfigurationID, "kind": string(existing.Kind),
+			"currency": existing.Currency, "revision": strconv.FormatInt(existing.Revision, 10),
+		})
+		return ExchangeImportResult{Committed: true}, err
+	}
+	if !errors.Is(err, ErrNotFound) {
+		return ExchangeImportResult{}, err
+	}
+	_, err = i.service.RecordPrice(ctx, RecordPriceInput{
+		ID: candidate.ID, ModelID: candidate.ModelID, ConfigurationID: candidate.ConfigurationID,
+		Kind: candidate.Kind, AmountMinor: candidate.AmountMinor, Currency: candidate.Currency,
+		EffectiveFrom: candidate.EffectiveFrom, EffectiveTo: candidate.EffectiveTo, SourceReference: candidate.SourceReference,
+	})
+	if err == nil {
+		return ExchangeImportResult{Committed: true, Created: true}, nil
+	}
+	if observed, readErr := i.service.GetPrice(ctx, candidate.ID); readErr == nil && sameExchangePrice(observed, candidate) {
+		return ExchangeImportResult{Committed: true, Created: true}, err
+	}
+	return ExchangeImportResult{}, err
+}
+
+func (i *exchangeImporter) ImportUpgradePath(ctx context.Context, operation ExchangeImportOperation, candidate UpgradePath) (ExchangeImportResult, error) {
+	operation, err := normalizeExchangeImportOperation(operation)
+	if err != nil || candidate.Revision != 1 {
+		return ExchangeImportResult{}, ErrInvalidInput
+	}
+	ctx = context.WithValue(ctx, exchangeImportContextKey{}, exchangeImportContext{operation: operation, revision: candidate.Revision})
+	existing, err := i.service.GetUpgradePath(ctx, candidate.ID)
+	if err == nil {
+		if !sameExchangeUpgradePath(existing, candidate) {
+			return ExchangeImportResult{}, ErrConflict
+		}
+		err = i.service.audit(ctx, "atlas.catalog.upgrade_path.created", "catalog_upgrade_path", existing.ID, map[string]string{
+			"fromModelId": existing.FromModelID, "fromConfigurationId": existing.FromConfigurationID,
+			"toModelId": existing.ToModelID, "toConfigurationId": existing.ToConfigurationID,
+			"kind": string(existing.Kind), "revision": strconv.FormatInt(existing.Revision, 10),
+		})
+		return ExchangeImportResult{Committed: true}, err
+	}
+	if !errors.Is(err, ErrNotFound) {
+		return ExchangeImportResult{}, err
+	}
+	_, err = i.service.CreateUpgradePath(ctx, CreateUpgradePathInput{
+		ID: candidate.ID, FromModelID: candidate.FromModelID, FromConfigurationID: candidate.FromConfigurationID,
+		ToModelID: candidate.ToModelID, ToConfigurationID: candidate.ToConfigurationID,
+		Kind: candidate.Kind, EffectiveFrom: candidate.EffectiveFrom,
+	})
+	if err == nil {
+		return ExchangeImportResult{Committed: true, Created: true}, nil
+	}
+	if observed, readErr := i.service.GetUpgradePath(ctx, candidate.ID); readErr == nil && sameExchangeUpgradePath(observed, candidate) {
+		return ExchangeImportResult{Committed: true, Created: true}, err
+	}
+	return ExchangeImportResult{}, err
+}
+
+func normalizeExchangeImportOperation(operation ExchangeImportOperation) (ExchangeImportOperation, error) {
+	operation.Token = strings.TrimSpace(operation.Token)
+	operation.OccurredAt = operation.OccurredAt.UTC()
+	if !stableIDPattern.MatchString(operation.Token) || operation.OccurredAt.IsZero() || operation.OccurredAt.Year() < 2000 || operation.OccurredAt.Year() > 9999 {
+		return ExchangeImportOperation{}, ErrInvalidInput
+	}
+	return operation, nil
+}
+
+func (s *Service) creationState(ctx context.Context) (time.Time, int64) {
+	if state, ok := ctx.Value(exchangeImportContextKey{}).(exchangeImportContext); ok && state.revision > 0 && !state.operation.OccurredAt.IsZero() {
+		return state.operation.OccurredAt.UTC(), state.revision
+	}
+	return s.now().UTC(), 1
+}
+
+func (s *Service) checkWrite(ctx context.Context, recordType, id string) error {
+	if _, importing := ctx.Value(exchangeImportContextKey{}).(exchangeImportContext); importing || s.writes == nil {
+		return nil
+	}
+	return s.writes.CheckResourceWrite(ctx, recordType, id)
+}
+
+func sameExchangeConfiguration(left, right Configuration) bool {
+	return left.ID == right.ID && left.ModelID == right.ModelID && left.Name == right.Name && left.SKU == right.SKU &&
+		left.Status == right.Status && left.Revision == right.Revision && maps.Equal(left.Specifications, right.Specifications)
+}
+
+func sameExchangePrice(left, right Price) bool {
+	return left.ID == right.ID && left.ModelID == right.ModelID && left.ConfigurationID == right.ConfigurationID &&
+		left.Kind == right.Kind && left.AmountMinor == right.AmountMinor && left.Currency == right.Currency &&
+		left.EffectiveFrom.Equal(right.EffectiveFrom) && equalOptionalTime(left.EffectiveTo, right.EffectiveTo) &&
+		left.SourceReference == right.SourceReference && left.Revision == right.Revision
+}
+
+func sameExchangeUpgradePath(left, right UpgradePath) bool {
+	return left.ID == right.ID && left.FromModelID == right.FromModelID && left.FromConfigurationID == right.FromConfigurationID &&
+		left.ToModelID == right.ToModelID && left.ToConfigurationID == right.ToConfigurationID && left.Kind == right.Kind &&
+		left.EffectiveFrom.Equal(right.EffectiveFrom) && left.Revision == right.Revision
+}
+
+func equalOptionalTime(left, right *time.Time) bool {
+	return left == nil && right == nil || left != nil && right != nil && left.Equal(*right)
 }
 
 func (s *Service) ListConfigurations(ctx context.Context, modelID string) ([]Configuration, error) {
@@ -79,16 +296,19 @@ func (s *Service) CreateConfiguration(ctx context.Context, input CreateConfigura
 	if err != nil {
 		return Configuration{}, err
 	}
-	now := s.now().UTC()
+	if err := s.checkWrite(ctx, "atlas.catalog-configuration", id); err != nil {
+		return Configuration{}, err
+	}
+	now, revision := s.creationState(ctx)
 	configuration, err := s.store.CreateConfiguration(ctx, Configuration{
 		ID: id, OrganizationID: s.organizationID, ModelID: input.ModelID, Name: input.Name,
-		SKU: input.SKU, Status: input.Status, Specifications: specifications, Revision: 1, CreatedAt: now, UpdatedAt: now,
+		SKU: input.SKU, Status: input.Status, Specifications: specifications, Revision: revision, CreatedAt: now, UpdatedAt: now,
 	})
 	if err != nil {
 		return Configuration{}, err
 	}
 	if err := s.audit(ctx, "atlas.catalog.configuration.created", "catalog_configuration", configuration.ID, map[string]string{
-		"modelId": configuration.ModelID, "status": string(configuration.Status), "revision": "1",
+		"modelId": configuration.ModelID, "status": string(configuration.Status), "revision": strconv.FormatInt(configuration.Revision, 10),
 	}); err != nil {
 		return Configuration{}, fmt.Errorf("audit Atlas Catalog configuration creation: %w", err)
 	}
@@ -117,17 +337,21 @@ func (s *Service) RecordPrice(ctx context.Context, input RecordPriceInput) (Pric
 	if err != nil {
 		return Price{}, err
 	}
+	if err := s.checkWrite(ctx, "atlas.catalog-price", id); err != nil {
+		return Price{}, err
+	}
+	now, revision := s.creationState(ctx)
 	price, err := s.store.CreatePrice(ctx, Price{
 		ID: id, OrganizationID: s.organizationID, ModelID: input.ModelID, ConfigurationID: input.ConfigurationID,
 		Kind: input.Kind, AmountMinor: input.AmountMinor, Currency: input.Currency, EffectiveFrom: input.EffectiveFrom,
-		EffectiveTo: input.EffectiveTo, SourceReference: input.SourceReference, Revision: 1, CreatedAt: s.now().UTC(),
+		EffectiveTo: input.EffectiveTo, SourceReference: input.SourceReference, Revision: revision, CreatedAt: now,
 	})
 	if err != nil {
 		return Price{}, err
 	}
 	if err := s.audit(ctx, "atlas.catalog.price.recorded", "catalog_price", price.ID, map[string]string{
 		"modelId": price.ModelID, "configurationId": price.ConfigurationID, "kind": string(price.Kind),
-		"currency": price.Currency, "revision": "1",
+		"currency": price.Currency, "revision": strconv.FormatInt(price.Revision, 10),
 	}); err != nil {
 		return Price{}, fmt.Errorf("audit Atlas Catalog price recording: %w", err)
 	}
@@ -246,11 +470,15 @@ func (s *Service) CreateUpgradePath(ctx context.Context, input CreateUpgradePath
 	if err != nil {
 		return UpgradePath{}, err
 	}
+	if err := s.checkWrite(ctx, "atlas.catalog-upgrade-path", id); err != nil {
+		return UpgradePath{}, err
+	}
+	now, revision := s.creationState(ctx)
 	path, err := s.store.CreateUpgradePath(ctx, UpgradePath{
 		ID: id, OrganizationID: s.organizationID, FromModelID: input.FromModelID,
 		FromConfigurationID: input.FromConfigurationID, ToModelID: input.ToModelID,
 		ToConfigurationID: input.ToConfigurationID, Kind: input.Kind, EffectiveFrom: input.EffectiveFrom,
-		Revision: 1, CreatedAt: s.now().UTC(),
+		Revision: revision, CreatedAt: now,
 	})
 	if err != nil {
 		return UpgradePath{}, err
@@ -258,7 +486,7 @@ func (s *Service) CreateUpgradePath(ctx context.Context, input CreateUpgradePath
 	if err := s.audit(ctx, "atlas.catalog.upgrade_path.created", "catalog_upgrade_path", path.ID, map[string]string{
 		"fromModelId": path.FromModelID, "fromConfigurationId": path.FromConfigurationID,
 		"toModelId": path.ToModelID, "toConfigurationId": path.ToConfigurationID,
-		"kind": string(path.Kind), "revision": "1",
+		"kind": string(path.Kind), "revision": strconv.FormatInt(path.Revision, 10),
 	}); err != nil {
 		return UpgradePath{}, fmt.Errorf("audit Atlas Catalog upgrade path creation: %w", err)
 	}
@@ -400,11 +628,22 @@ func catalogID(value string) (string, error) {
 func (s *Service) audit(ctx context.Context, action, resourceType, resourceID string, metadata map[string]string) error {
 	actorID := "system:atlas-catalog"
 	correlationID := ""
+	occurredAt := s.now().UTC()
+	eventID := ""
+	if state, ok := ctx.Value(exchangeImportContextKey{}).(exchangeImportContext); ok {
+		actorID = "system:exchange"
+		correlationID = state.operation.Token
+		occurredAt = state.operation.OccurredAt.UTC()
+		digest := sha256.Sum256([]byte(s.organizationID + "\x00" + state.operation.Token + "\x00" + action + "\x00" + resourceType + "\x00" + resourceID))
+		eventID = fmt.Sprintf("%x", digest[:])
+	}
 	if scope, ok := foundation.ScopeFromContext(ctx); ok {
-		if strings.TrimSpace(scope.ActorID) != "" {
+		if eventID == "" && strings.TrimSpace(scope.ActorID) != "" {
 			actorID = strings.TrimSpace(scope.ActorID)
 		}
-		correlationID = strings.TrimSpace(scope.CorrelationID)
+		if correlationID == "" {
+			correlationID = strings.TrimSpace(scope.CorrelationID)
+		}
 	}
 	if correlationID == "" {
 		var err error
@@ -413,15 +652,18 @@ func (s *Service) audit(ctx context.Context, action, resourceType, resourceID st
 			return fmt.Errorf("create Atlas Catalog audit correlation id: %w", err)
 		}
 	}
-	eventID, err := foundation.NewCorrelationID()
-	if err != nil {
-		return fmt.Errorf("create Atlas Catalog audit event id: %w", err)
+	if eventID == "" {
+		var err error
+		eventID, err = foundation.NewCorrelationID()
+		if err != nil {
+			return fmt.Errorf("create Atlas Catalog audit event id: %w", err)
+		}
 	}
 	metadata["requirementId"] = RequirementID
 	metadata["featureId"] = FeatureID
 	metadata["organizationScoped"] = strconv.FormatBool(true)
 	return s.auditor.Record(ctx, foundation.AuditEvent{
 		ID: eventID, OrganizationID: s.organizationID, ActorID: actorID, CorrelationID: correlationID,
-		Action: action, ResourceType: resourceType, ResourceID: resourceID, OccurredAt: s.now().UTC(), Metadata: metadata,
+		Action: action, ResourceType: resourceType, ResourceID: resourceID, OccurredAt: occurredAt, Metadata: metadata,
 	})
 }

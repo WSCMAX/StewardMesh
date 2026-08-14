@@ -31,6 +31,7 @@ test('filters assets, loads lifecycle details, and has no automated accessibilit
   }))
   const { container } = render(<AtlasInventory assets={[asset]} csrfToken="csrf-token" onAssetsChange={() => undefined} permissions={['assets.read']} />)
   expect(screen.getByRole('heading', { name: 'Atlas — Asset inventory' })).toBeInTheDocument()
+  expect(screen.getByRole('region', { name: 'Atlas inventory workflow' })).toBeInTheDocument()
   fireEvent.change(screen.getByLabelText('Search'), { target: { value: 'missing' } })
   expect(screen.getByText('No assets match these filters.')).toBeInTheDocument()
   fireEvent.change(screen.getByLabelText('Search'), { target: { value: 'LAB-001' } })
@@ -144,6 +145,134 @@ test('creates a model and links a new asset to it', async () => {
   expect(onAssetsChange).toHaveBeenCalledWith([created])
 })
 
+test('searches and inspects complete shared model defaults', async () => {
+  const model = {
+    id: 'model-detail', organizationId: 'example-org', manufacturer: 'Framework', name: 'Laptop 13',
+    modelNumber: 'FW13', kind: 'laptop', vendorIdentifier: 'vendor-fw13',
+    specifications: { CPU: 'Ryzen', Memory: '32 GB' }, supportUrl: 'https://support.example.test/fw13',
+    warrantyMonths: 36, usefulLifeMonths: 48, status: 'active', sourceSystemId: 'model-import',
+    sourceRecordId: 'framework-fw13-v1', instanceCount: 0, revision: 2,
+    createdAt: '2026-08-12T12:00:00Z', updatedAt: '2026-08-12T14:00:00Z',
+  }
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const path = String(input)
+    if (path === '/api/v1/asset-models?limit=100' || path === '/api/v1/asset-models?limit=100&q=Framework&kind=laptop') return jsonResponse({ items: [model] })
+    if (path === '/api/v1/asset-models/model-detail/inventory?limit=100') return jsonResponse({
+      modelId: model.id, totalCount: 0, filteredCount: 0, groups: [], items: [],
+    })
+    throw new Error(`unexpected request: ${path}`)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  const { container } = render(<AtlasInventory assets={[]} csrfToken="csrf-token" onAssetsChange={() => undefined} permissions={['assets.read']} />)
+
+  const searchForm = within(screen.getByRole('search', { name: 'Search models' }))
+  fireEvent.change(searchForm.getByLabelText('Search models'), { target: { value: 'Framework' } })
+  fireEvent.change(searchForm.getByLabelText('Model kind'), { target: { value: 'laptop' } })
+  fireEvent.click(searchForm.getByRole('button', { name: 'Search' }))
+  await waitFor(() => expect(fetchMock.mock.calls.some(([path]) => path === '/api/v1/asset-models?limit=100&q=Framework&kind=laptop')).toBe(true))
+
+  fireEvent.click(await screen.findByRole('link', { name: 'View inventory' }))
+  const details = (await screen.findByRole('heading', { name: 'Shared model defaults' })).closest('section') as HTMLElement
+  expect(within(details).getByText('vendor-fw13')).toBeInTheDocument()
+  expect(within(details).getByText('https://support.example.test/fw13')).toBeInTheDocument()
+  expect(within(details).getByText('model-import')).toBeInTheDocument()
+  expect(within(details).getByText('framework-fw13-v1')).toBeInTheDocument()
+  expect(within(details).getByText('Ryzen')).toBeInTheDocument()
+  expect(within(details).getByText('32 GB')).toBeInTheDocument()
+  expect((await axe.run(container)).violations).toEqual([])
+})
+
+test('updates specifications and import provenance without erasing model defaults', async () => {
+  const model = {
+    id: 'model-edit', organizationId: 'example-org', manufacturer: 'Framework', name: 'Laptop 13',
+    modelNumber: 'FW13', kind: 'laptop', vendorIdentifier: 'vendor-fw13',
+    specifications: { CPU: 'Ryzen', Memory: '32 GB' }, supportUrl: 'https://support.example.test/fw13',
+    warrantyMonths: 36, usefulLifeMonths: 48, status: 'active', sourceSystemId: 'model-import',
+    sourceRecordId: 'framework-fw13-v1', instanceCount: 0, revision: 1,
+    createdAt: '2026-08-12T12:00:00Z', updatedAt: '2026-08-12T12:00:00Z',
+  }
+  const updated = { ...model, specifications: { CPU: 'Ryzen AI', Memory: '32 GB' }, revision: 2, updatedAt: '2026-08-12T13:00:00Z' }
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input)
+    if (path === '/api/v1/asset-models?limit=100') return jsonResponse({ items: [model] })
+    if (path === '/api/v1/asset-models/model-edit' && init?.method === 'PUT') return jsonResponse(updated)
+    throw new Error(`unexpected request: ${path}`)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  const { container } = render(<AtlasInventory assets={[]} csrfToken="csrf-token" onAssetsChange={() => undefined} permissions={['assets.read', 'assets.write']} />)
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Edit' }))
+  const editForm = within(screen.getByRole('form', { name: 'Edit model' }))
+  expect(editForm.getByLabelText(/^Source system ID/)).toHaveValue('model-import')
+  expect(editForm.getByLabelText(/^Source record ID/)).toHaveValue('framework-fw13-v1')
+  expect(editForm.getByLabelText('Specification 1 name')).toHaveValue('CPU')
+  expect(editForm.getByLabelText('Specification 2 name')).toHaveValue('Memory')
+  fireEvent.change(editForm.getByLabelText('Specification 1 value'), { target: { value: 'Ryzen AI' } })
+  fireEvent.click(editForm.getByRole('button', { name: 'Save model' }))
+
+  expect(await screen.findByText('Model updated.')).toBeInTheDocument()
+  const request = fetchMock.mock.calls.find(([path, init]) => path === '/api/v1/asset-models/model-edit' && init?.method === 'PUT')
+  expect(request?.[1]?.headers).toMatchObject({ 'X-CSRF-Token': 'csrf-token' })
+  expect(JSON.parse(String(request?.[1]?.body))).toMatchObject({
+    specifications: { CPU: 'Ryzen AI', Memory: '32 GB' }, sourceSystemId: 'model-import',
+    sourceRecordId: 'framework-fw13-v1', revision: 1,
+  })
+  expect((await axe.run(container)).violations).toEqual([])
+})
+
+test('opens model inventory with exact filters, grouped counts, and linked asset details', async () => {
+  const model = {
+    id: 'model-inventory', organizationId: 'example-org', manufacturer: 'Dell', name: 'PowerEdge R760',
+    kind: 'server', status: 'active', instanceCount: 2, revision: 1,
+    createdAt: '2026-08-12T12:00:00Z', updatedAt: '2026-08-12T12:00:00Z',
+  }
+  const linked = { ...asset, id: 'inventory-asset', modelId: model.id, name: 'Chicago rack server', siteId: 'site-one', departmentId: 'department-one', userId: 'user-one', deploymentNotes: 'Rack 42 production' }
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const path = String(input)
+    if (path === '/api/v1/asset-models?limit=100') return jsonResponse({ items: [model] })
+    if (path === '/api/v1/sites') return jsonResponse({ items: [{ id: 'site-one', name: 'Chicago' }] })
+    if (path === '/api/v1/departments') return jsonResponse({ items: [{ id: 'department-one', name: 'Infrastructure' }] })
+    if (path === '/api/v1/identities?limit=100') return jsonResponse({ items: [{ id: 'user-one', displayName: 'Alex Admin' }] })
+    if (path === '/api/v1/buildings' || path === '/api/v1/rooms') return jsonResponse({ items: [] })
+    if (path.startsWith('/api/v1/asset-models/model-inventory/inventory?')) return jsonResponse({
+      modelId: model.id, totalCount: 2, filteredCount: 1, groupBy: path.includes('groupBy=site') ? 'site' : '',
+      groups: path.includes('groupBy=site') ? [{ key: 'site-one', count: 1 }] : [], items: [linked],
+    })
+    if (path === '/api/v1/assets/inventory-asset/lifecycle') return jsonResponse({ items: [] })
+    if (path === '/api/v1/assets/inventory-asset/identifiers') return jsonResponse({ items: [] })
+    throw new Error(`unexpected request: ${path}`)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  const { container } = render(<AtlasInventory assets={[]} csrfToken="csrf-token" onAssetsChange={() => undefined} permissions={['assets.read', 'directory.read']} />)
+  const viewInventory = await screen.findByRole('link', { name: 'View inventory' })
+  expect(viewInventory).toHaveAttribute('href', '#workspace-atlas')
+  fireEvent.click(viewInventory)
+  const filterForm = await screen.findByRole('form', { name: 'Filter inventory for Dell PowerEdge R760' })
+  const filters = within(filterForm)
+  fireEvent.change(filters.getByLabelText('Lifecycle state'), { target: { value: 'active' } })
+  fireEvent.change(filters.getByLabelText('Site'), { target: { value: 'site-one' } })
+  fireEvent.change(filters.getByLabelText('Asset department'), { target: { value: 'department-one' } })
+  fireEvent.change(filters.getByLabelText('Primary user (asset)'), { target: { value: 'user-one' } })
+  fireEvent.change(filters.getByLabelText('Deployment context'), { target: { value: 'Rack 42' } })
+  fireEvent.change(filters.getByLabelText('Group matching assets'), { target: { value: 'site' } })
+  fireEvent.click(filters.getByRole('button', { name: 'Apply filters' }))
+  expect(await screen.findByRole('heading', { name: 'Grouped counts' })).toBeInTheDocument()
+  expect(screen.getAllByText('Chicago').length).toBeGreaterThanOrEqual(2)
+  expect(screen.getByText('1 matching')).toBeInTheDocument()
+  const filteredRequest = fetchMock.mock.calls.map(([path]) => String(path)).find((path) => path.includes('groupBy=site')) || ''
+  expect(filteredRequest).toContain('status=active')
+  expect(filteredRequest).toContain('siteId=site-one')
+  expect(filteredRequest).toContain('departmentId=department-one')
+  expect(filteredRequest).toContain('userId=user-one')
+  expect(filteredRequest).toContain('deploymentContext=Rack+42')
+  expect(screen.getByText(/Effective-dated primary, additional-user, and responsible-department history remains in People/)).toBeInTheDocument()
+  const assetLink = screen.getByRole('link', { name: 'Chicago rack server' })
+  expect(assetLink).toHaveAttribute('href', '#workspace-atlas')
+  fireEvent.click(assetLink)
+  expect(await screen.findByText('Instance-specific record')).toBeInTheDocument()
+  expect((await axe.run(container)).violations).toEqual([])
+})
+
 test('bulk creates model instances with per-asset deployment fields and accessible repeatable rows', async () => {
   const model = {
     id: 'model-bulk', organizationId: 'example-org', manufacturer: 'Framework', name: 'Laptop 13',
@@ -207,4 +336,27 @@ test('updates an asset using its current revision and records a lifecycle note',
   const request = fetchMock.mock.calls.find(([path, init]) => path === '/api/v1/assets/asset-1' && init?.method === 'PUT')
   expect(JSON.parse(String(request?.[1]?.body))).toMatchObject({ revision: 1, status: 'retired', lifecycleNote: 'Replacement completed' })
   await waitFor(() => expect(onAssetsChange).toHaveBeenCalledWith([updated]))
+})
+
+test('opens the authorized asset detail from the explicit Atlas Codes scan-to-find workflow', async () => {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input)
+    if (path === '/api/v1/asset-models?limit=100') return jsonResponse({ items: [] })
+    if (path === '/api/v1/asset-identifiers/resolve' && init?.method === 'POST') return jsonResponse({ assetId: asset.id })
+    if (path === '/api/v1/assets/asset-1/lifecycle') return jsonResponse({ items: [] })
+    if (path === '/api/v1/assets/asset-1/identifiers') return jsonResponse({ items: [] })
+    throw new Error(`unexpected request: ${path}`)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  render(<AtlasInventory assets={[asset]} csrfToken="csrf-token" onAssetsChange={() => undefined} permissions={['assets.read']} />)
+
+  fireEvent.click(screen.getByRole('button', { name: 'Open scanner' }))
+  fireEvent.change(screen.getByLabelText('Symbology'), { target: { value: 'qr' } })
+  fireEvent.change(screen.getByLabelText('Scanned or entered value'), { target: { value: 'opaque-asset-route' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Find asset' }))
+
+  expect(await screen.findByText(/Identifier matched/)).toBeInTheDocument()
+  const detail = screen.getByRole('heading', { name: 'Asset details' }).closest('aside') as HTMLElement
+  expect(within(detail).getByText('Lab server')).toBeInTheDocument()
+  expect(JSON.parse(String(fetchMock.mock.calls.find(([path]) => path === '/api/v1/asset-identifiers/resolve')?.[1]?.body))).toEqual({ symbology: 'qr', value: 'opaque-asset-route' })
 })

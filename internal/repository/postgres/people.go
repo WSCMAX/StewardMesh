@@ -88,7 +88,7 @@ func (s *PeopleStore) ExchangeSnapshot(ctx context.Context, organizationID strin
 	remaining -= len(result.Departments)
 	result.Identities, err = queryPeopleExchangeRows(ctx, transaction, `
 		SELECT id, organization_id, kind, display_name, normalized_name, email, normalized_email,
-		       COALESCE(department_id, ''), COALESCE(site_id, ''), status, provider, provider_subject,
+		       COALESCE(department_id, ''), COALESCE(site_id, ''), COALESCE(building_id, ''), COALESCE(room_id, ''), status, provider, provider_subject,
 		       revision, created_at, updated_at
 		FROM people_identities WHERE organization_id = $1 ORDER BY id LIMIT $2
 	`, organizationID, remaining+1, scanPeopleIdentity)
@@ -174,6 +174,35 @@ func (s *PeopleStore) GetSite(ctx context.Context, organizationID, id string) (p
 	return site, nil
 }
 
+func (s *PeopleStore) UpdateSite(ctx context.Context, site people.Site, expectedRevision uint64) (people.Site, error) {
+	if expectedRevision < 1 || site.Revision != expectedRevision+1 {
+		return people.Site{}, people.ErrConflict
+	}
+	row := s.database.QueryRowContext(ctx, `
+		UPDATE people_sites SET
+			name = $4, normalized_name = $5, address_line1 = $6, address_line2 = $7,
+			address_city = $8, address_region = $9, address_postal_code = $10, address_country = $11,
+			status = $12, revision = $13, updated_at = $14
+		WHERE organization_id = $1 AND id = $2 AND revision = $3 AND created_at = $15
+		RETURNING id, organization_id, name, normalized_name, address_line1, address_line2,
+		          address_city, address_region, address_postal_code, address_country,
+		          status, revision, created_at, updated_at
+	`, site.OrganizationID, site.ID, expectedRevision, site.Name, site.NormalizedName, site.Address.Line1, site.Address.Line2,
+		site.Address.City, site.Address.Region, site.Address.PostalCode, site.Address.Country,
+		site.Status, site.Revision, site.UpdatedAt, site.CreatedAt)
+	updated, err := scanPeopleSite(row)
+	if err != nil {
+		if mapped := peopleUpdateMiss(err, func() error {
+			_, lookupErr := s.GetSite(ctx, site.OrganizationID, site.ID)
+			return lookupErr
+		}); mapped != nil {
+			return people.Site{}, mapped
+		}
+		return people.Site{}, mapPeopleStoreError("update site", err)
+	}
+	return updated, nil
+}
+
 func (s *PeopleStore) ListSites(ctx context.Context, organizationID string, visibility people.Visibility) ([]people.Site, error) {
 	if organizationID == "" || visibility.Empty() {
 		return nil, people.ErrScopeRequired
@@ -256,6 +285,30 @@ func (s *PeopleStore) GetBuilding(ctx context.Context, organizationID, id string
 	return building, nil
 }
 
+func (s *PeopleStore) UpdateBuilding(ctx context.Context, building people.Building, expectedRevision uint64) (people.Building, error) {
+	if expectedRevision < 1 || building.Revision != expectedRevision+1 {
+		return people.Building{}, people.ErrConflict
+	}
+	row := s.database.QueryRowContext(ctx, `
+		UPDATE people_buildings SET
+			site_id = $4, name = $5, normalized_name = $6, status = $7, revision = $8, updated_at = $9
+		WHERE organization_id = $1 AND id = $2 AND revision = $3 AND created_at = $10
+		RETURNING id, organization_id, site_id, name, normalized_name, status, revision, created_at, updated_at
+	`, building.OrganizationID, building.ID, expectedRevision, building.SiteID, building.Name, building.NormalizedName,
+		building.Status, building.Revision, building.UpdatedAt, building.CreatedAt)
+	updated, err := scanPeopleBuilding(row)
+	if err != nil {
+		if mapped := peopleUpdateMiss(err, func() error {
+			_, lookupErr := s.GetBuilding(ctx, building.OrganizationID, building.ID)
+			return lookupErr
+		}); mapped != nil {
+			return people.Building{}, mapped
+		}
+		return people.Building{}, mapPeopleStoreError("update building", err)
+	}
+	return updated, nil
+}
+
 func (s *PeopleStore) ListBuildings(ctx context.Context, organizationID, siteID string, visibility people.Visibility) ([]people.Building, error) {
 	if organizationID == "" {
 		return nil, people.ErrInvalidInput
@@ -332,6 +385,32 @@ func (s *PeopleStore) GetRoom(ctx context.Context, organizationID, id string) (p
 		return people.Room{}, fmt.Errorf("get room: %w", err)
 	}
 	return room, nil
+}
+
+func (s *PeopleStore) UpdateRoom(ctx context.Context, room people.Room, expectedRevision uint64) (people.Room, error) {
+	if expectedRevision < 1 || room.Revision != expectedRevision+1 {
+		return people.Room{}, people.ErrConflict
+	}
+	row := s.database.QueryRowContext(ctx, `
+		UPDATE people_rooms SET
+			site_id = $4, building_id = $5, room_number = $6, normalized_number = $7,
+			name = $8, status = $9, revision = $10, updated_at = $11
+		WHERE organization_id = $1 AND id = $2 AND revision = $3 AND created_at = $12
+		RETURNING id, organization_id, site_id, building_id, room_number, normalized_number,
+		          name, status, revision, created_at, updated_at
+	`, room.OrganizationID, room.ID, expectedRevision, room.SiteID, room.BuildingID, room.Number, room.NormalizedNumber,
+		room.Name, room.Status, room.Revision, room.UpdatedAt, room.CreatedAt)
+	updated, err := scanPeopleRoom(row)
+	if err != nil {
+		if mapped := peopleUpdateMiss(err, func() error {
+			_, lookupErr := s.GetRoom(ctx, room.OrganizationID, room.ID)
+			return lookupErr
+		}); mapped != nil {
+			return people.Room{}, mapped
+		}
+		return people.Room{}, mapPeopleStoreError("update room", err)
+	}
+	return updated, nil
 }
 
 func (s *PeopleStore) ListRooms(ctx context.Context, organizationID, siteID, buildingID string, visibility people.Visibility) ([]people.Room, error) {
@@ -412,6 +491,30 @@ func (s *PeopleStore) GetDepartment(ctx context.Context, organizationID, id stri
 		return people.Department{}, fmt.Errorf("get department: %w", err)
 	}
 	return department, nil
+}
+
+func (s *PeopleStore) UpdateDepartment(ctx context.Context, department people.Department, expectedRevision uint64) (people.Department, error) {
+	if expectedRevision < 1 || department.Revision != expectedRevision+1 {
+		return people.Department{}, people.ErrConflict
+	}
+	row := s.database.QueryRowContext(ctx, `
+		UPDATE people_departments SET
+			name = $4, normalized_name = $5, site_id = NULLIF($6, ''), status = $7, revision = $8, updated_at = $9
+		WHERE organization_id = $1 AND id = $2 AND revision = $3 AND created_at = $10
+		RETURNING id, organization_id, name, normalized_name, COALESCE(site_id, ''), status, revision, created_at, updated_at
+	`, department.OrganizationID, department.ID, expectedRevision, department.Name, department.NormalizedName, department.SiteID,
+		department.Status, department.Revision, department.UpdatedAt, department.CreatedAt)
+	updated, err := scanPeopleDepartment(row)
+	if err != nil {
+		if mapped := peopleUpdateMiss(err, func() error {
+			_, lookupErr := s.GetDepartment(ctx, department.OrganizationID, department.ID)
+			return lookupErr
+		}); mapped != nil {
+			return people.Department{}, mapped
+		}
+		return people.Department{}, mapPeopleStoreError("update department", err)
+	}
+	return updated, nil
 }
 
 func (s *PeopleStore) ListDepartments(ctx context.Context, organizationID string, visibility people.Visibility) ([]people.Department, error) {
@@ -769,13 +872,13 @@ func (s *PeopleStore) CreateIdentity(ctx context.Context, identity people.Identi
 	row := s.database.QueryRowContext(ctx, `
 		INSERT INTO people_identities (
 			id, organization_id, kind, display_name, normalized_name, email, normalized_email,
-			department_id, site_id, status, provider, provider_subject, revision, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, NULLIF($8, ''), NULLIF($9, ''), $10, $11, $12, $13, $14, $15)
+			department_id, site_id, building_id, room_id, status, provider, provider_subject, revision, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, NULLIF($8, ''), NULLIF($9, ''), NULLIF($10, ''), NULLIF($11, ''), $12, $13, $14, $15, $16, $17)
 		RETURNING id, organization_id, kind, display_name, normalized_name, email, normalized_email,
-		          COALESCE(department_id, ''), COALESCE(site_id, ''), status, provider, provider_subject,
+		          COALESCE(department_id, ''), COALESCE(site_id, ''), COALESCE(building_id, ''), COALESCE(room_id, ''), status, provider, provider_subject,
 		          revision, created_at, updated_at
 	`, identity.ID, identity.OrganizationID, identity.Kind, identity.DisplayName, identity.NormalizedName,
-		identity.Email, identity.NormalizedEmail, identity.DepartmentID, identity.SiteID, identity.Status,
+		identity.Email, identity.NormalizedEmail, identity.DepartmentID, identity.SiteID, identity.BuildingID, identity.RoomID, identity.Status,
 		identity.Provider, identity.ProviderSubject, identity.Revision, identity.CreatedAt, identity.UpdatedAt)
 	created, err := scanPeopleIdentity(row)
 	if err != nil {
@@ -787,7 +890,7 @@ func (s *PeopleStore) CreateIdentity(ctx context.Context, identity people.Identi
 func (s *PeopleStore) GetIdentity(ctx context.Context, organizationID, id string) (people.Identity, error) {
 	row := s.database.QueryRowContext(ctx, `
 		SELECT id, organization_id, kind, display_name, normalized_name, email, normalized_email,
-		       COALESCE(department_id, ''), COALESCE(site_id, ''), status, provider, provider_subject,
+		       COALESCE(department_id, ''), COALESCE(site_id, ''), COALESCE(building_id, ''), COALESCE(room_id, ''), status, provider, provider_subject,
 		       revision, created_at, updated_at
 		FROM people_identities
 		WHERE organization_id = $1 AND id = $2
@@ -802,10 +905,39 @@ func (s *PeopleStore) GetIdentity(ctx context.Context, organizationID, id string
 	return identity, nil
 }
 
+func (s *PeopleStore) UpdateIdentity(ctx context.Context, identity people.Identity, expectedRevision uint64) (people.Identity, error) {
+	if expectedRevision < 1 || identity.Revision != expectedRevision+1 {
+		return people.Identity{}, people.ErrConflict
+	}
+	row := s.database.QueryRowContext(ctx, `
+		UPDATE people_identities SET
+			kind = $4, display_name = $5, normalized_name = $6, email = $7, normalized_email = $8,
+			department_id = NULLIF($9, ''), site_id = NULLIF($10, ''), building_id = NULLIF($11, ''), room_id = NULLIF($12, ''), status = $13,
+			revision = $14, updated_at = $15
+		WHERE organization_id = $1 AND id = $2 AND revision = $3 AND provider = $16 AND provider_subject = $17 AND created_at = $18
+		RETURNING id, organization_id, kind, display_name, normalized_name, email, normalized_email,
+		          COALESCE(department_id, ''), COALESCE(site_id, ''), COALESCE(building_id, ''), COALESCE(room_id, ''), status, provider, provider_subject,
+		          revision, created_at, updated_at
+	`, identity.OrganizationID, identity.ID, expectedRevision, identity.Kind, identity.DisplayName, identity.NormalizedName,
+		identity.Email, identity.NormalizedEmail, identity.DepartmentID, identity.SiteID, identity.BuildingID, identity.RoomID, identity.Status,
+		identity.Revision, identity.UpdatedAt, identity.Provider, identity.ProviderSubject, identity.CreatedAt)
+	updated, err := scanPeopleIdentity(row)
+	if err != nil {
+		if mapped := peopleUpdateMiss(err, func() error {
+			_, lookupErr := s.GetIdentity(ctx, identity.OrganizationID, identity.ID)
+			return lookupErr
+		}); mapped != nil {
+			return people.Identity{}, mapped
+		}
+		return people.Identity{}, mapPeopleStoreError("update identity", err)
+	}
+	return updated, nil
+}
+
 func (s *PeopleStore) GetIdentityByProvider(ctx context.Context, organizationID, provider, providerSubject string) (people.Identity, error) {
 	row := s.database.QueryRowContext(ctx, `
 		SELECT id, organization_id, kind, display_name, normalized_name, email, normalized_email,
-		       COALESCE(department_id, ''), COALESCE(site_id, ''), status, provider, provider_subject,
+		       COALESCE(department_id, ''), COALESCE(site_id, ''), COALESCE(building_id, ''), COALESCE(room_id, ''), status, provider, provider_subject,
 		       revision, created_at, updated_at
 		FROM people_identities WHERE organization_id = $1 AND provider = $2 AND provider_subject = $3
 	`, organizationID, provider, providerSubject)
@@ -822,7 +954,7 @@ func (s *PeopleStore) GetIdentityByProvider(ctx context.Context, organizationID,
 func (s *PeopleStore) GetIdentityByEmail(ctx context.Context, organizationID, normalizedEmail string) (people.Identity, error) {
 	row := s.database.QueryRowContext(ctx, `
 		SELECT id, organization_id, kind, display_name, normalized_name, email, normalized_email,
-		       COALESCE(department_id, ''), COALESCE(site_id, ''), status, provider, provider_subject,
+		       COALESCE(department_id, ''), COALESCE(site_id, ''), COALESCE(building_id, ''), COALESCE(room_id, ''), status, provider, provider_subject,
 		       revision, created_at, updated_at
 		FROM people_identities WHERE organization_id = $1 AND normalized_email = $2
 	`, organizationID, normalizedEmail)
@@ -843,14 +975,14 @@ func (s *PeopleStore) ReconcileIdentity(ctx context.Context, identity people.Ide
 	row := s.database.QueryRowContext(ctx, `
 		UPDATE people_identities SET
 			kind = $4, display_name = $5, normalized_name = $6, email = $7, normalized_email = $8,
-			department_id = NULLIF($9, ''), site_id = NULLIF($10, ''), status = $11,
-			revision = $12, updated_at = $13
-		WHERE organization_id = $1 AND id = $2 AND revision = $3 AND provider = $14 AND provider_subject = $15 AND created_at = $16
+			department_id = NULLIF($9, ''), site_id = NULLIF($10, ''), building_id = NULLIF($11, ''), room_id = NULLIF($12, ''), status = $13,
+			revision = $14, updated_at = $15
+		WHERE organization_id = $1 AND id = $2 AND revision = $3 AND provider = $16 AND provider_subject = $17 AND created_at = $18
 		RETURNING id, organization_id, kind, display_name, normalized_name, email, normalized_email,
-		          COALESCE(department_id, ''), COALESCE(site_id, ''), status, provider, provider_subject,
+		          COALESCE(department_id, ''), COALESCE(site_id, ''), COALESCE(building_id, ''), COALESCE(room_id, ''), status, provider, provider_subject,
 		          revision, created_at, updated_at
 	`, identity.OrganizationID, identity.ID, expectedRevision, identity.Kind, identity.DisplayName, identity.NormalizedName,
-		identity.Email, identity.NormalizedEmail, identity.DepartmentID, identity.SiteID, identity.Status,
+		identity.Email, identity.NormalizedEmail, identity.DepartmentID, identity.SiteID, identity.BuildingID, identity.RoomID, identity.Status,
 		identity.Revision, identity.UpdatedAt, identity.Provider, identity.ProviderSubject, identity.CreatedAt)
 	updated, err := scanPeopleIdentity(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -884,7 +1016,7 @@ func (s *PeopleStore) SearchIdentities(ctx context.Context, organizationID strin
 	query := strings.Builder{}
 	query.WriteString(`
 		SELECT id, organization_id, kind, display_name, normalized_name, email, normalized_email,
-		       COALESCE(department_id, ''), COALESCE(site_id, ''), status, provider, provider_subject,
+		       COALESCE(department_id, ''), COALESCE(site_id, ''), COALESCE(building_id, ''), COALESCE(room_id, ''), status, provider, provider_subject,
 		       revision, created_at, updated_at
 		FROM people_identities
 		WHERE organization_id = $1`)
@@ -923,6 +1055,9 @@ func (s *PeopleStore) SearchIdentities(ctx context.Context, organizationID strin
 		arguments = append(arguments, filter.SiteID)
 		query.WriteString(fmt.Sprintf(" AND site_id = $%d", len(arguments)))
 	}
+	if len(filter.IDs) > 0 {
+		query.WriteString(" AND " + inPredicate("id", filter.IDs, &arguments))
+	}
 	arguments = append(arguments, filter.Limit)
 	query.WriteString(fmt.Sprintf(" ORDER BY normalized_name, id LIMIT $%d", len(arguments)))
 	rows, err := s.database.QueryContext(ctx, query.String(), arguments...)
@@ -951,7 +1086,7 @@ func (s *PeopleStore) ListGraphIdentities(ctx context.Context, organizationID st
 	query := strings.Builder{}
 	query.WriteString(`
 		SELECT id, organization_id, kind, display_name, normalized_name, email, normalized_email,
-		       COALESCE(department_id, ''), COALESCE(site_id, ''), status, provider, provider_subject,
+		       COALESCE(department_id, ''), COALESCE(site_id, ''), COALESCE(building_id, ''), COALESCE(room_id, ''), status, provider, provider_subject,
 		       revision, created_at, updated_at
 		FROM people_identities
 		WHERE organization_id = $1 AND status = 'active'`)
@@ -1249,7 +1384,7 @@ func scanPeopleDepartment(row peopleRowScanner) (people.Department, error) {
 func scanPeopleIdentity(row peopleRowScanner) (people.Identity, error) {
 	var identity people.Identity
 	err := row.Scan(&identity.ID, &identity.OrganizationID, &identity.Kind, &identity.DisplayName, &identity.NormalizedName,
-		&identity.Email, &identity.NormalizedEmail, &identity.DepartmentID, &identity.SiteID, &identity.Status,
+		&identity.Email, &identity.NormalizedEmail, &identity.DepartmentID, &identity.SiteID, &identity.BuildingID, &identity.RoomID, &identity.Status,
 		&identity.Provider, &identity.ProviderSubject, &identity.Revision, &identity.CreatedAt, &identity.UpdatedAt)
 	return identity, err
 }
@@ -1309,4 +1444,16 @@ func mapPeopleStoreError(operation string, err error) error {
 		}
 	}
 	return fmt.Errorf("%s: %w", operation, err)
+}
+
+func peopleUpdateMiss(err error, lookup func() error) error {
+	if !errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if lookupErr := lookup(); errors.Is(lookupErr, people.ErrNotFound) {
+		return people.ErrNotFound
+	} else if lookupErr != nil {
+		return lookupErr
+	}
+	return people.ErrConflict
 }

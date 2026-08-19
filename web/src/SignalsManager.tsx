@@ -1,6 +1,6 @@
 import { type FormEvent, useCallback, useEffect, useRef, useState } from 'react'
 import { ApiRequestError, isRevision, requestJSON, type Revision } from './api'
-import { buttonClass, dangerButtonClass, inputClass, labelClass, panelClass, secondaryButtonClass, StatusBadge, subpanelClass } from './ui'
+import { ProductHeader, buttonClass, dangerButtonClass, inputClass, labelClass, panelClass, secondaryButtonClass, StatusBadge, subpanelClass } from './ui'
 
 // Requirement: REQ-SIGNALS-001. Feature: alerts.rules. GitHub: #11.
 
@@ -291,10 +291,13 @@ export default function SignalsManager({ csrfToken, onOpenHelp, permissions }: {
   const exportQuery = statusFilter ? `?status=${encodeURIComponent(statusFilter)}&limit=500` : '?limit=500'
   return <section aria-labelledby="signals-heading" className="grid gap-6" data-feature="alerts.rules" data-requirement="REQ-SIGNALS-001">
     <div className={`${panelClass} p-5 sm:p-7`}>
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div><p className="text-xs font-semibold uppercase tracking-[0.18em] text-steward-teal">Signals</p><h2 className="mt-2 text-2xl font-semibold" id="signals-heading">Actionable alerts and rules</h2><p className="mt-2 max-w-3xl leading-7 text-steward-mist-muted">Evaluate operational and financial conditions, deduplicate repeated observations, and retain visible acknowledgment, assignment, resolution, and delivery history.</p></div>
-        <div className="flex flex-wrap gap-2">{onOpenHelp && <button className={secondaryButtonClass} onClick={onOpenHelp} type="button">Signals help</button>}{canWrite && <button className={buttonClass} disabled={busy !== ''} onClick={evaluate} type="button">{busy === 'evaluate' ? 'Evaluating…' : 'Evaluate now'}</button>}</div>
-      </div>
+      <ProductHeader
+        actions={<div className="flex flex-wrap gap-2">{onOpenHelp && <button className={secondaryButtonClass} onClick={onOpenHelp} type="button">Signals help</button>}{canWrite && <button className={buttonClass} disabled={busy !== ''} onClick={evaluate} type="button">{busy === 'evaluate' ? 'Evaluating…' : 'Evaluate now'}</button>}</div>}
+        description="Evaluate operational and financial conditions, deduplicate repeated observations, and retain visible acknowledgment, assignment, resolution, and delivery history."
+        headingId="signals-heading"
+        kicker="Signals"
+        title="Actionable alerts and rules"
+      />
       {error && <div aria-live="assertive" className="mt-4 rounded-xl border border-steward-danger/50 bg-steward-danger/10 p-4 text-sm text-[#ffbdc3]" ref={errorRef} role="alert" tabIndex={-1}>{error}</div>}
       {status && <p aria-live="polite" className="mt-4 rounded-xl border border-steward-success/35 bg-steward-success/10 p-4 text-sm text-[#98eab9]" role="status">{status}</p>}
       {!canWrite && <p className="mt-4 rounded-xl border border-steward-blue/35 bg-steward-blue/10 p-4 text-sm text-[#a9c7ff]">You have read-only Signals access. Creating rules, evaluating, assigning, and acknowledging require <code>signals.write</code>.</p>}
@@ -305,7 +308,7 @@ export default function SignalsManager({ csrfToken, onOpenHelp, permissions }: {
       {loading ? <p className="mt-5 text-sm text-steward-mist-muted">Loading alerts…</p> : alerts.length === 0 ? <p className="mt-5 rounded-xl border border-dashed border-white/15 p-6 text-center text-sm text-steward-mist-muted">No alerts match this status. Evaluate enabled rules after Ledger, Horizon, or Stack data changes.</p> : <ul className="mt-5 grid gap-4">
         {alerts.map((alert) => <li className={`${subpanelClass} min-w-0 p-4 sm:p-5`} key={alert.id}>
           <div className="flex flex-wrap items-start justify-between gap-3"><div className="min-w-0"><div className="flex flex-wrap gap-2"><StatusBadge tone={toneFor(alert)}>{words(alert.status)}</StatusBadge><StatusBadge tone={alert.severity === 'critical' ? 'warning' : alert.severity === 'info' ? 'info' : 'neutral'}>{words(alert.severity)} severity</StatusBadge><StatusBadge>{words(alert.condition)}</StatusBadge></div><h4 className="mt-3 text-lg font-semibold">{alert.title}</h4><p className="mt-1 max-w-4xl break-words text-sm leading-6 text-steward-mist-muted">{alert.summary}</p></div>{canWrite && alert.status === 'active' && <button className={secondaryButtonClass} disabled={busy !== ''} onClick={() => acknowledge(alert)} type="button">{busy === `ack-${alert.id}` ? 'Acknowledging…' : 'Acknowledge'}</button>}</div>
-          <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2 xl:grid-cols-4"><div><dt className="text-xs font-semibold uppercase tracking-wide text-steward-slate">Target</dt><dd className="mt-1 break-all font-mono">{alert.targetType}:{alert.targetId}</dd></div><div><dt className="text-xs font-semibold uppercase tracking-wide text-steward-slate">Due</dt><dd className="mt-1">{dateLabel(alert.dueAt)}</dd></div><div><dt className="text-xs font-semibold uppercase tracking-wide text-steward-slate">Last observed</dt><dd className="mt-1">{dateLabel(alert.lastObservedAt)}</dd></div><div><dt className="text-xs font-semibold uppercase tracking-wide text-steward-slate">Assignment</dt><dd className="mt-1 break-all">{alert.assignedId ? `${alert.assignedKind}: ${alert.assignedId}` : 'Unassigned'}</dd></div></dl>
+          <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2 xl:grid-cols-4"><div><dt className="text-xs font-medium text-steward-slate">Target</dt><dd className="mt-1 break-all font-mono">{alert.targetType}:{alert.targetId}</dd></div><div><dt className="text-xs font-medium text-steward-slate">Due</dt><dd className="mt-1">{dateLabel(alert.dueAt)}</dd></div><div><dt className="text-xs font-medium text-steward-slate">Last observed</dt><dd className="mt-1">{dateLabel(alert.lastObservedAt)}</dd></div><div><dt className="text-xs font-medium text-steward-slate">Assignment</dt><dd className="mt-1 break-all">{alert.assignedId ? `${alert.assignedKind}: ${alert.assignedId}` : 'Unassigned'}</dd></div></dl>
           {canWrite && alert.status !== 'resolved' && <form className="mt-4 grid gap-3 border-t border-white/[0.08] pt-4 sm:grid-cols-[10rem_minmax(12rem,1fr)_auto] sm:items-end" onSubmit={(event) => assign(event, alert)}><div><label className={labelClass} htmlFor={`signalAssignKind-${alert.id}`}>Assign to</label><select className={inputClass} id={`signalAssignKind-${alert.id}`} name="kind"><option value="identity">Identity</option><option value="group">Group</option></select></div><div><label className={labelClass} htmlFor={`signalAssignTarget-${alert.id}`}>Configured target ID</label><input className={inputClass} id={`signalAssignTarget-${alert.id}`} maxLength={128} name="targetId" pattern="[A-Za-z0-9][A-Za-z0-9._:\-]{0,127}" required /></div><button className={secondaryButtonClass} disabled={busy !== ''} type="submit">{busy === `assign-${alert.id}` ? 'Assigning…' : 'Assign alert'}</button></form>}
         </li>)}
       </ul>}

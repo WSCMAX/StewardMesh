@@ -304,6 +304,28 @@ func TestServiceUpdatesLifecycleAndCoversPeopleScopedInstallations(t *testing.T)
 		}
 	}
 
+	roomStore := newTestStore()
+	roomReferences := &testReferences{contexts: map[string]AssetContext{"lab-asset": {ID: "lab-asset", RoomID: "lab-room"}}}
+	roomService := newTestService(t, roomStore, roomReferences, &testAuditor{}, "org-one", now)
+	roomProduct, _ := roomService.CreateProduct(context.Background(), CreateProductInput{ID: "autodesk", Name: "Autodesk", Publisher: "Autodesk"})
+	roomVersion, _ := roomService.CreateVersion(context.Background(), CreateVersionInput{ID: "autodesk-version", ProductID: roomProduct.ID, Name: "2026"})
+	if _, err := roomService.RecordInstallation(context.Background(), RecordInstallationInput{ID: "lab-install", VersionID: roomVersion.ID, AssetID: "lab-asset", InstalledAt: now.Add(-time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	roomLicense, _ := roomService.CreateLicense(context.Background(), CreateLicenseInput{ID: "lab-pack", ProductID: roomProduct.ID, Name: "Lab pack", EntitlementMetric: "device", Quantity: 30})
+	if _, err := roomService.CreateAssignment(context.Background(), CreateAssignmentInput{ID: "lab-room-assignment", LicenseID: roomLicense.ID, AssigneeKind: "room", AssigneeID: "lab-room", Seats: 24, AssignedAt: now.Add(-time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	roomReport, err := roomService.Analytics(context.Background(), now, 90)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, condition := range roomReport.ComplianceConditions {
+		if condition.Code == "missing_license" {
+			t.Fatalf("room assignment should cover lab installation: %#v", condition)
+		}
+	}
+
 	removedAt := now
 	if _, err := service.UpdateInstallationState(context.Background(), UpdateInstallationStateInput{ID: installation.ID, Status: "removed", UsageState: "unused", RemovedAt: &removedAt, Revision: installation.Revision}); err != nil {
 		t.Fatal(err)

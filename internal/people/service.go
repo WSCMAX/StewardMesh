@@ -186,6 +186,53 @@ func (s *Service) ListSites(ctx context.Context, visibility Visibility) ([]Site,
 	return s.store.ListSites(ctx, s.organizationID, visibility)
 }
 
+func (s *Service) UpdateSite(ctx context.Context, input UpdateSiteInput) (Site, error) {
+	id := strings.TrimSpace(input.ID)
+	if !recordIDPattern.MatchString(id) {
+		return Site{}, ErrInvalidInput
+	}
+	if err := s.checkWrite(ctx, "people.site", id); err != nil {
+		return Site{}, err
+	}
+	existing, err := s.store.GetSite(ctx, s.organizationID, id)
+	if err != nil {
+		return Site{}, err
+	}
+	if existing.Revision != input.Revision {
+		return Site{}, ErrConflict
+	}
+	name, normalizedName, status, err := validateNamedRecord(input.Name, input.Status)
+	if err != nil {
+		return Site{}, err
+	}
+	address, err := normalizeAddress(input.Address)
+	if err != nil {
+		return Site{}, err
+	}
+	updated, err := s.store.UpdateSite(ctx, Site{
+		ID:             existing.ID,
+		OrganizationID: existing.OrganizationID,
+		Name:           name,
+		NormalizedName: normalizedName,
+		Address:        address,
+		Status:         status,
+		Revision:       existing.Revision + 1,
+		CreatedAt:      existing.CreatedAt,
+		UpdatedAt:      s.now(),
+	}, existing.Revision)
+	if err != nil {
+		return Site{}, err
+	}
+	requirementID := RequirementID
+	if !updated.Address.Empty() {
+		requirementID = DirectoryExpansionRequirementID
+	}
+	if err := s.auditRequirement(ctx, requirementID, "people.site.updated", "site", updated.ID, nil); err != nil {
+		return Site{}, fmt.Errorf("audit site update: %w", err)
+	}
+	return updated, nil
+}
+
 func (s *Service) CreateBuilding(ctx context.Context, input CreateBuildingInput) (Building, error) {
 	name, normalizedName, status, err := validateNamedRecord(input.Name, input.Status)
 	if err != nil {
@@ -239,6 +286,61 @@ func (s *Service) ListBuildings(ctx context.Context, siteID string, visibility V
 		return nil, ErrScopeRequired
 	}
 	return s.store.ListBuildings(ctx, s.organizationID, siteID, visibility)
+}
+
+func (s *Service) UpdateBuilding(ctx context.Context, input UpdateBuildingInput) (Building, error) {
+	id := strings.TrimSpace(input.ID)
+	siteID := strings.TrimSpace(input.SiteID)
+	if !recordIDPattern.MatchString(id) || !recordIDPattern.MatchString(siteID) {
+		return Building{}, ErrInvalidInput
+	}
+	if err := s.checkWrite(ctx, "people.building", id); err != nil {
+		return Building{}, err
+	}
+	existing, err := s.store.GetBuilding(ctx, s.organizationID, id)
+	if err != nil {
+		return Building{}, err
+	}
+	if existing.Revision != input.Revision {
+		return Building{}, ErrConflict
+	}
+	name, normalizedName, status, err := validateNamedRecord(input.Name, input.Status)
+	if err != nil {
+		return Building{}, err
+	}
+	if _, err := s.store.GetSite(ctx, s.organizationID, siteID); err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return Building{}, ErrReferenceMissing
+		}
+		return Building{}, err
+	}
+	if siteID != existing.SiteID {
+		rooms, listErr := s.store.ListRooms(ctx, s.organizationID, "", existing.ID, Visibility{All: true})
+		if listErr != nil {
+			return Building{}, listErr
+		}
+		if len(rooms) > 0 {
+			return Building{}, ErrConflict
+		}
+	}
+	updated, err := s.store.UpdateBuilding(ctx, Building{
+		ID:             existing.ID,
+		OrganizationID: existing.OrganizationID,
+		SiteID:         siteID,
+		Name:           name,
+		NormalizedName: normalizedName,
+		Status:         status,
+		Revision:       existing.Revision + 1,
+		CreatedAt:      existing.CreatedAt,
+		UpdatedAt:      s.now(),
+	}, existing.Revision)
+	if err != nil {
+		return Building{}, err
+	}
+	if err := s.auditRequirement(ctx, DirectoryExpansionRequirementID, "people.building.updated", "building", updated.ID, map[string]string{"siteId": updated.SiteID}); err != nil {
+		return Building{}, fmt.Errorf("audit building update: %w", err)
+	}
+	return updated, nil
 }
 
 func (s *Service) CreateRoom(ctx context.Context, input CreateRoomInput) (Room, error) {
@@ -319,6 +421,76 @@ func (s *Service) ListRooms(ctx context.Context, siteID, buildingID string, visi
 	return s.store.ListRooms(ctx, s.organizationID, siteID, buildingID, visibility)
 }
 
+func (s *Service) UpdateRoom(ctx context.Context, input UpdateRoomInput) (Room, error) {
+	id := strings.TrimSpace(input.ID)
+	buildingID := strings.TrimSpace(input.BuildingID)
+	if !recordIDPattern.MatchString(id) || !recordIDPattern.MatchString(buildingID) {
+		return Room{}, ErrInvalidInput
+	}
+	if err := s.checkWrite(ctx, "people.room", id); err != nil {
+		return Room{}, err
+	}
+	existing, err := s.store.GetRoom(ctx, s.organizationID, id)
+	if err != nil {
+		return Room{}, err
+	}
+	if existing.Revision != input.Revision {
+		return Room{}, ErrConflict
+	}
+	building, err := s.store.GetBuilding(ctx, s.organizationID, buildingID)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return Room{}, ErrReferenceMissing
+		}
+		return Room{}, err
+	}
+	siteID := strings.TrimSpace(input.SiteID)
+	if siteID == "" {
+		siteID = building.SiteID
+	}
+	if building.SiteID != siteID {
+		return Room{}, ErrInvalidInput
+	}
+	number := strings.TrimSpace(input.Number)
+	if number == "" || !utf8.ValidString(number) || utf8.RuneCountInString(number) > 100 {
+		return Room{}, ErrInvalidInput
+	}
+	name := strings.TrimSpace(input.Name)
+	if !utf8.ValidString(name) || utf8.RuneCountInString(name) > 200 {
+		return Room{}, ErrInvalidInput
+	}
+	status := input.Status
+	if status == "" {
+		status = StatusActive
+	}
+	if !validStatus(status) {
+		return Room{}, ErrInvalidInput
+	}
+	updated, err := s.store.UpdateRoom(ctx, Room{
+		ID:               existing.ID,
+		OrganizationID:   existing.OrganizationID,
+		SiteID:           building.SiteID,
+		BuildingID:       building.ID,
+		Number:           number,
+		NormalizedNumber: strings.ToLower(number),
+		Name:             name,
+		Status:           status,
+		Revision:         existing.Revision + 1,
+		CreatedAt:        existing.CreatedAt,
+		UpdatedAt:        s.now(),
+	}, existing.Revision)
+	if err != nil {
+		return Room{}, err
+	}
+	if err := s.auditRequirement(ctx, DirectoryExpansionRequirementID, "people.room.updated", "room", updated.ID, map[string]string{
+		"buildingId": updated.BuildingID,
+		"siteId":     updated.SiteID,
+	}); err != nil {
+		return Room{}, fmt.Errorf("audit room update: %w", err)
+	}
+	return updated, nil
+}
+
 func (s *Service) CreateDepartment(ctx context.Context, input CreateDepartmentInput) (Department, error) {
 	name, normalizedName, status, err := validateNamedRecord(input.Name, input.Status)
 	if err != nil {
@@ -376,6 +548,57 @@ func (s *Service) ListDepartments(ctx context.Context, visibility Visibility) ([
 	return s.store.ListDepartments(ctx, s.organizationID, visibility)
 }
 
+func (s *Service) UpdateDepartment(ctx context.Context, input UpdateDepartmentInput) (Department, error) {
+	id := strings.TrimSpace(input.ID)
+	if !recordIDPattern.MatchString(id) {
+		return Department{}, ErrInvalidInput
+	}
+	if err := s.checkWrite(ctx, "people.department", id); err != nil {
+		return Department{}, err
+	}
+	existing, err := s.store.GetDepartment(ctx, s.organizationID, id)
+	if err != nil {
+		return Department{}, err
+	}
+	if existing.Revision != input.Revision {
+		return Department{}, ErrConflict
+	}
+	name, normalizedName, status, err := validateNamedRecord(input.Name, input.Status)
+	if err != nil {
+		return Department{}, err
+	}
+	siteID := strings.TrimSpace(input.SiteID)
+	if siteID != "" {
+		if !recordIDPattern.MatchString(siteID) {
+			return Department{}, ErrInvalidInput
+		}
+		if _, err := s.store.GetSite(ctx, s.organizationID, siteID); err != nil {
+			if errors.Is(err, ErrNotFound) {
+				return Department{}, ErrReferenceMissing
+			}
+			return Department{}, err
+		}
+	}
+	updated, err := s.store.UpdateDepartment(ctx, Department{
+		ID:             existing.ID,
+		OrganizationID: existing.OrganizationID,
+		Name:           name,
+		NormalizedName: normalizedName,
+		SiteID:         siteID,
+		Status:         status,
+		Revision:       existing.Revision + 1,
+		CreatedAt:      existing.CreatedAt,
+		UpdatedAt:      s.now(),
+	}, existing.Revision)
+	if err != nil {
+		return Department{}, err
+	}
+	if err := s.auditRequirement(ctx, RequirementID, "people.department.updated", "department", updated.ID, nil); err != nil {
+		return Department{}, fmt.Errorf("audit department update: %w", err)
+	}
+	return updated, nil
+}
+
 func (s *Service) CreateIdentity(ctx context.Context, input CreateIdentityInput) (Identity, error) {
 	identity, err := s.prepareIdentity(ctx, input)
 	if err != nil {
@@ -394,6 +617,64 @@ func (s *Service) CreateIdentity(ctx context.Context, input CreateIdentityInput)
 	return created, nil
 }
 
+func (s *Service) UpdateIdentity(ctx context.Context, input UpdateIdentityInput) (Identity, error) {
+	id := strings.TrimSpace(input.ID)
+	if !recordIDPattern.MatchString(id) {
+		return Identity{}, ErrInvalidInput
+	}
+	if err := s.checkWrite(ctx, "people.identity", id); err != nil {
+		return Identity{}, err
+	}
+	existing, err := s.store.GetIdentity(ctx, s.organizationID, id)
+	if err != nil {
+		return Identity{}, err
+	}
+	if existing.Revision != input.Revision {
+		return Identity{}, ErrConflict
+	}
+	prepared, err := s.prepareIdentity(ctx, CreateIdentityInput{
+		Kind:            input.Kind,
+		DisplayName:     input.DisplayName,
+		Email:           input.Email,
+		DepartmentID:    input.DepartmentID,
+		SiteID:          input.SiteID,
+		BuildingID:      input.BuildingID,
+		RoomID:          input.RoomID,
+		Status:          input.Status,
+		Provider:        existing.Provider,
+		ProviderSubject: existing.ProviderSubject,
+	})
+	if err != nil {
+		return Identity{}, err
+	}
+	updated, err := s.store.UpdateIdentity(ctx, Identity{
+		ID:              existing.ID,
+		OrganizationID:  existing.OrganizationID,
+		Kind:            prepared.Kind,
+		DisplayName:     prepared.DisplayName,
+		NormalizedName:  prepared.NormalizedName,
+		Email:           prepared.Email,
+		NormalizedEmail: prepared.NormalizedEmail,
+		DepartmentID:    prepared.DepartmentID,
+		SiteID:          prepared.SiteID,
+		BuildingID:      prepared.BuildingID,
+		RoomID:          prepared.RoomID,
+		Status:          prepared.Status,
+		Provider:        existing.Provider,
+		ProviderSubject: existing.ProviderSubject,
+		Revision:        existing.Revision + 1,
+		CreatedAt:       existing.CreatedAt,
+		UpdatedAt:       s.now(),
+	}, existing.Revision)
+	if err != nil {
+		return Identity{}, err
+	}
+	if err := s.audit(ctx, "people.identity.updated", "identity", updated.ID, map[string]string{"kind": string(updated.Kind)}); err != nil {
+		return Identity{}, fmt.Errorf("audit identity update: %w", err)
+	}
+	return updated, nil
+}
+
 func (s *Service) SearchIdentities(ctx context.Context, query IdentityQuery, visibility Visibility) ([]Identity, error) {
 	visibility = normalizeVisibility(visibility)
 	if visibility.Empty() {
@@ -409,8 +690,15 @@ func (s *Service) SearchIdentities(ctx context.Context, query IdentityQuery, vis
 		(query.SiteID != "" && !recordIDPattern.MatchString(query.SiteID)) {
 		return nil, ErrInvalidInput
 	}
+	var err error
+	if query.IDs, err = normalizedIdentityIDs(query.IDs); err != nil {
+		return nil, err
+	}
 	if query.Limit == 0 {
 		query.Limit = defaultSearchLimit
+	}
+	if len(query.IDs) > 0 && query.Limit < len(query.IDs) {
+		query.Limit = len(query.IDs)
 	}
 	if query.Limit < 1 || query.Limit > maximumSearchLimit {
 		return nil, ErrInvalidInput
@@ -610,8 +898,12 @@ func (s *Service) prepareIdentity(ctx context.Context, input CreateIdentityInput
 	}
 	departmentID := strings.TrimSpace(input.DepartmentID)
 	siteID := strings.TrimSpace(input.SiteID)
+	buildingID := strings.TrimSpace(input.BuildingID)
+	roomID := strings.TrimSpace(input.RoomID)
 	if (departmentID != "" && !recordIDPattern.MatchString(departmentID)) ||
-		(siteID != "" && !recordIDPattern.MatchString(siteID)) {
+		(siteID != "" && !recordIDPattern.MatchString(siteID)) ||
+		(buildingID != "" && !recordIDPattern.MatchString(buildingID)) ||
+		(roomID != "" && !recordIDPattern.MatchString(roomID)) {
 		return Identity{}, ErrInvalidInput
 	}
 	if departmentID != "" {
@@ -628,6 +920,36 @@ func (s *Service) prepareIdentity(ctx context.Context, input CreateIdentityInput
 			}
 			siteID = department.SiteID
 		}
+	}
+	if roomID != "" {
+		room, err := s.store.GetRoom(ctx, s.organizationID, roomID)
+		if err != nil {
+			if errors.Is(err, ErrNotFound) {
+				return Identity{}, ErrReferenceMissing
+			}
+			return Identity{}, err
+		}
+		if buildingID != "" && buildingID != room.BuildingID {
+			return Identity{}, ErrInvalidInput
+		}
+		if siteID != "" && siteID != room.SiteID {
+			return Identity{}, ErrInvalidInput
+		}
+		buildingID = room.BuildingID
+		siteID = room.SiteID
+	}
+	if buildingID != "" {
+		building, err := s.store.GetBuilding(ctx, s.organizationID, buildingID)
+		if err != nil {
+			if errors.Is(err, ErrNotFound) {
+				return Identity{}, ErrReferenceMissing
+			}
+			return Identity{}, err
+		}
+		if siteID != "" && siteID != building.SiteID {
+			return Identity{}, ErrInvalidInput
+		}
+		siteID = building.SiteID
 	}
 	if siteID != "" {
 		if _, err := s.store.GetSite(ctx, s.organizationID, siteID); err != nil {
@@ -657,6 +979,8 @@ func (s *Service) prepareIdentity(ctx context.Context, input CreateIdentityInput
 		NormalizedEmail: email,
 		DepartmentID:    departmentID,
 		SiteID:          siteID,
+		BuildingID:      buildingID,
+		RoomID:          roomID,
 		Status:          status,
 		Provider:        provider,
 		ProviderSubject: providerSubject,
@@ -817,4 +1141,27 @@ func (s *Service) auditRequirement(ctx context.Context, requirementID, action, r
 		OccurredAt:     s.now(),
 		Metadata:       metadata,
 	})
+}
+
+func normalizedIdentityIDs(values []string) ([]string, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+	if len(values) > maximumSearchLimit {
+		return nil, ErrInvalidInput
+	}
+	seen := make(map[string]struct{}, len(values))
+	normalized := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if !recordIDPattern.MatchString(value) {
+			return nil, ErrInvalidInput
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		normalized = append(normalized, value)
+	}
+	return normalized, nil
 }

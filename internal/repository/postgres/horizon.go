@@ -165,6 +165,55 @@ func scanHorizonVersion(row horizonScanner) (horizon.PlanVersion, error) {
 	return item, err
 }
 
+const horizonKindDefaultColumns = `organization_id, asset_kind, scenario, expected_useful_life_months, replacement_model_id, revision, created_at, updated_at`
+
+func (s *HorizonStore) ListKindDefaults(ctx context.Context, organizationID, scenario string) ([]horizon.KindDefault, error) {
+	rows, err := s.database.QueryContext(ctx, `SELECT `+horizonKindDefaultColumns+`
+		FROM horizon_kind_defaults WHERE organization_id = $1 AND ($2 = '' OR scenario = $2)
+		ORDER BY asset_kind, scenario`, organizationID, scenario)
+	if err != nil {
+		return nil, fmt.Errorf("list Horizon kind defaults: %w", err)
+	}
+	defer rows.Close()
+	items := make([]horizon.KindDefault, 0)
+	for rows.Next() {
+		item, err := scanHorizonKindDefault(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan Horizon kind default: %w", err)
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *HorizonStore) UpsertKindDefault(ctx context.Context, item horizon.KindDefault) (horizon.KindDefault, error) {
+	saved, err := scanHorizonKindDefault(s.database.QueryRowContext(ctx, `
+		INSERT INTO horizon_kind_defaults (
+			organization_id, asset_kind, scenario, expected_useful_life_months, replacement_model_id, revision, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, NULLIF($5, ''), $6, $7, $8)
+		ON CONFLICT (organization_id, asset_kind, scenario) DO UPDATE SET
+			expected_useful_life_months = EXCLUDED.expected_useful_life_months,
+			replacement_model_id = EXCLUDED.replacement_model_id,
+			revision = horizon_kind_defaults.revision + 1,
+			updated_at = EXCLUDED.updated_at
+		RETURNING `+horizonKindDefaultColumns,
+		item.OrganizationID, item.AssetKind, item.Scenario, item.ExpectedUsefulLifeMonths, item.ReplacementModelID,
+		item.Revision, item.CreatedAt, item.UpdatedAt))
+	if err != nil {
+		return horizon.KindDefault{}, translateHorizonWriteError("upsert Horizon kind default", err)
+	}
+	return saved, nil
+}
+
+func scanHorizonKindDefault(row horizonScanner) (horizon.KindDefault, error) {
+	var item horizon.KindDefault
+	var replacementModelID sql.NullString
+	err := row.Scan(&item.OrganizationID, &item.AssetKind, &item.Scenario, &item.ExpectedUsefulLifeMonths,
+		&replacementModelID, &item.Revision, &item.CreatedAt, &item.UpdatedAt)
+	item.ReplacementModelID = replacementModelID.String
+	return item, err
+}
+
 func insertHorizonVersion(ctx context.Context, transaction *sql.Tx, item horizon.PlanVersion) error {
 	_, err := transaction.ExecContext(ctx, `
 		INSERT INTO horizon_plan_versions (organization_id, plan_id, asset_id, scenario, expected_useful_life_months,

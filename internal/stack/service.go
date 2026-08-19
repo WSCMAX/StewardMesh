@@ -33,7 +33,7 @@ var (
 	licenseStatuses      = stringSet("active", "expired", "retired")
 	usageStates          = stringSet("unknown", "used", "unused")
 	entitlementMetrics   = stringSet("device", "user", "concurrent", "site", "enterprise")
-	assigneeKinds        = stringSet("asset", "identity", "department", "site")
+	assigneeKinds        = stringSet("asset", "identity", "department", "site", "room")
 )
 
 type ServiceConfig struct {
@@ -83,7 +83,76 @@ func newService(store Store, references ReferenceValidator, auditor foundation.A
 }
 
 func (s *Service) Snapshot(ctx context.Context) (Snapshot, error) {
-	return s.store.Snapshot(ctx, s.organizationID)
+	snapshot, err := s.store.Snapshot(ctx, s.organizationID)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	for index := range snapshot.Licenses {
+		if snapshot.Licenses[index].DocumentIDs == nil {
+			snapshot.Licenses[index].DocumentIDs = []string{}
+		}
+	}
+	return snapshot, nil
+}
+
+func (s *Service) WorkspaceSnapshot(ctx context.Context, assignmentLimit, installationLimit int) (Snapshot, error) {
+	snapshot, err := s.Snapshot(ctx)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	snapshot.AssignmentTotal = len(snapshot.Assignments)
+	snapshot.InstallationTotal = len(snapshot.Installations)
+	if assignmentLimit < 1 {
+		assignmentLimit = 80
+	}
+	if installationLimit < 1 {
+		installationLimit = 200
+	}
+	if len(snapshot.Assignments) > assignmentLimit {
+		snapshot.Assignments = snapshot.Assignments[:assignmentLimit]
+	}
+	if len(snapshot.Installations) > installationLimit {
+		snapshot.Installations = snapshot.Installations[:installationLimit]
+	}
+	return snapshot, nil
+}
+
+func (s *Service) RecordsForAsset(ctx context.Context, assetID, roomID, departmentID, siteID string) (AssetRecords, error) {
+	assetID = strings.TrimSpace(assetID)
+	roomID = strings.TrimSpace(roomID)
+	departmentID = strings.TrimSpace(departmentID)
+	siteID = strings.TrimSpace(siteID)
+	if !stableIDPattern.MatchString(assetID) {
+		return AssetRecords{}, ErrInvalidInput
+	}
+	snapshot, err := s.Snapshot(ctx)
+	if err != nil {
+		return AssetRecords{}, err
+	}
+	records := AssetRecords{Installations: []Installation{}, Assignments: []Assignment{}, Licenses: []License{}}
+	licenseIDs := map[string]struct{}{}
+	for _, installation := range snapshot.Installations {
+		if installation.AssetID == assetID {
+			records.Installations = append(records.Installations, installation)
+		}
+	}
+	for _, assignment := range snapshot.Assignments {
+		matches := assignment.AssigneeKind == "asset" && assignment.AssigneeID == assetID ||
+			roomID != "" && assignment.AssigneeKind == "room" && assignment.AssigneeID == roomID ||
+			departmentID != "" && assignment.AssigneeKind == "department" && assignment.AssigneeID == departmentID ||
+			siteID != "" && assignment.AssigneeKind == "site" && assignment.AssigneeID == siteID
+		if !matches {
+			continue
+		}
+		records.Assignments = append(records.Assignments, assignment)
+		licenseIDs[assignment.LicenseID] = struct{}{}
+	}
+	for _, license := range snapshot.Licenses {
+		if _, ok := licenseIDs[license.ID]; ok {
+			records.Licenses = append(records.Licenses, license)
+		}
+	}
+	return records, nil
 }
 
 func (s *Service) CreateProduct(ctx context.Context, input CreateProductInput) (Product, error) {
@@ -276,7 +345,7 @@ func (s *Service) CreateLicense(ctx context.Context, input CreateLicenseInput) (
 		Name: input.Name, EntitlementMetric: input.EntitlementMetric, Quantity: input.Quantity,
 		Status: input.Status, StartsOn: startsOn, ExpiresOn: expiresOn, VendorID: input.VendorID,
 		PurchaseOrderID: input.PurchaseOrderID, ContractID: input.ContractID, CostRecordID: input.CostRecordID,
-		DocumentIDs: input.DocumentIDs, SourceSystemID: input.SourceSystemID, SourceRecordID: input.SourceRecordID,
+		DocumentIDs: append([]string(nil), input.DocumentIDs...), SourceSystemID: input.SourceSystemID, SourceRecordID: input.SourceRecordID,
 		Revision: createRevision(ctx), CreatedAt: now, UpdatedAt: now,
 	})
 	if err != nil {
@@ -696,6 +765,10 @@ func assignmentCoversAsset(assignments []Assignment, assetID string, asset Asset
 			if asset.SiteID != "" && assignment.AssigneeID == asset.SiteID {
 				return true
 			}
+		case "room":
+			if asset.RoomID != "" && assignment.AssigneeID == asset.RoomID {
+				return true
+			}
 		}
 	}
 	return false
@@ -712,11 +785,11 @@ func assignmentActiveAt(assignment Assignment, asOf time.Time) bool {
 func assignmentKindMatchesMetric(metric, kind string) bool {
 	switch metric {
 	case "device":
-		return kind == "asset"
+		return kind == "asset" || kind == "room"
 	case "user":
 		return kind == "identity"
 	case "site":
-		return kind == "site"
+		return kind == "site" || kind == "room"
 	case "concurrent", "enterprise":
 		return hasString(assigneeKinds, kind)
 	default:

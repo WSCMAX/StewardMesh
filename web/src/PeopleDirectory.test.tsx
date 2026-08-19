@@ -1,5 +1,5 @@
 import axe from 'axe-core'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, expect, test, vi } from 'vitest'
 import PeopleDirectory from './PeopleDirectory'
 
@@ -42,7 +42,15 @@ function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
 }
 
-function installPeopleFetch(options: { assignments?: unknown[]; buildings?: unknown[]; rooms?: unknown[]; roomCreateFailures?: number; sites?: unknown[] } = {}) {
+function openPeopleTab(name: string) {
+  fireEvent.click(screen.getByRole('tab', { name }))
+}
+
+async function waitForPeopleDirectory() {
+  await screen.findAllByText('Alex Rivera')
+}
+
+function installPeopleFetch(options: { assignments?: unknown[]; buildings?: unknown[]; rooms?: unknown[]; roomCreateFailures?: number; sites?: unknown[]; locationTypes?: unknown[]; locationReferences?: unknown[] } = {}) {
   let roomCreateAttempts = 0
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input)
@@ -76,12 +84,33 @@ function installPeopleFetch(options: { assignments?: unknown[]; buildings?: unkn
       }, 201)
     }
     if (path.startsWith('/api/v1/identities?')) return jsonResponse({ items: [person] })
-    if (path.startsWith('/api/v1/graph?')) return jsonResponse({ nodes: [], edges: [] })
+    if (path === `/api/v1/identities/${person.id}` && init?.method === 'PUT') {
+      const body = JSON.parse(String(init.body)) as Record<string, unknown>
+      return jsonResponse({ ...person, ...body, revision: person.revision + 1 })
+    }
     if (path === '/api/v1/assets/asset-1/assignments' && init?.method === 'POST') return jsonResponse(assignment, 201)
     if (path === '/api/v1/assets/asset-1/assignments') return jsonResponse({ items: options.assignments ?? [] })
     if (path === '/api/v1/assets/asset-1/assignments/assignment-1' && init?.method === 'PATCH') {
       return jsonResponse({ ...assignment, effectiveTo: '2026-08-10T12:00:00Z' })
     }
+    if (path === '/api/v1/location-reference-types' && init?.method === 'POST') {
+      const body = JSON.parse(String(init.body)) as Record<string, unknown>
+      return jsonResponse({
+        id: 'type-created', organizationId: 'example-org', name: body.name, description: body.description,
+        relationshipKind: body.relationshipKind, locationKind: body.locationKind, status: 'active', revision: 1,
+        createdAt: timestamp, updatedAt: timestamp,
+      }, 201)
+    }
+    if (path === '/api/v1/location-reference-types') return jsonResponse({ items: options.locationTypes ?? [] })
+    if (path.startsWith('/api/v1/location-references') && init?.method === 'POST') {
+      const body = JSON.parse(String(init.body)) as Record<string, unknown>
+      return jsonResponse({
+        id: 'reference-created', organizationId: 'example-org', identityId: body.identityId, typeId: body.typeId,
+        locationKind: body.locationKind, locationId: body.locationId, priority: body.priority || 'secondary',
+        status: 'active', revision: 1, createdAt: timestamp, updatedAt: timestamp,
+      }, 201)
+    }
+    if (path.startsWith('/api/v1/location-references')) return jsonResponse({ items: options.locationReferences ?? [] })
     throw new Error(`unexpected request: ${path}`)
   })
   vi.stubGlobal('fetch', fetchMock)
@@ -99,27 +128,70 @@ test('renders a scoped People directory and guided help without automated WCAG v
   expect(await screen.findByRole('heading', { name: 'Know who uses and stewards each asset' })).toBeInTheDocument()
   expect((await screen.findAllByText('Alex Rivera')).length).toBeGreaterThan(0)
   expect(screen.getByRole('heading', { name: 'Quick guide' })).toBeInTheDocument()
+  expect(screen.queryByRole('tab', { name: 'Relationship graph' })).not.toBeInTheDocument()
+  expect(screen.getByRole('region', { name: 'Directory identities' })).toBeInTheDocument()
+  openPeopleTab('Locations')
   expect(screen.getByRole('heading', { name: 'Locations in your scope' })).toBeInTheDocument()
-  expect(screen.getByRole('heading', { name: 'Innovation Hall' })).toBeInTheDocument()
-  expect(screen.getByText('Room 101 · Conference room')).toBeInTheDocument()
-  expect(screen.getByLabelText('Main Campus address')).toHaveTextContent('100 Steward Way')
+  expect(screen.getByRole('tab', { name: 'Sites' })).toHaveAttribute('aria-selected', 'true')
+  expect(screen.getByRole('gridcell', { name: 'Main Campus' })).toBeInTheDocument()
+  expect(screen.getByRole('gridcell', { name: '100 Steward Way' })).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('tab', { name: 'Buildings' }))
+  expect(screen.getByRole('gridcell', { name: 'Innovation Hall' })).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('tab', { name: 'Rooms' }))
+  expect(screen.getByRole('gridcell', { name: '101' })).toBeInTheDocument()
+  expect(screen.getByRole('gridcell', { name: 'Conference room' })).toBeInTheDocument()
   expect(fetchMock).toHaveBeenCalledWith('/api/v1/buildings', expect.any(Object))
   expect(fetchMock).toHaveBeenCalledWith('/api/v1/rooms', expect.any(Object))
+  openPeopleTab('Location references')
+  expect(await screen.findByRole('heading', { name: 'Location references' })).toBeInTheDocument()
+  expect(screen.getByRole('tab', { name: 'References' })).toHaveAttribute('aria-selected', 'true')
+  fireEvent.click(screen.getByRole('tab', { name: 'Types' }))
+  expect(screen.getByRole('region', { name: 'Location reference types' })).toBeInTheDocument()
   expect(screen.getByRole('link', { name: 'Report a People issue' })).toHaveAttribute('href', 'https://github.com/WSCMAX/StewardMesh/issues')
+  openPeopleTab('Workflows & assignments')
   await screen.findByText('Primary assignee · Active')
   for (const summary of ['Add a site', 'Add a building', 'Add a room', 'Add a department', 'Add a directory identity']) {
     fireEvent.click(screen.getByText(summary))
   }
   const results = await axe.run(container)
   expect(results.violations).toEqual([])
-  expect(screen.getByRole('region', { name: 'Directory results' })).toBeInTheDocument()
   expect(screen.getByRole('region', { name: 'Asset assignment history' })).toBeInTheDocument()
+})
+
+test('opens a nested location sheet from a site and building', async () => {
+  installPeopleFetch()
+  render(<PeopleDirectory assets={[]} csrfToken="csrf-value" issuesUrl="https://github.com/WSCMAX/StewardMesh/issues" permissions={permissions} />)
+  await waitForPeopleDirectory()
+  openPeopleTab('Locations')
+  fireEvent.click(screen.getByRole('button', { name: 'Open Main Campus' }))
+  const nestedBuildings = screen.getByLabelText('Nested buildings at Main Campus')
+  expect(within(nestedBuildings).getByRole('heading', { name: 'Buildings at Main Campus' })).toBeInTheDocument()
+  expect(within(nestedBuildings).getByRole('gridcell', { name: 'Innovation Hall' })).toBeInTheDocument()
+  fireEvent.click(within(nestedBuildings).getByRole('button', { name: 'Open Innovation Hall' }))
+  expect(screen.getByRole('heading', { name: 'Rooms in Innovation Hall' })).toBeInTheDocument()
+  expect(within(screen.getByLabelText('Nested rooms in Innovation Hall')).getByRole('gridcell', { name: '101' })).toBeInTheDocument()
+})
+
+test('saves directory cell edits through the identity update API', async () => {
+  const fetchMock = installPeopleFetch()
+  render(<PeopleDirectory assets={[]} csrfToken="csrf-value" issuesUrl="https://github.com/WSCMAX/StewardMesh/issues" permissions={permissions} />)
+  await waitForPeopleDirectory()
+  fireEvent.doubleClick(within(screen.getByRole('region', { name: 'Directory identities' })).getByRole('gridcell', { name: 'Alex Rivera' }))
+  const editing = screen.getByLabelText('Display name for Alex Rivera')
+  fireEvent.change(editing, { target: { value: 'Alex Rivera Jr' } })
+  fireEvent.keyDown(editing, { key: 'Enter' })
+  fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+  await waitFor(() => expect(fetchMock.mock.calls.some(([path, init]) => path === '/api/v1/identities/identity-1' && init?.method === 'PUT')).toBe(true))
+  const updateCall = fetchMock.mock.calls.find(([path, init]) => path === '/api/v1/identities/identity-1' && init?.method === 'PUT')
+  expect(updateCall?.[1]?.headers).toMatchObject({ 'X-CSRF-Token': 'csrf-value' })
+  expect(JSON.parse(String(updateCall?.[1]?.body))).toMatchObject({ displayName: 'Alex Rivera Jr', revision: 1 })
 })
 
 test('guides a person through an existing room without losing their draft', async () => {
   const fetchMock = installPeopleFetch()
   render(<PeopleDirectory assets={[]} csrfToken="csrf-value" issuesUrl="https://github.com/WSCMAX/StewardMesh/issues" permissions={permissions} />)
-  await screen.findByRole('heading', { name: 'Innovation Hall' })
+  await waitForPeopleDirectory()
+  openPeopleTab('Workflows & assignments')
 
   fireEvent.click(screen.getByRole('button', { name: 'Start person workflow' }))
   await waitFor(() => expect(screen.getByRole('heading', { name: 'Step 1 — Person details' })).toHaveFocus())
@@ -158,7 +230,8 @@ test('guides a person through an existing room without losing their draft', asyn
 test('identifies the failing step and creates a missing room before the person', async () => {
   const fetchMock = installPeopleFetch()
   render(<PeopleDirectory assets={[]} csrfToken="csrf-value" issuesUrl="https://github.com/WSCMAX/StewardMesh/issues" permissions={permissions} />)
-  await screen.findByRole('heading', { name: 'Innovation Hall' })
+  await waitForPeopleDirectory()
+  openPeopleTab('Workflows & assignments')
 
   fireEvent.click(screen.getByRole('button', { name: 'Start person workflow' }))
   fireEvent.change(screen.getByLabelText('Person display name'), { target: { value: 'Morgan Chen' } })
@@ -195,7 +268,8 @@ test('preserves the person and location draft while retrying a failed related-re
   const fetchMock = installPeopleFetch({ roomCreateFailures: 1 })
 
   render(<PeopleDirectory assets={[]} csrfToken="csrf-value" issuesUrl="https://github.com/WSCMAX/StewardMesh/issues" permissions={permissions} />)
-  await screen.findByRole('heading', { name: 'Innovation Hall' })
+  await waitForPeopleDirectory()
+  openPeopleTab('Workflows & assignments')
   fireEvent.click(screen.getByRole('button', { name: 'Start person workflow' }))
   fireEvent.change(screen.getByLabelText('Person display name'), { target: { value: 'Riley Park' } })
   fireEvent.change(screen.getByLabelText('Person email address'), { target: { value: 'riley@example.test' } })
@@ -218,7 +292,8 @@ test('preserves the person and location draft while retrying a failed related-re
 test('cancels the reusable workflow explicitly and clears its temporary draft', async () => {
   installPeopleFetch()
   render(<PeopleDirectory assets={[]} csrfToken="csrf-value" issuesUrl="https://github.com/WSCMAX/StewardMesh/issues" permissions={permissions} />)
-  await screen.findByRole('heading', { name: 'Innovation Hall' })
+  await waitForPeopleDirectory()
+  openPeopleTab('Workflows & assignments')
   fireEvent.click(screen.getByRole('button', { name: 'Start person workflow' }))
   fireEvent.change(screen.getByLabelText('Person display name'), { target: { value: 'Discarded draft' } })
   fireEvent.click(screen.getByRole('button', { name: 'Cancel workflow' }))
@@ -232,7 +307,8 @@ test('cancels the reusable workflow explicitly and clears its temporary draft', 
 test('gives read-only users a clear alternative instead of creation controls', async () => {
   installPeopleFetch()
   render(<PeopleDirectory assets={[]} csrfToken="csrf-value" issuesUrl="https://github.com/WSCMAX/StewardMesh/issues" permissions={['directory.read']} />)
-  await screen.findByRole('heading', { name: 'Innovation Hall' })
+  await waitForPeopleDirectory()
+  openPeopleTab('Workflows & assignments')
   expect(screen.getByText(/Ask an administrator for the/)).toHaveTextContent('directory.write')
   expect(screen.queryByRole('button', { name: 'Start person workflow' })).not.toBeInTheDocument()
   expect(screen.queryByText('Add a site')).not.toBeInTheDocument()
@@ -242,7 +318,8 @@ test('gives read-only users a clear alternative instead of creation controls', a
 test('creates structured sites, buildings, and rooms through flat CSRF-protected endpoints', async () => {
   const fetchMock = installPeopleFetch()
   render(<PeopleDirectory assets={[]} csrfToken="csrf-value" issuesUrl="https://github.com/WSCMAX/StewardMesh/issues" permissions={permissions} />)
-  await screen.findByRole('heading', { name: 'Innovation Hall' })
+  await waitForPeopleDirectory()
+  openPeopleTab('Workflows & assignments')
 
   fireEvent.click(screen.getByText('Add a site'))
   fireEvent.change(screen.getByLabelText('Site name'), { target: { value: 'East Campus' } })
@@ -287,13 +364,14 @@ test('rejects malformed location collection responses at runtime', async () => {
   installPeopleFetch({ buildings: [{ ...building, siteId: 123 }] })
   render(<PeopleDirectory assets={[]} csrfToken="csrf-value" issuesUrl="https://github.com/WSCMAX/StewardMesh/issues" permissions={permissions} />)
   expect(await screen.findByRole('alert')).toHaveTextContent('The People directory could not be loaded.')
-  expect(screen.queryByRole('heading', { name: 'Innovation Hall' })).not.toBeInTheDocument()
+  expect(screen.queryByText('Innovation Hall')).not.toBeInTheDocument()
 })
 
 test('requires a complete structured address when any address field is entered', async () => {
   const fetchMock = installPeopleFetch()
   render(<PeopleDirectory assets={[]} csrfToken="csrf-value" issuesUrl="https://github.com/WSCMAX/StewardMesh/issues" permissions={permissions} />)
-  await screen.findByRole('heading', { name: 'Innovation Hall' })
+  await waitForPeopleDirectory()
+  openPeopleTab('Workflows & assignments')
   fireEvent.click(screen.getByText('Add a site'))
   fireEvent.change(screen.getByLabelText('Site name'), { target: { value: 'Incomplete Campus' } })
   fireEvent.change(screen.getByLabelText('State or region (optional)'), { target: { value: 'WI' } })
@@ -305,11 +383,12 @@ test('requires a complete structured address when any address field is entered',
 test('creates a typed shared identity with the in-memory CSRF token', async () => {
   const fetchMock = installPeopleFetch()
   render(<PeopleDirectory assets={[]} csrfToken="csrf-value" issuesUrl="https://github.com/WSCMAX/StewardMesh/issues" permissions={permissions} />)
-  await screen.findAllByText('Alex Rivera')
+  await waitForPeopleDirectory()
+  openPeopleTab('Workflows & assignments')
   fireEvent.click(screen.getByText('Add a directory identity'))
-  fireEvent.change(screen.getAllByLabelText('Identity type')[1], { target: { value: 'shared' } })
+  fireEvent.change(screen.getByLabelText('Identity type'), { target: { value: 'shared' } })
   fireEvent.change(screen.getByLabelText('Display name'), { target: { value: 'Public workstation users' } })
-  fireEvent.change(screen.getByLabelText('Department (optional)'), { target: { value: department.id } })
+  fireEvent.click(screen.getByRole('option', { name: /Technology/ }))
   fireEvent.click(screen.getByRole('button', { name: 'Create identity' }))
   expect(await screen.findByText('Directory identity created.')).toBeInTheDocument()
   const createCall = fetchMock.mock.calls.find(([path, init]) => path === '/api/v1/identities' && init?.method === 'POST')
@@ -322,6 +401,8 @@ test('creates a typed shared identity with the in-memory CSRF token', async () =
 test('creates and ends effective-dated asset assignments through guarded mutations', async () => {
   const fetchMock = installPeopleFetch({ assignments: [assignment] })
   render(<PeopleDirectory assets={[asset]} csrfToken="csrf-value" issuesUrl="https://github.com/WSCMAX/StewardMesh/issues" permissions={permissions} />)
+  await waitForPeopleDirectory()
+  openPeopleTab('Workflows & assignments')
   await screen.findByText('Primary assignee · Active')
   fireEvent.change(screen.getByLabelText('Assignee'), { target: { value: person.id } })
   fireEvent.click(screen.getByRole('button', { name: 'Create assignment' }))

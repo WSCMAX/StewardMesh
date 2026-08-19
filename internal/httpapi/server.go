@@ -32,7 +32,9 @@ import (
 	"github.com/maxlemke/stewardmesh/internal/guard"
 	"github.com/maxlemke/stewardmesh/internal/horizon"
 	"github.com/maxlemke/stewardmesh/internal/identity"
+	"github.com/maxlemke/stewardmesh/internal/labels"
 	"github.com/maxlemke/stewardmesh/internal/ledger"
+	"github.com/maxlemke/stewardmesh/internal/mesh"
 	"github.com/maxlemke/stewardmesh/internal/patterns"
 	"github.com/maxlemke/stewardmesh/internal/people"
 	"github.com/maxlemke/stewardmesh/internal/reach"
@@ -68,6 +70,7 @@ type Dependencies struct {
 	People              *people.Service
 	DirectoryImports    *directoryexpansion.Service
 	Threads             *threads.Service
+	Labels              *labels.Service
 	Vault               *storage.Service
 	Ledger              *ledger.Service
 	Stack               *stack.Service
@@ -92,6 +95,7 @@ type Server struct {
 	people              *people.Service
 	directoryImports    *directoryexpansion.Service
 	threads             *threads.Service
+	labels              *labels.Service
 	vault               *storage.Service
 	ledger              *ledger.Service
 	stack               *stack.Service
@@ -105,6 +109,7 @@ type Server struct {
 	oidc                *identity.OIDCFlow
 	saml                *identity.SAMLFlow
 	graph               directoryexpansion.GraphStore
+	mesh                *mesh.Service
 	allowedOrigin       string
 	organization        bootstrap.Organization
 	sessionCookieSecure bool
@@ -185,6 +190,7 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 		people:              deps.People,
 		directoryImports:    deps.DirectoryImports,
 		threads:             deps.Threads,
+		labels:              deps.Labels,
 		vault:               deps.Vault,
 		ledger:              deps.Ledger,
 		stack:               deps.Stack,
@@ -201,6 +207,13 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 		allowedOrigin:       allowedOrigin,
 		organization:        organization,
 		sessionCookieSecure: deps.SessionCookieSecure,
+	}
+	if meshService, err := mesh.NewService(mesh.Dependencies{
+		Directory: deps.Graph, Atlas: deps.Atlas, Ledger: deps.Ledger, Stack: deps.Stack,
+		Labels: deps.Labels, Goals: deps.Threads, Vault: deps.Vault, Horizon: deps.Horizon,
+		OrganizationID: organization.ID, Organization: organization.Name,
+	}); err == nil {
+		server.mesh = meshService
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", server.health)
@@ -262,12 +275,14 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 	mux.Handle("GET /api/v1/asset-models/{modelID}/inventory", server.protected(guard.PermissionAssetsRead, false, server.getAssetModelInventory))
 	mux.Handle("PUT /api/v1/asset-models/{modelID}", server.protected(guard.PermissionAssetsWrite, true, server.updateAssetModel))
 	mux.Handle("POST /api/v1/asset-models/{modelID}/retire", server.protected(guard.PermissionAssetsWrite, true, server.retireAssetModel))
+	mux.Handle("POST /api/v1/asset-models/{modelID}/reactivate", server.protected(guard.PermissionAssetsWrite, true, server.reactivateAssetModel))
 	mux.Handle("POST /api/v1/asset-models/{modelID}/assets/bulk", server.protected(guard.PermissionAssetsWrite, true, server.createAssetsFromModel))
 	mux.Handle("GET /api/v1/assets", server.protected(guard.PermissionAssetsRead, false, server.listAssets))
 	mux.Handle("POST /api/v1/assets", server.protected(guard.PermissionAssetsWrite, true, server.createAsset))
 	// The handler authorizes the loaded asset so site-, department-, and
 	// resource-scoped readers can open assets discovered through Atlas Codes.
 	mux.Handle("GET /api/v1/assets/{assetID}", server.protected("", false, server.getAsset))
+	mux.Handle("GET /api/v1/assets/{assetID}/related", server.protected(guard.PermissionAssetsRead, false, server.getAssetRelated))
 	mux.Handle("PUT /api/v1/assets/{assetID}", server.protected(guard.PermissionAssetsWrite, true, server.updateAsset))
 	mux.Handle("GET /api/v1/assets/{assetID}/lifecycle", server.protected(guard.PermissionAssetsRead, false, server.listAssetLifecycle))
 	// Resolution authorizes the matched asset after lookup so site,
@@ -284,14 +299,25 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 	mux.Handle("POST /api/v1/assets/{assetID}/identifiers/{identifierID}/deactivate", server.protected("", true, server.deactivateAssetIdentifier))
 	mux.Handle("GET /api/v1/sites", server.protected("", false, server.listSites))
 	mux.Handle("POST /api/v1/sites", server.protected(guard.PermissionDirectoryWrite, true, server.createSite))
+	mux.Handle("PUT /api/v1/sites/{siteID}", server.protected(guard.PermissionDirectoryWrite, true, server.updateSite))
 	mux.Handle("GET /api/v1/buildings", server.protected("", false, server.listBuildings))
 	mux.Handle("POST /api/v1/buildings", server.protected(guard.PermissionDirectoryWrite, true, server.createBuilding))
+	mux.Handle("PUT /api/v1/buildings/{buildingID}", server.protected(guard.PermissionDirectoryWrite, true, server.updateBuilding))
 	mux.Handle("GET /api/v1/rooms", server.protected("", false, server.listRooms))
 	mux.Handle("POST /api/v1/rooms", server.protected(guard.PermissionDirectoryWrite, true, server.createRoom))
+	mux.Handle("PUT /api/v1/rooms/{roomID}", server.protected(guard.PermissionDirectoryWrite, true, server.updateRoom))
 	mux.Handle("GET /api/v1/departments", server.protected("", false, server.listDepartments))
 	mux.Handle("POST /api/v1/departments", server.protected(guard.PermissionDirectoryWrite, true, server.createDepartment))
+	mux.Handle("PUT /api/v1/departments/{departmentID}", server.protected(guard.PermissionDirectoryWrite, true, server.updateDepartment))
 	mux.Handle("GET /api/v1/identities", server.protected("", false, server.listIdentities))
 	mux.Handle("POST /api/v1/identities", server.protected(guard.PermissionDirectoryWrite, true, server.createIdentity))
+	mux.Handle("PUT /api/v1/identities/{identityID}", server.protected(guard.PermissionDirectoryWrite, true, server.updateIdentity))
+	mux.Handle("GET /api/v1/location-reference-types", server.protected("", false, server.listLocationReferenceTypes))
+	mux.Handle("POST /api/v1/location-reference-types", server.protected(guard.PermissionDirectoryWrite, true, server.createLocationReferenceType))
+	mux.Handle("PUT /api/v1/location-reference-types/{typeID}", server.protected(guard.PermissionDirectoryWrite, true, server.updateLocationReferenceType))
+	mux.Handle("GET /api/v1/location-references", server.protected("", false, server.listLocationReferences))
+	mux.Handle("POST /api/v1/location-references", server.protected(guard.PermissionDirectoryWrite, true, server.createLocationReference))
+	mux.Handle("PUT /api/v1/location-references/{referenceID}", server.protected(guard.PermissionDirectoryWrite, true, server.updateLocationReference))
 	mux.Handle("GET /api/v1/users", server.protected("", false, server.listUsers))
 	mux.Handle("GET /api/v1/assets/{assetID}/assignments", server.protected(guard.PermissionAssetsRead, false, server.listAssetAssignments))
 	mux.Handle("POST /api/v1/assets/{assetID}/assignments", server.protected(guard.PermissionDirectoryWrite, true, server.createAssetAssignment))
@@ -300,6 +326,16 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 	mux.Handle("POST /api/v1/tags", server.protected(guard.PermissionGoalsWrite, true, server.createTag))
 	mux.Handle("GET /api/v1/tags/{tagID}", server.protected(guard.PermissionGoalsRead, false, server.getTag))
 	mux.Handle("PUT /api/v1/tags/{tagID}", server.protected(guard.PermissionGoalsWrite, true, server.updateTag))
+	mux.Handle("GET /api/v1/labels/definitions", server.protected(guard.PermissionLabelsRead, false, server.listLabelDefinitions))
+	mux.Handle("POST /api/v1/labels/definitions", server.protected(guard.PermissionLabelsWrite, true, server.createLabelDefinition))
+	mux.Handle("GET /api/v1/labels/definitions/{definitionID}", server.protected(guard.PermissionLabelsRead, false, server.getLabelDefinition))
+	mux.Handle("PUT /api/v1/labels/definitions/{definitionID}", server.protected(guard.PermissionLabelsWrite, true, server.updateLabelDefinition))
+	mux.Handle("GET /api/v1/labels/definitions/{definitionID}/delete-preview", server.protected(guard.PermissionLabelsRead, false, server.previewDeleteLabelDefinition))
+	mux.Handle("DELETE /api/v1/labels/definitions/{definitionID}", server.protected(guard.PermissionLabelsWrite, true, server.deleteLabelDefinition))
+	mux.Handle("GET /api/v1/labels/definitions/{definitionID}/assignments", server.protected(guard.PermissionLabelsRead, false, server.listLabelDefinitionAssignments))
+	mux.Handle("GET /api/v1/labels/records/{recordType}/{recordID}/assignments", server.protected(guard.PermissionLabelsRead, false, server.listLabelAssignments))
+	mux.Handle("PUT /api/v1/labels/records/{recordType}/{recordID}/assignments/{definitionID}", server.protected(guard.PermissionLabelsWrite, true, server.setLabelAssignment))
+	mux.Handle("DELETE /api/v1/labels/records/{recordType}/{recordID}/assignments/{definitionID}", server.protected(guard.PermissionLabelsWrite, true, server.deleteLabelAssignment))
 	mux.Handle("GET /api/v1/goals", server.protected(guard.PermissionGoalsRead, false, server.listGoals))
 	mux.Handle("POST /api/v1/goals", server.protected(guard.PermissionGoalsWrite, true, server.createGoal))
 	mux.Handle("GET /api/v1/goals/{goalID}", server.protected(guard.PermissionGoalsRead, false, server.getGoal))
@@ -327,6 +363,7 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 	mux.Handle("GET /api/v1/ledger/budget-variance", server.protected(guard.PermissionFinanceRead, false, server.getLedgerBudgetVariance))
 	mux.Handle("GET /api/v1/ledger/export.csv", server.protected(guard.PermissionFinanceRead, false, server.exportLedgerCSV))
 	mux.Handle("GET /api/v1/stack", server.protected(guard.PermissionSoftwareRead, false, server.getStackSnapshot))
+	mux.Handle("GET /api/v1/stack/assignments", server.protected(guard.PermissionSoftwareRead, false, server.listStackAssignments))
 	mux.Handle("GET /api/v1/stack/analytics", server.protected(guard.PermissionSoftwareRead, false, server.getStackAnalytics))
 	mux.Handle("POST /api/v1/stack/products", server.protected(guard.PermissionSoftwareWrite, true, server.createStackProduct))
 	mux.Handle("PUT /api/v1/stack/products/{productID}/status", server.protected(guard.PermissionSoftwareWrite, true, server.updateStackProductStatus))
@@ -346,7 +383,10 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 	mux.Handle("PUT /api/v1/horizon/plans/{planID}", server.protected(guard.PermissionPlanningWrite, true, server.updateHorizonPlan))
 	mux.Handle("GET /api/v1/horizon/plans/{planID}/history", server.protected(guard.PermissionPlanningRead, false, server.listHorizonPlanHistory))
 	mux.Handle("GET /api/v1/horizon/forecast", server.protected(guard.PermissionPlanningRead, false, server.getHorizonForecast))
+	mux.Handle("GET /api/v1/horizon/forecast/assets", server.protected(guard.PermissionPlanningRead, false, server.getHorizonForecastGroupAssets))
 	mux.Handle("GET /api/v1/horizon/export.csv", server.protected(guard.PermissionPlanningRead, false, server.exportHorizonCSV))
+	mux.Handle("GET /api/v1/horizon/kind-defaults", server.protected(guard.PermissionPlanningRead, false, server.listHorizonKindDefaults))
+	mux.Handle("PUT /api/v1/horizon/kind-defaults", server.protected(guard.PermissionPlanningWrite, true, server.upsertHorizonKindDefault))
 	mux.Handle("GET /api/v1/signals/rules", server.protected(guard.PermissionSignalsRead, false, server.listSignalRules))
 	mux.Handle("POST /api/v1/signals/rules", server.protected(guard.PermissionSignalsWrite, true, server.createSignalRule))
 	mux.Handle("PUT /api/v1/signals/rules/{ruleID}", server.protected(guard.PermissionSignalsWrite, true, server.updateSignalRule))
@@ -381,6 +421,7 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 	mux.Handle("GET /api/v1/reach/messages/{messageID}/attempts", server.protected(guard.PermissionMessagingRead, false, server.listReachMessageAttempts))
 	mux.Handle("POST /api/v1/reach/signals/process", server.protected(guard.PermissionMessagingWrite, true, server.processReachSignals))
 	mux.Handle("GET /api/v1/graph", server.protected("", false, server.graphView))
+	mux.Handle("GET /api/v1/mesh/graph", server.protected("", false, server.meshGraphView))
 	return server.correlation(server.securityHeaders(server.cors(mux)))
 }
 
@@ -897,13 +938,47 @@ func (s *Server) getStackSnapshot(w http.ResponseWriter, r *http.Request, _ guar
 		writeError(w, r, http.StatusServiceUnavailable, "stack_unavailable", "Stack software inventory is unavailable")
 		return
 	}
-	snapshot, err := s.stack.Snapshot(r.Context())
+	snapshot, err := s.stack.WorkspaceSnapshot(r.Context(), 80, 200)
 	if err != nil {
 		writeStackError(w, r, err)
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, snapshot)
+}
+
+func (s *Server) listStackAssignments(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.stack == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "stack_unavailable", "Stack software inventory is unavailable")
+		return
+	}
+	snapshot, err := s.stack.Snapshot(r.Context())
+	if err != nil {
+		writeStackError(w, r, err)
+		return
+	}
+	search := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
+	limit := 50
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		parsed, parseErr := strconv.Atoi(raw)
+		if parseErr != nil || parsed < 1 || parsed > 200 {
+			writeError(w, r, http.StatusBadRequest, "validation_failed", "limit must be between 1 and 200")
+			return
+		}
+		limit = parsed
+	}
+	matches := make([]stack.Assignment, 0, limit)
+	for _, assignment := range snapshot.Assignments {
+		haystack := strings.ToLower(assignment.AssigneeID + " " + assignment.AssigneeKind + " " + assignment.LicenseID)
+		if search != "" && !strings.Contains(haystack, search) {
+			continue
+		}
+		matches = append(matches, assignment)
+		if len(matches) >= limit {
+			break
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": matches, "total": len(snapshot.Assignments), "limit": limit})
 }
 
 func (s *Server) getStackAnalytics(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
@@ -1345,6 +1420,25 @@ func (s *Server) getHorizonForecast(w http.ResponseWriter, r *http.Request, _ gu
 	writeJSON(w, http.StatusOK, report)
 }
 
+func (s *Server) getHorizonForecastGroupAssets(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.horizon == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "horizon_unavailable", "Horizon planning is unavailable")
+		return
+	}
+	query, err := horizonForecastGroupAssetsQuery(r)
+	if err != nil {
+		writeHorizonError(w, r, err)
+		return
+	}
+	report, err := s.horizon.ForecastGroupAssets(r.Context(), query)
+	if err != nil {
+		writeHorizonError(w, r, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, report)
+}
+
 func (s *Server) exportHorizonCSV(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
 	if s.horizon == nil {
 		writeError(w, r, http.StatusServiceUnavailable, "horizon_unavailable", "Horizon planning is unavailable")
@@ -1365,6 +1459,39 @@ func (s *Server) exportHorizonCSV(w http.ResponseWriter, r *http.Request, _ guar
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(content)
+}
+
+func (s *Server) listHorizonKindDefaults(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.horizon == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "horizon_unavailable", "Horizon planning is unavailable")
+		return
+	}
+	items, err := s.horizon.ListKindDefaults(r.Context(), r.URL.Query().Get("scenario"))
+	if err != nil {
+		writeHorizonError(w, r, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) upsertHorizonKindDefault(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.horizon == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "horizon_unavailable", "Horizon planning is unavailable")
+		return
+	}
+	var input horizon.UpsertKindDefaultInput
+	if err := decodeJSON(w, r, 16<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid Horizon kind default payload")
+		return
+	}
+	saved, err := s.horizon.UpsertKindDefault(r.Context(), input)
+	if err != nil {
+		writeHorizonError(w, r, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, saved)
 }
 
 func horizonForecastQuery(r *http.Request) (horizon.ForecastQuery, error) {
@@ -1397,10 +1524,34 @@ func horizonForecastQuery(r *http.Request) (horizon.ForecastQuery, error) {
 	return query, nil
 }
 
+func horizonForecastGroupAssetsQuery(r *http.Request) (horizon.ForecastGroupAssetsQuery, error) {
+	forecast, err := horizonForecastQuery(r)
+	if err != nil {
+		return horizon.ForecastGroupAssetsQuery{}, err
+	}
+	scenario := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("scenario")))
+	groupKey := strings.TrimSpace(r.URL.Query().Get("groupKey"))
+	if scenario == "" || groupKey == "" {
+		return horizon.ForecastGroupAssetsQuery{}, horizon.ErrInvalidInput
+	}
+	return horizon.ForecastGroupAssetsQuery{ForecastQuery: forecast, Scenario: scenario, GroupKey: groupKey}, nil
+}
+
 func optionalQueryInt(value string) (int, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {
 		return 0, nil
+	}
+	return strconv.Atoi(value)
+}
+
+func parseGraphRecordLimit(value string) (int, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, nil
+	}
+	if strings.EqualFold(value, "all") {
+		return directoryexpansion.MaximumGraphLimit, nil
 	}
 	return strconv.Atoi(value)
 }
@@ -1511,9 +1662,13 @@ func (s *Server) downloadBlob(w http.ResponseWriter, r *http.Request, _ guard.Au
 		return
 	}
 	defer content.Close()
+	disposition := "inline"
+	if strings.EqualFold(r.URL.Query().Get("download"), "1") {
+		disposition = "attachment"
+	}
 	w.Header().Set("Content-Type", blob.MediaType)
 	w.Header().Set("Content-Length", strconv.FormatInt(blob.SizeBytes, 10))
-	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": blob.Name}))
+	w.Header().Set("Content-Disposition", mime.FormatMediaType(disposition, map[string]string{"filename": blob.Name}))
 	w.Header().Set("ETag", `"sha256:`+blob.SHA256+`"`)
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.Copy(w, content)
@@ -1572,7 +1727,7 @@ func (s *Server) graphView(w http.ResponseWriter, r *http.Request, authenticatio
 		},
 	}
 	if value := r.URL.Query().Get("limit"); value != "" {
-		parsed, err := strconv.Atoi(value)
+		parsed, err := parseGraphRecordLimit(value)
 		if err != nil {
 			writeError(w, r, http.StatusBadRequest, "validation_failed", "relationship graph filters are invalid")
 			return
@@ -1612,6 +1767,111 @@ func (s *Server) graphAssetVisibility(authentication guard.Authentication) direc
 		}
 	}
 	return visibility
+}
+
+func (s *Server) meshGraphView(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
+	s.noStore(w)
+	if s.mesh == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "graph_unavailable", "relationship graph unavailable")
+		return
+	}
+	query := mesh.Query{
+		Search:        r.URL.Query().Get("search"),
+		Kinds:         parseMeshKinds(r.URL.Query()),
+		Relationships: parseMeshRelationships(r.URL.Query()),
+		Scope: mesh.Scope{
+			Directory: s.optionalDirectoryVisibility(authentication),
+			Assets:    s.graphAssetVisibility(authentication),
+			Finance:   s.hasOrganizationGrant(authentication, guard.PermissionFinanceRead),
+			Software:  s.hasOrganizationGrant(authentication, guard.PermissionSoftwareRead),
+			Labels:    s.hasOrganizationGrant(authentication, guard.PermissionLabelsRead),
+			Goals:     s.hasOrganizationGrant(authentication, guard.PermissionGoalsRead),
+			Storage:   s.hasOrganizationGrant(authentication, guard.PermissionStorageRead),
+			Planning:  s.hasOrganizationGrant(authentication, guard.PermissionPlanningRead),
+		},
+	}
+	if value := r.URL.Query().Get("limit"); value != "" {
+		parsed, err := parseGraphRecordLimit(value)
+		if err != nil {
+			writeError(w, r, http.StatusBadRequest, "validation_failed", "relationship graph filters are invalid")
+			return
+		}
+		query.Limit = parsed
+	}
+	graph, err := s.mesh.Graph(r.Context(), query)
+	if err != nil {
+		switch {
+		case errors.Is(err, mesh.ErrInvalidInput), errors.Is(err, directoryexpansion.ErrInvalidInput):
+			writeError(w, r, http.StatusBadRequest, "validation_failed", "relationship graph filters are invalid")
+		case errors.Is(err, mesh.ErrGraphScope):
+			writeError(w, r, http.StatusForbidden, "permission_denied", "a product read permission is required for this operation")
+		default:
+			writeError(w, r, http.StatusInternalServerError, "graph_error", "unable to load relationship graph")
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, graph)
+}
+
+func parseMeshKinds(values url.Values) []mesh.NodeKind {
+	return parseMeshNodeKinds(values.Get("kind"), values["kinds"])
+}
+
+func parseMeshRelationships(values url.Values) []mesh.RelationshipKind {
+	kinds := make([]mesh.RelationshipKind, 0)
+	if value := strings.TrimSpace(values.Get("relationship")); value != "" {
+		kinds = append(kinds, mesh.RelationshipKind(value))
+	}
+	for _, raw := range values["relationships"] {
+		for _, part := range strings.Split(raw, ",") {
+			if trimmed := strings.TrimSpace(part); trimmed != "" {
+				kinds = append(kinds, mesh.RelationshipKind(trimmed))
+			}
+		}
+	}
+	return kinds
+}
+
+func parseMeshNodeKinds(kind string, kinds []string) []mesh.NodeKind {
+	result := make([]mesh.NodeKind, 0)
+	if trimmed := strings.TrimSpace(kind); trimmed != "" {
+		result = append(result, mesh.NodeKind(trimmed))
+	}
+	for _, raw := range kinds {
+		for _, part := range strings.Split(raw, ",") {
+			if trimmed := strings.TrimSpace(part); trimmed != "" {
+				result = append(result, mesh.NodeKind(trimmed))
+			}
+		}
+	}
+	return result
+}
+
+func (s *Server) optionalDirectoryVisibility(authentication guard.Authentication) people.Visibility {
+	visibility := people.Visibility{}
+	for _, grant := range authentication.Grants {
+		if grant.Permission != guard.PermissionDirectoryRead || grant.Scope.OrganizationID != s.organization.ID {
+			continue
+		}
+		switch grant.Scope.Kind {
+		case guard.ScopeOrganization:
+			return people.Visibility{All: true}
+		case guard.ScopeDepartment:
+			visibility.DepartmentIDs = append(visibility.DepartmentIDs, grant.Scope.ResourceID)
+		case guard.ScopeSite:
+			visibility.SiteIDs = append(visibility.SiteIDs, grant.Scope.ResourceID)
+		}
+	}
+	return visibility
+}
+
+func (s *Server) hasOrganizationGrant(authentication guard.Authentication, permission guard.Permission) bool {
+	for _, grant := range authentication.Grants {
+		if grant.Permission == permission && grant.Scope.OrganizationID == s.organization.ID && grant.Scope.Kind == guard.ScopeOrganization {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
@@ -2138,12 +2398,12 @@ func (s *Server) listAssets(w http.ResponseWriter, r *http.Request, _ guard.Auth
 		writeError(w, r, http.StatusBadRequest, "validation_failed", "asset filters are invalid")
 		return
 	}
-	assets, err := s.atlas.ListAssets(r.Context(), query)
+	assets, err := s.atlas.ListAssetsPage(r.Context(), query)
 	if err != nil {
 		writeAtlasError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": assets})
+	writeJSON(w, http.StatusOK, map[string]any{"items": assets.Items, "nextCursor": assets.NextCursor})
 }
 
 func (s *Server) getAsset(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
@@ -2163,6 +2423,101 @@ func (s *Server) getAsset(w http.ResponseWriter, r *http.Request, authentication
 		return
 	}
 	writeJSON(w, http.StatusOK, asset)
+}
+
+type assetRelatedResponse struct {
+	Components     []domain.AssetComponent `json:"components"`
+	PurchaseOrders []ledger.PurchaseOrder  `json:"purchaseOrders"`
+	Costs          []ledger.CostRecord     `json:"costs"`
+	Installations  []stack.Installation    `json:"installations"`
+	Assignments    []stack.Assignment      `json:"assignments"`
+	Licenses       []stack.License         `json:"licenses"`
+	Documents      []storage.Blob          `json:"documents"`
+}
+
+func (s *Server) getAssetRelated(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
+	if s.atlas == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "repository_unavailable", "asset repository unavailable")
+		return
+	}
+	asset, err := s.atlas.GetAsset(r.Context(), r.PathValue("assetID"))
+	if err != nil {
+		writeAtlasError(w, r, err)
+		return
+	}
+	if !s.canReadAsset(r.Context(), authentication, asset) {
+		writeError(w, r, http.StatusNotFound, "not_found", "the requested asset was not found")
+		return
+	}
+	response := assetRelatedResponse{
+		Components:     append([]domain.AssetComponent(nil), asset.Components...),
+		PurchaseOrders: []ledger.PurchaseOrder{}, Costs: []ledger.CostRecord{},
+		Installations: []stack.Installation{}, Assignments: []stack.Assignment{},
+		Licenses: []stack.License{}, Documents: []storage.Blob{},
+	}
+	if s.ledger != nil {
+		snapshot, ledgerErr := s.ledger.Snapshot(r.Context())
+		if ledgerErr != nil {
+			writeLedgerError(w, r, ledgerErr)
+			return
+		}
+		for _, purchaseOrder := range snapshot.PurchaseOrders {
+			for _, assetID := range purchaseOrder.AssetIDs {
+				if assetID == asset.ID {
+					response.PurchaseOrders = append(response.PurchaseOrders, purchaseOrder)
+					break
+				}
+			}
+		}
+		for _, cost := range snapshot.Costs {
+			if cost.AssetID == asset.ID {
+				response.Costs = append(response.Costs, cost)
+			}
+		}
+	}
+	if s.stack != nil {
+		records, stackErr := s.stack.RecordsForAsset(r.Context(), asset.ID, asset.RoomID, asset.DepartmentID, asset.SiteID)
+		if stackErr != nil {
+			writeStackError(w, r, stackErr)
+			return
+		}
+		response.Installations = records.Installations
+		response.Assignments = records.Assignments
+		response.Licenses = records.Licenses
+	}
+	if s.vault != nil {
+		blobs, vaultErr := s.vault.ListBlobs(r.Context())
+		if vaultErr != nil {
+			writeVaultError(w, r, vaultErr)
+			return
+		}
+		documentIDs := map[string]struct{}{}
+		for _, purchaseOrder := range response.PurchaseOrders {
+			for _, documentID := range purchaseOrder.ReceiptDocumentIDs {
+				documentIDs[documentID] = struct{}{}
+			}
+		}
+		for _, cost := range response.Costs {
+			if cost.DocumentID != "" {
+				documentIDs[cost.DocumentID] = struct{}{}
+			}
+		}
+		for _, license := range response.Licenses {
+			for _, documentID := range license.DocumentIDs {
+				documentIDs[documentID] = struct{}{}
+			}
+		}
+		for _, blob := range blobs {
+			if blob.ResourceType == "atlas.asset" && blob.ResourceID == asset.ID {
+				response.Documents = append(response.Documents, blob)
+				continue
+			}
+			if _, ok := documentIDs[blob.ID]; ok {
+				response.Documents = append(response.Documents, blob)
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (s *Server) listAssetModels(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
@@ -2272,6 +2627,31 @@ func (s *Server) createSite(w http.ResponseWriter, r *http.Request, _ guard.Auth
 	writeJSON(w, http.StatusCreated, created)
 }
 
+func (s *Server) updateSite(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.people == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "repository_unavailable", "people directory unavailable")
+		return
+	}
+	var input struct {
+		Name     string              `json:"name"`
+		Address  people.Address      `json:"address"`
+		Status   people.RecordStatus `json:"status"`
+		Revision uint64              `json:"revision"`
+	}
+	if err := decodeJSON(w, r, 32<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid site payload")
+		return
+	}
+	updated, err := s.people.UpdateSite(r.Context(), people.UpdateSiteInput{
+		ID: r.PathValue("siteID"), Name: input.Name, Address: input.Address, Status: input.Status, Revision: input.Revision,
+	})
+	if err != nil {
+		writePeopleError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
+}
+
 func (s *Server) listBuildings(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
 	if s.people == nil {
 		writeError(w, r, http.StatusServiceUnavailable, "repository_unavailable", "people directory unavailable")
@@ -2311,6 +2691,31 @@ func (s *Server) createBuilding(w http.ResponseWriter, r *http.Request, _ guard.
 		return
 	}
 	writeJSON(w, http.StatusCreated, created)
+}
+
+func (s *Server) updateBuilding(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.people == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "repository_unavailable", "people directory unavailable")
+		return
+	}
+	var input struct {
+		SiteID   string              `json:"siteId"`
+		Name     string              `json:"name"`
+		Status   people.RecordStatus `json:"status"`
+		Revision uint64              `json:"revision"`
+	}
+	if err := decodeJSON(w, r, 32<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid building payload")
+		return
+	}
+	updated, err := s.people.UpdateBuilding(r.Context(), people.UpdateBuildingInput{
+		ID: r.PathValue("buildingID"), SiteID: input.SiteID, Name: input.Name, Status: input.Status, Revision: input.Revision,
+	})
+	if err != nil {
+		writePeopleError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
 }
 
 func (s *Server) listRooms(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
@@ -2362,6 +2767,34 @@ func (s *Server) createRoom(w http.ResponseWriter, r *http.Request, _ guard.Auth
 	writeJSON(w, http.StatusCreated, created)
 }
 
+func (s *Server) updateRoom(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.people == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "repository_unavailable", "people directory unavailable")
+		return
+	}
+	var input struct {
+		SiteID     string              `json:"siteId"`
+		BuildingID string              `json:"buildingId"`
+		Number     string              `json:"number"`
+		Name       string              `json:"name"`
+		Status     people.RecordStatus `json:"status"`
+		Revision   uint64              `json:"revision"`
+	}
+	if err := decodeJSON(w, r, 32<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid room payload")
+		return
+	}
+	updated, err := s.people.UpdateRoom(r.Context(), people.UpdateRoomInput{
+		ID: r.PathValue("roomID"), SiteID: input.SiteID, BuildingID: input.BuildingID,
+		Number: input.Number, Name: input.Name, Status: input.Status, Revision: input.Revision,
+	})
+	if err != nil {
+		writePeopleError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
+}
+
 func (s *Server) listDepartments(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
 	if s.people == nil {
 		writeError(w, r, http.StatusServiceUnavailable, "repository_unavailable", "people directory unavailable")
@@ -2401,6 +2834,31 @@ func (s *Server) createDepartment(w http.ResponseWriter, r *http.Request, _ guar
 		return
 	}
 	writeJSON(w, http.StatusCreated, created)
+}
+
+func (s *Server) updateDepartment(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.people == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "repository_unavailable", "people directory unavailable")
+		return
+	}
+	var input struct {
+		Name     string              `json:"name"`
+		SiteID   string              `json:"siteId"`
+		Status   people.RecordStatus `json:"status"`
+		Revision uint64              `json:"revision"`
+	}
+	if err := decodeJSON(w, r, 32<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid department payload")
+		return
+	}
+	updated, err := s.people.UpdateDepartment(r.Context(), people.UpdateDepartmentInput{
+		ID: r.PathValue("departmentID"), Name: input.Name, SiteID: input.SiteID, Status: input.Status, Revision: input.Revision,
+	})
+	if err != nil {
+		writePeopleError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
 }
 
 func (s *Server) listIdentities(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
@@ -2448,6 +2906,8 @@ func (s *Server) createIdentity(w http.ResponseWriter, r *http.Request, _ guard.
 		Email           string              `json:"email"`
 		DepartmentID    string              `json:"departmentId"`
 		SiteID          string              `json:"siteId"`
+		BuildingID      string              `json:"buildingId"`
+		RoomID          string              `json:"roomId"`
 		Status          people.RecordStatus `json:"status"`
 		Provider        string              `json:"provider"`
 		ProviderSubject string              `json:"providerSubject"`
@@ -2458,7 +2918,7 @@ func (s *Server) createIdentity(w http.ResponseWriter, r *http.Request, _ guard.
 	}
 	created, err := s.people.CreateIdentity(r.Context(), people.CreateIdentityInput{
 		Kind: input.Kind, DisplayName: input.DisplayName, Email: input.Email,
-		DepartmentID: input.DepartmentID, SiteID: input.SiteID, Status: input.Status,
+		DepartmentID: input.DepartmentID, SiteID: input.SiteID, BuildingID: input.BuildingID, RoomID: input.RoomID, Status: input.Status,
 		Provider: input.Provider, ProviderSubject: input.ProviderSubject,
 	})
 	if err != nil {
@@ -2466,6 +2926,199 @@ func (s *Server) createIdentity(w http.ResponseWriter, r *http.Request, _ guard.
 		return
 	}
 	writeJSON(w, http.StatusCreated, created)
+}
+
+func (s *Server) updateIdentity(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.people == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "repository_unavailable", "people directory unavailable")
+		return
+	}
+	var input struct {
+		Kind         people.IdentityKind `json:"kind"`
+		DisplayName  string              `json:"displayName"`
+		Email        string              `json:"email"`
+		DepartmentID string              `json:"departmentId"`
+		SiteID       string              `json:"siteId"`
+		BuildingID   string              `json:"buildingId"`
+		RoomID       string              `json:"roomId"`
+		Status       people.RecordStatus `json:"status"`
+		Revision     uint64              `json:"revision"`
+	}
+	if err := decodeJSON(w, r, 32<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid identity payload")
+		return
+	}
+	updated, err := s.people.UpdateIdentity(r.Context(), people.UpdateIdentityInput{
+		ID: r.PathValue("identityID"), Kind: input.Kind, DisplayName: input.DisplayName, Email: input.Email,
+		DepartmentID: input.DepartmentID, SiteID: input.SiteID, BuildingID: input.BuildingID, RoomID: input.RoomID, Status: input.Status, Revision: input.Revision,
+	})
+	if err != nil {
+		writePeopleError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
+}
+
+func (s *Server) listLocationReferenceTypes(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.people == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "repository_unavailable", "people directory unavailable")
+		return
+	}
+	items, err := s.people.ListLocationReferenceTypes(r.Context())
+	if err != nil {
+		writePeopleError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) createLocationReferenceType(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.people == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "repository_unavailable", "people directory unavailable")
+		return
+	}
+	var input struct {
+		Name             string              `json:"name"`
+		Description      string              `json:"description"`
+		RelationshipKind string              `json:"relationshipKind"`
+		LocationKind     people.LocationKind `json:"locationKind"`
+		Status           people.RecordStatus `json:"status"`
+	}
+	if err := decodeJSON(w, r, 32<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid location reference type payload")
+		return
+	}
+	created, err := s.people.CreateLocationReferenceType(r.Context(), people.CreateLocationReferenceTypeInput{
+		Name: input.Name, Description: input.Description, RelationshipKind: input.RelationshipKind,
+		LocationKind: input.LocationKind, Status: input.Status,
+	})
+	if err != nil {
+		writePeopleError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, created)
+}
+
+func (s *Server) updateLocationReferenceType(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.people == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "repository_unavailable", "people directory unavailable")
+		return
+	}
+	var input struct {
+		Name             string              `json:"name"`
+		Description      string              `json:"description"`
+		RelationshipKind string              `json:"relationshipKind"`
+		LocationKind     people.LocationKind `json:"locationKind"`
+		Status           people.RecordStatus `json:"status"`
+		Revision         uint64              `json:"revision"`
+	}
+	if err := decodeJSON(w, r, 32<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid location reference type payload")
+		return
+	}
+	updated, err := s.people.UpdateLocationReferenceType(r.Context(), people.UpdateLocationReferenceTypeInput{
+		ID: r.PathValue("typeID"), Name: input.Name, Description: input.Description, RelationshipKind: input.RelationshipKind,
+		LocationKind: input.LocationKind, Status: input.Status, Revision: input.Revision,
+	})
+	if err != nil {
+		writePeopleError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
+}
+
+func (s *Server) listLocationReferences(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
+	if s.people == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "repository_unavailable", "people directory unavailable")
+		return
+	}
+	visibility, ok := s.directoryVisibility(w, r, authentication)
+	if !ok {
+		return
+	}
+	query := people.LocationReferenceQuery{
+		TypeID:       strings.TrimSpace(r.URL.Query().Get("typeId")),
+		LocationKind: people.LocationKind(strings.TrimSpace(r.URL.Query().Get("locationKind"))),
+		Status:       people.RecordStatus(strings.TrimSpace(r.URL.Query().Get("status"))),
+		Limit:        100,
+	}
+	if identityID := strings.TrimSpace(r.URL.Query().Get("identityId")); identityID != "" {
+		query.IdentityIDs = []string{identityID}
+	}
+	if locationID := strings.TrimSpace(r.URL.Query().Get("locationId")); locationID != "" {
+		query.LocationIDs = []string{locationID}
+	}
+	if limit := strings.TrimSpace(r.URL.Query().Get("limit")); limit != "" {
+		parsed, err := strconv.Atoi(limit)
+		if err != nil {
+			writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid location reference limit")
+			return
+		}
+		query.Limit = parsed
+	}
+	items, err := s.people.ListLocationReferences(r.Context(), query, visibility)
+	if err != nil {
+		writePeopleError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) createLocationReference(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.people == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "repository_unavailable", "people directory unavailable")
+		return
+	}
+	var input struct {
+		IdentityID   string                  `json:"identityId"`
+		TypeID       string                  `json:"typeId"`
+		LocationKind people.LocationKind     `json:"locationKind"`
+		LocationID   string                  `json:"locationId"`
+		Priority     people.LocationPriority `json:"priority"`
+		Status       people.RecordStatus     `json:"status"`
+	}
+	if err := decodeJSON(w, r, 32<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid location reference payload")
+		return
+	}
+	created, err := s.people.CreateLocationReference(r.Context(), people.CreateLocationReferenceInput{
+		IdentityID: input.IdentityID, TypeID: input.TypeID, LocationKind: input.LocationKind,
+		LocationID: input.LocationID, Priority: input.Priority, Status: input.Status,
+	})
+	if err != nil {
+		writePeopleError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, created)
+}
+
+func (s *Server) updateLocationReference(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.people == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "repository_unavailable", "people directory unavailable")
+		return
+	}
+	var input struct {
+		IdentityID   string                  `json:"identityId"`
+		TypeID       string                  `json:"typeId"`
+		LocationKind people.LocationKind     `json:"locationKind"`
+		LocationID   string                  `json:"locationId"`
+		Priority     people.LocationPriority `json:"priority"`
+		Status       people.RecordStatus     `json:"status"`
+		Revision     uint64                  `json:"revision"`
+	}
+	if err := decodeJSON(w, r, 32<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid location reference payload")
+		return
+	}
+	updated, err := s.people.UpdateLocationReference(r.Context(), people.UpdateLocationReferenceInput{
+		ID: r.PathValue("referenceID"), IdentityID: input.IdentityID, TypeID: input.TypeID, LocationKind: input.LocationKind,
+		LocationID: input.LocationID, Priority: input.Priority, Status: input.Status, Revision: input.Revision,
+	})
+	if err != nil {
+		writePeopleError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
 }
 
 func (s *Server) listAssetAssignments(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
@@ -2610,6 +3263,167 @@ func (s *Server) updateTag(w http.ResponseWriter, r *http.Request, authenticatio
 		return
 	}
 	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) listLabelDefinitions(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if !s.requireLabels(w, r) {
+		return
+	}
+	items, err := s.labels.ListDefinitions(r.Context())
+	if err != nil {
+		writeLabelsError(w, r, err)
+		return
+	}
+	if items == nil {
+		items = []labels.Definition{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) getLabelDefinition(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if !s.requireLabels(w, r) {
+		return
+	}
+	item, err := s.labels.GetDefinition(r.Context(), r.PathValue("definitionID"))
+	if err != nil {
+		writeLabelsError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) createLabelDefinition(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if !s.requireLabels(w, r) {
+		return
+	}
+	var input labels.CreateDefinitionInput
+	if err := decodeJSON(w, r, 32<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid label definition payload")
+		return
+	}
+	item, err := s.labels.CreateDefinition(r.Context(), input)
+	if err != nil {
+		writeLabelsError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, item)
+}
+
+func (s *Server) updateLabelDefinition(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
+	if !s.requireLabels(w, r) || !s.requireResourceWrite(w, r, authentication, "labels.definition", r.PathValue("definitionID")) {
+		return
+	}
+	var input labels.UpdateDefinitionInput
+	if err := decodeJSON(w, r, 32<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid label definition payload")
+		return
+	}
+	input.ID = r.PathValue("definitionID")
+	item, err := s.labels.UpdateDefinition(r.Context(), input)
+	if err != nil {
+		writeLabelsError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) previewDeleteLabelDefinition(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if !s.requireLabels(w, r) {
+		return
+	}
+	preview, err := s.labels.PreviewDeleteDefinition(r.Context(), r.PathValue("definitionID"))
+	if err != nil {
+		writeLabelsError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, preview)
+}
+
+func (s *Server) deleteLabelDefinition(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
+	if !s.requireLabels(w, r) || !s.requireResourceWrite(w, r, authentication, "labels.definition", r.PathValue("definitionID")) {
+		return
+	}
+	var input labels.DeleteDefinitionInput
+	if err := decodeJSON(w, r, 8<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid label definition delete payload")
+		return
+	}
+	input.ID = r.PathValue("definitionID")
+	if err := s.labels.DeleteDefinition(r.Context(), input); err != nil {
+		writeLabelsError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) listLabelDefinitionAssignments(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if !s.requireLabels(w, r) {
+		return
+	}
+	items, err := s.labels.ListAssignmentsForDefinition(r.Context(), r.PathValue("definitionID"), r.URL.Query().Get("recordType"))
+	if err != nil {
+		writeLabelsError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) listLabelAssignments(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if !s.requireLabels(w, r) {
+		return
+	}
+	items, err := s.labels.ListAssignments(r.Context(), r.PathValue("recordType"), r.PathValue("recordID"))
+	if err != nil {
+		writeLabelsError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) setLabelAssignment(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
+	resourceID := r.PathValue("definitionID") + ":" + r.PathValue("recordType") + ":" + r.PathValue("recordID")
+	if !s.requireLabels(w, r) || !s.requireResourceWrite(w, r, authentication, "labels.assignment", resourceID) {
+		return
+	}
+	var input labels.SetAssignmentInput
+	if err := decodeJSON(w, r, 32<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid label assignment payload")
+		return
+	}
+	input.DefinitionID = r.PathValue("definitionID")
+	input.RecordType = r.PathValue("recordType")
+	input.RecordID = r.PathValue("recordID")
+	item, err := s.labels.SetAssignment(r.Context(), input)
+	if err != nil {
+		writeLabelsError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) deleteLabelAssignment(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
+	resourceID := r.PathValue("definitionID") + ":" + r.PathValue("recordType") + ":" + r.PathValue("recordID")
+	if !s.requireLabels(w, r) || !s.requireResourceWrite(w, r, authentication, "labels.assignment", resourceID) {
+		return
+	}
+	revision, err := positiveRevision(r)
+	if err != nil {
+		writeError(w, r, http.StatusBadRequest, "validation_failed", "label assignment revision is required")
+		return
+	}
+	if err := s.labels.DeleteAssignment(r.Context(), r.PathValue("definitionID"), r.PathValue("recordType"), r.PathValue("recordID"), revision); err != nil {
+		writeLabelsError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) requireLabels(w http.ResponseWriter, r *http.Request) bool {
+	if s.labels != nil {
+		return true
+	}
+	writeError(w, r, http.StatusServiceUnavailable, "repository_unavailable", "Labels service unavailable")
+	return false
 }
 
 func (s *Server) listGoals(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
@@ -2792,6 +3606,7 @@ func (s *Server) createAsset(w http.ResponseWriter, r *http.Request, _ guard.Aut
 		writeAtlasError(w, r, err)
 		return
 	}
+	s.syncHorizonBaselinePlan(r, created.ID)
 	writeJSON(w, http.StatusCreated, created)
 }
 
@@ -2852,6 +3667,7 @@ func (s *Server) updateAsset(w http.ResponseWriter, r *http.Request, authenticat
 		writeAtlasError(w, r, err)
 		return
 	}
+	s.syncHorizonBaselinePlan(r, updated.ID)
 	writeJSON(w, http.StatusOK, updated)
 }
 
@@ -2890,6 +3706,24 @@ func (s *Server) retireAssetModel(w http.ResponseWriter, r *http.Request, _ guar
 		return
 	}
 	writeJSON(w, http.StatusOK, retired)
+}
+
+func (s *Server) reactivateAssetModel(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.atlas == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "repository_unavailable", "asset repository unavailable")
+		return
+	}
+	revision, err := positiveRevision(r)
+	if err != nil {
+		writeError(w, r, http.StatusBadRequest, "validation_failed", "model revision is invalid")
+		return
+	}
+	reactivated, err := s.atlas.ReactivateModel(r.Context(), r.PathValue("modelID"), revision)
+	if err != nil {
+		writeAtlasError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, reactivated)
 }
 
 func (s *Server) listAssetLifecycle(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
@@ -3270,7 +4104,7 @@ func assetQueryFromRequest(r *http.Request) (atlas.Query, error) {
 	return atlas.Query{
 		Search: values.Get("q"), Kind: values.Get("kind"), Status: values.Get("status"),
 		ModelID: values.Get("modelId"), SiteID: values.Get("siteId"), DepartmentID: values.Get("departmentId"), UserID: values.Get("userId"),
-		DeploymentContext: values.Get("deploymentContext"), Limit: limit,
+		DeploymentContext: values.Get("deploymentContext"), Cursor: values.Get("cursor"), Limit: limit,
 	}, nil
 }
 
@@ -3301,7 +4135,25 @@ func assetModelQueryFromRequest(r *http.Request) (atlas.ModelQuery, error) {
 		}
 		limit = parsed
 	}
-	return atlas.ModelQuery{Search: values.Get("q"), Kind: values.Get("kind"), Status: values.Get("status"), Limit: limit}, nil
+	includeRetired := false
+	if raw := strings.TrimSpace(values.Get("includeRetired")); raw != "" {
+		parsed, err := strconv.ParseBool(raw)
+		if err != nil {
+			return atlas.ModelQuery{}, err
+		}
+		includeRetired = parsed
+	}
+	return atlas.ModelQuery{
+		Search: values.Get("q"), Kind: values.Get("kind"), Status: values.Get("status"),
+		IncludeRetired: includeRetired, Limit: limit,
+	}, nil
+}
+
+func (s *Server) syncHorizonBaselinePlan(r *http.Request, assetID string) {
+	if s.horizon == nil || strings.TrimSpace(assetID) == "" {
+		return
+	}
+	_ = s.horizon.EnsureBaselinePlanFromAsset(r.Context(), assetID)
 }
 
 func writeAtlasError(w http.ResponseWriter, r *http.Request, err error) {
@@ -3318,6 +4170,29 @@ func writeAtlasError(w http.ResponseWriter, r *http.Request, err error) {
 		writeError(w, r, http.StatusConflict, "conflict", "asset identity or revision conflicts with current data")
 	default:
 		writeError(w, r, http.StatusInternalServerError, "repository_error", "the asset operation could not be completed")
+	}
+}
+
+func writeLabelsError(w http.ResponseWriter, r *http.Request, err error) {
+	switch {
+	case errors.Is(err, guard.ErrResourceWriteLocked):
+		writeError(w, r, http.StatusLocked, "ownership_locked", "claim local ownership before changing this imported Labels record")
+	case errors.Is(err, guard.ErrPermissionDenied):
+		writeError(w, r, http.StatusForbidden, "permission_denied", "Labels write permission is required for this operation")
+	case errors.Is(err, labels.ErrInvalidInput):
+		writeError(w, r, http.StatusBadRequest, "validation_failed", "label definition, assignment, or value details are invalid")
+	case errors.Is(err, labels.ErrNotFound):
+		writeError(w, r, http.StatusNotFound, "not_found", "the requested label definition, record, or assignment was not found")
+	case errors.Is(err, labels.ErrConflict):
+		writeError(w, r, http.StatusConflict, "conflict", "the label definition or assignment conflicts with current data")
+	case errors.Is(err, labels.ErrCycle):
+		writeError(w, r, http.StatusBadRequest, "cycle_detected", "the label hierarchy would contain a cycle")
+	case errors.Is(err, labels.ErrHasChildren):
+		writeError(w, r, http.StatusConflict, "has_children", "this tag has child tags; choose how to handle them before deleting")
+	case errors.Is(err, labels.ErrConfirmationRequired):
+		writeError(w, r, http.StatusBadRequest, "confirmation_required", "confirm tag deletion after reviewing affected records")
+	default:
+		writeError(w, r, http.StatusInternalServerError, "repository_error", "the Labels operation could not be completed")
 	}
 }
 
@@ -3356,6 +4231,7 @@ func identityQueryFromRequest(r *http.Request) (people.IdentityQuery, error) {
 		Status:       people.RecordStatus(values.Get("status")),
 		DepartmentID: values.Get("departmentId"),
 		SiteID:       values.Get("siteId"),
+		IDs:          values["id"],
 		Limit:        limit,
 	}, nil
 }

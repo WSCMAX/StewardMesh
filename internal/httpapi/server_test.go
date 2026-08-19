@@ -32,6 +32,7 @@ import (
 	"github.com/maxlemke/stewardmesh/internal/guard"
 	"github.com/maxlemke/stewardmesh/internal/horizon"
 	"github.com/maxlemke/stewardmesh/internal/identity"
+	"github.com/maxlemke/stewardmesh/internal/labels"
 	"github.com/maxlemke/stewardmesh/internal/ledger"
 	"github.com/maxlemke/stewardmesh/internal/patterns"
 	"github.com/maxlemke/stewardmesh/internal/people"
@@ -67,6 +68,12 @@ type unavailableHTTPAttemptLimiter struct{}
 type allowHTTPAssetReferences struct{}
 
 func (allowHTTPAssetReferences) ValidateAssetReferences(context.Context, string, atlas.References) error {
+	return nil
+}
+
+type allowHTTPLabelRecords struct{}
+
+func (allowHTTPLabelRecords) ValidateRecord(context.Context, string, string, string) error {
 	return nil
 }
 
@@ -343,7 +350,7 @@ func TestVaultUploadMetadataAuthorizationAndDownload(t *testing.T) {
 	downloadRes := httptest.NewRecorder()
 	handler.ServeHTTP(downloadRes, download)
 	if downloadRes.Code != http.StatusOK || downloadRes.Body.String() != "verified evidence" || downloadRes.Header().Get("ETag") == "" ||
-		!strings.Contains(downloadRes.Header().Get("Content-Disposition"), "attachment") {
+		!strings.Contains(downloadRes.Header().Get("Content-Disposition"), "inline") {
 		t.Fatalf("unexpected Vault download %d headers=%v body=%q", downloadRes.Code, downloadRes.Header(), downloadRes.Body.String())
 	}
 	unauthorizedDownload := authenticatedRequest(http.MethodGet, "/api/v1/blobs/"+blob.ID+"/content", nil, session)
@@ -641,6 +648,14 @@ func TestHorizonLifecyclePlanForecastHistoryAndExport(t *testing.T) {
 	handler.ServeHTTP(forecastResponse, forecastRequest)
 	if forecastResponse.Code != http.StatusOK || !strings.Contains(forecastResponse.Body.String(), `"plannedReplacementMinor":260000`) || !strings.Contains(forecastResponse.Body.String(), `"label":"FY2027"`) || forecastResponse.Header().Get("Cache-Control") != "no-store" {
 		t.Fatalf("unexpected Horizon forecast %d headers=%v body=%s", forecastResponse.Code, forecastResponse.Header(), forecastResponse.Body.String())
+	}
+	groupAssetsPath := "/api/v1/horizon/forecast/assets?scenarios=baseline&asOf=2026-08-11T00%3A00%3A00Z&fromYear=2027&toYear=2027&fiscalYearStartMonth=1&groupBy=fiscal_year&scenario=baseline&groupKey=FY2027"
+	groupAssetsRequest := authenticatedRequest(http.MethodGet, groupAssetsPath, nil, session)
+	groupAssetsResponse := httptest.NewRecorder()
+	handler.ServeHTTP(groupAssetsResponse, groupAssetsRequest)
+	if groupAssetsResponse.Code != http.StatusOK || !strings.Contains(groupAssetsResponse.Body.String(), `"assetId":"`+asset.ID+`"`) ||
+		!strings.Contains(groupAssetsResponse.Body.String(), `"groupKey":"FY2027"`) || groupAssetsResponse.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("unexpected Horizon forecast group assets %d headers=%v body=%s", groupAssetsResponse.Code, groupAssetsResponse.Header(), groupAssetsResponse.Body.String())
 	}
 	exportRequest := authenticatedRequest(http.MethodGet, strings.Replace(forecastPath, "/forecast", "/export.csv", 1), nil, session)
 	exportResponse := httptest.NewRecorder()
@@ -2339,6 +2354,56 @@ func TestPeopleDirectoryCreateSearchAndAssignmentHistory(t *testing.T) {
 		t.Fatalf("unexpected typed identities %#v %#v", person, shared)
 	}
 
+	updatedSite := updatePeopleRecord[people.Site](t, handler, session, "/api/v1/sites/"+site.ID, map[string]any{
+		"name": "Main Campus East", "revision": site.Revision,
+		"address": map[string]string{"line1": "100 Steward Way", "city": "Madison", "region": "WI", "postalCode": "53703", "country": "US"},
+		"status":  "active",
+	})
+	if updatedSite.Name != "Main Campus East" || updatedSite.Revision != site.Revision+1 {
+		t.Fatalf("unexpected site update %#v", updatedSite)
+	}
+	updatedBuilding := updatePeopleRecord[people.Building](t, handler, session, "/api/v1/buildings/"+building.ID, map[string]any{
+		"siteId": site.ID, "name": "Steward Hall North", "status": "active", "revision": building.Revision,
+	})
+	if updatedBuilding.Name != "Steward Hall North" {
+		t.Fatalf("unexpected building update %#v", updatedBuilding)
+	}
+	updatedRoom := updatePeopleRecord[people.Room](t, handler, session, "/api/v1/rooms/"+room.ID, map[string]any{
+		"siteId": site.ID, "buildingId": building.ID, "number": "101B", "name": "Receiving Dock", "status": "active", "revision": room.Revision,
+	})
+	if updatedRoom.Number != "101B" || updatedRoom.Name != "Receiving Dock" {
+		t.Fatalf("unexpected room update %#v", updatedRoom)
+	}
+	updatedPerson := updatePeopleRecord[people.Identity](t, handler, session, "/api/v1/identities/"+person.ID, map[string]any{
+		"kind": "person", "displayName": "Alex Rivera-Updated", "email": "alex@example.test",
+		"departmentId": department.ID, "siteId": site.ID, "status": "active", "revision": person.Revision,
+	})
+	if updatedPerson.DisplayName != "Alex Rivera-Updated" {
+		t.Fatalf("unexpected identity update %#v", updatedPerson)
+	}
+	located := createPeopleRecord[people.Identity](t, handler, session, "/api/v1/identities", map[string]any{
+		"kind": "person", "displayName": "Casey Hall", "email": "casey@example.test",
+		"departmentId": department.ID, "buildingId": building.ID, "roomId": room.ID,
+	})
+	if located.BuildingID != building.ID || located.RoomID != room.ID || located.SiteID != site.ID {
+		t.Fatalf("expected identity primary location, got %#v", located)
+	}
+	officeType := createPeopleRecord[people.LocationReferenceType](t, handler, session, "/api/v1/location-reference-types", map[string]any{
+		"name": "Office", "relationshipKind": "uses_office", "locationKind": "room",
+	})
+	reference := createPeopleRecord[people.LocationReference](t, handler, session, "/api/v1/location-references", map[string]any{
+		"identityId": located.ID, "typeId": officeType.ID, "locationKind": "room", "locationId": room.ID, "priority": "primary",
+	})
+	if reference.IdentityID != located.ID || reference.LocationID != room.ID {
+		t.Fatalf("unexpected location reference %#v", reference)
+	}
+	listRefReq := authenticatedRequest(http.MethodGet, "/api/v1/location-references?locationId="+room.ID+"&limit=20", nil, session)
+	listRefRes := httptest.NewRecorder()
+	handler.ServeHTTP(listRefRes, listRefReq)
+	if listRefRes.Code != http.StatusOK || !bytes.Contains(listRefRes.Body.Bytes(), []byte(reference.ID)) {
+		t.Fatalf("expected location reference list, got %d: %s", listRefRes.Code, listRefRes.Body.String())
+	}
+
 	searchReq := authenticatedRequest(http.MethodGet, "/api/v1/identities?q=public&kind=shared&limit=10", nil, session)
 	searchRes := httptest.NewRecorder()
 	handler.ServeHTTP(searchRes, searchReq)
@@ -2644,6 +2709,161 @@ func TestRelationshipGraphHTTPIntersectsGuardScopesAndValidatesFilters(t *testin
 	}
 }
 
+func TestMeshGraphHTTPProjectsAuthorizedProductsAndKindFilters(t *testing.T) {
+	handler, guardService, _ := newGuardServerWithDirectory(t, nil, nil, nil, nil)
+	administrator := bootstrapAdministrator(t, handler)
+	site := createPeopleRecord[people.Site](t, handler, administrator, "/api/v1/sites", map[string]any{"name": "Mesh Campus", "status": "active"})
+	createPeopleRecord[people.Identity](t, handler, administrator, "/api/v1/identities", map[string]any{
+		"kind": "person", "displayName": "Mesh Person", "email": "mesh@example.test", "siteId": site.ID, "status": "active",
+	})
+	asset := createPeopleRecord[domain.Asset](t, handler, administrator, "/api/v1/assets", map[string]any{
+		"id": "mesh-laptop", "name": "Mesh Laptop", "kind": "computer", "siteId": site.ID, "status": "active",
+	})
+	vendor := createPeopleRecord[ledger.Vendor](t, handler, administrator, "/api/v1/ledger/vendors", map[string]any{
+		"id": "mesh-vendor", "name": "Mesh Vendor",
+	})
+	createPeopleRecord[ledger.PurchaseOrder](t, handler, administrator, "/api/v1/ledger/purchase-orders", map[string]any{
+		"id": "mesh-po", "number": "PO-MESH-1", "vendorId": vendor.ID, "status": "ordered", "currency": "USD",
+		"totalMinor": 1000, "orderedOn": "2026-08-01T00:00:00Z", "assetIds": []string{asset.ID},
+	})
+	definition := createPeopleRecord[labels.Definition](t, handler, administrator, "/api/v1/labels/definitions", map[string]any{
+		"id": "mesh-tag", "name": "Research goal", "valueKind": "flag", "applicableRecordTypes": []string{"atlas.asset"},
+	})
+	assignmentPayload, _ := json.Marshal(map[string]any{"revision": 0})
+	assignRequest := authenticatedRequest(http.MethodPut, "/api/v1/labels/records/atlas.asset/"+asset.ID+"/assignments/"+definition.ID, bytes.NewReader(assignmentPayload), administrator)
+	assignResponse := httptest.NewRecorder()
+	handler.ServeHTTP(assignResponse, assignRequest)
+	if assignResponse.Code != http.StatusOK {
+		t.Fatalf("label assignment failed: %d %s", assignResponse.Code, assignResponse.Body.String())
+	}
+
+	adminRequest := authenticatedRequest(http.MethodGet, "/api/v1/mesh/graph?limit=500", nil, administrator)
+	adminResponse := httptest.NewRecorder()
+	handler.ServeHTTP(adminResponse, adminRequest)
+	if adminResponse.Code != http.StatusOK || adminResponse.Header().Get("Cache-Control") != "no-store" ||
+		!strings.Contains(adminResponse.Body.String(), "Mesh Person") || !strings.Contains(adminResponse.Body.String(), "PO-MESH-1") ||
+		!strings.Contains(adminResponse.Body.String(), `"kind":"tagged_with"`) || !strings.Contains(adminResponse.Body.String(), `"kind":"purchased_via"`) {
+		t.Fatalf("unexpected mesh graph %d headers=%#v body=%s", adminResponse.Code, adminResponse.Header(), adminResponse.Body.String())
+	}
+	allRequest := authenticatedRequest(http.MethodGet, "/api/v1/mesh/graph?limit=all", nil, administrator)
+	allResponse := httptest.NewRecorder()
+	handler.ServeHTTP(allResponse, allRequest)
+	if allResponse.Code != http.StatusOK || !strings.Contains(allResponse.Body.String(), "PO-MESH-1") {
+		t.Fatalf("mesh graph limit=all failed: %d %s", allResponse.Code, allResponse.Body.String())
+	}
+	largeRequest := authenticatedRequest(http.MethodGet, "/api/v1/mesh/graph?limit=1000", nil, administrator)
+	largeResponse := httptest.NewRecorder()
+	handler.ServeHTTP(largeResponse, largeRequest)
+	if largeResponse.Code != http.StatusOK || !strings.Contains(largeResponse.Body.String(), "PO-MESH-1") {
+		t.Fatalf("mesh graph limit=1000 failed: %d %s", largeResponse.Code, largeResponse.Body.String())
+	}
+
+	ctx := context.Background()
+	administratorAuthentication, err := guardService.AuthenticateSession(ctx, administrator.cookie.Value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	financeCredentials, err := guardService.LoginOIDC(ctx, identity.OIDCPrincipal{
+		Issuer: "https://identity.example.test/mesh", Subject: "finance-graph-reader", Email: "finance-graph@example.test", EmailVerified: true, DisplayName: "Finance Graph Reader",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	financeRole, err := guardService.CreateRole(ctx, administratorAuthentication, guard.CreateRoleInput{
+		Name: "Finance graph reader", Permissions: []guard.Permission{guard.PermissionFinanceRead},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := guardService.AssignRole(ctx, administratorAuthentication, guard.RoleAssignmentInput{
+		AccountID: financeCredentials.Authentication.Principal.Subject, RoleID: financeRole.ID, ScopeKind: guard.ScopeOrganization, ResourceID: "example-org",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	finance := testSession{cookie: &http.Cookie{Name: localSessionName, Value: financeCredentials.Token}, csrfToken: financeCredentials.CSRFToken}
+	financeRequest := authenticatedRequest(http.MethodGet, "/api/v1/mesh/graph?limit=50", nil, finance)
+	financeResponse := httptest.NewRecorder()
+	handler.ServeHTTP(financeResponse, financeRequest)
+	if financeResponse.Code != http.StatusOK || !strings.Contains(financeResponse.Body.String(), "PO-MESH-1") ||
+		strings.Contains(financeResponse.Body.String(), "Mesh Person") {
+		t.Fatalf("finance-only mesh graph leaked directory records: %d %s", financeResponse.Code, financeResponse.Body.String())
+	}
+
+	kindsRequest := authenticatedRequest(http.MethodGet, "/api/v1/mesh/graph?kinds=purchase_order,vendor&limit=50", nil, administrator)
+	kindsResponse := httptest.NewRecorder()
+	handler.ServeHTTP(kindsResponse, kindsRequest)
+	if kindsResponse.Code != http.StatusOK || !strings.Contains(kindsResponse.Body.String(), "PO-MESH-1") ||
+		strings.Contains(kindsResponse.Body.String(), "Mesh Person") || strings.Contains(kindsResponse.Body.String(), "Research goal") {
+		t.Fatalf("kind filter did not restrict mesh graph: %d %s", kindsResponse.Code, kindsResponse.Body.String())
+	}
+
+	assetCredentials, err := guardService.LoginOIDC(ctx, identity.OIDCPrincipal{
+		Issuer: "https://identity.example.test/mesh", Subject: "asset-mesh-reader", Email: "asset-mesh@example.test", EmailVerified: true, DisplayName: "Asset Mesh Reader",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assetRole, err := guardService.CreateRole(ctx, administratorAuthentication, guard.CreateRoleInput{
+		Name: "Asset mesh reader", Permissions: []guard.Permission{guard.PermissionAssetsRead},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := guardService.AssignRole(ctx, administratorAuthentication, guard.RoleAssignmentInput{
+		AccountID: assetCredentials.Authentication.Principal.Subject, RoleID: assetRole.ID, ScopeKind: guard.ScopeOrganization, ResourceID: "example-org",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	assetOnly := testSession{cookie: &http.Cookie{Name: localSessionName, Value: assetCredentials.Token}, csrfToken: assetCredentials.CSRFToken}
+	assetRequest := authenticatedRequest(http.MethodGet, "/api/v1/mesh/graph?limit=50", nil, assetOnly)
+	assetResponse := httptest.NewRecorder()
+	handler.ServeHTTP(assetResponse, assetRequest)
+	if assetResponse.Code != http.StatusOK || !strings.Contains(assetResponse.Body.String(), "Mesh Laptop") ||
+		strings.Contains(assetResponse.Body.String(), "PO-MESH-1") {
+		t.Fatalf("asset-only mesh graph should include assets without ledger records: %d %s", assetResponse.Code, assetResponse.Body.String())
+	}
+
+	unauthenticated := httptest.NewRequest(http.MethodGet, "/api/v1/mesh/graph", nil)
+	unauthenticated.Header.Set("Origin", testOrigin)
+	unauthenticatedResponse := httptest.NewRecorder()
+	handler.ServeHTTP(unauthenticatedResponse, unauthenticated)
+	if unauthenticatedResponse.Code != http.StatusUnauthorized {
+		t.Fatalf("expected unauthenticated mesh graph to fail, got %d %s", unauthenticatedResponse.Code, unauthenticatedResponse.Body.String())
+	}
+
+	invalidRequest := authenticatedRequest(http.MethodGet, "/api/v1/mesh/graph?kinds=unregistered", nil, administrator)
+	invalidResponse := httptest.NewRecorder()
+	handler.ServeHTTP(invalidResponse, invalidRequest)
+	if invalidResponse.Code != http.StatusBadRequest || invalidResponse.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("invalid mesh kind was not rejected: %d %s", invalidResponse.Code, invalidResponse.Body.String())
+	}
+
+	deniedCredentials, err := guardService.LoginOIDC(ctx, identity.OIDCPrincipal{
+		Issuer: "https://identity.example.test/mesh", Subject: "messaging-mesh-reader", Email: "messaging-mesh@example.test", EmailVerified: true, DisplayName: "Messaging Mesh Reader",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deniedRole, err := guardService.CreateRole(ctx, administratorAuthentication, guard.CreateRoleInput{
+		Name: "Messaging mesh reader", Permissions: []guard.Permission{guard.PermissionMessagingRead},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := guardService.AssignRole(ctx, administratorAuthentication, guard.RoleAssignmentInput{
+		AccountID: deniedCredentials.Authentication.Principal.Subject, RoleID: deniedRole.ID, ScopeKind: guard.ScopeOrganization, ResourceID: "example-org",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	denied := testSession{cookie: &http.Cookie{Name: localSessionName, Value: deniedCredentials.Token}, csrfToken: deniedCredentials.CSRFToken}
+	deniedRequest := authenticatedRequest(http.MethodGet, "/api/v1/mesh/graph", nil, denied)
+	deniedResponse := httptest.NewRecorder()
+	handler.ServeHTTP(deniedResponse, deniedRequest)
+	if deniedResponse.Code != http.StatusForbidden || deniedResponse.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("mesh graph without a product read permission did not fail closed: %d %s", deniedResponse.Code, deniedResponse.Body.String())
+	}
+}
+
 func TestDirectoryImportHTTPRejectsMissingIdempotencyAndUnknownSource(t *testing.T) {
 	handler, _, _ := newGuardServerWithDirectory(t, nil, nil, nil, nil)
 	session := bootstrapAdministrator(t, handler)
@@ -2825,6 +3045,12 @@ func newGuardServerWithDirectory(t *testing.T, limiter guard.AttemptLimiter, oid
 	if err != nil {
 		t.Fatal(err)
 	}
+	labelsService, err := labels.NewService(repository.NewMemoryLabelsStore(), allowHTTPLabelRecords{}, foundation.NopAuditor{}, labels.ServiceConfig{
+		OrganizationID: organization.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	objectStore, err := storage.NewLocalBlobStore(t.TempDir(), 1<<20)
 	if err != nil {
 		t.Fatal(err)
@@ -2913,6 +3139,7 @@ func newGuardServerWithDirectory(t *testing.T, limiter guard.AttemptLimiter, oid
 		DirectoryImports: directoryService,
 		Graph:            directoryGraph,
 		Threads:          threadsService,
+		Labels:           labelsService,
 		Vault:            vaultService,
 		Ledger:           ledgerService,
 		Stack:            stackService,
@@ -2950,6 +3177,25 @@ func createPeopleRecord[T any](t *testing.T, handler http.Handler, session testS
 	handler.ServeHTTP(res, req)
 	if res.Code != http.StatusCreated {
 		t.Fatalf("expected 201 for %s, got %d: %s", path, res.Code, res.Body.String())
+	}
+	var record T
+	if err := json.Unmarshal(res.Body.Bytes(), &record); err != nil {
+		t.Fatal(err)
+	}
+	return record
+}
+
+func updatePeopleRecord[T any](t *testing.T, handler http.Handler, session testSession, path string, payload any) T {
+	t.Helper()
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := authenticatedRequest(http.MethodPut, path, bytes.NewReader(encoded), session)
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected 200 for %s, got %d: %s", path, res.Code, res.Body.String())
 	}
 	var record T
 	if err := json.Unmarshal(res.Body.Bytes(), &record); err != nil {

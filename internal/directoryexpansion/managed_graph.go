@@ -138,6 +138,9 @@ func (s *RelationshipGraphStore) Graph(ctx context.Context, query GraphQuery) (G
 		}
 	}
 	s.projectIdentityRecords(builder, organizationNodeID, append(anchorIdentities, contextIdentities...))
+	if err := s.projectOccupancy(ctx, builder, query.Scope.Directory, organizationNodeID, append(anchorIdentities, contextIdentities...)); err != nil {
+		return Graph{}, err
+	}
 	s.projectAssetRecords(builder, query.Scope, organizationNodeID, append(anchorAssets, contextAssets...))
 	if query.Scope.Directory.All {
 		managed := &ManagedGraphStore{store: s.groups, organizationID: s.organization.ID}
@@ -270,6 +273,8 @@ func graphRelationshipContext(query GraphQuery, anchors []Node, anchorIdentities
 			appendSelector(&locations.DepartmentIDs, identity.DepartmentID, &locationSelectorCount)
 		case RelationshipLocatedAt:
 			appendSelector(&locations.SiteIDs, identity.SiteID, &locationSelectorCount)
+			appendSelector(&locations.BuildingIDs, identity.BuildingID, &locationSelectorCount)
+			appendSelector(&locations.RoomIDs, identity.RoomID, &locationSelectorCount)
 		}
 	}
 	for _, asset := range anchorAssets {
@@ -398,11 +403,17 @@ func (s *RelationshipGraphStore) projectIdentityRecords(builder *graphBuilder, o
 			origin = "imported"
 		}
 		builder.addNode(Node{ID: id, Kind: kind, Label: identity.DisplayName, Attributes: statusAttributes(identity.Status, origin)})
-		related := identity.DepartmentID != "" || identity.SiteID != ""
+		related := identity.DepartmentID != "" || identity.SiteID != "" || identity.BuildingID != "" || identity.RoomID != ""
 		if target := typedNodeID(NodeDepartment, identity.DepartmentID); identity.DepartmentID != "" && builder.hasNode(target) {
 			builder.addEdge(RelationshipBelongsTo, id, target, nil)
 		}
 		if target := typedNodeID(NodeSite, identity.SiteID); identity.SiteID != "" && builder.hasNode(target) {
+			builder.addEdge(RelationshipLocatedAt, id, target, nil)
+		}
+		if target := typedNodeID(NodeBuilding, identity.BuildingID); identity.BuildingID != "" && builder.hasNode(target) {
+			builder.addEdge(RelationshipLocatedAt, id, target, nil)
+		}
+		if target := typedNodeID(NodeRoom, identity.RoomID); identity.RoomID != "" && builder.hasNode(target) {
 			builder.addEdge(RelationshipLocatedAt, id, target, nil)
 		}
 		if !related {
@@ -881,7 +892,8 @@ func validNodeKind(kind NodeKind) bool {
 
 func validRelationshipKind(kind RelationshipKind) bool {
 	switch kind {
-	case "", RelationshipContains, RelationshipBelongsTo, RelationshipLocatedAt, RelationshipMemberOf, RelationshipAssignedTo:
+	case "", RelationshipContains, RelationshipBelongsTo, RelationshipLocatedAt, RelationshipMemberOf, RelationshipAssignedTo,
+		RelationshipUsesOffice, RelationshipTeachesIn, RelationshipAttendsClass, RelationshipResidesIn, RelationshipUsesLab:
 		return true
 	default:
 		return false

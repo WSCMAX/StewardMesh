@@ -1,19 +1,19 @@
 @import "tailwindcss";
 
 @theme {
-  --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-sans: "Segoe UI", "Helvetica Neue", ui-sans-serif, system-ui, sans-serif;
 
   --color-steward-green: #46cf51;
   --color-steward-teal: #16bfa7;
   --color-steward-blue: #1768ef;
 
-  --color-steward-ink-950: #061827;
-  --color-steward-ink-900: #0b2238;
-  --color-steward-ink-850: #0f2942;
-  --color-steward-ink-800: #12314c;
-  --color-steward-mist: #f7fafc;
-  --color-steward-mist-muted: #dce6ef;
-  --color-steward-slate: #90a4b5;
+  --color-steward-ink-950: #07141e;
+  --color-steward-ink-900: #0c1c28;
+  --color-steward-ink-850: #102232;
+  --color-steward-ink-800: #163044;
+  --color-steward-mist: #eef3f7;
+  --color-steward-mist-muted: #b7c5d0;
+  --color-steward-slate: #7e93a3;
 
   --color-steward-success: #168c4b;
   --color-steward-warning: #c57900;
@@ -21,21 +21,18 @@
 }
 
 :root {
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: "Segoe UI", "Helvetica Neue", ui-sans-serif, system-ui, sans-serif;
   color-scheme: dark;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
-  scrollbar-color: #244760 #061827;
+  scrollbar-color: #244760 #07141e;
 }
 
 body {
   margin: 0;
   min-width: 0;
   min-height: 100vh;
-  background:
-    radial-gradient(circle at 82% -10%, rgba(23, 104, 239, 0.12), transparent 30rem),
-    radial-gradient(circle at 8% 12%, rgba(22, 191, 167, 0.08), transparent 26rem),
-    #061827;
+  background: #07141e;
 }
 
 button,
@@ -63,8 +60,8 @@ textarea {
 }
 
 option {
-  background: #0b2238;
-  color: #f7fafc;
+  background: #0c1c28;
+  color: #eef3f7;
 }
 
 ::selection {
@@ -86,8 +83,19 @@ option {
   animation: steward-pulse 1.8s ease-in-out infinite;
 }
 
+.steward-grid-scroll {
+  scrollbar-gutter: stable both-edges;
+  overscroll-behavior: contain;
+  scroll-padding: 0.5rem;
+}
+
+.steward-grid-scroll table {
+  padding-inline-end: 0.25rem;
+}
+
 @media (min-width: 1024px) {
-  .steward-scrollbar {
+  .steward-scrollbar,
+  .steward-grid-scroll {
     scrollbar-width: thin;
   }
 }

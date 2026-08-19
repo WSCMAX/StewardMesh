@@ -839,6 +839,7 @@ func (s *Service) issueSession(ctx context.Context, accountID string) (SessionCr
 	if err != nil {
 		return SessionCredentials{}, fmt.Errorf("load account access: %w", err)
 	}
+	AugmentAccessGrants(s.organizationID, &access)
 	token, tokenHash, err := newSecret()
 	if err != nil {
 		return SessionCredentials{}, err

@@ -31,7 +31,7 @@ func TestBuiltInTemplatesCoverCoreRecordsAndEveryFieldType(t *testing.T) {
 		if strings.HasPrefix(item.RecordType, "atlas.catalog-") || item.RecordType == "horizon.plan" ||
 			item.RecordType == "atlas.asset" || item.RecordType == "atlas.model" ||
 			item.RecordType == "atlas.identifier" || item.RecordType == "atlas.lifecycle-event" ||
-			strings.HasPrefix(item.RecordType, "people.") || strings.HasPrefix(item.RecordType, "threads.") || strings.HasPrefix(item.RecordType, "ledger.") || strings.HasPrefix(item.RecordType, "signals.") && item.RecordType != "signals.alert" || strings.HasPrefix(item.RecordType, "reach.") && item.RecordType != "reach.message" || strings.HasPrefix(item.RecordType, "directory.") && item.RecordType != "directory.import-batch" || item.RecordType == "patterns.template" || item.RecordType == "bridge.oauth-client" {
+			strings.HasPrefix(item.RecordType, "people.") || strings.HasPrefix(item.RecordType, "threads.") || strings.HasPrefix(item.RecordType, "labels.") || strings.HasPrefix(item.RecordType, "ledger.") || strings.HasPrefix(item.RecordType, "signals.") && item.RecordType != "signals.alert" || strings.HasPrefix(item.RecordType, "reach.") && item.RecordType != "reach.message" || strings.HasPrefix(item.RecordType, "directory.") && item.RecordType != "directory.import-batch" || item.RecordType == "patterns.template" || item.RecordType == "bridge.oauth-client" {
 			wantVersion = 2
 		}
 		if !item.BuiltIn || item.Version != wantVersion || item.Status != patterns.StatusActive {
@@ -54,7 +54,7 @@ func TestBuiltInTemplatesCoverCoreRecordsAndEveryFieldType(t *testing.T) {
 			wantVersion := int64(1)
 			if strings.HasPrefix(record, "atlas.catalog-") || record == "horizon.plan" ||
 				record == "atlas.asset" || record == "atlas.model" || record == "atlas.identifier" || record == "atlas.lifecycle-event" ||
-				strings.HasPrefix(record, "people.") || strings.HasPrefix(record, "threads.") || strings.HasPrefix(record, "ledger.") || strings.HasPrefix(record, "signals.") && record != "signals.alert" || strings.HasPrefix(record, "reach.") && record != "reach.message" || strings.HasPrefix(record, "directory.") && record != "directory.import-batch" || record == "patterns.template" || record == "bridge.oauth-client" {
+				strings.HasPrefix(record, "people.") || strings.HasPrefix(record, "threads.") || strings.HasPrefix(record, "labels.") || strings.HasPrefix(record, "ledger.") || strings.HasPrefix(record, "signals.") && record != "signals.alert" || strings.HasPrefix(record, "reach.") && record != "reach.message" || strings.HasPrefix(record, "directory.") && record != "directory.import-batch" || record == "patterns.template" || record == "bridge.oauth-client" {
 				wantVersion = 2
 			}
 			if !ok || id == "" || version != wantVersion {
@@ -72,7 +72,7 @@ func TestBuiltInTemplatesCoverCoreRecordsAndEveryFieldType(t *testing.T) {
 			types[field.Type] = true
 		}
 	}
-	for _, fieldType := range []patterns.FieldType{patterns.FieldText, patterns.FieldNumber, patterns.FieldDate, patterns.FieldMoney, patterns.FieldEnum, patterns.FieldAttachment, patterns.FieldReference} {
+	for _, fieldType := range []patterns.FieldType{patterns.FieldText, patterns.FieldNumber, patterns.FieldDate, patterns.FieldMoney, patterns.FieldEnum, patterns.FieldAttachment, patterns.FieldReference, patterns.FieldTag} {
 		if !types[fieldType] {
 			t.Errorf("missing field type %s", fieldType)
 		}
@@ -97,7 +97,7 @@ func TestBuiltInTemplateContractFingerprint(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := fmt.Sprintf("%x", sha256.Sum256(encoded))
-	const want = "646e304be8e3301fb18931a501bc0a558ec54bc2f9baa8a00410c38ab3fa07eb"
+	const want = "a2a3f5120d622e7d70388d572e2b602867f303dc2f9abb04fca67b859882496a"
 	if got != want {
 		t.Fatalf("built-in contract changed; review domain parity and intentionally update the fingerprint: got %s want %s", got, want)
 	}

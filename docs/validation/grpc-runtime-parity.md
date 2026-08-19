@@ -17,7 +17,7 @@ for the all-domain adapter is active in `cmd/stewardmesh-grpc`. It uses a public
 listener at `STEWARDMESH_GRPC_PUBLIC_ADDR` (default `127.0.0.1:9091`) and a
 protected listener at `STEWARDMESH_GRPC_ADDR` (default `127.0.0.1:9090`). The
 three public Guard methods and the standard unary gRPC health `Check` method are
-registered only on the 64 KiB receive/send-envelope listener. The other 151 RPCs are registered
+registered only on the 64 KiB receive/send-envelope listener. The other 152 RPCs are registered
 only on the authenticated 34 MiB listener. These grpc-go server limits apply
 before codec invocation, which preserves the allocation boundary even though
 grpc-go decompresses requests before invoking the codec.
@@ -93,7 +93,7 @@ development or test runtimes.
 ## Automated evidence
 
 - `internal/grpcapi/server_test.go` compares descriptor and runtime registration
-  for all 16 services and 154 RPCs, and verifies exact Bearer parsing plus
+  for all 16 services and 155 RPCs, and verifies exact Bearer parsing plus
   client cookie/origin/CSRF stripping, pre-decode authentication, public-request
   limits through a real transport with preserved `ResourceExhausted` status,
   route/OpenAPI coverage, opaque Struct keys, strict mutation projections,

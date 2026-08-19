@@ -5,26 +5,26 @@
 - **Roadmap issue:** [#31](https://github.com/WSCMAX/StewardMesh/issues/31)
 
 Relationship Graph is StewardMesh's reusable, read-only view of connections
-among authoritative records. It includes visible People locations and
+among authoritative records. The People graph includes visible locations and
 identities, organization-wide imported groups, and Atlas assets permitted by
-both Atlas and directory visibility. Future features can add node and edge
-types without moving ownership of their records into the graph.
+both Atlas and directory visibility. The mesh graph adds purchase orders,
+vendors, contracts, budgets, software products and licenses, labels, goals,
+documents, models, and lifecycle plans when the caller can read those
+products. Source services keep ownership of their records.
 
 ## Contract and safety
 
-The REST endpoint is `GET /api/v1/graph`; the protobuf surface is
-`RelationshipGraphService.GetRelationshipGraph`. Both accept only bounded
-search, node type, relationship type, and record limit filters. Organization,
-site, department, resource, and asset visibility never appear in a client
-request. The server derives them from the authenticated Guard principal and
-intersects scopes before projection.
+The REST endpoint `GET /api/v1/graph` remains the People-scoped projection
+(`RelationshipGraphService.GetRelationshipGraph`). The cross-product endpoint
+is `GET /api/v1/mesh/graph`. It layers Ledger, Stack, Labels, Goals, Vault, and
+Horizon records onto the same typed node/edge model, using only Guard grants
+the caller already has. Visibility never appears in a client request.
 
-Search and record-type filters select anchor records. When a relationship type
-is also selected, the response retains each matching relationship's other
-endpoint as context even when that endpoint has another record type or label;
-the complete response still stays within the selected record limit. This makes
-cross-type questions such as "assets located at" useful without exposing an
-edge whose endpoint is absent.
+`GET /api/v1/mesh/graph` accepts bounded search, one or more node types
+(`kind` / `kinds`), one or more relationship types (`relationship` /
+`relationships`), and a record limit. Selecting kinds drops every other record
+type and any edge that would have pointed at it. Search keeps matching records
+and their direct connections within the limit.
 
 Node IDs are typed (`site:<id>`, `person:<id>`, or `asset:<id>`), labels are
 bounded, and attributes contain only minimal status, origin, and asset-kind
@@ -34,9 +34,11 @@ when cyclic, disconnected, or empty.
 
 ## Accessible use
 
-Open People and use the Relationship graph filters. The SVG supplies a compact
-overview of the first 40 records. Focusable relationship and disconnected-node
-tables are the complete keyboard and screen-reader representation, including
-when filters leave nodes without a matching edge. At 320 pixels the controls
-stack, while wide tables scroll within labeled regions instead of widening the
-page.
+Open Mesh for the graph. People edits directory records in the shared
+spreadsheet; it no longer hosts a separate relationship-graph tab. Zoom and
+gravity sliders, a type legend, and optional
+clustering make the visual readable; focusable relationship and disconnected-node
+tables remain the complete keyboard and screen-reader representation. The Mesh
+Data tab uses the same loaded records in the shared spreadsheet grid. At 320
+pixels the controls stack, while wide tables scroll within labeled regions
+instead of widening the page.

@@ -13,3 +13,12 @@ Object.defineProperty(window, 'scrollTo', {
   configurable: true,
   value: () => undefined,
 })
+Object.defineProperty(window, 'ResizeObserver', {
+  configurable: true,
+  writable: true,
+  value: class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  },
+})

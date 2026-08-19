@@ -1,4 +1,4 @@
-// Requirements: REQ-API-001, REQ-SIGNALS-001, REQ-REACH-001. Feature: integrations.protocols.
+// Requirements: REQ-API-001, REQ-SIGNALS-001, REQ-REACH-001, REQ-DIRECTORY-EXPANSION-008. Features: integrations.protocols, threads.relationships.
 package grpcapi
 
 import "net/http"
@@ -122,6 +122,7 @@ func routes() map[string]route {
 		"/stewardmesh.v1.PeopleService/EndAssetAssignment":    endpoint(http.MethodPatch, "/api/v1/assets/{assetId}/assignments/{assignmentId}"),
 
 		"/stewardmesh.v1.RelationshipGraphService/GetRelationshipGraph": endpoint(http.MethodGet, "/api/v1/graph"),
+		"/stewardmesh.v1.RelationshipGraphService/GetMeshGraph":         endpoint(http.MethodGet, "/api/v1/mesh/graph"),
 
 		"/stewardmesh.v1.DirectoryImportService/ListDirectoryImportSources": endpoint(http.MethodGet, "/api/v1/directory-import-sources"),
 		"/stewardmesh.v1.DirectoryImportService/ListDirectoryImports":       endpoint(http.MethodGet, "/api/v1/directory-imports"),

@@ -63,6 +63,8 @@ const (
 	PermissionSignalsWrite      Permission = "signals.write"
 	PermissionMessagingRead     Permission = "messaging.read"
 	PermissionMessagingWrite    Permission = "messaging.write"
+	PermissionLabelsRead        Permission = "labels.read"
+	PermissionLabelsWrite       Permission = "labels.write"
 	PermissionGuardManage       Permission = "guard.manage"
 )
 
@@ -89,6 +91,8 @@ func AdministratorBundlePermissions() []Permission {
 		PermissionSignalsWrite,
 		PermissionMessagingRead,
 		PermissionMessagingWrite,
+		PermissionLabelsRead,
+		PermissionLabelsWrite,
 	}
 }
 
@@ -117,6 +121,8 @@ func SupportedPermissions() []Permission {
 		PermissionSignalsWrite,
 		PermissionMessagingRead,
 		PermissionMessagingWrite,
+		PermissionLabelsRead,
+		PermissionLabelsWrite,
 		PermissionGuardManage,
 	}
 }

@@ -11,7 +11,8 @@ test('accepts only fixed Workspace deep links', () => {
   expect(workspaceAreaFromHash('#workspace-exchange')).toBe('exchange')
   expect(workspaceAreaFromHash('#workspace-unknown')).toBe('overview')
   expect(workspaceAreaFromHash('#guide-atlas')).toBe('overview')
-  expect(workspaceHash('people')).toBe('#workspace-people')
+  expect(workspaceAreaFromHash('#workspace-people')).toBe('people')
+  expect(workspaceAreaFromHash('#workspace-mesh')).toBe('mesh')
 })
 
 test('uses ordinary navigation links and reports the requested focused area', () => {

@@ -9,12 +9,17 @@
   "scripts": {
     "dev": "vite",
     "e2e:phase-one": "../scripts/e2e/run-phase-one.sh",
-    "build": "tsc -b && vite build",
+    "wasm": "bash ../scripts/build-xlsx-wasm.sh",
+    "build": "npm run wasm && tsc -b && vite build",
     "openapi:lint": "redocly lint ../api/openapi/openapi.yaml --config ../redocly.yaml",
     "test": "vitest run",
     "typecheck": "tsc -b --pretty false"
   },
   "dependencies": {
+    "d3-drag": "^3.0.0",
+    "d3-force": "^3.0.0",
+    "d3-selection": "^3.0.0",
+    "d3-zoom": "^3.0.0",
     "react": "19.2.8",
     "react-dom": "19.2.8"
   },
@@ -26,6 +31,10 @@
     "@tailwindcss/vite": "4.3.3",
     "@testing-library/jest-dom": "7.0.0",
     "@testing-library/react": "16.3.2",
+    "@types/d3-drag": "^3.0.7",
+    "@types/d3-force": "^3.0.10",
+    "@types/d3-selection": "^3.0.11",
+    "@types/d3-zoom": "^3.0.8",
     "@types/node": "26.2.0",
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.4",

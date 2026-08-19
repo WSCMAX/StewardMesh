@@ -313,6 +313,9 @@ func (s *MemoryLedgerStore) UpdateCost(_ context.Context, item ledger.CostRecord
 func clonePurchaseOrder(item ledger.PurchaseOrder) ledger.PurchaseOrder {
 	item.AssetIDs = append([]string(nil), item.AssetIDs...)
 	item.ReceiptDocumentIDs = append([]string(nil), item.ReceiptDocumentIDs...)
+	if len(item.Lines) > 0 {
+		item.Lines = append([]ledger.PurchaseOrderLine(nil), item.Lines...)
+	}
 	if item.OrderedOn != nil {
 		value := *item.OrderedOn
 		item.OrderedOn = &value

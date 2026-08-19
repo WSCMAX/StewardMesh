@@ -1,6 +1,6 @@
 import { type FormEvent, useCallback, useEffect, useRef, useState } from 'react'
 import { ApiRequestError, isRevision, requestJSON, type Revision } from './api'
-import { buttonClass, inputClass, labelClass, panelClass, secondaryButtonClass, StatusBadge, subpanelClass } from './ui'
+import { ProductHeader, buttonClass, inputClass, labelClass, panelClass, secondaryButtonClass, StatusBadge, subpanelClass } from './ui'
 
 // Requirements: REQ-REACH-001, REQ-EXCHANGE-001. Features: messaging.delivery, migration.packages. GitHub: #9, #12.
 
@@ -225,7 +225,15 @@ export default function ReachManager({ csrfToken, onOpenHelp, permissions }: { c
 
   if (!canRead) return <section className={`${panelClass} p-6`} data-feature="messaging.delivery" data-requirement="REQ-REACH-001"><h3 className="text-xl font-semibold text-white">Reach is permission limited</h3><p className="mt-2 text-sm text-steward-mist-muted">Ask an administrator for messaging.read access.</p></section>
   return <section aria-labelledby="reach-heading" className="grid min-w-0 max-w-full grid-cols-[minmax(0,1fr)] gap-6" data-feature="messaging.delivery" data-requirement="REQ-REACH-001">
-    <header className={`${panelClass} p-5 sm:p-6`}><div className="flex flex-wrap items-start justify-between gap-4"><div><p className="text-xs font-semibold uppercase tracking-[0.18em] text-steward-teal">Reach</p><h3 className="mt-2 text-2xl font-semibold text-white" id="reach-heading">Confirmed, traceable delivery</h3><p className="mt-2 max-w-3xl text-sm leading-6 text-steward-mist-muted">Configure deployment-approved email, Teams, and webhook adapters; route subscriber groups; and inspect sanitized retry history. Credentials and endpoint URLs never appear here.</p></div>{onOpenHelp && <button className={secondaryButtonClass} onClick={onOpenHelp} type="button">Open Reach help</button>}</div>
+    <header className={`${panelClass} p-5`}>
+      <ProductHeader
+        actions={onOpenHelp ? <button className={secondaryButtonClass} onClick={onOpenHelp} type="button">Open Reach help</button> : undefined}
+        description="Configure deployment-approved email, Teams, and webhook adapters; route subscriber groups; and inspect sanitized retry history. Credentials and endpoint URLs never appear here."
+        headingId="reach-heading"
+        headingLevel={3}
+        kicker="Reach"
+        title="Confirmed, traceable delivery"
+      />
       {!canWrite && <p className="mt-4 rounded-xl border border-white/10 bg-white/[0.03] p-3 text-sm text-steward-mist-muted">You have read-only Reach access. messaging.write is required to configure or deliver messages.</p>}
       {loading && <p className="mt-4 text-sm text-steward-mist-muted" role="status">Loading Reach…</p>}
       {error && <div className="mt-4 rounded-xl border border-steward-danger/45 bg-steward-danger/10 p-3 text-sm text-[#ffccd1]" ref={errorRef} role="alert" tabIndex={-1}>{error}</div>}

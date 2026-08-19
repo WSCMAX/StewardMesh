@@ -1,24 +1,26 @@
-import { type CSSProperties, type FormEvent, type ReactNode, useEffect, useRef, useState } from 'react'
+import { type CSSProperties, type FormEvent, type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import { ApiRequestError, authenticationRequiredEventName, requestJSON } from './api'
-import AtlasInventory, { isAsset, type Asset } from './AtlasInventory'
+import AtlasInventory, { assetPageLimit, fetchAssetPage, mergeAssets, type Asset } from './AtlasInventory'
 import BridgeManager from './BridgeManager'
 import { documentationHref } from './documentation'
 import ExchangeManager from './ExchangeManager'
+import { newWorkspaceRecordFocus, type AtlasAssetScope, type WorkspaceRecordFocus } from './graphRecord'
 import GuideExperience, { GuideInvitation, type GuideDestination } from './GuideExperience'
 import GuardAccessManager from './GuardAccessManager'
 import HorizonPlanner from './HorizonPlanner'
 import LedgerManager from './LedgerManager'
+import MeshExplorer from './MeshExplorer'
 import PatternsManager from './PatternsManager'
 import PeopleDirectory from './PeopleDirectory'
 import ReachManager from './ReachManager'
 import SignalsManager from './SignalsManager'
 import StackManager from './StackManager'
 import ThreadsManager from './ThreadsManager'
-import { AreaIcon, ChevronRightIcon, StatusBadge, buttonClass, cx, inputClass, panelClass, plainButtonClass, secondaryButtonClass, sectionKickerClass, type AreaIconName } from './ui'
+import { AreaIcon, ChevronRightIcon, StatusBadge, buttonClass, cx, inputClass, panelClass, plainButtonClass, secondaryButtonClass, type AreaIconName } from './ui'
 import VaultManager from './VaultManager'
 import { brandingStyle, readWalkthroughStatus, resolveBranding, type WalkthroughStatus, writeWalkthroughStatus } from './guide'
 import WorkspaceShell, { workspaceAreaFromHash, workspaceHash, type WorkspaceArea, type WorkspaceAreaID } from './WorkspaceShell'
-import { permissionAccess, type PermissionAccess, type SessionGrant } from './workspaceAccess'
+import { anyPermissionAccess, meshReadPermissions, permissionAccess, type PermissionAccess, type SessionGrant } from './workspaceAccess'
 
 // Requirements include REQ-WORKSPACE-001, REQ-PATTERNS-001, REQ-STORAGE-001, REQ-LEDGER-001, REQ-STACK-001, REQ-HORIZON-001, REQ-SIGNALS-001, REQ-REACH-001, REQ-EXCHANGE-001, A11Y-001, DOC-001, and DOC-002.
 
@@ -29,10 +31,8 @@ type WorkspaceModule = {
   summary: string
   permission: string
   writePermission?: string
-}
-
-type AssetResponse = {
-  items?: Asset[]
+  anyPermissions?: readonly string[]
+  allowScoped?: boolean
 }
 
 type Organization = {
@@ -78,10 +78,11 @@ const workspaceModules: readonly WorkspaceModule[] = [
   { id: 'stack', name: 'Stack', descriptor: 'Software and licenses', summary: 'Connect installed software, purchased entitlements, assignments, usage, and compliance.', permission: 'software.read', writePermission: 'software.write' },
   { id: 'signals', name: 'Signals', descriptor: 'Alerts and action queue', summary: 'Evaluate operational and financial conditions, acknowledge alerts, assign ownership, and configure delivery subscriptions.', permission: 'signals.read', writePermission: 'signals.write' },
   { id: 'reach', name: 'Reach', descriptor: 'Message delivery', summary: 'Configure approved provider adapters, subscriber groups, plain-text templates, confirmed sends, retries, and sanitized history.', permission: 'messaging.read', writePermission: 'messaging.write' },
-  { id: 'threads', name: 'Threads', descriptor: 'Tags and strategic goals', summary: 'Connect inventory to hierarchical tags, goals, and visible provenance.', permission: 'goals.read', writePermission: 'goals.write' },
+  { id: 'threads', name: 'Tags', descriptor: 'Configurable connections', summary: 'Define tags with typed values, connect them to any record, and link strategic goals where needed.', permission: 'goals.read', writePermission: 'goals.write' },
   { id: 'vault', name: 'Vault', descriptor: 'Private files and evidence', summary: 'Store checksummed evidence and authorize private downloads.', permission: 'storage.read', writePermission: 'storage.write' },
   { id: 'exchange', name: 'Exchange', descriptor: 'Migration packages', summary: 'Move selected records through bounded, checksummed, dependency-aware packages.', permission: 'integrations.read', writePermission: 'integrations.write' },
   { id: 'people', name: 'People', descriptor: 'Users and departments', summary: 'Organize locations, departments, identities, and asset assignments.', permission: 'directory.read', writePermission: 'directory.write' },
+  { id: 'mesh', name: 'Mesh', descriptor: 'Cross-product graph', summary: 'See how people, assets, purchase orders, tags, licenses, goals, and files connect, then inspect the same records as a table.', permission: 'directory.read', anyPermissions: meshReadPermissions, allowScoped: true },
   { id: 'bridge', name: 'Bridge', descriptor: 'MCP and OAuth clients', summary: 'Connect approved MCP clients through narrow scopes, explicit consent, and revocable access.', permission: 'integrations.read', writePermission: 'integrations.write' },
   { id: 'guard', name: 'Guard', descriptor: 'Authentication and authorization', summary: 'Manage roles, scoped assignments, ownership, and access policy.', permission: 'guard.manage' },
 ]
@@ -161,6 +162,8 @@ export default function App() {
   const [authFailure] = useState(() => new URL(window.location.href).searchParams.get('auth'))
   const [health, setHealth] = useState<ServiceHealth>('checking')
   const [assets, setAssets] = useState<Asset[]>([])
+  const [assetNextCursor, setAssetNextCursor] = useState('')
+  const [assetsLoading, setAssetsLoading] = useState(false)
   const [organizationName, setOrganizationName] = useState('Your organization')
   const [authPhase, setAuthPhase] = useState<AuthPhase>('loading')
   const [principal, setPrincipal] = useState<Principal | null>(null)
@@ -182,6 +185,8 @@ export default function App() {
   const [walkthroughStatus, setWalkthroughStatus] = useState(readWalkthroughStatus)
   const [activeWorkspaceArea, setActiveWorkspaceArea] = useState<WorkspaceAreaID>(() => workspaceAreaFromHash(window.location.hash))
   const [visitedWorkspaceAreas, setVisitedWorkspaceAreas] = useState<ReadonlySet<WorkspaceAreaID>>(() => new Set([workspaceAreaFromHash(window.location.hash)]))
+  const [recordFocus, setRecordFocus] = useState<WorkspaceRecordFocus | null>(null)
+  const [atlasAssetScope, setAtlasAssetScope] = useState<AtlasAssetScope | null>(null)
   const errorRef = useRef<HTMLDivElement>(null)
 
   function openGuide(destination: GuideDestination) {
@@ -202,6 +207,18 @@ export default function App() {
       window.history[history === 'push' ? 'pushState' : 'replaceState']({ workspaceArea: area }, '', `${window.location.pathname}${window.location.search}${nextHash}`)
     }
     if (focus) queueMicrotask(() => document.getElementById('workspace-context-heading')?.focus())
+  }
+
+  function openWorkspaceRecord(node: { id: string; kind: string }) {
+    const next = newWorkspaceRecordFocus(node)
+    if (!next) return
+    setRecordFocus(next)
+    navigateWorkspace(next.area)
+  }
+
+  function openAtlasAssetScope(assetIds: readonly string[], label: string, fiscalYearStartMonth: number) {
+    setAtlasAssetScope({ assetIds, label, fiscalYearStartMonth, nonce: Date.now() })
+    navigateWorkspace('atlas')
   }
 
   useEffect(() => {
@@ -273,6 +290,7 @@ export default function App() {
       setPermissions([])
       setGrants([])
       setAssets([])
+      setAssetNextCursor('')
       setAuthError('Your session expired. Sign in again to continue; unsaved work was not submitted.')
       setAuthPhase('login')
       queueMicrotask(() => errorRef.current?.focus())
@@ -308,13 +326,23 @@ export default function App() {
         .catch(() => { if (active) setOrganizationName('Your organization') })
     }
     if (permissions.includes('assets.read')) {
-      requestJSON('/api/v1/assets')
-        .then((body) => {
-          if (typeof body !== 'object' || body === null) throw new Error('invalid asset response')
-          const items = (body as AssetResponse).items
-          if (active) setAssets(Array.isArray(items) ? items.filter(isAsset) : [])
+      setAssetsLoading(true)
+      fetchAssetPage()
+        .then((page) => {
+          if (active) {
+            setAssets(page.items)
+            setAssetNextCursor(page.nextCursor)
+          }
         })
-        .catch(() => { if (active) setAssets([]) })
+        .catch(() => {
+          if (active) {
+            setAssets([])
+            setAssetNextCursor('')
+          }
+        })
+        .finally(() => {
+          if (active) setAssetsLoading(false)
+        })
     }
     return () => {
       active = false
@@ -410,6 +438,7 @@ export default function App() {
       setPermissions([])
       setGrants([])
       setAssets([])
+      setAssetNextCursor('')
       setActiveWorkspaceArea('overview')
       setVisitedWorkspaceAreas(new Set(['overview']))
       setAuthPhase('login')
@@ -420,35 +449,68 @@ export default function App() {
     }
   }
 
+  const loadMoreAssets = useCallback(async () => {
+    if (!assetNextCursor || assetsLoading) return
+    setAssetsLoading(true)
+    try {
+      const page = await fetchAssetPage(new URLSearchParams({ limit: String(assetPageLimit), cursor: assetNextCursor }))
+      setAssets((current) => mergeAssets(current, page.items))
+      setAssetNextCursor(page.nextCursor)
+    } finally {
+      setAssetsLoading(false)
+    }
+  }, [assetNextCursor, assetsLoading])
+
+  const loadAllAssets = useCallback(async () => {
+    if (assetsLoading) return assets
+    setAssetsLoading(true)
+    try {
+      let cursor = assetNextCursor
+      let next = assets
+      while (cursor) {
+        const page = await fetchAssetPage(new URLSearchParams({ limit: String(assetPageLimit), cursor }))
+        next = mergeAssets(next, page.items)
+        cursor = page.nextCursor
+      }
+      setAssets(next)
+      setAssetNextCursor('')
+      return next
+    } finally {
+      setAssetsLoading(false)
+    }
+  }, [assetNextCursor, assets, assetsLoading])
+
   const serviceLabel = health === 'connected' ? 'Connected' : health === 'unavailable' ? 'Unavailable' : 'Checking connection'
   const workspaceContent: Record<Exclude<WorkspaceAreaID, 'overview'>, ReactNode> = {
-    atlas: <AtlasInventory assets={assets} csrfToken={csrfToken} onAssetsChange={setAssets} onOpenHelp={() => openGuide({ view: 'help', topic: 'atlas' })} permissions={permissions} />,
-    horizon: <HorizonPlanner assets={assets} csrfToken={csrfToken} onOpenHelp={() => openGuide({ view: 'help', topic: 'horizon' })} permissions={permissions} />,
+    atlas: <AtlasInventory assets={assets} assetNextCursor={assetNextCursor} assetScope={atlasAssetScope} assetsLoading={assetsLoading} csrfToken={csrfToken} focusRecord={recordFocus?.area === 'atlas' ? recordFocus : null} identity={principal ? { subject: principal.subject, organizationId: principal.organizationId } : null} onAssetsChange={setAssets} onClearAssetScope={() => setAtlasAssetScope(null)} onLoadAllAssets={loadAllAssets} onLoadMoreAssets={loadMoreAssets} onOpenHelp={() => openGuide({ view: 'help', topic: 'atlas' })} permissions={permissions} />,
+    horizon: <HorizonPlanner assets={assets} csrfToken={csrfToken} onOpenAtlasInventory={openAtlasAssetScope} onOpenHelp={() => openGuide({ view: 'help', topic: 'horizon' })} permissions={permissions} />,
     ledger: <LedgerManager csrfToken={csrfToken} onOpenHelp={() => openGuide({ view: 'help', topic: 'ledger' })} permissions={permissions} />,
-    stack: <StackManager assets={assets} csrfToken={csrfToken} onOpenHelp={() => openGuide({ view: 'help', topic: 'stack' })} permissions={permissions} />,
+    stack: <StackManager assets={assets} csrfToken={csrfToken} identity={principal ? { subject: principal.subject, organizationId: principal.organizationId } : null} onOpenHelp={() => openGuide({ view: 'help', topic: 'stack' })} permissions={permissions} />,
     signals: <SignalsManager csrfToken={csrfToken} onOpenHelp={() => openGuide({ view: 'help', topic: 'signals' })} permissions={permissions} />,
     reach: <ReachManager csrfToken={csrfToken} onOpenHelp={() => openGuide({ view: 'help', topic: 'reach' })} permissions={permissions} />,
-    threads: <ThreadsManager assets={assets} csrfToken={csrfToken} onOpenHelp={() => openGuide({ view: 'help', topic: 'threads' })} permissions={permissions} />,
+    threads: <ThreadsManager assets={assets} csrfToken={csrfToken} onOpenHelp={() => openGuide({ view: 'help', topic: 'threads' })} permissions={permissions} roles={principal?.roles ?? []} />,
     vault: <VaultManager csrfToken={csrfToken} onOpenHelp={() => openGuide({ view: 'help', topic: 'vault' })} permissions={permissions} />,
     exchange: <ExchangeManager csrfToken={csrfToken} onOpenHelp={() => openGuide({ view: 'help', topic: 'exchange' })} permissions={permissions} />,
-    people: <PeopleDirectory assets={assets} csrfToken={csrfToken} issuesUrl={issuesUrl} onOpenHelp={() => openGuide({ view: 'help', topic: 'people' })} onReportIssue={() => openGuide({ view: 'report', topic: 'people' })} permissions={permissions} />,
+    people: <PeopleDirectory assets={assets} csrfToken={csrfToken} focusRecord={recordFocus?.area === 'people' ? recordFocus : null} identity={principal ? { subject: principal.subject, organizationId: principal.organizationId } : null} issuesUrl={issuesUrl} onOpenHelp={() => openGuide({ view: 'help', topic: 'people' })} onReportIssue={() => openGuide({ view: 'report', topic: 'people' })} permissions={permissions} />,
+    mesh: <MeshExplorer csrfToken={csrfToken} identity={principal ? { subject: principal.subject, organizationId: principal.organizationId } : null} onOpenRecord={openWorkspaceRecord} permissions={permissions} />,
     bridge: <BridgeManager csrfToken={csrfToken} permissions={permissions} />,
-    guard: <div className="grid gap-6"><GuardAccessManager csrfToken={csrfToken} onOpenHelp={() => openGuide({ view: 'help', topic: 'guard' })} /><PatternsManager csrfToken={csrfToken} /></div>,
+    guard: <div className="grid gap-6"><GuardAccessManager csrfToken={csrfToken} onOpenHelp={() => openGuide({ view: 'help', topic: 'guard' })} /><PatternsManager csrfToken={csrfToken} permissions={permissions} /></div>,
   }
   const workspaceAreas: WorkspaceArea[] = [
     {
       id: 'overview', name: 'Overview', descriptor: 'Work queue and product areas',
       summary: 'Choose a focused area, see what is available, and return here without losing work already in progress.',
-      content: <WorkspaceOverview assets={assets} grants={grants} guideOpen={guideOpen} health={health} modules={workspaceModules} onNavigate={navigateWorkspace} onOpenGuide={openGuide} onWalkthroughStatus={updateWalkthroughStatus} principal={principal} walkthroughStatus={walkthroughStatus} />,
+      content: <WorkspaceOverview assetNextCursor={assetNextCursor} assets={assets} grants={grants} guideOpen={guideOpen} health={health} modules={workspaceModules} onNavigate={navigateWorkspace} onOpenGuide={openGuide} onWalkthroughStatus={updateWalkthroughStatus} principal={principal} walkthroughStatus={walkthroughStatus} />,
     },
     ...workspaceModules.map((module): WorkspaceArea => {
-      const readAccess = permissionAccess(grants, module.permission)
+      const readAccess = module.anyPermissions ? anyPermissionAccess(grants, module.anyPermissions) : permissionAccess(grants, module.permission)
       const writeAccess = module.writePermission ? permissionAccess(grants, module.writePermission) : readAccess
+      const showContent = readAccess.level === 'organization' || (Boolean(module.allowScoped) && readAccess.level === 'scoped')
       return {
         ...module,
         readAccess,
         writeAccess,
-        content: readAccess.level === 'organization'
+        content: showContent
           ? workspaceContent[module.id]
           : <PermissionLimitedArea module={module} onOpenGuide={() => openGuide({ view: 'help', topic: module.id })} readAccess={readAccess} writeAccess={writeAccess} />,
       }
@@ -458,20 +520,20 @@ export default function App() {
   return (
     <div className="min-h-screen text-steward-mist" data-feature="authorization.security experience.help" data-requirement="SEC-GUARD-001 A11Y-001 DOC-001 DOC-002" style={brandingStyle(branding.appliedTheme) as CSSProperties}>
       <a className="sr-only rounded-xl bg-steward-teal px-3 py-2 font-semibold text-steward-ink-950 focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[70]" href="#main-content">Skip to main content</a>
-      <header className="sticky top-0 z-30 border-b border-white/[0.07] bg-steward-ink-950/88 shadow-sm shadow-black/20 backdrop-blur-xl">
-        <div className="mx-auto flex max-w-[100rem] flex-wrap items-center justify-between gap-4 px-4 py-3 sm:px-6">
+      <header className="sticky top-0 z-30 border-b border-white/[0.08] bg-steward-ink-950/95">
+        <div className="mx-auto flex max-w-[100rem] flex-wrap items-center justify-between gap-3 px-4 py-2.5 sm:px-6">
           <div className="flex min-w-0 items-center gap-3">
-            <span className="grid size-11 shrink-0 place-items-center rounded-xl border border-white/10 bg-steward-ink-900 shadow-sm"><img alt="" aria-hidden="true" className="h-9 w-auto" height="370" src="/brand/stewardmesh-s-mark.svg" width="294" /></span>
+            <span className="grid size-9 shrink-0 place-items-center"><img alt="" aria-hidden="true" className="h-8 w-auto" height="370" src="/brand/stewardmesh-s-mark.svg" width="294" /></span>
             <div className="min-w-0">
               <div className="flex items-baseline gap-2">
-                <h1 className="truncate text-xl font-bold tracking-tight text-white">StewardMesh</h1>
-                <p className="hidden text-[0.6875rem] font-semibold uppercase tracking-[0.14em] text-steward-slate sm:block">By Binary Cornfield</p>
+                <h1 className="truncate text-lg font-semibold text-white">StewardMesh</h1>
+                <p className="hidden text-xs text-steward-slate sm:block">Binary Cornfield</p>
               </div>
-              <p className="truncate text-xs text-steward-mist-muted sm:text-sm" aria-live="polite" data-requirement="REQ-FOUNDATION-001">{organizationName}</p>
+              <p className="truncate text-xs text-steward-mist-muted" aria-live="polite" data-requirement="REQ-FOUNDATION-001">{organizationName}</p>
             </div>
           </div>
-          <div className="flex flex-wrap items-center justify-end gap-2 sm:gap-3">
-            {principal && <div className="hidden items-center gap-2 xl:flex"><span aria-hidden="true" className="grid size-8 place-items-center rounded-full bg-steward-blue/15 text-xs font-bold text-[#a9c7ff] ring-1 ring-inset ring-steward-blue/30">{principal.displayName.split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase()}</span><p className="max-w-64 truncate text-sm text-steward-mist-muted">Signed in as <strong className="font-semibold text-steward-mist">{principal.displayName}</strong></p></div>}
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {principal && <div className="hidden items-center gap-2 xl:flex"><span aria-hidden="true" className="grid size-7 place-items-center rounded-full bg-steward-ink-800 text-[11px] font-semibold text-steward-mist">{principal.displayName.split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase()}</span><p className="max-w-64 truncate text-sm text-steward-mist-muted">Signed in as <strong className="font-medium text-steward-mist">{principal.displayName}</strong></p></div>}
             <button className={cx(secondaryButtonClass, authPhase === 'authenticated' && 'max-sm:hidden')} onClick={() => openGuide({ view: 'help', topic: authPhase === 'authenticated' ? 'workspace' : 'guard' })} type="button">Open Guide</button>
             {principal && <button className={`${plainButtonClass} text-steward-mist-muted`} disabled={busy} onClick={handleLogout} type="button">Sign out</button>}
             <p aria-live="polite"><StatusBadge tone={health === 'connected' ? 'success' : health === 'unavailable' ? 'warning' : 'info'}><span aria-hidden="true" className={cx('size-1.5 rounded-full', health === 'connected' ? 'bg-steward-green' : health === 'unavailable' ? 'bg-steward-warning' : 'steward-pulse bg-steward-blue')} />{health === 'connected' ? 'Service connected' : health === 'unavailable' ? 'Service unavailable' : 'Checking service'}</StatusBadge></p>
@@ -479,7 +541,7 @@ export default function App() {
         </div>
       </header>
 
-      <main id="main-content" className={cx('mx-auto max-w-[100rem] space-y-8 px-4 py-5 sm:px-6 lg:py-7', authPhase !== 'authenticated' && 'grid min-h-[calc(100svh-5.5rem)] place-items-center')} tabIndex={-1}>
+      <main id="main-content" className={cx('mx-auto max-w-[100rem] space-y-6 px-4 py-4 sm:px-6 lg:py-5', authPhase !== 'authenticated' && 'grid min-h-[calc(100svh-4.5rem)] place-items-center')} tabIndex={-1}>
         {authError && <div ref={errorRef} className="rounded-xl border border-steward-danger/50 bg-steward-danger/15 p-4 text-[#ffccd1]" role="alert" tabIndex={-1}>{authError}</div>}
 
         {authPhase === 'loading' && <section aria-labelledby="auth-loading-heading" className={`${panelClass} w-full max-w-xl p-6`}><span aria-hidden="true" className="mb-4 block h-1 w-20 overflow-hidden rounded-full bg-steward-ink-800"><span className="steward-pulse block h-full w-1/2 rounded-full bg-steward-teal" /></span><h2 id="auth-loading-heading" className="text-xl font-semibold">Guard — Checking access</h2><p className="mt-2 text-steward-mist-muted" role="status">Checking administrator setup and your secure session.</p></section>}
@@ -487,10 +549,9 @@ export default function App() {
         {authPhase === 'unavailable' && <section aria-labelledby="auth-unavailable-heading" className={`${panelClass} w-full max-w-xl border-steward-warning/35 bg-steward-warning/10 p-6`}><h2 id="auth-unavailable-heading" className="text-xl font-semibold">Guard — Authentication unavailable</h2><p className="mt-2 text-steward-mist-muted">Confirm the Go service and database are running, then reload this page.</p><HelpLinks onHelp={() => openGuide({ view: 'help', topic: 'guard' })} onReport={() => openGuide({ view: 'report', topic: 'guard' })} /></section>}
 
         {authPhase === 'bootstrap' && (
-          <section aria-labelledby="bootstrap-heading" className={`${panelClass} relative mx-auto w-full max-w-2xl overflow-hidden p-6 sm:p-8`}>
-            <span aria-hidden="true" className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-steward-green via-steward-teal to-steward-blue" />
-            <p className={sectionKickerClass}>Guard / Secure local authentication</p>
-            <h2 id="bootstrap-heading" className="mt-3 text-3xl font-bold tracking-tight">Create the first administrator</h2>
+          <section aria-labelledby="bootstrap-heading" className={`${panelClass} mx-auto w-full max-w-2xl p-6 sm:p-8`}>
+            <p className="text-[13px] text-steward-slate">Guard</p>
+            <h2 id="bootstrap-heading" className="mt-1 text-2xl font-semibold">Create the first administrator</h2>
             <p className="mt-3 leading-7 text-steward-mist-muted">This one-time account receives the organization-scoped Administrator role. Passwords are hashed before storage, and the browser receives only an HttpOnly session cookie.</p>
             <form className="mt-6 space-y-5" onSubmit={handleBootstrap}>
               <Field id="displayName" label="Display name" autoComplete="name" required />
@@ -506,11 +567,9 @@ export default function App() {
         )}
 
         {authPhase === 'login' && (
-          <section aria-labelledby="login-heading" className={`${panelClass} relative mx-auto w-full max-w-xl overflow-hidden p-6 sm:p-9`}>
-            <span aria-hidden="true" className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-steward-green via-steward-teal to-steward-blue" />
-            <div className="mb-6 grid size-12 place-items-center rounded-xl border border-steward-teal/25 bg-steward-teal/10 text-steward-teal"><AreaIcon area="guard" className="size-6" /></div>
-            <p className={sectionKickerClass}>Guard / Secure authentication</p>
-            <h2 id="login-heading" className="mt-3 text-3xl font-bold tracking-tight">Sign in to StewardMesh</h2>
+          <section aria-labelledby="login-heading" className={`${panelClass} mx-auto w-full max-w-xl p-6 sm:p-8`}>
+            <p className="text-[13px] text-steward-slate">Guard</p>
+            <h2 id="login-heading" className="mt-1 text-2xl font-semibold">Sign in to StewardMesh</h2>
             <p className="mt-3 text-steward-mist-muted">Use your local organization account{oidcEnabled || samlEnabled ? ' or an organization identity provider' : ''}.</p>
             {(oidcEnabled || samlEnabled) && <div className="mt-6 grid gap-3">
               {oidcEnabled && <a className="block min-h-11 w-full rounded-lg border border-steward-teal px-4 py-3 text-center font-semibold text-steward-teal transition hover:bg-steward-teal/10" href="/api/v1/auth/oidc/start">Continue with OpenID Connect</a>}
@@ -535,7 +594,8 @@ export default function App() {
   )
 }
 
-function WorkspaceOverview({ assets, grants, guideOpen, health, modules, onNavigate, onOpenGuide, onWalkthroughStatus, principal, walkthroughStatus }: {
+function WorkspaceOverview({ assetNextCursor, assets, grants, guideOpen, health, modules, onNavigate, onOpenGuide, onWalkthroughStatus, principal, walkthroughStatus }: {
+  assetNextCursor: string
   assets: readonly Asset[]
   grants: readonly SessionGrant[]
   guideOpen: boolean
@@ -547,15 +607,17 @@ function WorkspaceOverview({ assets, grants, guideOpen, health, modules, onNavig
   principal: Principal | null
   walkthroughStatus: WalkthroughStatus
 }) {
-  const availableCount = modules.filter((module) => permissionAccess(grants, module.permission).level !== 'none').length
-  return <div className="space-y-5">
-    <section aria-labelledby="workspace-overview-heading" className={`${panelClass} relative overflow-hidden p-5 sm:p-7`}>
-      <div aria-hidden="true" className="absolute -right-20 -top-20 size-72 rounded-full bg-steward-blue/10 blur-3xl" />
-      <p className={sectionKickerClass}>Connect what you steward. Plan what comes next.</p>
-      <h3 className="relative mt-3 max-w-4xl text-2xl font-bold tracking-tight text-white sm:text-3xl" id="workspace-overview-heading">A clear starting point for inventory, people, evidence, goals, planning, and finance.</h3>
-      <p className="mt-3 max-w-4xl leading-7 text-steward-mist-muted">Open one product area at a time from the navigation. StewardMesh keeps previously opened areas mounted, so filters, selected records, and incomplete form work remain in context while you move around.</p>
+  const availableCount = modules.filter((module) => {
+    const access = module.anyPermissions ? anyPermissionAccess(grants, module.anyPermissions) : permissionAccess(grants, module.permission)
+    return access.level !== 'none'
+  }).length
+  return <div className="space-y-4">
+    <section aria-labelledby="workspace-overview-heading" className={`${panelClass} p-5`}>
+      <p className="text-[13px] text-steward-slate">Overview</p>
+      <h3 className="mt-1 max-w-4xl text-xl font-semibold text-white" id="workspace-overview-heading">A clear starting point for inventory, people, evidence, goals, planning, and finance.</h3>
+      <p className="mt-2 max-w-4xl text-sm leading-6 text-steward-mist-muted">Open one product area at a time. Filters, selected records, and unfinished forms stay in place while you move around.</p>
       <dl className="mt-5 grid gap-3 sm:grid-cols-3">
-        <OverviewMetric label="Assets tracked" value={String(assets.length)} detail="Current Atlas records" />
+        <OverviewMetric label="Assets tracked" value={assetNextCursor ? `${assets.length}+` : String(assets.length)} detail={assetNextCursor ? 'More Atlas records are available' : 'Current Atlas records'} />
         <OverviewMetric label="Work areas available" value={`${availableCount} of ${modules.length}`} detail="Based on your current grants" />
         <OverviewMetric label="Service state" value={health === 'connected' ? 'Connected' : health === 'unavailable' ? 'Unavailable' : 'Checking'} detail={health === 'unavailable' ? 'Protected work is temporarily unavailable' : 'Live application status'} />
       </dl>
@@ -563,24 +625,23 @@ function WorkspaceOverview({ assets, grants, guideOpen, health, modules, onNavig
 
     {!guideOpen && <GuideInvitation onNavigate={onOpenGuide} onWalkthroughStatus={onWalkthroughStatus} roles={principal?.roles ?? []} status={walkthroughStatus} />}
 
-    <section aria-labelledby="workspace-areas-heading" className={`${panelClass} p-5 sm:p-7`}>
+    <section aria-labelledby="workspace-areas-heading" className={`${panelClass} p-5`}>
       <div className="flex flex-wrap items-end justify-between gap-3">
-        <div><p className="text-xs font-semibold uppercase tracking-[0.18em] text-steward-mist-muted">Product areas</p><h3 className="mt-1 text-xl font-semibold" id="workspace-areas-heading">Choose where to work</h3></div>
+        <div><h3 className="text-lg font-semibold" id="workspace-areas-heading">Product areas</h3><p className="mt-1 text-sm text-steward-mist-muted">Choose where to work</p></div>
         <button className={plainButtonClass} onClick={() => onOpenGuide({ view: 'help', topic: 'workspace' })} type="button">How Workspace works</button>
       </div>
-      <ul className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-        {modules.map((module, index) => {
-          const readAccess = permissionAccess(grants, module.permission)
+      <ul className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+        {modules.map((module) => {
+          const readAccess = module.anyPermissions ? anyPermissionAccess(grants, module.anyPermissions) : permissionAccess(grants, module.permission)
           const writeAccess = module.writePermission ? permissionAccess(grants, module.writePermission) : readAccess
           const available = readAccess.level !== 'none'
           const accessLabel = readAccess.level === 'none' ? 'Limited' : readAccess.level === 'scoped' ? 'Scoped' : writeAccess.level === 'organization' ? 'Read and change' : 'Read only'
-          return <li className="group relative overflow-hidden rounded-xl border border-white/[0.08] bg-steward-ink-950/38 p-4 transition hover:-translate-y-0.5 hover:border-steward-teal/30 hover:bg-steward-ink-950/58" key={module.id}>
-            <span aria-hidden="true" className={`absolute inset-x-0 top-0 h-0.5 ${index % 3 === 0 ? 'bg-steward-green' : index % 3 === 1 ? 'bg-steward-teal' : 'bg-steward-blue'}`} />
+          return <li className="rounded-md border border-white/[0.08] bg-steward-ink-950/40 p-4" key={module.id}>
             <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0"><span aria-hidden="true" className="mb-4 grid size-10 place-items-center rounded-xl border border-white/[0.08] bg-white/[0.04] text-steward-teal transition group-hover:border-steward-teal/25 group-hover:bg-steward-teal/10"><AreaIcon area={module.id as AreaIconName} /></span><h4 className="font-semibold text-white">{module.name} — {module.descriptor}</h4><p className="mt-2 text-sm leading-6 text-steward-mist-muted">{module.summary}</p></div>
+              <div className="min-w-0"><span aria-hidden="true" className="mb-3 grid size-8 place-items-center text-steward-teal"><AreaIcon area={module.id as AreaIconName} /></span><h4 className="font-medium text-white">{module.name} — {module.descriptor}</h4><p className="mt-1.5 text-sm leading-6 text-steward-mist-muted">{module.summary}</p></div>
               <StatusBadge tone={available ? 'success' : 'warning'}>{accessLabel}</StatusBadge>
             </div>
-            <button className={`${plainButtonClass} mt-3 px-0 group-hover:px-2`} onClick={() => onNavigate(module.id)} type="button">Open {module.name}<ChevronRightIcon /></button>
+            <button className={`${plainButtonClass} mt-3 px-0`} onClick={() => onNavigate(module.id)} type="button">Open {module.name}<ChevronRightIcon /></button>
           </li>
         })}
       </ul>
@@ -589,7 +650,7 @@ function WorkspaceOverview({ assets, grants, guideOpen, health, modules, onNavig
 }
 
 function OverviewMetric({ detail, label, value }: { detail: string; label: string; value: string }) {
-  return <div className="rounded-xl border border-white/[0.08] bg-steward-ink-950/40 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.025)]"><dt className="text-[0.6875rem] font-semibold uppercase tracking-[0.12em] text-steward-slate">{label}</dt><dd className="mt-2 text-2xl font-bold tracking-tight text-white">{value}</dd><dd className="mt-1 text-xs text-steward-mist-muted">{detail}</dd></div>
+  return <div className="rounded-md border border-white/[0.08] bg-steward-ink-950/50 p-3.5"><dt className="text-[11px] text-steward-slate">{label}</dt><dd className="mt-1.5 text-xl font-semibold text-white">{value}</dd><dd className="mt-1 text-xs text-steward-mist-muted">{detail}</dd></div>
 }
 
 function PermissionLimitedArea({ module, onOpenGuide, readAccess, writeAccess }: { module: WorkspaceModule; onOpenGuide: () => void; readAccess: PermissionAccess; writeAccess: PermissionAccess }) {

@@ -40,6 +40,10 @@ func (r horizonExchangeAssets) GetAsset(_ context.Context, id string) (domain.As
 	return item, nil
 }
 
+func (r horizonExchangeAssets) GetModel(_ context.Context, id string) (domain.AssetModel, error) {
+	return domain.AssetModel{}, atlas.ErrNotFound
+}
+
 type horizonExchangeFinance struct{}
 
 func (horizonExchangeFinance) Snapshot(context.Context) (ledger.Snapshot, error) {

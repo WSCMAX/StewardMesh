@@ -11,13 +11,21 @@ import (
 )
 
 type MemoryHorizonStore struct {
-	mu       sync.RWMutex
-	plans    map[string]horizon.Plan
-	versions map[string][]horizon.PlanVersion
+	mu           sync.RWMutex
+	plans        map[string]horizon.Plan
+	versions     map[string][]horizon.PlanVersion
+	kindDefaults map[string]horizon.KindDefault
 }
 
 func NewMemoryHorizonStore() *MemoryHorizonStore {
-	return &MemoryHorizonStore{plans: make(map[string]horizon.Plan), versions: make(map[string][]horizon.PlanVersion)}
+	return &MemoryHorizonStore{
+		plans: make(map[string]horizon.Plan), versions: make(map[string][]horizon.PlanVersion),
+		kindDefaults: make(map[string]horizon.KindDefault),
+	}
+}
+
+func horizonKindDefaultKey(organizationID, assetKind, scenario string) string {
+	return organizationID + "\x00" + assetKind + "\x00" + scenario
 }
 
 func horizonKey(organizationID, id string) string { return organizationID + "\x00" + id }
@@ -104,6 +112,36 @@ func (s *MemoryHorizonStore) ListPlanVersions(_ context.Context, organizationID,
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].Revision > items[j].Revision })
 	return items, nil
+}
+
+func (s *MemoryHorizonStore) ListKindDefaults(_ context.Context, organizationID, scenario string) ([]horizon.KindDefault, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	items := make([]horizon.KindDefault, 0)
+	for _, item := range s.kindDefaults {
+		if item.OrganizationID == organizationID && (scenario == "" || item.Scenario == scenario) {
+			items = append(items, item)
+		}
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].AssetKind == items[j].AssetKind {
+			return items[i].Scenario < items[j].Scenario
+		}
+		return items[i].AssetKind < items[j].AssetKind
+	})
+	return items, nil
+}
+
+func (s *MemoryHorizonStore) UpsertKindDefault(_ context.Context, item horizon.KindDefault) (horizon.KindDefault, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := horizonKindDefaultKey(item.OrganizationID, item.AssetKind, item.Scenario)
+	if existing, ok := s.kindDefaults[key]; ok {
+		item.Revision = existing.Revision + 1
+		item.CreatedAt = existing.CreatedAt
+	}
+	s.kindDefaults[key] = item
+	return item, nil
 }
 
 func cloneHorizonPlan(item horizon.Plan) horizon.Plan {

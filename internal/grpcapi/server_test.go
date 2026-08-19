@@ -62,7 +62,7 @@ func TestRegisterAllCoversEveryDeclaredServiceAndRPC(t *testing.T) {
 			t.Errorf("service %s registered %d methods, descriptor declares %d", service.FullName(), len(information.Methods), service.Methods().Len())
 		}
 	}
-	if declaredMethods != 154 || registeredMethods != declaredMethods {
+	if declaredMethods != 155 || registeredMethods != declaredMethods {
 		t.Fatalf("registered %d methods, descriptor declares %d", registeredMethods, declaredMethods)
 	}
 
@@ -82,7 +82,7 @@ func TestRegisterAllCoversEveryDeclaredServiceAndRPC(t *testing.T) {
 	for _, information := range protectedServer.GetServiceInfo() {
 		protectedMethods += len(information.Methods)
 	}
-	if protectedMethods != 151 {
+	if protectedMethods != 152 {
 		t.Fatalf("protected methods=%d, want 151", protectedMethods)
 	}
 }

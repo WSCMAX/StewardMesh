@@ -109,11 +109,19 @@ type Assignment struct {
 }
 
 type Snapshot struct {
-	Products      []Product      `json:"products"`
-	Versions      []Version      `json:"versions"`
+	Products           []Product      `json:"products"`
+	Versions           []Version      `json:"versions"`
+	Installations      []Installation `json:"installations"`
+	Licenses           []License      `json:"licenses"`
+	Assignments        []Assignment   `json:"assignments"`
+	AssignmentTotal    int            `json:"assignmentTotal,omitempty"`
+	InstallationTotal  int            `json:"installationTotal,omitempty"`
+}
+
+type AssetRecords struct {
 	Installations []Installation `json:"installations"`
-	Licenses      []License      `json:"licenses"`
 	Assignments   []Assignment   `json:"assignments"`
+	Licenses      []License      `json:"licenses"`
 }
 
 type Condition struct {
@@ -256,6 +264,7 @@ type AssetContext struct {
 	SiteID       string
 	DepartmentID string
 	IdentityID   string
+	RoomID       string
 }
 
 // ExchangeRecord is Stack's provider-neutral seam for the future Exchange

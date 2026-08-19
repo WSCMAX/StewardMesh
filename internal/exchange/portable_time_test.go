@@ -34,6 +34,8 @@ func TestPortableTimestampClassificationCoversRegistry(t *testing.T) {
 		"threads.goal":                {},
 		"threads.tag-rule":            {},
 		"threads.goal-link":           {},
+		"labels.definition":           {},
+		"labels.assignment":           {},
 		"vault.blob":                  {},
 		"ledger.vendor":               {"createdAt", "updatedAt"},
 		"ledger.purchase-order":       {"createdAt", "updatedAt"},

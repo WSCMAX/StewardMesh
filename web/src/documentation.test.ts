@@ -11,7 +11,7 @@ test('creates fixed same-host documentation deep links', () => {
 })
 
 test('keeps every local documentation page complete and connected', () => {
-  expect(documentationPages).toHaveLength(15)
+  expect(documentationPages).toHaveLength(16)
   for (const page of documentationPages) {
     expect(page.sections.length).toBeGreaterThan(0)
     expect(page.related.length).toBeGreaterThan(0)
@@ -31,11 +31,22 @@ test('documents strict opt-in synthetic demo setup', () => {
   expect(documentationByID.people.sections.some((section) => section.id === 'synthetic-demo')).toBe(true)
 })
 
-test('documents the permission-scoped relationship graph and its text fallback', () => {
-  expect(searchDocumentation('relationship graph').map((page) => page.id)).toContain('people')
+test('documents the People spreadsheet and Mesh relationship graph', () => {
+  expect(searchDocumentation('spreadsheet').map((page) => page.id)).toContain('people')
+  expect(documentationByID.people.sections.some((section) => section.id === 'spreadsheet')).toBe(true)
+  expect(searchDocumentation('relationship graph').map((page) => page.id)).toEqual(expect.arrayContaining(['people', 'mesh']))
   const section = documentationByID.people.sections.find((candidate) => candidate.id === 'relationship-graph')
-  expect(section?.bullets?.join(' ')).toContain('keyboard and screen-reader view')
+  expect(section?.paragraphs?.join(' ')).toContain('Open Mesh')
   expect(section?.callout?.body).toContain('do not accept an organization')
+  expect(documentationByID.people.sections.some((candidate) => candidate.id === 'location-references')).toBe(true)
+  expect(searchDocumentation('dormitory').map((page) => page.id)).toContain('people')
+})
+
+test('documents the cross-product Mesh graph', () => {
+  expect(searchDocumentation('mesh graph').map((page) => page.id)).toContain('mesh')
+  expect(searchDocumentation('cross-product graph').map((page) => page.id)).toContain('mesh')
+  expect(documentationByID.mesh.sections.some((section) => section.id === 'graph')).toBe(true)
+  expect(documentationByID.mesh.sections.find((section) => section.id === 'graph')?.callout?.body).toContain('finance-only')
 })
 
 test('documents the optional read-only PeopleSoft workflow', () => {

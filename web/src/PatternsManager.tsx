@@ -1,11 +1,11 @@
 import { type ChangeEvent, type FormEvent, useCallback, useEffect, useRef, useState } from 'react'
 import { ApiRequestError, requestJSON } from './api'
 import { parsePatternCsv, serializePatternCsv } from './patternCsv'
-import { buttonClass, inputClass, labelClass, panelClass, secondaryButtonClass, subpanelClass } from './ui'
+import { ProductHeader, buttonClass, inputClass, labelClass, panelClass, secondaryButtonClass, subpanelClass } from './ui'
 
 // Requirement: REQ-PATTERNS-001. Feature: templates.schemas. GitHub: #8.
 
-type PatternFieldType = 'text' | 'number' | 'date' | 'money' | 'enum' | 'attachment' | 'reference'
+type PatternFieldType = 'text' | 'number' | 'date' | 'money' | 'enum' | 'attachment' | 'reference' | 'tag'
 
 type PatternField = {
   key: string
@@ -15,6 +15,7 @@ type PatternField = {
   required: boolean
   allowHolding?: boolean
   referenceType?: string
+  tagDefinitionId?: string
   options?: string[]
   currencyField?: string
   minimum?: number
@@ -50,6 +51,7 @@ type DraftField = {
   required: boolean
   allowHolding: boolean
   referenceType: string
+  tagDefinitionId: string
   options: string
   currencyField: string
   accessibleLabel: string
@@ -59,10 +61,10 @@ type DraftField = {
   maximumLength: string
 }
 
-const fieldTypes: PatternFieldType[] = ['text', 'number', 'date', 'money', 'enum', 'attachment', 'reference']
+const fieldTypes: PatternFieldType[] = ['text', 'number', 'date', 'money', 'enum', 'attachment', 'reference', 'tag']
 
 function emptyField(): DraftField {
-  return { key: '', label: '', help: '', type: 'text', required: false, allowHolding: false, referenceType: '', options: '', currencyField: '', accessibleLabel: '', csvHeader: '', minimum: '', maximum: '', maximumLength: '' }
+  return { key: '', label: '', help: '', type: 'text', required: false, allowHolding: false, referenceType: '', tagDefinitionId: '', options: '', currencyField: '', accessibleLabel: '', csvHeader: '', minimum: '', maximum: '', maximumLength: '' }
 }
 
 function selectionKey(template: Pick<PatternTemplate, 'id' | 'version'>): string {
@@ -72,7 +74,7 @@ function selectionKey(template: Pick<PatternTemplate, 'id' | 'version'>): string
 function draftFromField(field: PatternField): DraftField {
   return {
     key: field.key, label: field.label, help: field.help ?? '', type: field.type, required: field.required,
-    allowHolding: field.allowHolding ?? false, referenceType: field.referenceType ?? '', options: field.options?.join(', ') ?? '',
+    allowHolding: field.allowHolding ?? false, referenceType: field.referenceType ?? '', tagDefinitionId: field.tagDefinitionId ?? '', options: field.options?.join(', ') ?? '',
     currencyField: field.currencyField ?? '', accessibleLabel: field.accessibleLabel, csvHeader: field.csvHeader,
     minimum: field.minimum === undefined ? '' : String(field.minimum), maximum: field.maximum === undefined ? '' : String(field.maximum),
     maximumLength: field.maximumLength === undefined ? '' : String(field.maximumLength),
@@ -90,6 +92,7 @@ function fieldPayload(field: DraftField): PatternField {
     key: field.key.trim(), label: field.label.trim(), help: field.help.trim(), type: field.type, required: field.required,
     allowHolding: (field.type === 'reference' || field.type === 'attachment') && field.allowHolding,
     referenceType: field.type === 'reference' || field.type === 'attachment' ? field.referenceType.trim() : undefined,
+    tagDefinitionId: field.type === 'tag' ? field.tagDefinitionId.trim() : undefined,
     options: field.type === 'enum' ? field.options.split(',').map((option) => option.trim()).filter(Boolean) : undefined,
     currencyField: field.type === 'money' ? field.currencyField.trim() : undefined,
     accessibleLabel: field.accessibleLabel.trim(), csvHeader: field.csvHeader.trim(),
@@ -99,11 +102,12 @@ function fieldPayload(field: DraftField): PatternField {
   }
 }
 
-function DraftFieldsEditor({ idPrefix, labelPrefix = '', fields, setFields }: {
+function DraftFieldsEditor({ idPrefix, labelPrefix = '', fields, setFields, labelDefinitions }: {
   idPrefix: string
   labelPrefix?: string
   fields: DraftField[]
   setFields: (updater: (current: DraftField[]) => DraftField[]) => void
+  labelDefinitions: { id: string, name: string }[]
 }) {
   const change = (index: number, update: Partial<DraftField>) => setFields((current) => current.map((field, fieldIndex) => fieldIndex === index ? { ...field, ...update } : field))
   return <>
@@ -117,6 +121,7 @@ function DraftFieldsEditor({ idPrefix, labelPrefix = '', fields, setFields }: {
         <div><label className={labelClass} htmlFor={`${idPrefix}Csv-${index}`}>{labelPrefix}CSV header <span className="font-normal">(defaults to key)</span></label><input className={inputClass} id={`${idPrefix}Csv-${index}`} maxLength={160} onChange={(event) => change(index, { csvHeader: event.target.value })} value={field.csvHeader} /></div>
         {field.type === 'enum' && <div><label className={labelClass} htmlFor={`${idPrefix}Options-${index}`}>{labelPrefix}Options, comma separated</label><input className={inputClass} id={`${idPrefix}Options-${index}`} onChange={(event) => change(index, { options: event.target.value })} required value={field.options} /></div>}
         {(field.type === 'reference' || field.type === 'attachment') && <div><label className={labelClass} htmlFor={`${idPrefix}Reference-${index}`}>{labelPrefix}Referenced record type</label><input className={inputClass} id={`${idPrefix}Reference-${index}`} onChange={(event) => change(index, { referenceType: event.target.value })} pattern="[a-z][a-z0-9.\-]{1,79}" required value={field.referenceType} /></div>}
+        {field.type === 'tag' && <div><label className={labelClass} htmlFor={`${idPrefix}TagDefinition-${index}`}>{labelPrefix}Label definition</label><select className={inputClass} id={`${idPrefix}TagDefinition-${index}`} onChange={(event) => change(index, { tagDefinitionId: event.target.value })} required value={field.tagDefinitionId}><option value="">Choose a label definition</option>{labelDefinitions.map((definition) => <option key={definition.id} value={definition.id}>{definition.name}</option>)}</select></div>}
         {field.type === 'money' && <div><label className={labelClass} htmlFor={`${idPrefix}Currency-${index}`}>{labelPrefix}Currency field key</label><input className={inputClass} id={`${idPrefix}Currency-${index}`} onChange={(event) => change(index, { currencyField: event.target.value })} required value={field.currencyField} /></div>}
         {(field.type === 'number' || field.type === 'money') && <>
           <div><label className={labelClass} htmlFor={`${idPrefix}Minimum-${index}`}>{labelPrefix}Minimum <span className="font-normal">(optional)</span></label><input className={inputClass} id={`${idPrefix}Minimum-${index}`} onChange={(event) => change(index, { minimum: event.target.value })} step="any" type="number" value={field.minimum} /></div>
@@ -141,6 +146,7 @@ function isPatternField(value: unknown): value is PatternField {
   const lengthOptional = field.maximumLength === undefined || (Number.isInteger(field.maximumLength) && Number(field.maximumLength) >= 0)
   return typeof field.key === 'string' && typeof field.label === 'string' && fieldTypes.includes(field.type as PatternFieldType)
     && typeof field.required === 'boolean' && typeof field.accessibleLabel === 'string' && typeof field.csvHeader === 'string'
+    && (field.tagDefinitionId === undefined || typeof field.tagDefinitionId === 'string')
     && finiteOptional('minimum') && finiteOptional('maximum') && lengthOptional
 }
 
@@ -187,8 +193,9 @@ function valuesForValidation(template: PatternTemplate, values: Record<string, s
   return result
 }
 
-export default function PatternsManager({ csrfToken }: { csrfToken: string }) {
+export default function PatternsManager({ csrfToken, permissions = [] }: { csrfToken: string, permissions?: readonly string[] }) {
   const [templates, setTemplates] = useState<PatternTemplate[]>([])
+  const [labelDefinitions, setLabelDefinitions] = useState<{ id: string, name: string }[]>([])
   const [selectedKey, setSelectedKey] = useState('')
   const [fields, setFields] = useState<DraftField[]>([emptyField()])
   const [versionFields, setVersionFields] = useState<DraftField[]>([])
@@ -235,6 +242,20 @@ export default function PatternsManager({ csrfToken }: { csrfToken: string }) {
       .finally(() => setLoading(false))
     return () => controller.abort()
   }, [loadTemplates])
+
+  useEffect(() => {
+    if (!permissions.includes('labels.read')) return
+    let active = true
+    requestJSON('/api/v1/labels/definitions')
+      .then((response) => {
+        if (typeof response !== 'object' || response === null || !Array.isArray((response as Record<string, unknown>).items)) return
+        const items = ((response as Record<string, unknown>).items as unknown[])
+          .filter((item): item is { id: string, name: string } => typeof item === 'object' && item !== null && typeof (item as Record<string, unknown>).id === 'string' && typeof (item as Record<string, unknown>).name === 'string')
+        if (active) setLabelDefinitions(items)
+      })
+      .catch(() => {})
+    return () => { active = false }
+  }, [permissions])
 
   async function createTemplate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -382,10 +403,13 @@ export default function PatternsManager({ csrfToken }: { csrfToken: string }) {
     }
   }
 
-  return <section aria-labelledby="patterns-heading" className={`${panelClass} min-w-0 max-w-full overflow-hidden p-5 sm:p-7`} data-feature="templates.schemas" data-requirement="REQ-PATTERNS-001">
-    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-steward-teal">Patterns</p>
-    <h2 className="mt-2 text-2xl font-semibold" id="patterns-heading">Versioned record templates</h2>
-    <p className="mt-2 max-w-3xl leading-7 text-steward-mist-muted">Use built-in schemas as form, API, CSV, and Exchange contracts. Custom versions are append-only, and every operation pins the exact template ID and version.</p>
+  return <section aria-labelledby="patterns-heading" className={`${panelClass} min-w-0 max-w-full overflow-hidden p-5 sm:p-6`} data-feature="templates.schemas" data-requirement="REQ-PATTERNS-001">
+    <ProductHeader
+      description="Use built-in schemas as form, API, CSV, and Exchange contracts. Custom versions are append-only, and every operation pins the exact template ID and version."
+      headingId="patterns-heading"
+      kicker="Patterns"
+      title="Versioned record templates"
+    />
     <p className="mt-2 text-sm text-steward-mist-muted">A missing reference can become a visible holding record only when the field allows it; it is never silently accepted.</p>
     {error && <div aria-live="assertive" className="mt-4 rounded-xl border border-steward-danger/50 bg-steward-danger/10 p-4 text-sm text-[#ffbdc3]" ref={errorRef} role="alert" tabIndex={-1}>{error}</div>}
     {status && <p aria-live="polite" className="mt-4 rounded-xl border border-steward-success/35 bg-steward-success/10 p-4 text-sm text-[#98eab9]" role="status">{status}</p>}
@@ -413,7 +437,7 @@ export default function PatternsManager({ csrfToken }: { csrfToken: string }) {
               <fieldset>
                 <legend className="font-semibold">Version fields</legend>
                 <p className="mt-1 text-sm text-steward-mist-muted">Start from this exact version, then edit the next immutable field contract.</p>
-                <DraftFieldsEditor fields={versionFields} idPrefix="patternVersionField" labelPrefix="Version " setFields={setVersionFields} />
+                <DraftFieldsEditor fields={versionFields} idPrefix="patternVersionField" labelDefinitions={labelDefinitions} labelPrefix="Version " setFields={setVersionFields} />
               </fieldset>
               <div><button className={buttonClass} disabled={busy !== ''} type="submit">{busy === 'version' ? 'Appending…' : 'Append next immutable version'}</button></div>
             </form>
@@ -427,7 +451,7 @@ export default function PatternsManager({ csrfToken }: { csrfToken: string }) {
             <div className="flex flex-wrap items-start justify-between gap-2"><h4 className="font-semibold">{field.label}</h4><span className="rounded-md border border-steward-teal/35 px-2 py-1 font-mono text-xs text-steward-teal">{field.type}</span></div>
             <p className="mt-2 font-mono text-xs text-steward-mist-muted">{field.key} · CSV: {field.csvHeader}</p>
             <p className="mt-2 text-sm leading-6 text-steward-mist-muted">{field.help || `Accessible label: ${field.accessibleLabel}.`}</p>
-            <p className="mt-2 text-xs text-steward-mist-muted">{field.required ? 'Required' : 'Optional'}{field.allowHolding ? ' · Missing references may be held visibly' : ''}{field.options ? ` · ${field.options.join(', ')}` : ''}</p>
+            <p className="mt-2 text-xs text-steward-mist-muted">{field.required ? 'Required' : 'Optional'}{field.allowHolding ? ' · Missing references may be held visibly' : ''}{field.options ? ` · ${field.options.join(', ')}` : ''}{field.tagDefinitionId ? ` · Label: ${field.tagDefinitionId}` : ''}</p>
           </article>)}
         </div>
       </div>
@@ -461,6 +485,8 @@ export default function PatternsManager({ csrfToken }: { csrfToken: string }) {
               <label className={labelClass} htmlFor={inputID}>{field.accessibleLabel}{field.required ? ' (required)' : ''}</label>
               {field.type === 'enum'
                 ? <select {...shared}><option value="">Choose…</option>{field.options?.map((option) => <option key={option} value={option}>{option}</option>)}</select>
+                : field.type === 'tag'
+                  ? <input {...shared} type="text" />
                 : <input {...shared}
                   inputMode={field.type === 'number' || field.type === 'money' ? 'decimal' : undefined}
                   max={field.type === 'number' || field.type === 'money' ? field.maximum : undefined}
@@ -472,6 +498,8 @@ export default function PatternsManager({ csrfToken }: { csrfToken: string }) {
               <p className="mt-1 text-xs leading-5 text-steward-mist-muted" id={helpID}>
                 {field.help || (field.type === 'reference' || field.type === 'attachment'
                   ? `Enter a stable ${field.referenceType} identifier.`
+                  : field.type === 'tag'
+                    ? `Enter a value validated against label definition ${field.tagDefinitionId}. For multi-select labels, separate values with commas.`
                   : field.type === 'money' ? 'Enter an exact integer amount in minor units.'
                     : `CSV column: ${field.csvHeader}.`)}
               </p>
@@ -522,7 +550,7 @@ export default function PatternsManager({ csrfToken }: { csrfToken: string }) {
         <fieldset>
           <legend className="text-base font-semibold">Fields</legend>
           <p className="mt-1 text-sm text-steward-mist-muted">Money fields point to a text or enum currency field. References and attachments require a target record type.</p>
-          <DraftFieldsEditor fields={fields} idPrefix="patternField" setFields={setFields} />
+          <DraftFieldsEditor fields={fields} idPrefix="patternField" labelDefinitions={labelDefinitions} setFields={setFields} />
         </fieldset>
         <div><button className={buttonClass} disabled={busy !== ''} type="submit">{busy === 'create' ? 'Creating…' : 'Create custom template'}</button></div>
       </form>

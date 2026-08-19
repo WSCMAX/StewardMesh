@@ -4,7 +4,9 @@ package atlas_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -333,8 +335,144 @@ func TestServiceRejectsInvalidInputsAndMissingReferences(t *testing.T) {
 	}
 }
 
+func TestServiceListAssetsPageUsesNameOrderedCursor(t *testing.T) {
+	service, err := atlas.NewService(repository.NewMemoryAtlasStore(), testReferenceValidator{}, foundation.NopAuditor{}, atlas.ServiceConfig{
+		OrganizationID: "example-org",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := 0; index < 120; index++ {
+		if _, createErr := service.CreateAsset(context.Background(), atlas.CreateAssetInput{
+			ID: fmt.Sprintf("asset-%03d", index), Name: fmt.Sprintf("Asset %03d", index), Kind: "server", Status: "active",
+		}); createErr != nil {
+			t.Fatalf("create asset %d: %v", index, createErr)
+		}
+	}
+	first, err := service.ListAssetsPage(context.Background(), atlas.Query{Limit: 50})
+	if err != nil || len(first.Items) != 50 || first.NextCursor == "" {
+		t.Fatalf("unexpected first page %#v err=%v", first, err)
+	}
+	second, err := service.ListAssetsPage(context.Background(), atlas.Query{Limit: 50, Cursor: first.NextCursor})
+	if err != nil || len(second.Items) != 50 || second.NextCursor == "" {
+		t.Fatalf("unexpected second page %#v err=%v", second, err)
+	}
+	if second.Items[0].Name <= first.Items[len(first.Items)-1].Name {
+		t.Fatalf("expected name-ordered continuation, first tail=%q second head=%q", first.Items[len(first.Items)-1].Name, second.Items[0].Name)
+	}
+	seen := make(map[string]struct{}, 120)
+	for _, page := range []atlas.AssetPage{first, second} {
+		for _, item := range page.Items {
+			seen[item.ID] = struct{}{}
+		}
+	}
+	cursor := second.NextCursor
+	for cursor != "" {
+		page, pageErr := service.ListAssetsPage(context.Background(), atlas.Query{Limit: 50, Cursor: cursor})
+		if pageErr != nil {
+			t.Fatalf("page after %q: %v", cursor, pageErr)
+		}
+		for _, item := range page.Items {
+			seen[item.ID] = struct{}{}
+		}
+		cursor = page.NextCursor
+	}
+	if len(seen) != 120 {
+		t.Fatalf("pagination lost records: got %d want 120", len(seen))
+	}
+}
+
 func TestServiceRequiresAllDependencies(t *testing.T) {
 	if service, err := atlas.NewService(nil, testReferenceValidator{}, foundation.NopAuditor{}, atlas.ServiceConfig{OrganizationID: "org"}); err == nil || service != nil {
 		t.Fatalf("expected missing store failure, service=%T err=%v", service, err)
+	}
+}
+
+func TestUpdateAssetInputUnmarshalsLifecycleFields(t *testing.T) {
+	raw := []byte(`{
+		"installedDate":"2024-06-01T00:00:00Z",
+		"purchaseDate":"2023-01-15T00:00:00Z",
+		"replacementModelId":"successor-model",
+		"name":"Lab station",
+		"kind":"desktop",
+		"status":"active",
+		"revision":1
+	}`)
+	var input atlas.UpdateAssetInput
+	if err := json.Unmarshal(raw, &input); err != nil {
+		t.Fatal(err)
+	}
+	if input.InstalledDate == nil || input.PurchaseDate == nil {
+		t.Fatalf("expected lifecycle dates, got installed=%v purchase=%v", input.InstalledDate, input.PurchaseDate)
+	}
+	if input.ReplacementModelID != "successor-model" {
+		t.Fatalf("unexpected replacement model %q", input.ReplacementModelID)
+	}
+}
+
+func TestUpdateAssetPersistsLifecycleFields(t *testing.T) {
+	now := time.Date(2026, time.August, 17, 12, 0, 0, 0, time.UTC)
+	auditor := &recordingAuditor{}
+	service, err := atlas.NewService(repository.NewMemoryAtlasStore(), testReferenceValidator{}, auditor, atlas.ServiceConfig{
+		OrganizationID: "example-org",
+		Now:            func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := foundation.WithScope(context.Background(), foundation.Scope{
+		OrganizationID: "example-org", ActorID: "account-one", CorrelationID: "request-one",
+	})
+	created, err := service.CreateAsset(ctx, atlas.CreateAssetInput{
+		ID: "asset-one", Name: "Lab station", Kind: "desktop", Status: "active",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	installed := time.Date(2024, time.June, 1, 0, 0, 0, 0, time.UTC)
+	purchased := time.Date(2023, time.January, 15, 0, 0, 0, 0, time.UTC)
+	updated, err := service.UpdateAsset(ctx, atlas.UpdateAssetInput{
+		ID: created.ID, Name: created.Name, Kind: created.Kind, Status: created.Status, Revision: created.Revision,
+		PurchaseDate: &purchased, InstalledDate: &installed,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.InstalledDate == nil || !updated.InstalledDate.Equal(installed) {
+		t.Fatalf("installed date not persisted: %#v", updated.InstalledDate)
+	}
+	if updated.PurchaseDate == nil || !updated.PurchaseDate.Equal(purchased) {
+		t.Fatalf("purchase date not persisted: %#v", updated.PurchaseDate)
+	}
+}
+
+func TestUpdateAssetIgnoresLifecycleNoteWhenStatusUnchanged(t *testing.T) {
+	now := time.Date(2026, time.August, 17, 12, 0, 0, 0, time.UTC)
+	service, err := atlas.NewService(repository.NewMemoryAtlasStore(), testReferenceValidator{}, &recordingAuditor{}, atlas.ServiceConfig{
+		OrganizationID: "example-org",
+		Now:            func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := foundation.WithScope(context.Background(), foundation.Scope{
+		OrganizationID: "example-org", ActorID: "account-one", CorrelationID: "request-one",
+	})
+	created, err := service.CreateAsset(ctx, atlas.CreateAssetInput{
+		ID: "asset-one", Name: "Lab station", Kind: "desktop", Status: "active",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	installed := time.Date(2024, time.June, 1, 0, 0, 0, 0, time.UTC)
+	updated, err := service.UpdateAsset(ctx, atlas.UpdateAssetInput{
+		ID: created.ID, Name: created.Name, Kind: created.Kind, Status: created.Status, Revision: created.Revision,
+		InstalledDate: &installed, LifecycleNote: "Should not block date-only edits",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.InstalledDate == nil || !updated.InstalledDate.Equal(installed) {
+		t.Fatalf("installed date not persisted: %#v", updated.InstalledDate)
 	}
 }

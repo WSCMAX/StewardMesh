@@ -416,6 +416,7 @@ func (s *GuardStore) AccessForAccount(ctx context.Context, organizationID, accou
 		}
 		return access.Grants[i].Permission < access.Grants[j].Permission
 	})
+	guard.AugmentAccessGrants(organizationID, &access)
 	return access, nil
 }
 

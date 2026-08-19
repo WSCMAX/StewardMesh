@@ -172,6 +172,25 @@ func (s *MemoryAtlasStore) RetireModel(_ context.Context, organizationID, id str
 	return cloneAssetModel(model), nil
 }
 
+func (s *MemoryAtlasStore) ReactivateModel(_ context.Context, organizationID, id string, expectedRevision int64, reactivatedAt time.Time) (domain.AssetModel, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := atlasMemoryKey(organizationID, id)
+	model, ok := s.models[key]
+	if !ok {
+		return domain.AssetModel{}, atlas.ErrNotFound
+	}
+	if model.Revision != expectedRevision || model.Status != "retired" {
+		return domain.AssetModel{}, atlas.ErrConflict
+	}
+	model.Status = "active"
+	model.Revision++
+	model.UpdatedAt = reactivatedAt
+	s.models[key] = cloneAssetModel(model)
+	model.InstanceCount = s.modelInstanceCountLocked(model.OrganizationID, model.ID)
+	return cloneAssetModel(model), nil
+}
+
 func (s *MemoryAtlasStore) GetModelInventory(_ context.Context, organizationID, modelID string, query atlas.ModelInventoryQuery) (atlas.ModelInventory, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -231,6 +250,16 @@ func (s *MemoryAtlasStore) ListAssets(_ context.Context, organizationID string, 
 		items = append(items, cloneAsset(asset))
 	}
 	sortAssets(items)
+	if query.Cursor != "" {
+		start := 0
+		for start < len(items) && items[start].ID != query.Cursor {
+			start++
+		}
+		if start >= len(items) {
+			return []domain.Asset{}, nil
+		}
+		items = items[start+1:]
+	}
 	if len(items) > query.Limit {
 		items = items[:query.Limit]
 	}
@@ -583,6 +612,14 @@ func cloneAsset(asset domain.Asset) domain.Asset {
 		value := *asset.PurchaseDate
 		asset.PurchaseDate = &value
 	}
+	if asset.LifecycleStartDate != nil {
+		value := *asset.LifecycleStartDate
+		asset.LifecycleStartDate = &value
+	}
+	if asset.InstalledDate != nil {
+		value := *asset.InstalledDate
+		asset.InstalledDate = &value
+	}
 	if asset.ModelContext != nil {
 		context := *asset.ModelContext
 		if len(context.Specifications) > 0 {
@@ -594,6 +631,14 @@ func cloneAsset(asset domain.Asset) domain.Asset {
 		context.Overrides = append([]string{}, asset.ModelContext.Overrides...)
 		asset.ModelContext = &context
 	}
+	if len(asset.Attributes) > 0 {
+		attributes := make(map[string]string, len(asset.Attributes))
+		for key, value := range asset.Attributes {
+			attributes[key] = value
+		}
+		asset.Attributes = attributes
+	}
+	asset.Components = append([]domain.AssetComponent(nil), asset.Components...)
 	return asset
 }
 
@@ -604,6 +649,14 @@ func cloneAssetModel(model domain.AssetModel) domain.AssetModel {
 			specifications[key] = value
 		}
 		model.Specifications = specifications
+	}
+	if len(model.TemplateFields) > 0 {
+		fields := make([]domain.AssetTemplateField, len(model.TemplateFields))
+		for index, field := range model.TemplateFields {
+			field.Options = append([]string(nil), field.Options...)
+			fields[index] = field
+		}
+		model.TemplateFields = fields
 	}
 	return model
 }

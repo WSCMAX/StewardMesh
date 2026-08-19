@@ -2,7 +2,7 @@ import { documentationHref } from './documentation'
 
 // Requirements: REQ-WORKSPACE-001, REQ-HORIZON-001, REQ-STACK-001, REQ-PATTERNS-001, REQ-SIGNALS-001, REQ-REACH-001, REQ-EXCHANGE-001, A11Y-001, DOC-001, DOC-002. Features: experience.workspace, lifecycle.planning, software.licenses, templates.schemas, alerts.rules, messaging.delivery, migration.packages, experience.help.
 
-export type GuideTopicID = 'workspace' | 'atlas' | 'horizon' | 'ledger' | 'stack' | 'signals' | 'reach' | 'threads' | 'vault' | 'exchange' | 'people' | 'bridge' | 'guard' | 'guide'
+export type GuideTopicID = 'workspace' | 'atlas' | 'horizon' | 'ledger' | 'stack' | 'signals' | 'reach' | 'threads' | 'vault' | 'exchange' | 'people' | 'mesh' | 'bridge' | 'guard' | 'guide'
 export type GuideView = 'help' | 'walkthrough' | 'accessibility' | 'report'
 export type WalkthroughStatus = 'new' | 'completed' | 'skipped'
 
@@ -15,6 +15,7 @@ export type GuideTopic = {
   docsUrl: string
   anchor?: string
   permission?: string
+  permissions?: readonly string[]
 }
 
 export const guideTopics: GuideTopic[] = [
@@ -29,6 +30,7 @@ export const guideTopics: GuideTopic[] = [
   { id: 'vault', name: 'Vault', descriptor: 'Private files and evidence', summary: 'Store checksummed evidence with ownership and provenance, then authorize downloads only when needed.', example: 'Upload a purchase receipt with its source identity and relate it to the asset or financial record it supports.', docsUrl: documentationHref('vault'), anchor: 'guide-vault', permission: 'storage.read' },
   { id: 'exchange', name: 'Exchange', descriptor: 'Migration packages', summary: 'Move selected records in bounded, compressed packages while preserving dependencies, provenance, checksums, and ownership boundaries.', example: 'Select a Stack product and its dependencies, export a metadata-only package, then import it and review created, unchanged, or holding outcomes.', docsUrl: documentationHref('exchange'), anchor: 'guide-exchange', permission: 'integrations.read' },
   { id: 'people', name: 'People', descriptor: 'Users and departments', summary: 'Organize sites, buildings, rooms, departments, identities, and effective-dated asset assignments.', example: 'Create a site and room, add a person, then record that person as the asset’s primary steward.', docsUrl: documentationHref('people'), anchor: 'guide-people', permission: 'directory.read' },
+  { id: 'mesh', name: 'Mesh', descriptor: 'Cross-product graph', summary: 'Explore how people, assets, purchase orders, tags, licenses, goals, documents, and plans connect in one graph and table.', example: 'Show purchase orders and tags, cluster vendors, then switch to the data table to sort the same records.', docsUrl: documentationHref('mesh'), anchor: 'guide-mesh', permissions: ['directory.read', 'assets.read', 'finance.read', 'software.read', 'labels.read', 'goals.read', 'storage.read', 'planning.read'] },
   { id: 'bridge', name: 'Bridge', descriptor: 'MCP and OAuth clients', summary: 'Register exact OAuth redirects, approve granular scopes, and revoke MCP client access.', example: 'Register a public client with S256 PKCE, approve read-only inventory scope, and later revoke its grant.', docsUrl: documentationHref('bridge'), anchor: 'guide-bridge', permission: 'integrations.read' },
   { id: 'guard', name: 'Guard', descriptor: 'Access and record schemas', summary: 'Manage secure sign-in, roles, scoped ownership, and Patterns templates that generate exact-version forms and bounded CSV rows.', example: 'Choose a built-in Patterns version, validate a generated record form, then prepare one formula-safe CSV row.', docsUrl: documentationHref('guard'), anchor: 'guide-guard', permission: 'guard.manage' },
   { id: 'guide', name: 'Guide', descriptor: 'Help and walkthroughs', summary: 'Open contextual help, replay a role-aware walkthrough, inspect branding accessibility, or prepare a sanitized issue report.', example: 'Select a module here, open its local documentation, and prepare a report without exposing session or identity data.', docsUrl: documentationHref('guide') },

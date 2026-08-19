@@ -1,5 +1,7 @@
 import { type FormEvent, useEffect, useRef, useState } from 'react'
 import { ApiRequestError, isRevision, requestJSON, type Revision } from './api'
+import BarcodeCameraCapture from './BarcodeCameraCapture'
+import { validateScannedValue } from './AtlasScanner'
 import { buttonClass, emptyStateClass, inputClass, secondaryButtonClass, subpanelClass } from './ui'
 
 // Requirement: REQ-ATLAS-CODES-001. Feature: inventory.identifiers.
@@ -219,7 +221,7 @@ export default function AtlasIdentifiers({ assetId, assetName, canWrite, csrfTok
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h4 className="font-semibold" id="asset-identifiers-heading">Atlas Codes — Identifiers</h4>
-          <p className="mt-1 text-sm leading-5 text-steward-mist-muted">Manage Code 128 and QR associations for {assetName}. Use the Atlas scanner to find or associate codes; the organization label workspace can select codes across visible assets.</p>
+          <p className="mt-1 text-sm leading-5 text-steward-mist-muted">Manage Code 128 and QR associations for {assetName}. Scan with the camera to adopt a printed code, or type, paste, or use a keyboard scanner.</p>
         </div>
         {canWrite && <button className={secondaryButtonClass} onClick={() => { setCreateOpen((open) => !open); setReplaceTarget(null); setDeactivateTarget(null) }} type="button">{createOpen ? 'Cancel association' : 'Associate identifier'}</button>}
       </div>
@@ -270,18 +272,34 @@ function IdentifierForm({ busy, initialPrimary = false, initialSymbology = 'code
   showPrimary?: boolean
   submitLabel: string
 }) {
+  const [symbology, setSymbology] = useState<AssetIdentifier['symbology']>(initialSymbology)
+  const [value, setValue] = useState('')
+  const [displayValue, setDisplayValue] = useState('')
+  const [scanError, setScanError] = useState('')
+
   return <form aria-label={legend} className={`${subpanelClass} mt-3 border-steward-blue/35 p-4`} onSubmit={onSubmit}>
     <fieldset>
       <legend className="font-semibold">{legend}</legend>
+      <p className="mt-2 text-sm text-steward-mist-muted">Scan a Code 128 or QR code on the asset to fill the encoded value, then review and save.</p>
+      <div className="mt-3">
+        <BarcodeCameraCapture disabled={busy} onCapture={(code) => {
+          const validation = validateScannedValue(code.symbology, code.value)
+          setSymbology(code.symbology)
+          setValue(validation.value)
+          setDisplayValue((current) => current || validation.value)
+          setScanError(validation.error)
+        }} />
+      </div>
+      {scanError && <p className="mt-3 rounded-lg border border-red-400/50 bg-red-950/50 p-3 text-sm" role="alert">{scanError}</p>}
       <div className="mt-3 grid gap-3">
         <label className="text-sm font-semibold text-steward-mist-muted">Symbology
-          <select className={inputClass} defaultValue={initialSymbology} name="symbology"><option value="code128">Code 128</option><option value="qr">QR</option></select>
+          <select className={inputClass} name="symbology" onChange={(event) => { setSymbology(event.target.value as AssetIdentifier['symbology']); setScanError('') }} value={symbology}><option value="code128">Code 128</option><option value="qr">QR</option></select>
         </label>
         <label className="text-sm font-semibold text-steward-mist-muted">Encoded value
-          <input autoCapitalize="none" autoComplete="off" autoCorrect="off" className={inputClass} maxLength={512} name="value" required spellCheck={false} />
+          <input autoCapitalize="none" autoComplete="off" autoCorrect="off" className={inputClass} maxLength={512} name="value" onChange={(event) => { setValue(event.target.value); setScanError('') }} required spellCheck={false} value={value} />
         </label>
         <label className="text-sm font-semibold text-steward-mist-muted">Display value <span className="font-normal">(optional)</span>
-          <input className={inputClass} maxLength={512} name="displayValue" />
+          <input className={inputClass} maxLength={512} name="displayValue" onChange={(event) => setDisplayValue(event.target.value)} value={displayValue} />
         </label>
         {showPrimary && <label className="flex min-h-11 items-center gap-3 text-sm font-semibold text-steward-mist-muted"><input className="h-5 w-5 accent-steward-teal" defaultChecked={initialPrimary} name="primary" type="checkbox" />Primary identifier</label>}
       </div>

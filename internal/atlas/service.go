@@ -36,6 +36,10 @@ var (
 		"draft": {}, "active": {}, "inactive": {}, "retired": {}, "disposed": {},
 	}
 	validModelStatuses = map[string]struct{}{"active": {}, "retired": {}}
+	validTemplateFieldKinds = map[string]struct{}{"text": {}, "number": {}, "select": {}}
+	validComponentKinds     = map[string]struct{}{
+		"monitor": {}, "mouse": {}, "keyboard": {}, "combo": {}, "dock": {}, "other": {},
+	}
 )
 
 type ServiceConfig struct {
@@ -78,11 +82,30 @@ func NewServiceWithExchangeImporter(store Store, references ReferenceValidator, 
 }
 
 func (s *Service) ListAssets(ctx context.Context, query Query) ([]domain.Asset, error) {
-	query, err := normalizeQuery(query)
+	page, err := s.ListAssetsPage(ctx, query)
 	if err != nil {
 		return nil, err
 	}
-	return s.store.ListAssets(ctx, s.organizationID, query)
+	return page.Items, nil
+}
+
+func (s *Service) ListAssetsPage(ctx context.Context, query Query) (AssetPage, error) {
+	query, err := normalizeQuery(query)
+	if err != nil {
+		return AssetPage{}, err
+	}
+	pageLimit := query.Limit
+	query.Limit = pageLimit + 1
+	items, err := s.store.ListAssets(ctx, s.organizationID, query)
+	if err != nil {
+		return AssetPage{}, err
+	}
+	nextCursor := ""
+	if len(items) > pageLimit {
+		nextCursor = items[pageLimit-1].ID
+		items = items[:pageLimit]
+	}
+	return AssetPage{Items: items, NextCursor: nextCursor}, nil
 }
 
 // ListAuthorizedAssets returns an ID-keyset page after applying the
@@ -112,7 +135,7 @@ func (s *Service) ListAuthorizedAssets(ctx context.Context, query AuthorizedAsse
 // ListGraphAssets is the bounded label/reference read used only by the
 // relationship graph. Public Atlas search keeps its broader fields and
 // 100-record limit; graph search matches labels only and applies authenticated
-// visibility plus relationship selectors before its independent 500-node cap.
+// visibility plus relationship selectors before its independent graph-node cap.
 // Requirement: REQ-DIRECTORY-EXPANSION-008.
 func (s *Service) ListGraphAssets(ctx context.Context, query GraphAssetQuery) ([]domain.Asset, error) {
 	query, err := normalizeGraphAssetQuery(query)
@@ -187,12 +210,23 @@ func (s *Service) CreateModel(ctx context.Context, input CreateModelInput) (doma
 	if err := s.checkWrite(ctx, "atlas.model", id); err != nil {
 		return domain.AssetModel{}, err
 	}
+	if normalized.ReplacementModelID != "" {
+		if normalized.ReplacementModelID == id {
+			return domain.AssetModel{}, ErrInvalidInput
+		}
+		if _, err := s.validateModelLineageReference(ctx, normalized.ReplacementModelID); err != nil {
+			return domain.AssetModel{}, err
+		}
+	}
 	now := s.now().UTC()
 	model := domain.AssetModel{
 		ID: id, OrganizationID: s.organizationID, Manufacturer: normalized.Manufacturer, Name: normalized.Name,
 		ModelNumber: normalized.ModelNumber, Kind: normalized.Kind, VendorIdentifier: normalized.VendorIdentifier,
-		Specifications: cloneSpecifications(normalized.Specifications), SupportURL: normalized.SupportURL,
-		WarrantyMonths: normalized.WarrantyMonths, UsefulLifeMonths: normalized.UsefulLifeMonths, Status: "active",
+		Specifications: cloneSpecifications(normalized.Specifications), TemplateFields: cloneTemplateFields(normalized.TemplateFields),
+		SupportURL: normalized.SupportURL, WarrantyMonths: normalized.WarrantyMonths, UsefulLifeMonths: normalized.UsefulLifeMonths,
+		LastEffectiveDate: cloneDate(normalized.LastEffectiveDate), ReplacementModelID: normalized.ReplacementModelID,
+		CriticalityScore: normalized.CriticalityScore,
+		UnitCostMinor: normalized.UnitCostMinor, Currency: normalized.Currency, Status: "active",
 		SourceSystemID: normalized.SourceSystemID, SourceRecordID: normalized.SourceRecordID, Revision: 1,
 		CreatedAt: now, UpdatedAt: now,
 	}
@@ -223,12 +257,22 @@ func (s *Service) UpdateModel(ctx context.Context, input UpdateModelInput) (doma
 	}
 	normalized, err := normalizeCreateModelInput(CreateModelInput{
 		ID: id, Manufacturer: input.Manufacturer, Name: input.Name, ModelNumber: input.ModelNumber, Kind: input.Kind,
-		VendorIdentifier: input.VendorIdentifier, Specifications: input.Specifications, SupportURL: input.SupportURL,
-		WarrantyMonths: input.WarrantyMonths, UsefulLifeMonths: input.UsefulLifeMonths,
-		SourceSystemID: input.SourceSystemID, SourceRecordID: input.SourceRecordID,
+		VendorIdentifier: input.VendorIdentifier, Specifications: input.Specifications, TemplateFields: input.TemplateFields,
+		SupportURL: input.SupportURL, WarrantyMonths: input.WarrantyMonths, UsefulLifeMonths: input.UsefulLifeMonths,
+		UnitCostMinor: input.UnitCostMinor, Currency: input.Currency,
+		SourceSystemID: input.SourceSystemID, SourceRecordID: input.SourceRecordID, LastEffectiveDate: input.LastEffectiveDate,
+		ReplacementModelID: input.ReplacementModelID, CriticalityScore: input.CriticalityScore,
 	})
 	if err != nil {
 		return domain.AssetModel{}, err
+	}
+	if normalized.ReplacementModelID != "" {
+		if normalized.ReplacementModelID == id {
+			return domain.AssetModel{}, ErrInvalidInput
+		}
+		if _, err := s.validateModelLineageReference(ctx, normalized.ReplacementModelID); err != nil {
+			return domain.AssetModel{}, err
+		}
 	}
 	updated := existing
 	updated.Manufacturer = normalized.Manufacturer
@@ -237,9 +281,15 @@ func (s *Service) UpdateModel(ctx context.Context, input UpdateModelInput) (doma
 	updated.Kind = normalized.Kind
 	updated.VendorIdentifier = normalized.VendorIdentifier
 	updated.Specifications = cloneSpecifications(normalized.Specifications)
+	updated.TemplateFields = cloneTemplateFields(normalized.TemplateFields)
 	updated.SupportURL = normalized.SupportURL
 	updated.WarrantyMonths = normalized.WarrantyMonths
 	updated.UsefulLifeMonths = normalized.UsefulLifeMonths
+	updated.LastEffectiveDate = cloneDate(normalized.LastEffectiveDate)
+	updated.ReplacementModelID = normalized.ReplacementModelID
+	updated.CriticalityScore = normalized.CriticalityScore
+	updated.UnitCostMinor = normalized.UnitCostMinor
+	updated.Currency = normalized.Currency
 	updated.SourceSystemID = normalized.SourceSystemID
 	updated.SourceRecordID = normalized.SourceRecordID
 	updated.Revision = existing.Revision + 1
@@ -276,6 +326,31 @@ func (s *Service) RetireModel(ctx context.Context, id string, revision int64) (d
 	return retired, nil
 }
 
+func (s *Service) ReactivateModel(ctx context.Context, id string, revision int64) (domain.AssetModel, error) {
+	id = strings.TrimSpace(id)
+	if !assetIDPattern.MatchString(id) || revision < 1 {
+		return domain.AssetModel{}, ErrInvalidInput
+	}
+	if err := s.checkWrite(ctx, "atlas.model", id); err != nil {
+		return domain.AssetModel{}, err
+	}
+	existing, err := s.store.GetModel(ctx, s.organizationID, id)
+	if err != nil {
+		return domain.AssetModel{}, err
+	}
+	if existing.Status != "retired" {
+		return domain.AssetModel{}, ErrConflict
+	}
+	reactivated, err := s.store.ReactivateModel(ctx, s.organizationID, id, revision, portabletime.Max(s.now(), existing.UpdatedAt))
+	if err != nil {
+		return domain.AssetModel{}, err
+	}
+	if err := s.auditRecord(ctx, "atlas.model.reactivated", "asset_model", reactivated.ID, modelAuditMetadata(reactivated)); err != nil {
+		return domain.AssetModel{}, fmt.Errorf("audit model reactivation: %w", err)
+	}
+	return reactivated, nil
+}
+
 func (s *Service) CreateAsset(ctx context.Context, input CreateAssetInput) (domain.Asset, error) {
 	normalized, err := s.normalizeCreateInput(input)
 	if err != nil {
@@ -288,8 +363,27 @@ func (s *Service) CreateAsset(ctx context.Context, input CreateAssetInput) (doma
 	if normalized.Kind == "" && model.ID != "" {
 		normalized.Kind = model.Kind
 	}
+	if normalized.UnitCostMinor == 0 && model.UnitCostMinor > 0 {
+		normalized.UnitCostMinor = model.UnitCostMinor
+		if normalized.Currency == "" {
+			normalized.Currency = model.Currency
+		}
+	}
+	if err := validateAttributesForModel(model, normalized.Attributes); err != nil {
+		return domain.Asset{}, err
+	}
 	if err := s.references.ValidateAssetReferences(ctx, s.organizationID, normalized.References); err != nil {
 		return domain.Asset{}, err
+	}
+	if normalized.ReplacementModelID != "" {
+		if _, err := s.validateModelLineageReference(ctx, normalized.ReplacementModelID); err != nil {
+			return domain.Asset{}, err
+		}
+	} else if model.ReplacementModelID != "" {
+		normalized.ReplacementModelID = model.ReplacementModelID
+	}
+	if normalized.CriticalityScore <= 0 && model.CriticalityScore > 0 {
+		normalized.CriticalityScore = model.CriticalityScore
 	}
 	id := normalized.ID
 	if id == "" {
@@ -307,8 +401,13 @@ func (s *Service) CreateAsset(ctx context.Context, input CreateAssetInput) (doma
 		ModelContext: snapshotModelContext(model, normalized.Kind, now), Name: normalized.Name, Kind: normalized.Kind,
 		AssetTag: normalized.AssetTag, SerialNumber: normalized.SerialNumber, Hostname: normalized.Hostname, DeploymentNotes: normalized.DeploymentNotes,
 		SiteID: normalized.SiteID, BuildingID: normalized.BuildingID, RoomID: normalized.RoomID,
-		DepartmentID: normalized.DepartmentID, UserID: normalized.UserID, Status: normalized.Status,
-		PurchaseDate: cloneDate(normalized.PurchaseDate), Revision: 1, CreatedAt: now, UpdatedAt: now,
+		DepartmentID: normalized.DepartmentID, UserID: normalized.UserID, AdditionalUserIDs: normalized.AdditionalUserIDs, Status: normalized.Status,
+		PurchaseDate: cloneDate(normalized.PurchaseDate), LifecycleStartDate: cloneDate(normalized.LifecycleStartDate),
+		InstalledDate: cloneDate(normalized.InstalledDate), ReplacementModelID: normalized.ReplacementModelID,
+		CriticalityScore: normalized.CriticalityScore,
+		Attributes: cloneSpecifications(normalized.Attributes),
+		Components: cloneComponents(normalized.Components), UnitCostMinor: normalized.UnitCostMinor,
+		Currency: normalized.Currency, Revision: 1, CreatedAt: now, UpdatedAt: now,
 	}
 	event, err := s.lifecycleEvent(ctx, asset, "", asset.Status, "Asset registered")
 	if err != nil {
@@ -353,8 +452,27 @@ func (s *Service) CreateAssetsFromModel(ctx context.Context, input BulkCreateAss
 		if normalized.Kind == "" {
 			normalized.Kind = model.Kind
 		}
+		if normalized.UnitCostMinor == 0 && model.UnitCostMinor > 0 {
+			normalized.UnitCostMinor = model.UnitCostMinor
+			if normalized.Currency == "" {
+				normalized.Currency = model.Currency
+			}
+		}
+		if validateErr := validateAttributesForModel(model, normalized.Attributes); validateErr != nil {
+			return BulkCreateAssetsResult{}, validateErr
+		}
 		if validateErr := s.references.ValidateAssetReferences(ctx, s.organizationID, normalized.References); validateErr != nil {
 			return BulkCreateAssetsResult{}, validateErr
+		}
+		if normalized.ReplacementModelID != "" {
+		if _, validateErr := s.validateModelLineageReference(ctx, normalized.ReplacementModelID); validateErr != nil {
+				return BulkCreateAssetsResult{}, validateErr
+			}
+		} else if model.ReplacementModelID != "" {
+			normalized.ReplacementModelID = model.ReplacementModelID
+		}
+		if normalized.CriticalityScore <= 0 && model.CriticalityScore > 0 {
+			normalized.CriticalityScore = model.CriticalityScore
 		}
 		id := normalized.ID
 		if id == "" {
@@ -375,8 +493,12 @@ func (s *Service) CreateAssetsFromModel(ctx context.Context, input BulkCreateAss
 			ModelContext: snapshotModelContext(model, normalized.Kind, now), Name: normalized.Name, Kind: normalized.Kind,
 			AssetTag: normalized.AssetTag, SerialNumber: normalized.SerialNumber, Hostname: normalized.Hostname, DeploymentNotes: normalized.DeploymentNotes,
 			SiteID: normalized.SiteID, BuildingID: normalized.BuildingID, RoomID: normalized.RoomID,
-			DepartmentID: normalized.DepartmentID, UserID: normalized.UserID, Status: normalized.Status,
-			PurchaseDate: cloneDate(normalized.PurchaseDate), Revision: 1, CreatedAt: now, UpdatedAt: now,
+			DepartmentID: normalized.DepartmentID, UserID: normalized.UserID, AdditionalUserIDs: normalized.AdditionalUserIDs, Status: normalized.Status,
+			PurchaseDate: cloneDate(normalized.PurchaseDate), LifecycleStartDate: cloneDate(normalized.LifecycleStartDate),
+			InstalledDate: cloneDate(normalized.InstalledDate), ReplacementModelID: normalized.ReplacementModelID,
+			Attributes: cloneSpecifications(normalized.Attributes),
+			Components: cloneComponents(normalized.Components), UnitCostMinor: normalized.UnitCostMinor,
+			Currency: normalized.Currency, Revision: 1, CreatedAt: now, UpdatedAt: now,
 		}
 		event, eventErr := s.lifecycleEvent(ctx, asset, "", asset.Status, "Asset registered from model bulk intake")
 		if eventErr != nil {
@@ -418,7 +540,11 @@ func (s *Service) UpdateAsset(ctx context.Context, input UpdateAssetInput) (doma
 	normalized, err := s.normalizeCreateInput(CreateAssetInput{
 		ID: id, ModelID: input.ModelID, Name: input.Name, Kind: input.Kind, AssetTag: input.AssetTag,
 		SerialNumber: input.SerialNumber, Hostname: input.Hostname, DeploymentNotes: input.DeploymentNotes, References: input.References,
-		Status: input.Status, PurchaseDate: input.PurchaseDate,
+		Status: input.Status, PurchaseDate: input.PurchaseDate, LifecycleStartDate: input.LifecycleStartDate,
+		InstalledDate: input.InstalledDate, ReplacementModelID: input.ReplacementModelID, CriticalityScore: input.CriticalityScore,
+		Attributes: input.Attributes,
+		Components: input.Components, UnitCostMinor: input.UnitCostMinor, Currency: input.Currency,
+		AdditionalUserIDs: input.AdditionalUserIDs,
 	})
 	if err != nil {
 		return domain.Asset{}, err
@@ -442,12 +568,23 @@ func (s *Service) UpdateAsset(ctx context.Context, input UpdateAssetInput) (doma
 			normalized.Kind = model.Kind
 		}
 	}
+	if err := validateAttributesForModel(model, normalized.Attributes); err != nil {
+		return domain.Asset{}, err
+	}
 	if err := s.references.ValidateAssetReferences(ctx, s.organizationID, normalized.References); err != nil {
 		return domain.Asset{}, err
 	}
+	if normalized.ReplacementModelID != "" {
+		if _, err := s.validateModelLineageReference(ctx, normalized.ReplacementModelID); err != nil {
+			return domain.Asset{}, err
+		}
+	}
 	note := strings.TrimSpace(input.LifecycleNote)
-	if !validText(note, 1000) || (note != "" && normalized.Status == existing.Status) {
+	if !validText(note, 1000) {
 		return domain.Asset{}, ErrInvalidInput
+	}
+	if note != "" && normalized.Status == existing.Status {
+		note = ""
 	}
 	now := portabletime.Max(s.now(), existing.UpdatedAt)
 	if model.ID != "" {
@@ -467,8 +604,17 @@ func (s *Service) UpdateAsset(ctx context.Context, input UpdateAssetInput) (doma
 	updated.RoomID = normalized.RoomID
 	updated.DepartmentID = normalized.DepartmentID
 	updated.UserID = normalized.UserID
+	updated.AdditionalUserIDs = normalized.AdditionalUserIDs
 	updated.Status = normalized.Status
 	updated.PurchaseDate = cloneDate(normalized.PurchaseDate)
+	updated.LifecycleStartDate = cloneDate(normalized.LifecycleStartDate)
+	updated.InstalledDate = cloneDate(normalized.InstalledDate)
+	updated.ReplacementModelID = normalized.ReplacementModelID
+	updated.CriticalityScore = normalized.CriticalityScore
+	updated.Attributes = cloneSpecifications(normalized.Attributes)
+	updated.Components = cloneComponents(normalized.Components)
+	updated.UnitCostMinor = normalized.UnitCostMinor
+	updated.Currency = normalized.Currency
 	updated.Revision = existing.Revision + 1
 	updated.UpdatedAt = now
 
@@ -549,6 +695,11 @@ func (s *Service) normalizeCreateInput(input CreateAssetInput) (CreateAssetInput
 	if err := validateReferences(input.References); err != nil {
 		return CreateAssetInput{}, err
 	}
+	additional, err := normalizeAdditionalUserIDs(input.AdditionalUserIDs, input.UserID)
+	if err != nil {
+		return CreateAssetInput{}, err
+	}
+	input.AdditionalUserIDs = additional
 	if input.PurchaseDate != nil {
 		value := input.PurchaseDate.UTC()
 		if value.IsZero() || value.Year() < 1970 || value.Year() > 9999 {
@@ -557,6 +708,34 @@ func (s *Service) normalizeCreateInput(input CreateAssetInput) (CreateAssetInput
 		value = time.Date(value.Year(), value.Month(), value.Day(), 0, 0, 0, 0, time.UTC)
 		input.PurchaseDate = &value
 	}
+	if input.LifecycleStartDate, err = normalizeOptionalCalendarDate(input.LifecycleStartDate); err != nil {
+		return CreateAssetInput{}, err
+	}
+	if input.InstalledDate, err = normalizeOptionalCalendarDate(input.InstalledDate); err != nil {
+		return CreateAssetInput{}, err
+	}
+	input.ReplacementModelID = strings.TrimSpace(input.ReplacementModelID)
+	if input.ReplacementModelID != "" && !assetIDPattern.MatchString(input.ReplacementModelID) {
+		return CreateAssetInput{}, ErrInvalidInput
+	}
+	attributes, err := normalizeAttributes(input.Attributes)
+	if err != nil {
+		return CreateAssetInput{}, err
+	}
+	input.Attributes = attributes
+	components, err := normalizeComponents(input.Components)
+	if err != nil {
+		return CreateAssetInput{}, err
+	}
+	input.Components = components
+	if input.CriticalityScore < 0 || input.CriticalityScore > 5 {
+		return CreateAssetInput{}, ErrInvalidInput
+	}
+	currency, err := normalizeMoney(input.UnitCostMinor, input.Currency)
+	if err != nil {
+		return CreateAssetInput{}, err
+	}
+	input.Currency = currency
 	return input, nil
 }
 
@@ -570,11 +749,14 @@ func normalizeCreateModelInput(input CreateModelInput) (CreateModelInput, error)
 	input.SupportURL = strings.TrimSpace(input.SupportURL)
 	input.SourceSystemID = strings.TrimSpace(input.SourceSystemID)
 	input.SourceRecordID = strings.TrimSpace(input.SourceRecordID)
+	input.ReplacementModelID = strings.TrimSpace(input.ReplacementModelID)
 	if (input.ID != "" && !assetIDPattern.MatchString(input.ID)) || !validTextRange(input.Manufacturer, 1, 120) ||
 		!validTextRange(input.Name, 1, 160) || !validText(input.ModelNumber, 120) ||
 		!validText(input.VendorIdentifier, 160) || !validText(input.SourceSystemID, 120) ||
 		!validText(input.SourceRecordID, 160) || !validKind(input.Kind) ||
-		input.WarrantyMonths < 0 || input.WarrantyMonths > 1200 || input.UsefulLifeMonths < 0 || input.UsefulLifeMonths > 1200 {
+		input.WarrantyMonths < 0 || input.WarrantyMonths > 1200 || input.UsefulLifeMonths < 0 || input.UsefulLifeMonths > 1200 ||
+		input.CriticalityScore < 0 || input.CriticalityScore > 5 ||
+		input.ReplacementModelID != "" && !assetIDPattern.MatchString(input.ReplacementModelID) {
 		return CreateModelInput{}, ErrInvalidInput
 	}
 	if input.SupportURL != "" && (!validText(input.SupportURL, 500) || !urlPattern.MatchString(input.SupportURL)) {
@@ -596,6 +778,19 @@ func normalizeCreateModelInput(input CreateModelInput) (CreateModelInput, error)
 		specs[key] = value
 	}
 	input.Specifications = specs
+	fields, err := normalizeTemplateFields(input.TemplateFields)
+	if err != nil {
+		return CreateModelInput{}, err
+	}
+	input.TemplateFields = fields
+	currency, err := normalizeMoney(input.UnitCostMinor, input.Currency)
+	if err != nil {
+		return CreateModelInput{}, err
+	}
+	input.Currency = currency
+	if input.LastEffectiveDate, err = normalizeOptionalCalendarDate(input.LastEffectiveDate); err != nil {
+		return CreateModelInput{}, err
+	}
 	return input, nil
 }
 
@@ -619,12 +814,14 @@ func normalizeQuery(query Query) (Query, error) {
 	query.DepartmentID = strings.TrimSpace(query.DepartmentID)
 	query.UserID = strings.TrimSpace(query.UserID)
 	query.DeploymentContext = strings.ToLower(strings.TrimSpace(query.DeploymentContext))
+	query.Cursor = strings.TrimSpace(query.Cursor)
 	if !validText(query.Search, 200) || (query.Kind != "" && !validKind(query.Kind)) ||
 		(query.Status != "" && !validStatus(query.Status)) ||
 		(query.ModelID != "" && !assetIDPattern.MatchString(query.ModelID)) ||
 		(query.SiteID != "" && !referencePattern.MatchString(query.SiteID)) ||
 		(query.DepartmentID != "" && !referencePattern.MatchString(query.DepartmentID)) ||
 		(query.UserID != "" && !referencePattern.MatchString(query.UserID)) ||
+		(query.Cursor != "" && !assetIDPattern.MatchString(query.Cursor)) ||
 		!validText(query.DeploymentContext, 200) {
 		return Query{}, ErrInvalidInput
 	}
@@ -725,7 +922,7 @@ func normalizeModelQuery(query ModelQuery) (ModelQuery, error) {
 	query.Search = strings.ToLower(strings.TrimSpace(query.Search))
 	query.Kind = strings.ToLower(strings.TrimSpace(query.Kind))
 	query.Status = strings.ToLower(strings.TrimSpace(query.Status))
-	if query.Status == "" {
+	if !query.IncludeRetired && query.Status == "" {
 		query.Status = "active"
 	}
 	if !validText(query.Search, 200) || (query.Kind != "" && !validKind(query.Kind)) ||
@@ -764,6 +961,33 @@ func validateReferences(references References) error {
 	return nil
 }
 
+func normalizeAdditionalUserIDs(ids []string, primary string) ([]string, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	primary = strings.TrimSpace(primary)
+	seen := map[string]struct{}{}
+	normalized := make([]string, 0, len(ids))
+	for _, raw := range ids {
+		id := strings.TrimSpace(raw)
+		if id == "" || id == primary {
+			continue
+		}
+		if !referencePattern.MatchString(id) {
+			return nil, ErrInvalidInput
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		normalized = append(normalized, id)
+	}
+	if len(normalized) == 0 {
+		return nil, nil
+	}
+	return normalized, nil
+}
+
 func validKind(value string) bool {
 	_, ok := validKinds[value]
 	return ok
@@ -796,6 +1020,18 @@ func cloneDate(value *time.Time) *time.Time {
 	return &cloned
 }
 
+func normalizeOptionalCalendarDate(value *time.Time) (*time.Time, error) {
+	if value == nil {
+		return nil, nil
+	}
+	normalized := value.UTC()
+	if normalized.IsZero() || normalized.Year() < 1970 || normalized.Year() > 9999 {
+		return nil, ErrInvalidInput
+	}
+	result := time.Date(normalized.Year(), normalized.Month(), normalized.Day(), 0, 0, 0, 0, time.UTC)
+	return &result, nil
+}
+
 func cloneSpecifications(values map[string]string) map[string]string {
 	if len(values) == 0 {
 		return nil
@@ -807,6 +1043,201 @@ func cloneSpecifications(values map[string]string) map[string]string {
 	return cloned
 }
 
+func cloneTemplateFields(fields []domain.AssetTemplateField) []domain.AssetTemplateField {
+	if len(fields) == 0 {
+		return nil
+	}
+	cloned := make([]domain.AssetTemplateField, len(fields))
+	for index, field := range fields {
+		field.Options = append([]string(nil), field.Options...)
+		cloned[index] = field
+	}
+	return cloned
+}
+
+func cloneComponents(components []domain.AssetComponent) []domain.AssetComponent {
+	if len(components) == 0 {
+		return nil
+	}
+	return append([]domain.AssetComponent(nil), components...)
+}
+
+func normalizeMoney(amount int64, currency string) (string, error) {
+	currency = strings.ToUpper(strings.TrimSpace(currency))
+	if amount < 0 || amount > 9007199254740991 {
+		return "", ErrInvalidInput
+	}
+	if currency == "" {
+		if amount == 0 {
+			return "", nil
+		}
+		currency = "USD"
+	}
+	if len(currency) != 3 {
+		return "", ErrInvalidInput
+	}
+	for _, character := range currency {
+		if character < 'A' || character > 'Z' {
+			return "", ErrInvalidInput
+		}
+	}
+	return currency, nil
+}
+
+func normalizeAttributes(values map[string]string) (map[string]string, error) {
+	if len(values) > 25 {
+		return nil, ErrInvalidInput
+	}
+	attributes := make(map[string]string, len(values))
+	for key, value := range values {
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		if !validTextRange(key, 1, 80) || !validText(value, 500) {
+			return nil, ErrInvalidInput
+		}
+		if _, exists := attributes[key]; exists {
+			return nil, ErrInvalidInput
+		}
+		attributes[key] = value
+	}
+	if len(attributes) == 0 {
+		return nil, nil
+	}
+	return attributes, nil
+}
+
+func normalizeTemplateFields(fields []domain.AssetTemplateField) ([]domain.AssetTemplateField, error) {
+	if len(fields) > 25 {
+		return nil, ErrInvalidInput
+	}
+	normalized := make([]domain.AssetTemplateField, 0, len(fields))
+	seen := make(map[string]struct{}, len(fields))
+	for _, field := range fields {
+		field.Key = strings.TrimSpace(field.Key)
+		field.Label = strings.TrimSpace(field.Label)
+		field.Kind = strings.ToLower(strings.TrimSpace(field.Kind))
+		field.Help = strings.TrimSpace(field.Help)
+		field.Default = strings.TrimSpace(field.Default)
+		if !validTextRange(field.Key, 1, 80) || !validTextRange(field.Label, 1, 120) || !validText(field.Help, 300) ||
+			!validText(field.Default, 500) {
+			return nil, ErrInvalidInput
+		}
+		if _, ok := validTemplateFieldKinds[field.Kind]; !ok {
+			return nil, ErrInvalidInput
+		}
+		if _, exists := seen[field.Key]; exists {
+			return nil, ErrInvalidInput
+		}
+		seen[field.Key] = struct{}{}
+		options := make([]string, 0, len(field.Options))
+		optionSeen := make(map[string]struct{}, len(field.Options))
+		for _, option := range field.Options {
+			option = strings.TrimSpace(option)
+			if !validTextRange(option, 1, 120) {
+				return nil, ErrInvalidInput
+			}
+			if _, exists := optionSeen[option]; exists {
+				return nil, ErrInvalidInput
+			}
+			optionSeen[option] = struct{}{}
+			options = append(options, option)
+		}
+		if field.Kind == "select" && len(options) == 0 {
+			return nil, ErrInvalidInput
+		}
+		if field.Kind != "select" {
+			options = nil
+		}
+		field.Options = options
+		normalized = append(normalized, field)
+	}
+	if len(normalized) == 0 {
+		return nil, nil
+	}
+	return normalized, nil
+}
+
+func normalizeComponents(components []domain.AssetComponent) ([]domain.AssetComponent, error) {
+	if len(components) > 40 {
+		return nil, ErrInvalidInput
+	}
+	normalized := make([]domain.AssetComponent, 0, len(components))
+	seen := make(map[string]struct{}, len(components))
+	for index, component := range components {
+		component.ID = strings.TrimSpace(component.ID)
+		component.Kind = strings.ToLower(strings.TrimSpace(component.Kind))
+		component.Name = strings.TrimSpace(component.Name)
+		component.ModelNumber = strings.TrimSpace(component.ModelNumber)
+		component.ModelID = strings.TrimSpace(component.ModelID)
+		component.SerialNumber = strings.TrimSpace(component.SerialNumber)
+		component.Notes = strings.TrimSpace(component.Notes)
+		if component.ID == "" {
+			component.ID = fmt.Sprintf("component-%d", index+1)
+		}
+		if component.Quantity == 0 {
+			component.Quantity = 1
+		}
+		currency, err := normalizeMoney(component.UnitCostMinor, component.Currency)
+		if err != nil {
+			return nil, err
+		}
+		component.Currency = currency
+		if !assetIDPattern.MatchString(component.ID) || !validTextRange(component.Name, 1, 160) ||
+			!validText(component.ModelNumber, 120) || (component.ModelID != "" && !assetIDPattern.MatchString(component.ModelID)) ||
+			!validText(component.SerialNumber, 255) || !validText(component.Notes, 500) ||
+			component.Quantity < 1 || component.Quantity > 1000 {
+			return nil, ErrInvalidInput
+		}
+		if _, ok := validComponentKinds[component.Kind]; !ok {
+			return nil, ErrInvalidInput
+		}
+		if _, exists := seen[component.ID]; exists {
+			return nil, ErrInvalidInput
+		}
+		seen[component.ID] = struct{}{}
+		normalized = append(normalized, component)
+	}
+	if len(normalized) == 0 {
+		return nil, nil
+	}
+	return normalized, nil
+}
+
+func validateAttributesForModel(model domain.AssetModel, attributes map[string]string) error {
+	if model.ID == "" || len(model.TemplateFields) == 0 {
+		return nil
+	}
+	for _, field := range model.TemplateFields {
+		value := strings.TrimSpace(attributes[field.Key])
+		if field.Required && value == "" {
+			return ErrInvalidInput
+		}
+		if value == "" {
+			continue
+		}
+		if field.Kind == "number" {
+			for _, character := range value {
+				if character != '.' && (character < '0' || character > '9') {
+					return ErrInvalidInput
+				}
+			}
+		}
+		if field.Kind == "select" {
+			matched := false
+			for _, option := range field.Options {
+				if option == value {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				return ErrInvalidInput
+			}
+		}
+	}
+	return nil
+}
+
 func snapshotModelContext(model domain.AssetModel, assetKind string, appliedAt time.Time) *domain.AssetModelContext {
 	if model.ID == "" {
 		return nil
@@ -815,6 +1246,8 @@ func snapshotModelContext(model domain.AssetModel, assetKind string, appliedAt t
 		Manufacturer: model.Manufacturer, Name: model.Name, ModelNumber: model.ModelNumber, Kind: model.Kind,
 		VendorIdentifier: model.VendorIdentifier, Specifications: cloneSpecifications(model.Specifications),
 		SupportURL: model.SupportURL, WarrantyMonths: model.WarrantyMonths, UsefulLifeMonths: model.UsefulLifeMonths,
+		CriticalityScore: model.CriticalityScore,
+		UnitCostMinor: model.UnitCostMinor, Currency: model.Currency,
 		SourceSystemID: model.SourceSystemID, SourceRecordID: model.SourceRecordID, ModelRevision: model.Revision,
 		DefaultsEffectiveAt: portabletime.Normalize(model.UpdatedAt), AppliedAt: portabletime.Normalize(appliedAt), Overrides: []string{},
 	}
@@ -942,6 +1375,13 @@ func (s *Service) validateModelReference(ctx context.Context, modelID string) (d
 		return domain.AssetModel{}, ErrConflict
 	}
 	return model, nil
+}
+
+func (s *Service) validateModelLineageReference(ctx context.Context, modelID string) (domain.AssetModel, error) {
+	if modelID == "" {
+		return domain.AssetModel{}, nil
+	}
+	return s.store.GetModel(ctx, s.organizationID, modelID)
 }
 
 func modelAuditMetadata(model domain.AssetModel) map[string]string {

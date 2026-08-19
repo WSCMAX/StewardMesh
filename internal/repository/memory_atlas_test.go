@@ -36,9 +36,9 @@ func TestMemoryAtlasStoreContract(t *testing.T) {
 func TestMemoryAtlasGraphAssetSearchIsLabelOnlyBeforeLimit(t *testing.T) {
 	store := repository.NewMemoryAtlasStore()
 	now := time.Date(2026, time.August, 13, 12, 0, 0, 0, time.UTC)
-	for index := 0; index <= atlas.MaximumGraphAssetLimit; index++ {
+	for index := 0; index <= 500; index++ {
 		name := fmt.Sprintf("Alpha Asset %03d", index)
-		if index == atlas.MaximumGraphAssetLimit {
+		if index == 500 {
 			name = "Zeta Needle Asset"
 		}
 		asset := domain.Asset{ID: fmt.Sprintf("graph-asset-%03d", index), OrganizationID: "graph-org", Name: name,

@@ -32,18 +32,37 @@ const importResult = {
 function response(value: unknown, status = 200) { return new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } }) }
 function fetchForRead(input: RequestInfo | URL) { return Promise.resolve(response(String(input).includes('/analytics') ? analytics : snapshot)) }
 
+// Every Stack record type renders through the shared data grid, so tests locate
+// records by the grid's accessible names rather than by table markup: each grid
+// is a region named for its record type, each cell is a gridcell named by its
+// visible text, and each cell editor is named "<column> for <record>".
+function grid(name: string) { return screen.getByRole('region', { name }) }
+function cell(gridName: string, cellName: string | RegExp) { return within(grid(gridName)).getByRole('gridcell', { name: cellName }) }
+
+function editCell(gridName: string, cellName: string, editorName: string, value: string) {
+  fireEvent.doubleClick(cell(gridName, cellName))
+  const field = screen.getByLabelText(editorName)
+  fireEvent.change(field, { target: { value } })
+  fireEvent.keyDown(field, { key: 'Enter' })
+}
+
 beforeEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
 test('renders authoritative analytics and read-only records without accessibility violations', async () => {
   vi.stubGlobal('fetch', vi.fn(fetchForRead))
   const { container } = render(<StackManager assets={[]} csrfToken="csrf" permissions={['software.read']} />)
-  expect(await screen.findByText('Steward Writer')).toBeInTheDocument()
+  expect(await screen.findByRole('region', { name: 'Software products' })).toBeInTheDocument()
+  expect(cell('Software products', 'Steward Writer')).toBeInTheDocument()
+  expect(cell('Software versions', '1.0')).toBeInTheDocument()
+  expect(cell('License entitlements', 'Device subscription')).toBeInTheDocument()
+  expect(cell('Seat assignments', 'asset-1')).toBeInTheDocument()
   expect(screen.getByText('Expiring')).toBeInTheDocument()
   expect(screen.getByText('Over Assigned')).toBeInTheDocument()
   expect(screen.getByText('2 seats are assigned against 1 entitled seat.')).toBeInTheDocument()
   expect(screen.queryByText('Add and connect records')).not.toBeInTheDocument()
-  expect(screen.queryByRole('button', { name: 'Update' })).not.toBeInTheDocument()
-  expect(screen.getByRole('region', { name: 'Stack software records' })).toHaveClass('overflow-x-auto')
+  // Without software.write every cell reports itself read-only to assistive technology.
+  expect(cell('Software products', 'Active')).toHaveAttribute('aria-readonly', 'true')
+  expect(screen.queryByRole('button', { name: 'Save changes' })).not.toBeInTheDocument()
   expect((await axe.run(container)).violations).toEqual([])
 })
 
@@ -58,19 +77,46 @@ test('keeps version and license calendar dates stable west of UTC', async () => 
 
   try {
     render(<StackManager assets={[]} csrfToken="csrf" permissions={['software.read', 'software.write']} />)
-    const versionRow = (await screen.findByText('1.0')).closest('tr')
-    const licenseRow = screen.getByText('Device subscription').closest('tr')
-    if (!versionRow || !licenseRow) throw new Error('Stack calendar rows missing')
+    await screen.findByRole('region', { name: 'Software versions' })
     const calendarLabel = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeZone: 'UTC' }).format(new Date('2026-09-12T00:00:00Z'))
     const driftedLocalLabel = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(new Date('2026-09-12T00:00:00Z'))
     expect(driftedLocalLabel).not.toBe(calendarLabel)
-    expect(within(versionRow).getByText(calendarLabel)).toBeInTheDocument()
-    expect(within(licenseRow).getByText(`1 Device · expires ${calendarLabel}`)).toBeInTheDocument()
-    expect(within(licenseRow).getByLabelText('License starts for Device subscription')).toHaveValue('2026-08-13')
-    expect(within(licenseRow).getByLabelText('License expires for Device subscription')).toHaveValue('2026-09-12')
+    expect(cell('Software versions', calendarLabel)).toBeInTheDocument()
+    expect(cell('License entitlements', '2026-08-13')).toBeInTheDocument()
+    expect(cell('License entitlements', '2026-09-12')).toBeInTheDocument()
+    // The editor opens on the same calendar day the cell shows, not the local shift.
+    fireEvent.doubleClick(cell('License entitlements', '2026-09-12'))
+    expect(screen.getByLabelText('Expires on for Device subscription')).toHaveValue('2026-09-12')
   } finally {
     vi.unstubAllEnvs()
   }
+})
+
+test('sorting, filtering, and column visibility narrow a grid without touching the data', async () => {
+  const wideSnapshot = {
+    ...snapshot,
+    products: [
+      snapshot.products[0],
+      { id: 'reader', name: 'Steward Reader', publisher: 'Example', category: 'productivity', status: 'retired', revision: 1 },
+    ],
+  }
+  vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => Promise.resolve(response(String(input).includes('/analytics') ? analytics : wideSnapshot))))
+  render(<StackManager assets={[]} csrfToken="csrf" permissions={['software.read']} />)
+  await screen.findByRole('region', { name: 'Software products' })
+  const products = grid('Software products')
+
+  const productNames = () => within(products).getAllByRole('row').slice(1).map((row) => within(row).getAllByRole('gridcell')[0].textContent)
+  expect(productNames()).toEqual(['Steward Writer', 'Steward Reader'])
+  fireEvent.click(within(products).getByRole('button', { name: 'Product' }))
+  expect(productNames()).toEqual(['Steward Reader', 'Steward Writer'])
+
+  fireEvent.change(within(products).getByLabelText('Filter Status'), { target: { value: 'retired' } })
+  expect(productNames()).toEqual(['Steward Reader'])
+  expect(within(products.parentElement as HTMLElement).getByText('1 of 2 rows')).toBeInTheDocument()
+
+  fireEvent.click(within(products.parentElement as HTMLElement).getByRole('button', { name: 'Columns' }))
+  fireEvent.click(within(products.parentElement as HTMLElement).getByLabelText('Publisher'))
+  expect(within(products).queryByRole('columnheader', { name: /Publisher/ })).not.toBeInTheDocument()
 })
 
 test('creates a product with CSRF and reloads the connected view', async () => {
@@ -81,8 +127,8 @@ test('creates a product with CSRF and reloads the connected view', async () => {
   })
   vi.stubGlobal('fetch', fetchMock)
   render(<StackManager assets={[]} csrfToken="csrf-token" permissions={['software.read', 'software.write']} />)
-  await screen.findByText('Steward Writer')
-  fireEvent.click(screen.getByText('Define product'))
+  await screen.findByRole('region', { name: 'Software products' })
+  fireEvent.click(screen.getByRole('button', { name: 'Define product' }))
   const form = screen.getByRole('button', { name: 'Create product' }).closest('form')
   if (!form) throw new Error('product form missing')
   const scoped = within(form)
@@ -95,25 +141,27 @@ test('creates a product with CSRF and reloads the connected view', async () => {
   expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({ name: 'Browser Writer', publisher: 'Browser Publisher', status: 'active' })
 })
 
-test('updates assignment usage with optimistic revision and CSRF', async () => {
+test('updates assignment usage from the grid with optimistic revision and CSRF', async () => {
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     if (String(input).endsWith('/assignments/assignment-1/usage') && init?.method === 'PUT') return response({ ...snapshot.assignments[0], usageState: 'used', revision: 2 })
     return fetchForRead(input)
   })
   vi.stubGlobal('fetch', fetchMock)
   render(<StackManager assets={[]} csrfToken="csrf-token" permissions={['software.read', 'software.write']} />)
-  await screen.findByText('Steward Writer')
-  const row = screen.getByText('Assignment').closest('tr')
-  if (!row) throw new Error('assignment row missing')
-  fireEvent.change(within(row).getByLabelText('Assignment usage for asset-1'), { target: { value: 'used' } })
-  fireEvent.click(within(row).getByRole('button', { name: 'Update assignment usage' }))
-  expect(await screen.findByText('Assignment usage updated.')).toBeInTheDocument()
+  await screen.findByRole('region', { name: 'Seat assignments' })
+
+  editCell('Seat assignments', 'unused', 'Usage for asset-1', 'used')
+  expect(screen.getByText('1 cell changed in 1 record')).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+
+  expect(await screen.findByText('Assignment updated.')).toBeInTheDocument()
   await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/v1/stack/assignments/assignment-1/usage', expect.objectContaining({ method: 'PUT' })))
   const call = fetchMock.mock.calls.find(([path, init]) => String(path).endsWith('/assignments/assignment-1/usage') && init?.method === 'PUT')
-  expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({ usageState: 'used', lastUsedAt: '2026-08-12T00:00:00.000Z', revision: 1 })
+  expect(call?.[1]?.headers).toMatchObject({ 'X-CSRF-Token': 'csrf-token' })
+  expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({ usageState: 'used', lastUsedAt: '2026-08-12T00:00:00Z', revision: 1 })
 })
 
-test('retires products and ends assignments through explicit lifecycle controls', async () => {
+test('retires products and ends assignments through the grids that own those fields', async () => {
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input)
     if (path.endsWith('/products/writer/status') && init?.method === 'PUT') return response({ ...snapshot.products[0], status: 'retired', revision: 2 })
@@ -122,25 +170,59 @@ test('retires products and ends assignments through explicit lifecycle controls'
   })
   vi.stubGlobal('fetch', fetchMock)
   render(<StackManager assets={[]} csrfToken="csrf-token" permissions={['software.read', 'software.write']} />)
-  await screen.findByText('Steward Writer')
+  await screen.findByRole('region', { name: 'Software products' })
 
-  const productRow = screen.getByLabelText('Product status for Steward Writer').closest('tr')
-  if (!productRow) throw new Error('product row missing')
-  fireEvent.change(within(productRow).getByLabelText('Product status for Steward Writer'), { target: { value: 'retired' } })
-  fireEvent.click(within(productRow).getByRole('button', { name: 'Update product' }))
+  editCell('Software products', 'Active', 'Status for Steward Writer', 'retired')
+  fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
   expect(await screen.findByText('Product status updated.')).toBeInTheDocument()
 
-  const assignmentRow = screen.getByLabelText('Assignment ends at for asset-1').closest('tr')
-  if (!assignmentRow) throw new Error('assignment row missing')
-  fireEvent.change(within(assignmentRow).getByLabelText('Assignment ends at for asset-1'), { target: { value: '2026-08-13T12:00' } })
-  fireEvent.click(within(assignmentRow).getByRole('button', { name: 'End assignment' }))
-  expect(await screen.findByText('License assignment ended.')).toBeInTheDocument()
+  fireEvent.doubleClick(within(grid('Seat assignments')).getAllByRole('gridcell')[7])
+  const endsAt = screen.getByLabelText('Ended for asset-1')
+  fireEvent.change(endsAt, { target: { value: '2026-08-13T12:00' } })
+  fireEvent.keyDown(endsAt, { key: 'Enter' })
+  fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+  expect(await screen.findByText('Assignment updated.')).toBeInTheDocument()
 
   const productCall = fetchMock.mock.calls.find(([path, init]) => String(path).endsWith('/products/writer/status') && init?.method === 'PUT')
   expect(productCall?.[1]?.headers).toMatchObject({ 'X-CSRF-Token': 'csrf-token' })
   expect(JSON.parse(String(productCall?.[1]?.body))).toEqual({ status: 'retired', revision: 1 })
   const assignmentCall = fetchMock.mock.calls.find(([path, init]) => String(path).endsWith('/assignments/assignment-1/end') && init?.method === 'PUT')
   expect(JSON.parse(String(assignmentCall?.[1]?.body))).toEqual({ endedAt: new Date('2026-08-13T12:00').toISOString(), revision: 1 })
+})
+
+test('reports the record that lost a revision race and leaves the edit pending for retry', async () => {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).endsWith('/products/writer/status') && init?.method === 'PUT') {
+      return response({ error: { code: 'revision_conflict', message: 'The product changed since it was loaded.', correlationId: 'stack-test' } }, 409)
+    }
+    return fetchForRead(input)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  render(<StackManager assets={[]} csrfToken="csrf-token" permissions={['software.read', 'software.write']} />)
+  await screen.findByRole('region', { name: 'Software products' })
+
+  editCell('Software products', 'Active', 'Status for Steward Writer', 'retired')
+  fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+
+  expect(await screen.findByRole('alert')).toHaveTextContent('0 of 1 records saved. 1 conflicted with a newer change. Reload to see current values.')
+  expect(screen.getByText('1 cell changed in 1 record')).toBeInTheDocument()
+})
+
+test('locks the cells of records the Stack endpoints refuse to change again', async () => {
+  const closedSnapshot = {
+    ...snapshot,
+    products: [{ ...snapshot.products[0], status: 'retired' }],
+    assignments: [{ ...snapshot.assignments[0], endedAt: '2026-08-12T00:00:00Z' }],
+  }
+  vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => Promise.resolve(response(String(input).includes('/analytics') ? analytics : closedSnapshot))))
+  render(<StackManager assets={[]} csrfToken="csrf" permissions={['software.read', 'software.write']} />)
+  await screen.findByRole('region', { name: 'Software products' })
+
+  expect(cell('Software products', 'Retired')).toHaveAttribute('aria-readonly', 'true')
+  expect(within(grid('Seat assignments')).getAllByRole('gridcell')[4]).toHaveAttribute('aria-readonly', 'true')
+  // Immutable columns stay read-only even on records that are still open.
+  expect(cell('License entitlements', 'Device')).toHaveAttribute('aria-readonly', 'true')
+  expect(cell('License entitlements', 'Active')).not.toHaveAttribute('aria-readonly')
 })
 
 test('imports exported records and reports replay totals', async () => {
@@ -150,8 +232,8 @@ test('imports exported records and reports replay totals', async () => {
   })
   vi.stubGlobal('fetch', fetchMock)
   render(<StackManager assets={[]} csrfToken="csrf" permissions={['software.read', 'software.write']} />)
-  await screen.findByText('Steward Writer')
-  fireEvent.click(screen.getByText('Import portable records'))
+  await screen.findByRole('region', { name: 'Software products' })
+  fireEvent.click(screen.getByRole('button', { name: 'Import portable records' }))
   const form = screen.getByRole('button', { name: 'Import records' }).closest('form')
   if (!form) throw new Error('import form missing')
   const scoped = within(form)
@@ -181,8 +263,8 @@ test('shows the durable receipt and committed prefix when a Stack import fails',
   })
   vi.stubGlobal('fetch', fetchMock)
   const { container } = render(<StackManager assets={[]} csrfToken="csrf" permissions={['software.read', 'software.write']} />)
-  await screen.findByText('Steward Writer')
-  fireEvent.click(screen.getByText('Import portable records'))
+  await screen.findByRole('region', { name: 'Software products' })
+  fireEvent.click(screen.getByRole('button', { name: 'Import portable records' }))
   const form = screen.getByRole('button', { name: 'Import records' }).closest('form')
   if (!form) throw new Error('import form missing')
   const scoped = within(form)
@@ -213,6 +295,14 @@ test('explains missing software permission', () => {
 })
 
 test('rejects malformed optional fields in Stack responses', () => {
+  expect(parseStackSnapshot({ ...snapshot, licenses: [{ ...snapshot.licenses[0], documentIds: null }] }).licenses[0].documentIds).toEqual([])
+  expect(parseStackSnapshot({
+    ...snapshot,
+    assignmentTotal: 535,
+    installationTotal: 796,
+    assignments: [{ ...snapshot.assignments[0], lastUsedAt: null, endedAt: null }],
+    installations: [{ ...snapshot.installations[0], lastUsedAt: null, removedAt: null }],
+  }).assignmentTotal).toBe(535)
   expect(() => parseStackSnapshot({ ...snapshot, licenses: [{ ...snapshot.licenses[0], documentIds: [42] }] })).toThrow('invalid Stack response')
   expect(() => parseStackSnapshot({ ...snapshot, assignments: [{ ...snapshot.assignments[0], revision: 0 }] })).toThrow('invalid Stack response')
   expect(() => parseStackAnalytics({ ...analytics, expiringWithinDays: 0 })).toThrow('invalid Stack analytics response')

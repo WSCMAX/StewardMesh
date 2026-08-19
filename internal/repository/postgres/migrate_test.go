@@ -14,8 +14,8 @@ func TestEmbeddedMigrationsAreOrderedAndChecksummed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(migrations) != 39 {
-		t.Fatalf("expected 39 platform migrations, got %d", len(migrations))
+	if len(migrations) != 48 {
+		t.Fatalf("expected 48 platform migrations, got %d", len(migrations))
 	}
 	for index, migration := range migrations {
 		expectedVersion := int64(index + 1)
@@ -259,6 +259,24 @@ func TestStackMigrationAddsSoftwareEntitlementsAndAdministratorPermissions(t *te
 	} {
 		if !strings.Contains(contents, expected) {
 			t.Fatalf("Stack migration is missing %q", expected)
+		}
+	}
+}
+
+func TestStackAssignmentRoomMigrationAllowsLabAssignees(t *testing.T) {
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(migrations) < 44 {
+		t.Fatal("Stack assignment room migration 0044 is missing")
+	}
+	contents := migrations[43].contents
+	for _, expected := range []string{
+		"REQ-STACK-001", "software.licenses", "stack_assignments_assignee_kind_check", "'room'",
+	} {
+		if !strings.Contains(contents, expected) {
+			t.Fatalf("Stack room assignment migration is missing %q", expected)
 		}
 	}
 }

@@ -21,6 +21,9 @@ type MemoryPeopleStore struct {
 	departments        map[string]people.Department
 	identities         map[string]people.Identity
 	assignments        map[string]people.AssetAssignment
+	locationTypes      map[string]people.LocationReferenceType
+	locationRefs       map[string]people.LocationReference
+	locationTypeByName map[string]string
 	siteByName         map[string]string
 	buildingByName     map[string]string
 	roomByNumber       map[string]string
@@ -39,6 +42,9 @@ func NewMemoryPeopleStore() *MemoryPeopleStore {
 		departments:        make(map[string]people.Department),
 		identities:         make(map[string]people.Identity),
 		assignments:        make(map[string]people.AssetAssignment),
+		locationTypes:      make(map[string]people.LocationReferenceType),
+		locationRefs:       make(map[string]people.LocationReference),
+		locationTypeByName: make(map[string]string),
 		siteByName:         make(map[string]string),
 		buildingByName:     make(map[string]string),
 		roomByNumber:       make(map[string]string),
@@ -128,6 +134,26 @@ func (s *MemoryPeopleStore) GetSite(_ context.Context, organizationID, id string
 	return site, nil
 }
 
+func (s *MemoryPeopleStore) UpdateSite(_ context.Context, site people.Site, expectedRevision uint64) (people.Site, error) {
+	if !validMemorySite(site) || expectedRevision < 1 || site.Revision != expectedRevision+1 {
+		return people.Site{}, people.ErrInvalidInput
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	existing, exists := s.sites[site.ID]
+	if !exists || existing.OrganizationID != site.OrganizationID {
+		return people.Site{}, people.ErrNotFound
+	}
+	if existing.Revision != expectedRevision || site.CreatedAt != existing.CreatedAt {
+		return people.Site{}, people.ErrConflict
+	}
+	if err := rekeyUnique(s.siteByName, site.ID, peopleKey(existing.OrganizationID, existing.NormalizedName), peopleKey(site.OrganizationID, site.NormalizedName)); err != nil {
+		return people.Site{}, err
+	}
+	s.sites[site.ID] = site
+	return site, nil
+}
+
 func (s *MemoryPeopleStore) ListSites(_ context.Context, organizationID string, visibility people.Visibility) ([]people.Site, error) {
 	if organizationID == "" || visibility.Empty() {
 		return nil, people.ErrScopeRequired
@@ -198,6 +224,30 @@ func (s *MemoryPeopleStore) GetBuilding(_ context.Context, organizationID, id st
 	return building, nil
 }
 
+func (s *MemoryPeopleStore) UpdateBuilding(_ context.Context, building people.Building, expectedRevision uint64) (people.Building, error) {
+	if !validMemoryBuilding(building) || expectedRevision < 1 || building.Revision != expectedRevision+1 {
+		return people.Building{}, people.ErrInvalidInput
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	existing, exists := s.buildings[building.ID]
+	if !exists || existing.OrganizationID != building.OrganizationID {
+		return people.Building{}, people.ErrNotFound
+	}
+	if existing.Revision != expectedRevision || building.CreatedAt != existing.CreatedAt {
+		return people.Building{}, people.ErrConflict
+	}
+	site, exists := s.sites[building.SiteID]
+	if !exists || site.OrganizationID != building.OrganizationID {
+		return people.Building{}, people.ErrReferenceMissing
+	}
+	if err := rekeyUnique(s.buildingByName, building.ID, peopleKey(existing.OrganizationID, existing.SiteID, existing.NormalizedName), peopleKey(building.OrganizationID, building.SiteID, building.NormalizedName)); err != nil {
+		return people.Building{}, err
+	}
+	s.buildings[building.ID] = building
+	return building, nil
+}
+
 func (s *MemoryPeopleStore) ListBuildings(_ context.Context, organizationID, siteID string, visibility people.Visibility) ([]people.Building, error) {
 	if organizationID == "" {
 		return nil, people.ErrInvalidInput
@@ -255,6 +305,30 @@ func (s *MemoryPeopleStore) GetRoom(_ context.Context, organizationID, id string
 	if !exists || room.OrganizationID != organizationID {
 		return people.Room{}, people.ErrNotFound
 	}
+	return room, nil
+}
+
+func (s *MemoryPeopleStore) UpdateRoom(_ context.Context, room people.Room, expectedRevision uint64) (people.Room, error) {
+	if !validMemoryRoom(room) || expectedRevision < 1 {
+		return people.Room{}, people.ErrInvalidInput
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	existing, exists := s.rooms[room.ID]
+	if !exists || existing.OrganizationID != room.OrganizationID {
+		return people.Room{}, people.ErrNotFound
+	}
+	if existing.Revision != expectedRevision || room.Revision != expectedRevision+1 || room.CreatedAt != existing.CreatedAt {
+		return people.Room{}, people.ErrConflict
+	}
+	building, exists := s.buildings[room.BuildingID]
+	if !exists || building.OrganizationID != room.OrganizationID || building.SiteID != room.SiteID {
+		return people.Room{}, people.ErrReferenceMissing
+	}
+	if err := rekeyUnique(s.roomByNumber, room.ID, peopleKey(existing.OrganizationID, existing.BuildingID, existing.NormalizedNumber), peopleKey(room.OrganizationID, room.BuildingID, room.NormalizedNumber)); err != nil {
+		return people.Room{}, err
+	}
+	s.rooms[room.ID] = room
 	return room, nil
 }
 
@@ -318,6 +392,32 @@ func (s *MemoryPeopleStore) GetDepartment(_ context.Context, organizationID, id 
 	if !exists || department.OrganizationID != organizationID {
 		return people.Department{}, people.ErrNotFound
 	}
+	return department, nil
+}
+
+func (s *MemoryPeopleStore) UpdateDepartment(_ context.Context, department people.Department, expectedRevision uint64) (people.Department, error) {
+	if !validMemoryDepartment(department) || expectedRevision < 1 || department.Revision != expectedRevision+1 {
+		return people.Department{}, people.ErrInvalidInput
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	existing, exists := s.departments[department.ID]
+	if !exists || existing.OrganizationID != department.OrganizationID {
+		return people.Department{}, people.ErrNotFound
+	}
+	if existing.Revision != expectedRevision || department.CreatedAt != existing.CreatedAt {
+		return people.Department{}, people.ErrConflict
+	}
+	if department.SiteID != "" {
+		site, exists := s.sites[department.SiteID]
+		if !exists || site.OrganizationID != department.OrganizationID {
+			return people.Department{}, people.ErrReferenceMissing
+		}
+	}
+	if err := rekeyUnique(s.departmentByName, department.ID, peopleKey(existing.OrganizationID, existing.NormalizedName), peopleKey(department.OrganizationID, department.NormalizedName)); err != nil {
+		return people.Department{}, err
+	}
+	s.departments[department.ID] = department
 	return department, nil
 }
 
@@ -521,6 +621,9 @@ func (s *MemoryPeopleStore) CreateIdentity(_ context.Context, identity people.Id
 			return people.Identity{}, people.ErrReferenceMissing
 		}
 	}
+	if err := memoryIdentityLocations(s, identity); err != nil {
+		return people.Identity{}, err
+	}
 	if _, exists := s.identities[identity.ID]; exists {
 		return people.Identity{}, people.ErrConflict
 	}
@@ -549,6 +652,54 @@ func (s *MemoryPeopleStore) GetIdentity(_ context.Context, organizationID, id st
 	if !exists || identity.OrganizationID != organizationID {
 		return people.Identity{}, people.ErrNotFound
 	}
+	return identity, nil
+}
+
+func (s *MemoryPeopleStore) UpdateIdentity(_ context.Context, identity people.Identity, expectedRevision uint64) (people.Identity, error) {
+	if !validMemoryIdentity(identity) || expectedRevision < 1 || identity.Revision != expectedRevision+1 {
+		return people.Identity{}, people.ErrInvalidInput
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	existing, exists := s.identities[identity.ID]
+	if !exists || existing.OrganizationID != identity.OrganizationID {
+		return people.Identity{}, people.ErrNotFound
+	}
+	if existing.Revision != expectedRevision || identity.CreatedAt != existing.CreatedAt {
+		return people.Identity{}, people.ErrConflict
+	}
+	if identity.Provider != existing.Provider || identity.ProviderSubject != existing.ProviderSubject {
+		return people.Identity{}, people.ErrConflict
+	}
+	if identity.DepartmentID != "" {
+		department, exists := s.departments[identity.DepartmentID]
+		if !exists || department.OrganizationID != identity.OrganizationID {
+			return people.Identity{}, people.ErrReferenceMissing
+		}
+	}
+	if identity.SiteID != "" {
+		site, exists := s.sites[identity.SiteID]
+		if !exists || site.OrganizationID != identity.OrganizationID {
+			return people.Identity{}, people.ErrReferenceMissing
+		}
+	}
+	if err := memoryIdentityLocations(s, identity); err != nil {
+		return people.Identity{}, err
+	}
+	if existing.NormalizedEmail != "" {
+		delete(s.identityByEmail, peopleKey(existing.OrganizationID, existing.NormalizedEmail))
+	}
+	if identity.NormalizedEmail != "" {
+		key := peopleKey(identity.OrganizationID, identity.NormalizedEmail)
+		if otherID, duplicate := s.identityByEmail[key]; duplicate && otherID != identity.ID {
+			if existing.NormalizedEmail != "" {
+				s.identityByEmail[peopleKey(existing.OrganizationID, existing.NormalizedEmail)] = existing.ID
+			}
+			return people.Identity{}, people.ErrConflict
+		}
+		s.identityByEmail[key] = identity.ID
+	}
+	s.identities[identity.ID] = identity
 	return identity, nil
 }
 
@@ -639,11 +790,17 @@ func (s *MemoryPeopleStore) SearchIdentities(_ context.Context, organizationID s
 	defer s.mu.RUnlock()
 	departments := stringSet(visibility.DepartmentIDs)
 	sites := stringSet(visibility.SiteIDs)
+	idFilter := stringSet(query.IDs)
 	search := strings.ToLower(query.Search)
 	result := make([]people.Identity, 0, query.Limit)
 	for _, identity := range s.identities {
 		if identity.OrganizationID != organizationID {
 			continue
+		}
+		if len(idFilter) > 0 {
+			if _, ok := idFilter[identity.ID]; !ok {
+				continue
+			}
 		}
 		if !visibility.All {
 			_, departmentAllowed := departments[identity.DepartmentID]
@@ -952,10 +1109,256 @@ func peopleKey(values ...string) string {
 	return strings.Join(values, "\x00")
 }
 
+func rekeyUnique(index map[string]string, id, oldKey, newKey string) error {
+	if oldKey == newKey {
+		return nil
+	}
+	if other, exists := index[newKey]; exists && other != id {
+		return people.ErrConflict
+	}
+	delete(index, oldKey)
+	index[newKey] = id
+	return nil
+}
+
 func clonePeopleAssignment(assignment people.AssetAssignment) people.AssetAssignment {
 	if assignment.EffectiveTo != nil {
 		effectiveTo := *assignment.EffectiveTo
 		assignment.EffectiveTo = &effectiveTo
 	}
 	return assignment
+}
+
+func memoryIdentityLocations(store *MemoryPeopleStore, identity people.Identity) error {
+	if identity.BuildingID != "" {
+		building, exists := store.buildings[identity.BuildingID]
+		if !exists || building.OrganizationID != identity.OrganizationID {
+			return people.ErrReferenceMissing
+		}
+		if identity.SiteID != "" && building.SiteID != identity.SiteID {
+			return people.ErrInvalidInput
+		}
+	}
+	if identity.RoomID != "" {
+		room, exists := store.rooms[identity.RoomID]
+		if !exists || room.OrganizationID != identity.OrganizationID {
+			return people.ErrReferenceMissing
+		}
+		if identity.BuildingID != "" && room.BuildingID != identity.BuildingID {
+			return people.ErrInvalidInput
+		}
+		if identity.SiteID != "" && room.SiteID != identity.SiteID {
+			return people.ErrInvalidInput
+		}
+	}
+	return nil
+}
+
+func (s *MemoryPeopleStore) CreateLocationReferenceType(_ context.Context, item people.LocationReferenceType) (people.LocationReferenceType, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if item.ID == "" || item.OrganizationID == "" || item.Name == "" {
+		return people.LocationReferenceType{}, people.ErrInvalidInput
+	}
+	key := peopleKey(item.OrganizationID, item.NormalizedName)
+	if _, exists := s.locationTypes[item.ID]; exists {
+		return people.LocationReferenceType{}, people.ErrConflict
+	}
+	if _, exists := s.locationTypeByName[key]; exists {
+		return people.LocationReferenceType{}, people.ErrConflict
+	}
+	s.locationTypes[item.ID] = item
+	s.locationTypeByName[key] = item.ID
+	return item, nil
+}
+
+func (s *MemoryPeopleStore) GetLocationReferenceType(_ context.Context, organizationID, id string) (people.LocationReferenceType, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	item, exists := s.locationTypes[id]
+	if !exists || item.OrganizationID != organizationID {
+		return people.LocationReferenceType{}, people.ErrNotFound
+	}
+	return item, nil
+}
+
+func (s *MemoryPeopleStore) UpdateLocationReferenceType(_ context.Context, item people.LocationReferenceType, expectedRevision uint64) (people.LocationReferenceType, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	existing, exists := s.locationTypes[item.ID]
+	if !exists || existing.OrganizationID != item.OrganizationID {
+		return people.LocationReferenceType{}, people.ErrNotFound
+	}
+	if existing.Revision != expectedRevision || item.Revision != expectedRevision+1 {
+		return people.LocationReferenceType{}, people.ErrConflict
+	}
+	oldKey := peopleKey(existing.OrganizationID, existing.NormalizedName)
+	newKey := peopleKey(item.OrganizationID, item.NormalizedName)
+	if err := rekeyUnique(s.locationTypeByName, item.ID, oldKey, newKey); err != nil {
+		return people.LocationReferenceType{}, err
+	}
+	s.locationTypes[item.ID] = item
+	return item, nil
+}
+
+func (s *MemoryPeopleStore) ListLocationReferenceTypes(_ context.Context, organizationID string) ([]people.LocationReferenceType, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	result := make([]people.LocationReferenceType, 0)
+	for _, item := range s.locationTypes {
+		if item.OrganizationID == organizationID {
+			result = append(result, item)
+		}
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].NormalizedName == result[j].NormalizedName {
+			return result[i].ID < result[j].ID
+		}
+		return result[i].NormalizedName < result[j].NormalizedName
+	})
+	return result, nil
+}
+
+func (s *MemoryPeopleStore) CreateLocationReference(_ context.Context, item people.LocationReference) (people.LocationReference, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.validateLocationReferenceLocked(item); err != nil {
+		return people.LocationReference{}, err
+	}
+	if _, exists := s.locationRefs[item.ID]; exists {
+		return people.LocationReference{}, people.ErrConflict
+	}
+	if item.Priority == people.LocationPriorityPrimary && item.Status == people.StatusActive {
+		for _, existing := range s.locationRefs {
+			if existing.OrganizationID == item.OrganizationID && existing.IdentityID == item.IdentityID && existing.TypeID == item.TypeID && existing.Status == people.StatusActive && existing.Priority == people.LocationPriorityPrimary {
+				return people.LocationReference{}, people.ErrConflict
+			}
+		}
+	}
+	s.locationRefs[item.ID] = item
+	return item, nil
+}
+
+func (s *MemoryPeopleStore) GetLocationReference(_ context.Context, organizationID, id string) (people.LocationReference, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	item, exists := s.locationRefs[id]
+	if !exists || item.OrganizationID != organizationID {
+		return people.LocationReference{}, people.ErrNotFound
+	}
+	return item, nil
+}
+
+func (s *MemoryPeopleStore) UpdateLocationReference(_ context.Context, item people.LocationReference, expectedRevision uint64) (people.LocationReference, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	existing, exists := s.locationRefs[item.ID]
+	if !exists || existing.OrganizationID != item.OrganizationID {
+		return people.LocationReference{}, people.ErrNotFound
+	}
+	if existing.Revision != expectedRevision || item.Revision != expectedRevision+1 {
+		return people.LocationReference{}, people.ErrConflict
+	}
+	if err := s.validateLocationReferenceLocked(item); err != nil {
+		return people.LocationReference{}, err
+	}
+	if item.Priority == people.LocationPriorityPrimary && item.Status == people.StatusActive {
+		for _, other := range s.locationRefs {
+			if other.ID != item.ID && other.OrganizationID == item.OrganizationID && other.IdentityID == item.IdentityID && other.TypeID == item.TypeID && other.Status == people.StatusActive && other.Priority == people.LocationPriorityPrimary {
+				return people.LocationReference{}, people.ErrConflict
+			}
+		}
+	}
+	s.locationRefs[item.ID] = item
+	return item, nil
+}
+
+func (s *MemoryPeopleStore) ListLocationReferences(_ context.Context, organizationID string, query people.LocationReferenceQuery, visibility people.Visibility) ([]people.LocationReference, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if visibility.Empty() {
+		return nil, people.ErrScopeRequired
+	}
+	identityIDs := stringSet(query.IdentityIDs)
+	locationIDs := stringSet(query.LocationIDs)
+	departmentIDs := stringSet(visibility.DepartmentIDs)
+	siteIDs := stringSet(visibility.SiteIDs)
+	result := make([]people.LocationReference, 0)
+	for _, item := range s.locationRefs {
+		if item.OrganizationID != organizationID {
+			continue
+		}
+		identity, exists := s.identities[item.IdentityID]
+		if !exists {
+			continue
+		}
+		if !visibility.All {
+			_, departmentOK := departmentIDs[identity.DepartmentID]
+			_, siteOK := siteIDs[identity.SiteID]
+			if !departmentOK && !siteOK {
+				continue
+			}
+		}
+		if len(identityIDs) > 0 {
+			if _, ok := identityIDs[item.IdentityID]; !ok {
+				continue
+			}
+		}
+		if len(locationIDs) > 0 {
+			if _, ok := locationIDs[item.LocationID]; !ok {
+				continue
+			}
+		}
+		if query.TypeID != "" && item.TypeID != query.TypeID {
+			continue
+		}
+		if query.LocationKind != "" && item.LocationKind != query.LocationKind {
+			continue
+		}
+		if query.Status != "" && item.Status != query.Status {
+			continue
+		}
+		result = append(result, item)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].UpdatedAt.Equal(result[j].UpdatedAt) {
+			return result[i].ID < result[j].ID
+		}
+		return result[i].UpdatedAt.After(result[j].UpdatedAt)
+	})
+	if query.Limit > 0 && len(result) > query.Limit {
+		result = result[:query.Limit]
+	}
+	return result, nil
+}
+
+func (s *MemoryPeopleStore) validateLocationReferenceLocked(item people.LocationReference) error {
+	identity, exists := s.identities[item.IdentityID]
+	if !exists || identity.OrganizationID != item.OrganizationID {
+		return people.ErrReferenceMissing
+	}
+	referenceType, exists := s.locationTypes[item.TypeID]
+	if !exists || referenceType.OrganizationID != item.OrganizationID {
+		return people.ErrReferenceMissing
+	}
+	switch item.LocationKind {
+	case people.LocationKindSite:
+		site, ok := s.sites[item.LocationID]
+		if !ok || site.OrganizationID != item.OrganizationID {
+			return people.ErrReferenceMissing
+		}
+	case people.LocationKindBuilding:
+		building, ok := s.buildings[item.LocationID]
+		if !ok || building.OrganizationID != item.OrganizationID {
+			return people.ErrReferenceMissing
+		}
+	case people.LocationKindRoom:
+		room, ok := s.rooms[item.LocationID]
+		if !ok || room.OrganizationID != item.OrganizationID {
+			return people.ErrReferenceMissing
+		}
+	default:
+		return people.ErrInvalidInput
+	}
+	return nil
 }

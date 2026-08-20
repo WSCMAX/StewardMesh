@@ -176,7 +176,7 @@ function WorkspaceNavigation({ active, areas, onNavigate, onOpenHelp, onReportIs
               <span aria-hidden="true" className={cx('grid size-7 shrink-0 place-items-center text-current', selected ? 'text-steward-teal' : 'text-steward-slate group-hover:text-steward-mist')}><AreaIcon area={area.id as AreaIconName} className="size-4" /></span>
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-sm font-medium">{area.name}</span>
-                <span className="block truncate text-[11px] text-steward-slate">{area.descriptor}</span>
+                <span className="block truncate text-[11px] text-steward-mist-muted">{area.descriptor}</span>
               </span>
               {accessLabel && <span className="sr-only">{accessLabel}</span>}
             </a>

@@ -1,11 +1,7 @@
 import axe from 'axe-core'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { beforeAll, beforeEach, expect, test, vi } from 'vitest'
+import { beforeEach, expect, test, vi } from 'vitest'
 import PeopleDirectory from './PeopleDirectory'
-
-beforeAll(() => {
-  vi.setConfig({ testTimeout: 20000 })
-})
 
 // Requirements: REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-008, REQ-WORKSPACE-001, A11Y-001, DOC-001, DOC-002.
 // Feature: threads.relationships.

@@ -406,6 +406,7 @@ function listValues(value: string) {
 }
 
 export function matchQueryValue(text: string, operator: QueryOperator, value: string, kind?: GridColumnKind) {
+  void kind
   const haystack = text.trim()
   const needle = value.trim()
   const lowerHay = haystack.toLowerCase()

@@ -4833,7 +4833,7 @@ components:
       type: object
       required: [id, organizationId, name, kind, status, revision, createdAt, updatedAt]
       properties:
-        id: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        id: {$ref: '#/components/schemas/AssetID'}
         organizationId: {type: string}
         modelId: {$ref: '#/components/schemas/AssetModelID'}
         modelContext: {$ref: '#/components/schemas/AssetModelContext'}
@@ -5097,6 +5097,9 @@ components:
     AssetStatus:
       type: string
       enum: [draft, active, inactive, retired, disposed]
+    AssetID:
+      type: string
+      pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
     AssetModelID:
       type: string
       pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'

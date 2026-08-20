@@ -15,7 +15,7 @@ import DataGrid, { type StagedDraft } from './grid/DataGrid'
 import Drawer from './grid/Drawer'
 import QueryBuilder from './grid/QueryBuilder'
 import { emptyQuery, encodeQuery, isQueryEmpty, matchQuery, parseQuery, type QueryField, type QueryModel } from './grid/queryLanguage'
-import { applyCellPayload, calendarText, encodeLookupText, lookupExportText, lookupLabel, parseLookupText, type GridColumn, type LookupConfig, type LookupCreateConfig, type LookupOption } from './grid/columns'
+import { applyCellPayload, calendarText, encodeLookupText, filterLookupOptions, lookupExportText, lookupLabel, parseLookupText, type GridColumn, type LookupConfig, type LookupCreateConfig, type LookupOption } from './grid/columns'
 import type { CellEdit } from './grid/useCellEditing'
 import {
   buildLabelColumns,
@@ -808,6 +808,7 @@ function buildAssetColumns(
       key: 'replacementModelId', header: 'Replacement model', kind: 'lookup', editable: assetEditable, width: 12,
       lookup: {
         options: models.map((model) => ({ id: model.id, label: modelLabel(model), detail: model.kind })),
+        search: async (query) => filterLookupOptions(models.map((model) => ({ id: model.id, label: modelLabel(model), detail: model.kind })), query),
         browseLabel: 'Open models',
         onBrowse: context.onOpenModels,
       },
@@ -821,7 +822,7 @@ function buildAssetColumns(
         return model ? modelLabel(model) : asset.replacementModelId ?? ''
       },
     },
-    { key: 'unitCostMinor', header: 'Unit cost', kind: 'money', editable: assetEditable, align: 'right', width: 8, text: (asset) => dollarsFromMinor(asset.unitCostMinor) },
+    { key: 'unitCostMinor', header: 'Unit cost', kind: 'money', editable: assetEditable, align: 'right' as const, width: 8, text: (asset) => dollarsFromMinor(asset.unitCostMinor) },
     { key: 'deploymentNotes', header: 'Deployment notes', kind: 'text', editable: assetEditable, maxLength: 2000, width: 16, text: (asset) => asset.deploymentNotes ?? '' },
     ...labelColumns,
     {
@@ -1375,13 +1376,14 @@ export default function AtlasInventory({
 
   useEffect(() => {
     if (!focusRecord || (focusRecord.kind !== 'asset' && focusRecord.kind !== 'model')) return
+    const focused = focusRecord
     let cancelled = false
     async function openFocusedRecord() {
-      if (focusRecord.kind === 'asset') {
-        let asset = assets.find((item) => item.id === focusRecord.recordId)
+      if (focused.kind === 'asset') {
+        let asset = assets.find((item) => item.id === focused.recordId)
         if (!asset) {
           try {
-            const response = await requestJSON(`/api/v1/assets/${encodeURIComponent(focusRecord.recordId)}`)
+            const response = await requestJSON(`/api/v1/assets/${encodeURIComponent(focused.recordId)}`)
             if (!isAsset(response)) return
             asset = response
             if (!cancelled) onAssetsChange([...assets, asset].sort((left, right) => left.name.localeCompare(right.name)))
@@ -1399,10 +1401,10 @@ export default function AtlasInventory({
         queueMicrotask(() => document.getElementById(canWrite ? 'assets-heading' : 'asset-detail-heading')?.focus())
         return
       }
-      let model = models.find((item) => item.id === focusRecord.recordId)
+      let model = models.find((item) => item.id === focused.recordId)
       if (!model) {
         try {
-          const response = await requestJSON(`/api/v1/asset-models/${encodeURIComponent(focusRecord.recordId)}`)
+          const response = await requestJSON(`/api/v1/asset-models/${encodeURIComponent(focused.recordId)}`)
           if (!isAssetModel(response)) return
           model = response
           if (!cancelled) setModels((current) => current.some((item) => item.id === response.id) ? current : [...current, response])
@@ -2463,9 +2465,9 @@ function ModelRecordDetails({ model, models }: { model: AssetModel; models: read
   </section>
 }
 
-function TextField({ defaultValue, help, label, maxLength, name, required }: { defaultValue: string; help?: string; label: string; maxLength?: number; name: string; required?: boolean }) {
+function TextField({ defaultValue = '', help, label, maxLength, name, placeholder, required }: { defaultValue?: string; help?: string; label: string; maxLength?: number; name: string; placeholder?: string; required?: boolean }) {
   const helpID = help ? `${name}-help` : undefined
-  return <label className={labelClass}>{label}{help && <span className="mt-1 block font-normal leading-5 text-steward-mist-muted" id={helpID}>{help}</span>}<input aria-describedby={helpID} className={inputClass} defaultValue={defaultValue} maxLength={maxLength} name={name} required={required} /></label>
+  return <label className={labelClass}>{label}{help && <span className="mt-1 block font-normal leading-5 text-steward-mist-muted" id={helpID}>{help}</span>}<input aria-describedby={helpID} className={inputClass} defaultValue={defaultValue} maxLength={maxLength} name={name} placeholder={placeholder} required={required} /></label>
 }
 
 function TextAreaField({ defaultValue, label, maxLength, name }: { defaultValue: string; label: string; maxLength: number; name: string }) {

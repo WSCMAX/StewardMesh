@@ -344,7 +344,7 @@ export default function DataGrid<T>({
 
   useEffect(() => {
     if (!exportOpen && !columnsOpen) return undefined
-    function handlePointerDown(event: PointerEvent) {
+    function handlePointerDown(event: globalThis.PointerEvent) {
       if (exportOpen && !exportRef.current?.contains(event.target as Node)) setExportOpen(false)
       if (columnsOpen && !columnsRef.current?.contains(event.target as Node)) setColumnsOpen(false)
     }

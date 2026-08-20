@@ -6,7 +6,7 @@ export const maximumPatternCsvRows = 1
 export type CsvPatternField = {
   key: string
   csvHeader: string
-  type: 'text' | 'number' | 'date' | 'money' | 'enum' | 'attachment' | 'reference'
+  type: 'text' | 'number' | 'date' | 'money' | 'enum' | 'attachment' | 'reference' | 'tag'
 }
 
 export type CsvPatternTemplate = {

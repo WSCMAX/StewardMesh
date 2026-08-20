@@ -14,8 +14,8 @@ func TestEmbeddedMigrationsAreOrderedAndChecksummed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(migrations) != 48 {
-		t.Fatalf("expected 48 platform migrations, got %d", len(migrations))
+	if len(migrations) != 49 {
+		t.Fatalf("expected 49 platform migrations, got %d", len(migrations))
 	}
 	for index, migration := range migrations {
 		expectedVersion := int64(index + 1)

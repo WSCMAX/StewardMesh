@@ -1,6 +1,13 @@
 -- Primary building/room on directory identities, plus typed location
 -- references (office, instructor, class, dormitory, lab) for occupancy.
 
+-- Buildings and rooms are uniquely keyed by id, but composite FKs from
+-- identities need a matching unique constraint on (organization_id, id).
+CREATE UNIQUE INDEX IF NOT EXISTS people_buildings_organization_id_idx
+    ON people_buildings (organization_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS people_rooms_organization_id_idx
+    ON people_rooms (organization_id, id);
+
 ALTER TABLE people_identities
     ADD COLUMN IF NOT EXISTS building_id TEXT,
     ADD COLUMN IF NOT EXISTS room_id TEXT;

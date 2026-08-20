@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { expect, test, vi } from 'vitest'
-import WorkspaceShell, { workspaceAreaFromHash, workspaceHash, type WorkspaceArea } from './WorkspaceShell'
+import WorkspaceShell, { workspaceAreaFromHash, type WorkspaceArea } from './WorkspaceShell'
 
 // Requirement: REQ-WORKSPACE-001. Feature: experience.workspace.
 

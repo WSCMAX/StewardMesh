@@ -1,6 +1,6 @@
 import { type FormEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { ApiRequestError, isRevision, requestJSON, type Revision } from './api'
-import { buttonClass, emptyStateClass, inputClass, labelClass, plainButtonClass, secondaryButtonClass, StatusBadge, subpanelClass } from './ui'
+import { buttonClass, emptyStateClass, inputClass, labelClass, plainButtonClass, StatusBadge, subpanelClass } from './ui'
 
 // Requirement: REQ-LABELS-001. Feature: identity.labels.
 

@@ -69,8 +69,10 @@ async page => {
   assert(await page.getByRole('button', { name: 'Print labels' }).count() === 0, 'reader can open label printing')
   await page.getByRole('tab', { name: 'Scan' }).click()
   const scannerPanel = page.locator('section[aria-labelledby="atlas-scanner-heading"]')
-  await scannerPanel.getByRole('button', { name: 'Open scanner', exact: true }).click()
+  const openScanner = scannerPanel.getByRole('button', { name: 'Open scanner', exact: true })
+  if (await openScanner.count()) await openScanner.click()
   const scannerForm = scannerPanel.getByRole('form', { name: 'Scan an Atlas Code', exact: true })
+  await scannerForm.waitFor()
   const scannerWorkflow = scannerForm.locator('label').filter({ hasText: /^Workflow/ }).locator('select')
   assert(await scannerWorkflow.locator('option[value="associate"]').count() === 0, 'reader scanner exposes association mode')
 

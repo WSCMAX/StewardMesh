@@ -807,7 +807,7 @@ export default function HorizonPlanner({ csrfToken, permissions, assets, onOpenH
           <p className="mt-1 text-sm leading-6 text-steward-mist-muted">Supplemental compact bars. Exact values and asset counts are in the authoritative table below.</p>
           <ul className="mt-4 grid gap-3">
             {forecast.groups.map((group) => <li className="grid gap-2 sm:grid-cols-[minmax(9rem,0.6fr)_minmax(10rem,1fr)_auto] sm:items-center" key={`${group.scenario}-${group.key}`}>
-              <button className="rounded-md text-left text-sm font-medium text-steward-blue underline-offset-2 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-steward-blue" disabled={busy !== ''} onClick={() => void openForecastGroup(group)} type="button">{group.label} · {label(group.scenario)}</button>
+              <button className="rounded-md text-left text-sm font-medium text-[#a9c7ff] underline-offset-2 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-steward-blue" disabled={busy !== ''} onClick={() => void openForecastGroup(group)} type="button">{group.label} · {label(group.scenario)}</button>
               <span aria-hidden="true" className="h-3 overflow-hidden rounded-sm bg-steward-ink-800"><span className="block h-full rounded-sm bg-steward-blue" style={{ width: `${group.plannedReplacementMinor === 0 ? 0 : Math.max(2, Math.round(group.plannedReplacementMinor / maxReplacement * 100))}%` }} /></span>
               <span className="text-sm tabular-nums">{money(group.plannedReplacementMinor, forecast.currency)}</span>
             </li>)}
@@ -821,7 +821,7 @@ export default function HorizonPlanner({ csrfToken, permissions, assets, onOpenH
             <caption className="pb-3 text-left text-sm text-steward-mist-muted" id="horizon-forecast-table-heading">Authoritative forecast values by {label(forecast.groupBy).toLowerCase()} and scenario.</caption>
             <thead><tr className="border-b border-steward-ink-800 text-steward-mist-muted"><Header>Group</Header><Header>Scenario</Header><Header>Assets</Header><Header>Replacement need</Header>{costKinds.map((kind) => <Header key={kind}>{label(kind)}</Header>)}</tr></thead>
             <tbody>{forecast.groups.map((group) => <tr className="border-b border-steward-ink-800/70 align-top" key={`${group.scenario}-${group.key}`}>
-              <Cell><button className="rounded-md text-left font-medium text-steward-blue underline-offset-2 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-steward-blue" disabled={busy !== ''} onClick={() => void openForecastGroup(group)} type="button">{group.label}</button></Cell>
+              <Cell><button className="rounded-md text-left font-medium text-[#a9c7ff] underline-offset-2 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-steward-blue" disabled={busy !== ''} onClick={() => void openForecastGroup(group)} type="button">{group.label}</button></Cell>
               <Cell>{label(group.scenario)}</Cell>
               <Cell>{group.assetCount}</Cell>
               <Cell>{money(group.plannedReplacementMinor, forecast.currency)}</Cell>

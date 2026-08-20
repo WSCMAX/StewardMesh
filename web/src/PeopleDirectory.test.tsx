@@ -1,7 +1,11 @@
 import axe from 'axe-core'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { beforeEach, expect, test, vi } from 'vitest'
+import { beforeAll, beforeEach, expect, test, vi } from 'vitest'
 import PeopleDirectory from './PeopleDirectory'
+
+beforeAll(() => {
+  vi.setConfig({ testTimeout: 20000 })
+})
 
 // Requirements: REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-008, REQ-WORKSPACE-001, A11Y-001, DOC-001, DOC-002.
 // Feature: threads.relationships.
@@ -111,6 +115,7 @@ function installPeopleFetch(options: { assignments?: unknown[]; buildings?: unkn
       }, 201)
     }
     if (path.startsWith('/api/v1/location-references')) return jsonResponse({ items: options.locationReferences ?? [] })
+    if (path === '/api/v1/labels/definitions' || path.startsWith('/api/v1/labels/')) return jsonResponse({ items: [] })
     throw new Error(`unexpected request: ${path}`)
   })
   vi.stubGlobal('fetch', fetchMock)

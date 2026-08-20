@@ -32,7 +32,10 @@ async page => {
     }
     const violations = await page.evaluate(async () => {
       const result = await globalThis.axe.run(document)
-      return result.violations.map(violation => `${violation.id}:${violation.nodes.length}`)
+      return result.violations.map(violation => {
+        const nodes = violation.nodes.map(node => `${node.target.join(' ')}: ${(node.any[0] && node.any[0].message) || node.failureSummary || ''}`)
+        return `${violation.id}[${nodes.join(' | ')}]`
+      })
     })
     assert(violations.length === 0, `${label} axe violations: ${violations.join(', ')}`)
   }
@@ -45,13 +48,14 @@ async page => {
   await page.locator('#assets-heading').waitFor()
   await axe('empty Atlas')
 
-  const search = page.getByRole('searchbox', { name: 'Search', exact: true })
+  const search = page.getByRole('searchbox', { name: 'Search Asset inventory' })
   await search.fill('phase-one-preserved-filter')
   await page.getByRole('link', { name: /^People —/ }).click()
   await page.locator('#people-heading').waitFor()
   await page.getByRole('link', { name: /^Atlas —/ }).click()
   assert(await search.inputValue() === 'phase-one-preserved-filter', 'Atlas filter was not preserved across workspace navigation')
   await page.getByRole('link', { name: /^People —/ }).click()
+  await page.getByRole('tab', { name: 'Workflows & assignments' }).click()
 
   await page.getByRole('button', { name: 'Start person workflow' }).click()
   await assertFocused(page.getByRole('heading', { name: 'Step 1 — Person details' }), 'person step heading did not receive focus')

@@ -50,28 +50,40 @@ async page => {
   const openAtlasTab = async name => {
     await page.getByRole('tab', { name, exact: true }).click()
   }
+  const dismissDrawer = async () => {
+    const dialog = page.getByRole('dialog')
+    if (await dialog.count() === 0) return
+    await page.keyboard.press('Escape')
+    await dialog.first().waitFor({ state: 'hidden' })
+  }
   const createAsset = async (name, tag, serial) => {
     await openAtlasTab('Assets')
+    await dismissDrawer()
     await page.getByRole('button', { name: 'Add asset' }).click()
     const form = page.getByRole('form', { name: 'Add asset' })
     await form.getByLabel('Asset name').fill(name)
     await form.getByLabel('Asset tag').fill(tag)
     await form.getByLabel('Serial number').fill(serial)
+    await form.getByLabel('Status').selectOption('active')
     await form.getByRole('button', { name: 'Create asset' }).click()
     await page.getByText('Asset created.', { exact: true }).waitFor()
     await page.locator('#asset-identifiers-heading').waitFor()
+    await dismissDrawer()
   }
   const selectAsset = async name => {
     await openAtlasTab('Assets')
-    await page.getByRole('button', { name: new RegExp(`^${name}`) }).first().click()
+    await dismissDrawer()
+    await page.getByRole('button', { name: `Open ${name}` }).click()
     await page.locator('#asset-identifiers-heading').waitFor()
     await page.getByText(name, { exact: true }).last().waitFor()
+    await dismissDrawer()
   }
   const scannerPanel = page.locator('section[aria-labelledby="atlas-scanner-heading"]')
   const scannerForm = () => scannerPanel.getByRole('form', { name: 'Scan an Atlas Code', exact: true })
   const scannerSelect = label => scannerForm().locator('label').filter({ hasText: new RegExp(`^${label}`) }).locator('select')
   const scannerInput = () => scannerForm().locator('input[placeholder="Scan, paste, or type"]')
   const setScanner = async (mode, symbology = 'code128') => {
+    await dismissDrawer()
     await openAtlasTab('Scan')
     if (await scannerPanel.getByRole('button', { name: 'Open scanner', exact: true }).count()) await scannerPanel.getByRole('button', { name: 'Open scanner', exact: true }).click()
     await scannerSelect('Workflow').selectOption(mode)
@@ -178,6 +190,7 @@ async page => {
   await scannerPanel.getByText('Scanning cancelled. No asset or identifier was changed.', { exact: true }).waitFor()
 
   await openAtlasTab('Assets')
+  await page.getByRole('button', { name: `Open ${assetA}` }).click()
   const identifiers = page.locator('section[aria-labelledby="asset-identifiers-heading"]')
   const codeAItem = identifiers.locator('li').filter({ has: page.getByText(codeA, { exact: true }) })
   await codeAItem.getByRole('button', { name: 'Replace' }).click()
@@ -246,6 +259,7 @@ async page => {
   await scannerPanel.getByRole('button', { name: 'Cancel scanning', exact: true }).click()
 
   await openAtlasTab('Labels')
+  await dismissDrawer()
   await page.getByRole('button', { name: 'Print labels' }).click()
   const labelPanel = page.locator('section[aria-labelledby="atlas-label-print-heading"]')
   await labelPanel.getByText('1. Select active identifiers', { exact: true }).waitFor()

@@ -67,7 +67,7 @@ async page => {
     await form.getByLabel('Status').selectOption('active')
     await form.getByRole('button', { name: 'Create asset' }).click()
     await page.getByText('Asset created.', { exact: true }).waitFor()
-    await page.locator('#asset-identifiers-heading').waitFor()
+    await page.getByRole('button', { name: `Open ${name}` }).waitFor()
     await dismissDrawer()
   }
   const selectAsset = async name => {

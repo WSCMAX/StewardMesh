@@ -78,14 +78,20 @@ async page => {
     await page.getByText(name, { exact: true }).last().waitFor()
     await dismissDrawer()
   }
-  const scannerPanel = page.locator('section[aria-labelledby="atlas-scanner-heading"]')
-  const scannerForm = () => scannerPanel.getByRole('form', { name: 'Scan an Atlas Code', exact: true })
+  const scannerPanel = page.locator('#atlas-panel-scan')
+  const scannerForm = () => scannerPanel.locator('form')
   const scannerSelect = label => scannerForm().locator('label').filter({ hasText: new RegExp(`^${label}`) }).locator('select')
   const scannerInput = () => scannerForm().locator('input[placeholder="Scan, paste, or type"]')
   const setScanner = async (mode, symbology = 'code128') => {
     await dismissDrawer()
-    await openAtlasTab('Scan')
-    if (await scannerPanel.getByRole('button', { name: 'Open scanner', exact: true }).count()) await scannerPanel.getByRole('button', { name: 'Open scanner', exact: true }).click()
+    await page.locator('#atlas-tab-scan').click()
+    await page.locator('#atlas-panel-scan:not([hidden])').waitFor()
+    const openScanner = scannerPanel.getByRole('button', { name: 'Open scanner', exact: true })
+    try {
+      await scannerForm().waitFor({ timeout: 2000 })
+    } catch {
+      await openScanner.click()
+    }
     await scannerSelect('Workflow').selectOption(mode)
     await scannerSelect('Symbology').selectOption(symbology)
   }

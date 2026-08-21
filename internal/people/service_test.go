@@ -473,4 +473,9 @@ func TestPeopleServiceRecordsTypedLocationReferences(t *testing.T) {
 	if primary.Priority != LocationPriorityPrimary || secondary.TypeID != instructorType.ID {
 		t.Fatalf("unexpected occupancy records %#v %#v", primary, secondary)
 	}
+	if _, err := service.CreateLocationReference(ctx, CreateLocationReferenceInput{
+		IdentityID: person.ID, TypeID: officeType.ID, LocationKind: LocationKindSite, LocationID: site.ID,
+	}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected location kind mismatch, got %v", err)
+	}
 }

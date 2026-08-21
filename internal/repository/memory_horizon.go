@@ -137,6 +137,9 @@ func (s *MemoryHorizonStore) UpsertKindDefault(_ context.Context, item horizon.K
 	defer s.mu.Unlock()
 	key := horizonKindDefaultKey(item.OrganizationID, item.AssetKind, item.Scenario)
 	if existing, ok := s.kindDefaults[key]; ok {
+		if item.Revision != existing.Revision {
+			return horizon.KindDefault{}, horizon.ErrConflict
+		}
 		item.Revision = existing.Revision + 1
 		item.CreatedAt = existing.CreatedAt
 	}

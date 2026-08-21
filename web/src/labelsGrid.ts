@@ -13,6 +13,8 @@ export type LabelDefinition = {
   valueKind: LabelValueKind
   applicableRecordTypes: string[]
   options?: string[]
+  parentId?: string
+  goalId?: string
   status: 'active' | 'retired'
   revision: Revision
 }
@@ -42,6 +44,8 @@ export function isLabelDefinition(value: unknown): value is LabelDefinition {
   return typeof item.id === 'string' && typeof item.name === 'string'
     && labelValueKinds.includes(item.valueKind as LabelValueKind)
     && Array.isArray(item.applicableRecordTypes)
+    && (item.parentId === undefined || typeof item.parentId === 'string')
+    && (item.goalId === undefined || typeof item.goalId === 'string')
     && (item.status === 'active' || item.status === 'retired')
     && isRevision(item.revision)
 }
@@ -268,6 +272,8 @@ export async function appendLabelDefinitionOptions(
       valueKind: definition.valueKind,
       applicableRecordTypes: definition.applicableRecordTypes,
       options,
+      parentId: definition.parentId ?? '',
+      goalId: definition.goalId ?? '',
       status: definition.status,
       revision: definition.revision,
     }),

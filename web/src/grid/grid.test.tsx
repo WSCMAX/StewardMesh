@@ -364,5 +364,6 @@ test('CSV export includes the header row and the visible cells', async () => {
   expect(jsonFromSheet(sheet)).toContain('"name": "Writer"')
   expect(formulaSafeText('=HYPERLINK("https://example.test")')).toBe(`'=HYPERLINK("https://example.test")`)
   expect(csvFromSheet({ ...sheet, rows: [['=HYPERLINK("https://example.test")']] })).toContain(`'=HYPERLINK`)
+  expect(csvFromSheet({ ...sheet, rows: [['Doe, Jane']] })).toBe('Name\n"Doe, Jane"')
   expect(jsonFromSheet({ ...sheet, rows: [['=HYPERLINK("https://example.test")']] })).toContain('=HYPERLINK')
 })

@@ -508,3 +508,44 @@ func TestForecastGroupAssetsListsMatchingPlans(t *testing.T) {
 		t.Fatalf("expected asset name ordering, got %#v", report.Items)
 	}
 }
+
+func TestListPlanHistoryUsesLifecycleAnchor(t *testing.T) {
+	purchaseDate := time.Date(2020, time.January, 1, 0, 0, 0, 0, time.UTC)
+	lifecycleStart := time.Date(2024, time.June, 15, 0, 0, 0, 0, time.UTC)
+	asset := horizonAsset("asset-1", &purchaseDate)
+	asset.LifecycleStartDate = &lifecycleStart
+	fixture := newHorizonFixture(t, asset)
+	created := createHorizonPlan(t, fixture, horizon.CreatePlanInput{
+		ID: "plan-1", AssetID: "asset-1", Scenario: "baseline", ExpectedUsefulLifeMonths: 12,
+		LifecycleStage: "planned", ReplacementCostMinor: 1000, Currency: "USD",
+		EffectiveFrom: time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC),
+	})
+	history, err := fixture.service.ListPlanHistory(context.Background(), created.ID)
+	if err != nil || len(history) != 1 || history[0].DerivedReplacementDate == nil {
+		t.Fatalf("unexpected history %#v err=%v", history, err)
+	}
+	want := time.Date(2025, time.June, 15, 0, 0, 0, 0, time.UTC)
+	if !history[0].DerivedReplacementDate.Equal(want) {
+		t.Fatalf("expected lifecycle-start derived replacement %s, got %s", want, history[0].DerivedReplacementDate)
+	}
+}
+
+func TestUpsertKindDefaultRejectsStaleRevision(t *testing.T) {
+	fixture := newHorizonFixture(t)
+	created, err := fixture.service.UpsertKindDefault(context.Background(), horizon.UpsertKindDefaultInput{
+		AssetKind: "laptop", Scenario: "baseline", ExpectedUsefulLifeMonths: 36,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.service.UpsertKindDefault(context.Background(), horizon.UpsertKindDefaultInput{
+		AssetKind: "laptop", Scenario: "baseline", ExpectedUsefulLifeMonths: 48, Revision: created.Revision,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.service.UpsertKindDefault(context.Background(), horizon.UpsertKindDefaultInput{
+		AssetKind: "laptop", Scenario: "baseline", ExpectedUsefulLifeMonths: 60, Revision: created.Revision,
+	}); !errors.Is(err, horizon.ErrConflict) {
+		t.Fatalf("expected stale kind-default conflict, got %v", err)
+	}
+}

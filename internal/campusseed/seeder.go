@@ -290,6 +290,15 @@ func (s *Seeder) alreadySeeded(ctx context.Context) (bool, error) {
 	if !hasCatalog || len(products.Assignments) == 0 {
 		return false, nil
 	}
+	if _, err := os.Stat(s.credentialsPath); err != nil {
+		return false, nil
+	}
+	if _, err := s.guardStore.FindAccountByUsername(ctx, s.organizationID, "it-director"); err != nil {
+		if errors.Is(err, guard.ErrNotFound) {
+			return false, nil
+		}
+		return false, fmt.Errorf("lookup campus demo guard account: %w", err)
+	}
 	return true, nil
 }
 

@@ -2455,7 +2455,7 @@ func (s *Server) getAssetRelated(w http.ResponseWriter, r *http.Request, authent
 		Installations: []stack.Installation{}, Assignments: []stack.Assignment{},
 		Licenses: []stack.License{}, Documents: []storage.Blob{},
 	}
-	if s.ledger != nil {
+	if s.ledger != nil && s.hasOrganizationGrant(authentication, guard.PermissionFinanceRead) {
 		snapshot, ledgerErr := s.ledger.Snapshot(r.Context())
 		if ledgerErr != nil {
 			writeLedgerError(w, r, ledgerErr)
@@ -2475,7 +2475,7 @@ func (s *Server) getAssetRelated(w http.ResponseWriter, r *http.Request, authent
 			}
 		}
 	}
-	if s.stack != nil {
+	if s.stack != nil && s.hasOrganizationGrant(authentication, guard.PermissionSoftwareRead) {
 		records, stackErr := s.stack.RecordsForAsset(r.Context(), asset.ID, asset.RoomID, asset.DepartmentID, asset.SiteID)
 		if stackErr != nil {
 			writeStackError(w, r, stackErr)
@@ -2485,7 +2485,7 @@ func (s *Server) getAssetRelated(w http.ResponseWriter, r *http.Request, authent
 		response.Assignments = records.Assignments
 		response.Licenses = records.Licenses
 	}
-	if s.vault != nil {
+	if s.vault != nil && s.hasOrganizationGrant(authentication, guard.PermissionStorageRead) {
 		blobs, vaultErr := s.vault.ListBlobs(r.Context())
 		if vaultErr != nil {
 			writeVaultError(w, r, vaultErr)

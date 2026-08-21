@@ -114,8 +114,19 @@ func (s *Service) Graph(ctx context.Context, query Query) (Graph, error) {
 func (s *Service) projectAtlas(ctx context.Context, builder *graphBuilder, query Query) error {
 	orgID := typedNodeID(NodeOrganization, s.organizationID)
 	modelsByNumber := map[string]string{}
+	if !wantsAny(query.Kinds, NodeAsset) && !wantsAny(query.Kinds, NodeModel) {
+		return nil
+	}
+	assets, err := s.atlas.ListGraphAssets(ctx, atlas.GraphAssetQuery{
+		LabelSearch: query.Search, Limit: query.Limit,
+		Visibility: graphAssetVisibility(query.Scope.Assets),
+		Directory:  atlasDirectoryVisibility(query.Scope.Directory),
+	})
+	if err != nil {
+		return err
+	}
 	if wantsAny(query.Kinds, NodeModel) {
-		models, err := s.atlas.ListModels(ctx, atlas.ModelQuery{Limit: boundedAtlasListLimit(MaximumLimit)})
+		models, err := s.modelsForGraph(ctx, query, assets)
 		if err != nil {
 			return err
 		}
@@ -139,17 +150,6 @@ func (s *Service) projectAtlas(ctx context.Context, builder *graphBuilder, query
 			}
 		}
 	}
-	if !wantsAny(query.Kinds, NodeAsset) && !wantsAny(query.Kinds, NodeModel) {
-		return nil
-	}
-	assets, err := s.atlas.ListGraphAssets(ctx, atlas.GraphAssetQuery{
-		LabelSearch: query.Search, Limit: query.Limit,
-		Visibility: graphAssetVisibility(query.Scope.Assets),
-		Directory:  atlasDirectoryVisibility(query.Scope.Directory),
-	})
-	if err != nil {
-		return err
-	}
 	for _, asset := range assets {
 		if asset.OrganizationID != s.organizationID {
 			continue
@@ -163,6 +163,33 @@ func (s *Service) projectAtlas(ctx context.Context, builder *graphBuilder, query
 		s.linkAsset(builder, asset, modelsByNumber)
 	}
 	return nil
+}
+
+func (s *Service) modelsForGraph(ctx context.Context, query Query, assets []domain.Asset) ([]domain.AssetModel, error) {
+	if query.Scope.Assets.All {
+		return s.atlas.ListModels(ctx, atlas.ModelQuery{Limit: boundedAtlasListLimit(MaximumLimit)})
+	}
+	seen := map[string]struct{}{}
+	models := make([]domain.AssetModel, 0)
+	for _, asset := range assets {
+		id := strings.TrimSpace(asset.ModelID)
+		if id == "" {
+			continue
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		model, err := s.atlas.GetModel(ctx, id)
+		if errors.Is(err, atlas.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		models = append(models, model)
+	}
+	return models, nil
 }
 
 func (s *Service) linkAsset(builder *graphBuilder, asset domain.Asset, modelsByNumber map[string]string) {

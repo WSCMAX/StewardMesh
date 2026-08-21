@@ -6,8 +6,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -375,6 +377,9 @@ func (s *Service) CreateAsset(ctx context.Context, input CreateAssetInput) (doma
 	if err := s.references.ValidateAssetReferences(ctx, s.organizationID, normalized.References); err != nil {
 		return domain.Asset{}, err
 	}
+	if err := s.references.ValidateIdentities(ctx, s.organizationID, normalized.AdditionalUserIDs); err != nil {
+		return domain.Asset{}, err
+	}
 	if normalized.ReplacementModelID != "" {
 		if _, err := s.validateModelLineageReference(ctx, normalized.ReplacementModelID); err != nil {
 			return domain.Asset{}, err
@@ -464,6 +469,9 @@ func (s *Service) CreateAssetsFromModel(ctx context.Context, input BulkCreateAss
 		if validateErr := s.references.ValidateAssetReferences(ctx, s.organizationID, normalized.References); validateErr != nil {
 			return BulkCreateAssetsResult{}, validateErr
 		}
+		if validateErr := s.references.ValidateIdentities(ctx, s.organizationID, normalized.AdditionalUserIDs); validateErr != nil {
+			return BulkCreateAssetsResult{}, validateErr
+		}
 		if normalized.ReplacementModelID != "" {
 		if _, validateErr := s.validateModelLineageReference(ctx, normalized.ReplacementModelID); validateErr != nil {
 				return BulkCreateAssetsResult{}, validateErr
@@ -496,6 +504,7 @@ func (s *Service) CreateAssetsFromModel(ctx context.Context, input BulkCreateAss
 			DepartmentID: normalized.DepartmentID, UserID: normalized.UserID, AdditionalUserIDs: normalized.AdditionalUserIDs, Status: normalized.Status,
 			PurchaseDate: cloneDate(normalized.PurchaseDate), LifecycleStartDate: cloneDate(normalized.LifecycleStartDate),
 			InstalledDate: cloneDate(normalized.InstalledDate), ReplacementModelID: normalized.ReplacementModelID,
+			CriticalityScore: normalized.CriticalityScore,
 			Attributes: cloneSpecifications(normalized.Attributes),
 			Components: cloneComponents(normalized.Components), UnitCostMinor: normalized.UnitCostMinor,
 			Currency: normalized.Currency, Revision: 1, CreatedAt: now, UpdatedAt: now,
@@ -572,6 +581,9 @@ func (s *Service) UpdateAsset(ctx context.Context, input UpdateAssetInput) (doma
 		return domain.Asset{}, err
 	}
 	if err := s.references.ValidateAssetReferences(ctx, s.organizationID, normalized.References); err != nil {
+		return domain.Asset{}, err
+	}
+	if err := s.references.ValidateIdentities(ctx, s.organizationID, normalized.AdditionalUserIDs); err != nil {
 		return domain.Asset{}, err
 	}
 	if normalized.ReplacementModelID != "" {
@@ -1216,10 +1228,9 @@ func validateAttributesForModel(model domain.AssetModel, attributes map[string]s
 			continue
 		}
 		if field.Kind == "number" {
-			for _, character := range value {
-				if character != '.' && (character < '0' || character > '9') {
-					return ErrInvalidInput
-				}
+			parsed, parseErr := strconv.ParseFloat(value, 64)
+			if parseErr != nil || math.IsNaN(parsed) || math.IsInf(parsed, 0) {
+				return ErrInvalidInput
 			}
 		}
 		if field.Kind == "select" {

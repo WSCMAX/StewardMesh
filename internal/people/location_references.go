@@ -233,6 +233,9 @@ func (s *Service) prepareLocationReference(ctx context.Context, input CreateLoca
 	if referenceType.Status != StatusActive {
 		return LocationReference{}, ErrInvalidInput
 	}
+	if referenceType.LocationKind != input.LocationKind {
+		return LocationReference{}, ErrInvalidInput
+	}
 	switch input.LocationKind {
 	case LocationKindSite:
 		if _, err := s.store.GetSite(ctx, s.organizationID, locationID); err != nil {

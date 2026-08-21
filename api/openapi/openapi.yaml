@@ -1,4 +1,4 @@
-# Requirements: REQ-API-001, REQ-ATLAS-001, REQ-ATLAS-MODELS-001, REQ-ATLAS-CODES-001, REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005, REQ-DIRECTORY-EXPANSION-006, REQ-DIRECTORY-EXPANSION-007, REQ-DIRECTORY-EXPANSION-008, REQ-DIRECTORY-EXPANSION-009, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-HORIZON-001, REQ-LEDGER-001, REQ-STACK-001, REQ-SIGNALS-001, REQ-REACH-001, REQ-EXCHANGE-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001, SEC-MCP-001.
+# Requirements: REQ-API-001, REQ-ATLAS-001, REQ-ATLAS-MODELS-001, REQ-ATLAS-CODES-001, REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005, REQ-DIRECTORY-EXPANSION-006, REQ-DIRECTORY-EXPANSION-007, REQ-DIRECTORY-EXPANSION-008, REQ-DIRECTORY-EXPANSION-009, REQ-PATTERNS-001, REQ-THREADS-001, REQ-LABELS-001, REQ-STORAGE-001, REQ-HORIZON-001, REQ-LEDGER-001, REQ-STACK-001, REQ-SIGNALS-001, REQ-REACH-001, REQ-EXCHANGE-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001, SEC-MCP-001.
 # Feature: experience.help.
 openapi: 3.1.0
 info:
@@ -2393,6 +2393,233 @@ paths:
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
         '423': {$ref: '#/components/responses/Locked'}
+  /api/v1/labels/definitions:
+    get:
+      summary: List label definitions
+      operationId: listLabelDefinitions
+      tags: [Labels]
+      x-requirement: REQ-LABELS-001
+      description: Requires labels.read. Returns organization-scoped configurable tags.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200':
+          description: Label definition collection
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/LabelDefinitionCollection'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+    post:
+      summary: Create a label definition
+      operationId: createLabelDefinition
+      tags: [Labels]
+      x-requirement: REQ-LABELS-001
+      description: Requires labels.write.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateLabelDefinitionRequest'}
+      responses:
+        '201':
+          description: Label definition created
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/LabelDefinition'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '423': {$ref: '#/components/responses/Locked'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+  /api/v1/labels/definitions/{definitionID}:
+    parameters:
+      - $ref: '#/components/parameters/LabelDefinitionID'
+    get:
+      summary: Get a label definition
+      operationId: getLabelDefinition
+      tags: [Labels]
+      x-requirement: REQ-LABELS-001
+      description: Requires labels.read.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200':
+          description: Label definition
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/LabelDefinition'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+    put:
+      summary: Update a label definition
+      operationId: updateLabelDefinition
+      tags: [Labels]
+      x-requirement: REQ-LABELS-001
+      description: Requires labels.write. Duplicate names return 409. Omitting parentId or goalId clears hierarchy.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/UpdateLabelDefinitionRequest'}
+      responses:
+        '200':
+          description: Label definition updated
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/LabelDefinition'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '423': {$ref: '#/components/responses/Locked'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+    delete:
+      summary: Delete a label definition
+      operationId: deleteLabelDefinition
+      tags: [Labels]
+      x-requirement: REQ-LABELS-001
+      description: Requires labels.write. confirm must be true. Child definitions require an explicit delete mode.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/DeleteLabelDefinitionRequest'}
+      responses:
+        '204': {description: Label definition deleted}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '423': {$ref: '#/components/responses/Locked'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+  /api/v1/labels/definitions/{definitionID}/delete-preview:
+    parameters:
+      - $ref: '#/components/parameters/LabelDefinitionID'
+    get:
+      summary: Preview deleting a label definition
+      operationId: previewDeleteLabelDefinition
+      tags: [Labels]
+      x-requirement: REQ-LABELS-001
+      description: Requires labels.read. Shows child definitions and assignments that each delete mode would remove.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200':
+          description: Delete impact preview
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/LabelDefinitionDeletePreview'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+  /api/v1/labels/definitions/{definitionID}/assignments:
+    parameters:
+      - $ref: '#/components/parameters/LabelDefinitionID'
+    get:
+      summary: List assignments for a label definition
+      operationId: listLabelDefinitionAssignments
+      tags: [Labels]
+      x-requirement: REQ-LABELS-001
+      description: Requires labels.read.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - {in: query, name: recordType, schema: {$ref: '#/components/schemas/LabelRecordType'}}
+      responses:
+        '200':
+          description: Label assignment collection
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/LabelAssignmentCollection'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+  /api/v1/labels/records/{recordType}/{recordID}/assignments:
+    parameters:
+      - $ref: '#/components/parameters/LabelRecordTypeParam'
+      - $ref: '#/components/parameters/LabelRecordID'
+    get:
+      summary: List label assignments on a record
+      operationId: listLabelAssignments
+      tags: [Labels]
+      x-requirement: REQ-LABELS-001
+      description: Requires labels.read.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200':
+          description: Label assignment collection
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/LabelAssignmentCollection'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+  /api/v1/labels/records/{recordType}/{recordID}/assignments/{definitionID}:
+    parameters:
+      - $ref: '#/components/parameters/LabelRecordTypeParam'
+      - $ref: '#/components/parameters/LabelRecordID'
+      - $ref: '#/components/parameters/LabelDefinitionID'
+    put:
+      summary: Set a label assignment
+      operationId: setLabelAssignment
+      tags: [Labels]
+      x-requirement: REQ-LABELS-001
+      description: Requires labels.write. Uses optimistic revision control.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/SetLabelAssignmentRequest'}
+      responses:
+        '200':
+          description: Label assignment stored
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/LabelAssignment'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '423': {$ref: '#/components/responses/Locked'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+    delete:
+      summary: Delete a label assignment
+      operationId: deleteLabelAssignment
+      tags: [Labels]
+      x-requirement: REQ-LABELS-001
+      description: Requires labels.write.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+        - {in: query, name: revision, required: true, schema: {type: integer, minimum: 1}}
+      responses:
+        '204': {description: Label assignment deleted}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '423': {$ref: '#/components/responses/Locked'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
   /api/v1/goals:
     get:
       summary: List goals
@@ -4085,6 +4312,21 @@ components:
     TagID:
       in: path
       name: tagId
+      required: true
+      schema: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+    LabelDefinitionID:
+      in: path
+      name: definitionID
+      required: true
+      schema: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+    LabelRecordTypeParam:
+      in: path
+      name: recordType
+      required: true
+      schema: {$ref: '#/components/schemas/LabelRecordType'}
+    LabelRecordID:
+      in: path
+      name: recordID
       required: true
       schema: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
     GoalID:
@@ -7402,6 +7644,137 @@ components:
         delivered: {type: integer, minimum: 0, maximum: 500}
         retrying: {type: integer, minimum: 0, maximum: 500}
         failed: {type: integer, minimum: 0, maximum: 500}
+    LabelRecordType:
+      type: string
+      pattern: '^[a-z][a-z0-9]*(\.[a-z][a-z0-9-]*)+$'
+      maxLength: 128
+    LabelValueKind:
+      type: string
+      enum: [flag, text, select, multiselect]
+    LabelDefinitionStatus:
+      type: string
+      enum: [active, retired]
+    LabelDefinition:
+      type: object
+      additionalProperties: false
+      required: [id, organizationId, name, valueKind, applicableRecordTypes, status, revision, createdAt, updatedAt]
+      properties:
+        id: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        organizationId: {type: string, minLength: 1, maxLength: 128}
+        name: {type: string, minLength: 1, maxLength: 100}
+        description: {type: string, maxLength: 2000}
+        valueKind: {$ref: '#/components/schemas/LabelValueKind'}
+        applicableRecordTypes: {type: array, minItems: 1, maxItems: 32, items: {$ref: '#/components/schemas/LabelRecordType'}}
+        options: {type: array, maxItems: 200, items: {type: string, minLength: 1, maxLength: 120}}
+        parentId: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        goalId: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        status: {$ref: '#/components/schemas/LabelDefinitionStatus'}
+        revision: {type: integer, minimum: 1}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    CreateLabelDefinitionRequest:
+      type: object
+      additionalProperties: false
+      required: [name, valueKind, applicableRecordTypes]
+      properties:
+        id: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        name: {type: string, minLength: 1, maxLength: 100}
+        description: {type: string, maxLength: 2000}
+        valueKind: {$ref: '#/components/schemas/LabelValueKind'}
+        applicableRecordTypes: {type: array, minItems: 1, maxItems: 32, items: {$ref: '#/components/schemas/LabelRecordType'}}
+        options: {type: array, maxItems: 200, items: {type: string, minLength: 1, maxLength: 120}}
+        parentId: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        goalId: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+    UpdateLabelDefinitionRequest:
+      type: object
+      additionalProperties: false
+      required: [name, valueKind, applicableRecordTypes, status, revision]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 100}
+        description: {type: string, maxLength: 2000}
+        valueKind: {$ref: '#/components/schemas/LabelValueKind'}
+        applicableRecordTypes: {type: array, minItems: 1, maxItems: 32, items: {$ref: '#/components/schemas/LabelRecordType'}}
+        options: {type: array, maxItems: 200, items: {type: string, minLength: 1, maxLength: 120}}
+        parentId: {type: string, maxLength: 128}
+        goalId: {type: string, maxLength: 128}
+        status: {$ref: '#/components/schemas/LabelDefinitionStatus'}
+        revision: {type: integer, minimum: 1}
+    DeleteLabelDefinitionRequest:
+      type: object
+      additionalProperties: false
+      required: [revision, confirm]
+      properties:
+        revision: {type: integer, minimum: 1}
+        confirm: {type: boolean}
+        mode: {type: string, enum: [strict, orphan_children, cascade_children]}
+    LabelDefinitionRef:
+      type: object
+      additionalProperties: false
+      required: [id, name]
+      properties:
+        id: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        name: {type: string, minLength: 1, maxLength: 100}
+    LabelAffectedAssignment:
+      type: object
+      additionalProperties: false
+      required: [definitionId, definitionName, recordType, recordId]
+      properties:
+        definitionId: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        definitionName: {type: string, minLength: 1, maxLength: 100}
+        recordType: {$ref: '#/components/schemas/LabelRecordType'}
+        recordId: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+    LabelDefinitionDeleteImpact:
+      type: object
+      additionalProperties: false
+      required: [definitionsRemoved, assignmentsRemoved]
+      properties:
+        definitionsRemoved: {type: array, items: {$ref: '#/components/schemas/LabelDefinitionRef'}}
+        assignmentsRemoved: {type: array, items: {$ref: '#/components/schemas/LabelAffectedAssignment'}}
+    LabelDefinitionDeletePreview:
+      type: object
+      additionalProperties: false
+      required: [definition, childDefinitions, hasChildren, orphanChildrenOption, cascadeChildrenOption]
+      properties:
+        definition: {$ref: '#/components/schemas/LabelDefinitionRef'}
+        childDefinitions: {type: array, items: {$ref: '#/components/schemas/LabelDefinitionRef'}}
+        hasChildren: {type: boolean}
+        orphanChildrenOption: {$ref: '#/components/schemas/LabelDefinitionDeleteImpact'}
+        cascadeChildrenOption: {$ref: '#/components/schemas/LabelDefinitionDeleteImpact'}
+    LabelDefinitionCollection:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/LabelDefinition'}}
+    LabelAssignment:
+      type: object
+      additionalProperties: false
+      required: [organizationId, definitionId, recordType, recordId, revision, updatedBy, createdAt, updatedAt]
+      properties:
+        organizationId: {type: string, minLength: 1, maxLength: 128}
+        definitionId: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        recordType: {$ref: '#/components/schemas/LabelRecordType'}
+        recordId: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        valueText: {type: string, maxLength: 2000}
+        values: {type: array, maxItems: 200, items: {type: string, minLength: 1, maxLength: 120}}
+        revision: {type: integer, minimum: 1}
+        updatedBy: {type: string, minLength: 1, maxLength: 128}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    LabelAssignmentCollection:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/LabelAssignment'}}
+    SetLabelAssignmentRequest:
+      type: object
+      additionalProperties: false
+      required: [revision]
+      properties:
+        valueText: {type: string, maxLength: 2000}
+        values: {type: array, maxItems: 200, items: {type: string, minLength: 1, maxLength: 120}}
+        revision: {type: integer, minimum: 0}
     Tag:
       type: object
       additionalProperties: false

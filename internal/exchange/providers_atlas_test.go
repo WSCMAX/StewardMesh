@@ -24,6 +24,7 @@ type allowAtlasReferences struct{}
 func (allowAtlasReferences) ValidateAssetReferences(context.Context, string, atlas.References) error {
 	return nil
 }
+func (allowAtlasReferences) ValidateIdentities(context.Context, string, []string) error { return nil }
 
 func TestAtlasProvidersRoundTripLosslessStateAndIdentifierHistory(t *testing.T) {
 	ctx := foundation.WithScope(context.Background(), foundation.Scope{

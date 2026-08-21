@@ -116,6 +116,9 @@ func (i *exchangeImporter) ImportAsset(ctx context.Context, operation ExchangeIm
 	}); err != nil {
 		return ExchangeImportResult{}, err
 	}
+	if err := i.service.references.ValidateIdentities(ctx, i.service.organizationID, candidate.AdditionalUserIDs); err != nil {
+		return ExchangeImportResult{}, err
+	}
 	if existing, readErr := i.service.store.GetAsset(ctx, i.service.organizationID, candidate.ID); readErr == nil {
 		if !sameExchangeAsset(existing, candidate) {
 			return ExchangeImportResult{}, ErrConflict

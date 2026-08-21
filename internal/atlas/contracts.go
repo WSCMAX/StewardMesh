@@ -387,4 +387,5 @@ type Store interface {
 
 type ReferenceValidator interface {
 	ValidateAssetReferences(ctx context.Context, organizationID string, references References) error
+	ValidateIdentities(ctx context.Context, organizationID string, identityIDs []string) error
 }

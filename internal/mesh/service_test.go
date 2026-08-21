@@ -44,6 +44,14 @@ type fakeAtlas struct {
 func (f fakeAtlas) ListModels(context.Context, atlas.ModelQuery) ([]domain.AssetModel, error) {
 	return f.models, nil
 }
+func (f fakeAtlas) GetModel(_ context.Context, id string) (domain.AssetModel, error) {
+	for _, model := range f.models {
+		if model.ID == id {
+			return model, nil
+		}
+	}
+	return domain.AssetModel{}, atlas.ErrNotFound
+}
 func (f fakeAtlas) ListGraphAssets(context.Context, atlas.GraphAssetQuery) ([]domain.Asset, error) {
 	return f.assets, nil
 }
@@ -383,5 +391,31 @@ func TestEndedAssignmentsAndRemovedInstallationsAreOmitted(t *testing.T) {
 		if strings.Contains(key, "installed_on") || strings.HasPrefix(key, "license:lic|assigned_to") {
 			t.Fatalf("inactive stack relationship leaked: %s", key)
 		}
+	}
+}
+
+func TestGraphOmitsModelsOutsideAssetScope(t *testing.T) {
+	t.Parallel()
+	service := testService(t, Dependencies{
+		Atlas: fakeAtlas{
+			models: []domain.AssetModel{
+				{ID: "visible-model", OrganizationID: "example-org", Name: "Visible", Kind: "laptop", Status: "active"},
+				{ID: "secret-model", OrganizationID: "example-org", Name: "Secret", Kind: "laptop", Status: "active"},
+			},
+			assets: []domain.Asset{
+				{ID: "laptop", OrganizationID: "example-org", Name: "Laptop", Kind: "laptop", Status: "active", ModelID: "visible-model", SiteID: "site-1"},
+			},
+		},
+	})
+	graph, err := service.Graph(context.Background(), Query{
+		Kinds: []NodeKind{NodeModel}, Limit: 50,
+		Scope: Scope{Assets: directoryexpansion.AssetVisibility{SiteIDs: []string{"site-1"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := nodeIDs(graph)
+	if !ids["model:visible-model"] || ids["model:secret-model"] {
+		t.Fatalf("scoped model graph leaked or dropped models: %#v", ids)
 	}
 }

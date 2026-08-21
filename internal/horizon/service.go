@@ -340,8 +340,8 @@ func (s *Service) ListPlanHistory(ctx context.Context, planID string) ([]PlanVer
 			versions[index].DerivedReplacementDate = cloneDate(versions[index].ReplacementDate)
 			continue
 		}
-		if asset.PurchaseDate != nil {
-			date := addCalendarMonths(*asset.PurchaseDate, versions[index].ExpectedUsefulLifeMonths)
+		if anchor := LifecycleAnchor(asset); anchor != nil {
+			date := addCalendarMonths(*anchor, versions[index].ExpectedUsefulLifeMonths)
 			versions[index].DerivedReplacementDate = &date
 		}
 	}

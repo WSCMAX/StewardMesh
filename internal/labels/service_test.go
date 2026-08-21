@@ -3,6 +3,7 @@ package labels
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 
@@ -114,6 +115,33 @@ func TestDeleteDefinitionCascadeRemovesChildrenAndAssignments(t *testing.T) {
 	}
 }
 
+func TestUpdateDefinitionRejectsDuplicateName(t *testing.T) {
+	store := newTestLabelsStore()
+	service, err := NewService(store, noopRecordValidator{}, foundation.NopAuditor{}, ServiceConfig{OrganizationID: "org-one"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	first, err := service.CreateDefinition(ctx, CreateDefinitionInput{
+		Name: "Campus", ValueKind: ValueFlag, ApplicableRecordTypes: []string{"atlas.asset"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := service.CreateDefinition(ctx, CreateDefinitionInput{
+		Name: "Lab", ValueKind: ValueFlag, ApplicableRecordTypes: []string{"atlas.asset"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.UpdateDefinition(ctx, UpdateDefinitionInput{
+		ID: second.ID, Name: first.Name, ValueKind: second.ValueKind,
+		ApplicableRecordTypes: second.ApplicableRecordTypes, Status: second.Status, Revision: second.Revision,
+	}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("expected duplicate rename conflict, got %v", err)
+	}
+}
+
 type noopRecordValidator struct{}
 
 func (noopRecordValidator) ValidateRecord(context.Context, string, string, string) error { return nil }
@@ -167,6 +195,14 @@ func (s *testLabelsStore) CreateDefinition(ctx context.Context, definition Defin
 	if s.definitions[definition.OrganizationID] == nil {
 		s.definitions[definition.OrganizationID] = map[string]Definition{}
 	}
+	for _, item := range s.definitions[definition.OrganizationID] {
+		if strings.EqualFold(item.Name, definition.Name) {
+			return Definition{}, ErrConflict
+		}
+	}
+	if _, exists := s.definitions[definition.OrganizationID][definition.ID]; exists {
+		return Definition{}, ErrConflict
+	}
 	s.definitions[definition.OrganizationID][definition.ID] = definition
 	return definition, nil
 }
@@ -181,6 +217,11 @@ func (s *testLabelsStore) UpdateDefinition(ctx context.Context, definition Defin
 	}
 	if existing.Revision != expectedRevision {
 		return Definition{}, ErrConflict
+	}
+	for id, item := range s.definitions[definition.OrganizationID] {
+		if id != definition.ID && strings.EqualFold(item.Name, definition.Name) {
+			return Definition{}, ErrConflict
+		}
 	}
 	s.definitions[definition.OrganizationID][definition.ID] = definition
 	return definition, nil

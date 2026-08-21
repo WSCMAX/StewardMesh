@@ -25,6 +25,7 @@ type bridgeExchangeReferences struct{}
 func (bridgeExchangeReferences) ValidateAssetReferences(context.Context, string, atlas.References) error {
 	return nil
 }
+func (bridgeExchangeReferences) ValidateIdentities(context.Context, string, []string) error { return nil }
 
 type bridgeExchangeAssets struct{ service *atlas.Service }
 

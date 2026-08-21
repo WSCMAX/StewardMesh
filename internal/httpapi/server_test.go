@@ -70,6 +70,7 @@ type allowHTTPAssetReferences struct{}
 func (allowHTTPAssetReferences) ValidateAssetReferences(context.Context, string, atlas.References) error {
 	return nil
 }
+func (allowHTTPAssetReferences) ValidateIdentities(context.Context, string, []string) error { return nil }
 
 type allowHTTPLabelRecords struct{}
 

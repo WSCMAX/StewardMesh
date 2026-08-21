@@ -1,4 +1,4 @@
-import { encodeTSV, type GridColumn, type GridColumnKind } from './columns'
+import { type GridColumn, type GridColumnKind } from './columns'
 
 // Requirements: REQ-WORKSPACE-001, REQ-ATLAS-001, REQ-STACK-001, A11Y-001. Feature: experience.grid.
 
@@ -42,10 +42,16 @@ export function sheetFromGrid<T>(options: {
 }
 
 export function csvFromSheet(sheet: ExportSheet) {
-  return encodeTSV([
+  const rows = [
     sheet.columns.map((column) => formulaSafeText(column.header)),
     ...sheet.rows.map((row) => row.map(formulaSafeText)),
-  ]).replaceAll('\t', ',')
+  ]
+  return rows.map((row) => row.map(encodeCSVCell).join(',')).join('\n')
+}
+
+function encodeCSVCell(value: string) {
+  if (!/[\t\n\r",]/.test(value)) return value
+  return `"${value.replaceAll('"', '""')}"`
 }
 
 export function jsonFromSheet(sheet: ExportSheet) {

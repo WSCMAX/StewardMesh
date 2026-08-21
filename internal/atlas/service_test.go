@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/maxlemke/stewardmesh/internal/atlas"
+	"github.com/maxlemke/stewardmesh/internal/domain"
 	"github.com/maxlemke/stewardmesh/internal/foundation"
 	"github.com/maxlemke/stewardmesh/internal/repository"
 )
@@ -20,6 +21,13 @@ type testReferenceValidator struct {
 }
 
 func (v testReferenceValidator) ValidateAssetReferences(context.Context, string, atlas.References) error {
+	if v.reject {
+		return atlas.ErrReferenceMissing
+	}
+	return nil
+}
+
+func (v testReferenceValidator) ValidateIdentities(context.Context, string, []string) error {
 	if v.reject {
 		return atlas.ErrReferenceMissing
 	}
@@ -202,6 +210,7 @@ func TestServiceResolvesModelsAndAtomicallyCreatesBulkInstances(t *testing.T) {
 	}
 	model, err := service.CreateModel(context.Background(), atlas.CreateModelInput{
 		ID: "model-bulk", Manufacturer: "Framework", Name: "Laptop 13", ModelNumber: "FW13", Kind: "laptop",
+		CriticalityScore: 4,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -222,7 +231,8 @@ func TestServiceResolvesModelsAndAtomicallyCreatesBulkInstances(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Items) != 2 || result.Items[0].ModelID != model.ID || result.Items[0].Kind != "laptop" || result.Items[1].Status != "draft" {
+	if len(result.Items) != 2 || result.Items[0].ModelID != model.ID || result.Items[0].Kind != "laptop" || result.Items[1].Status != "draft" ||
+		result.Items[0].CriticalityScore != 4 || result.Items[1].CriticalityScore != 4 {
 		t.Fatalf("unexpected bulk result %#v", result)
 	}
 	loadedModel, err := service.GetModel(context.Background(), model.ID)
@@ -474,5 +484,34 @@ func TestUpdateAssetIgnoresLifecycleNoteWhenStatusUnchanged(t *testing.T) {
 	}
 	if updated.InstalledDate == nil || !updated.InstalledDate.Equal(installed) {
 		t.Fatalf("installed date not persisted: %#v", updated.InstalledDate)
+	}
+}
+
+func TestServiceRejectsNonNumericTemplateAttributes(t *testing.T) {
+	service, err := atlas.NewService(repository.NewMemoryAtlasStore(), testReferenceValidator{}, foundation.NopAuditor{}, atlas.ServiceConfig{
+		OrganizationID: "example-org",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model, err := service.CreateModel(context.Background(), atlas.CreateModelInput{
+		ID: "model-numeric", Manufacturer: "Framework", Name: "Laptop 13", Kind: "laptop",
+		TemplateFields: []domain.AssetTemplateField{{Key: "watts", Label: "Watts", Kind: "number"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.CreateAsset(context.Background(), atlas.CreateAssetInput{
+		ID: "asset-bad-number", Name: "Bad watts", Kind: "laptop", Status: "active", ModelID: model.ID,
+		Attributes: map[string]string{"watts": "1.2.3"},
+	}); !errors.Is(err, atlas.ErrInvalidInput) {
+		t.Fatalf("expected invalid dotted number, got %v", err)
+	}
+	created, err := service.CreateAsset(context.Background(), atlas.CreateAssetInput{
+		ID: "asset-good-number", Name: "Good watts", Kind: "laptop", Status: "active", ModelID: model.ID,
+		Attributes: map[string]string{"watts": "-12.5e1"},
+	})
+	if err != nil || created.Attributes["watts"] != "-12.5e1" {
+		t.Fatalf("expected finite numeric attribute, got %#v err=%v", created, err)
 	}
 }

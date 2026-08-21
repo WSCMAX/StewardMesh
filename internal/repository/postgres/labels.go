@@ -122,6 +122,9 @@ func (s *LabelsStore) UpdateDefinition(ctx context.Context, definition labels.De
 	if errors.Is(err, sql.ErrNoRows) {
 		return labels.Definition{}, labels.ErrConflict
 	}
+	if isUniqueViolation(err) {
+		return labels.Definition{}, labels.ErrConflict
+	}
 	return updated, err
 }
 

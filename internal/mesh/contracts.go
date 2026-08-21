@@ -133,6 +133,7 @@ type DirectoryGraph interface {
 
 type AtlasReader interface {
 	ListModels(context.Context, atlas.ModelQuery) ([]domain.AssetModel, error)
+	GetModel(context.Context, string) (domain.AssetModel, error)
 	ListGraphAssets(context.Context, atlas.GraphAssetQuery) ([]domain.Asset, error)
 }
 

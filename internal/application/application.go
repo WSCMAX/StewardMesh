@@ -1262,6 +1262,22 @@ func (v peopleAssetReferenceValidator) ValidateAssetReferences(ctx context.Conte
 	return nil
 }
 
+func (v peopleAssetReferenceValidator) ValidateIdentities(ctx context.Context, organizationID string, identityIDs []string) error {
+	if v.store == nil {
+		return errors.New("people store is required")
+	}
+	for _, id := range identityIDs {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, err := v.store.GetIdentity(ctx, organizationID, id); err != nil {
+			return mapAtlasReferenceError("identity", err)
+		}
+	}
+	return nil
+}
+
 func mapAtlasReferenceError(kind string, err error) error {
 	if errors.Is(err, people.ErrNotFound) || errors.Is(err, people.ErrReferenceMissing) {
 		return fmt.Errorf("%s: %w", kind, atlas.ErrReferenceMissing)

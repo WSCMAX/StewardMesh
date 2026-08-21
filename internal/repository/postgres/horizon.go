@@ -196,9 +196,13 @@ func (s *HorizonStore) UpsertKindDefault(ctx context.Context, item horizon.KindD
 			replacement_model_id = EXCLUDED.replacement_model_id,
 			revision = horizon_kind_defaults.revision + 1,
 			updated_at = EXCLUDED.updated_at
+		WHERE horizon_kind_defaults.revision = EXCLUDED.revision
 		RETURNING `+horizonKindDefaultColumns,
 		item.OrganizationID, item.AssetKind, item.Scenario, item.ExpectedUsefulLifeMonths, item.ReplacementModelID,
 		item.Revision, item.CreatedAt, item.UpdatedAt))
+	if errors.Is(err, sql.ErrNoRows) {
+		return horizon.KindDefault{}, horizon.ErrConflict
+	}
 	if err != nil {
 		return horizon.KindDefault{}, translateHorizonWriteError("upsert Horizon kind default", err)
 	}

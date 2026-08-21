@@ -89,6 +89,11 @@ func (s *MemoryLabelsStore) UpdateDefinition(ctx context.Context, definition lab
 	if existing.Revision != expectedRevision {
 		return labels.Definition{}, labels.ErrConflict
 	}
+	for id, item := range s.definitions[definition.OrganizationID] {
+		if id != definition.ID && strings.EqualFold(item.Name, definition.Name) {
+			return labels.Definition{}, labels.ErrConflict
+		}
+	}
 	s.definitions[definition.OrganizationID][definition.ID] = definition
 	return definition, nil
 }

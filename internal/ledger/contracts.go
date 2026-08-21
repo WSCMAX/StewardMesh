@@ -34,20 +34,33 @@ type Vendor struct {
 	UpdatedAt      time.Time `json:"updatedAt"`
 }
 
+type PurchaseOrderLine struct {
+	ID            string `json:"id,omitempty"`
+	Description   string `json:"description"`
+	Kind          string `json:"kind"`
+	AssetID       string `json:"assetId,omitempty"`
+	ModelID       string `json:"modelId,omitempty"`
+	LicenseID     string `json:"licenseId,omitempty"`
+	Quantity      int64  `json:"quantity"`
+	UnitCostMinor int64  `json:"unitCostMinor"`
+	AmountMinor   int64  `json:"amountMinor"`
+}
+
 type PurchaseOrder struct {
-	ID                 string     `json:"id"`
-	OrganizationID     string     `json:"organizationId"`
-	Number             string     `json:"number"`
-	VendorID           string     `json:"vendorId"`
-	Status             string     `json:"status"`
-	Currency           string     `json:"currency"`
-	TotalMinor         int64      `json:"totalMinor"`
-	OrderedOn          *time.Time `json:"orderedOn,omitempty"`
-	AssetIDs           []string   `json:"assetIds"`
-	ReceiptDocumentIDs []string   `json:"receiptDocumentIds"`
-	Revision           int64      `json:"revision"`
-	CreatedAt          time.Time  `json:"createdAt"`
-	UpdatedAt          time.Time  `json:"updatedAt"`
+	ID                 string             `json:"id"`
+	OrganizationID     string             `json:"organizationId"`
+	Number             string             `json:"number"`
+	VendorID           string             `json:"vendorId"`
+	Status             string             `json:"status"`
+	Currency           string             `json:"currency"`
+	TotalMinor         int64              `json:"totalMinor"`
+	OrderedOn          *time.Time         `json:"orderedOn,omitempty"`
+	AssetIDs           []string           `json:"assetIds"`
+	ReceiptDocumentIDs []string           `json:"receiptDocumentIds"`
+	Lines              []PurchaseOrderLine `json:"lines,omitempty"`
+	Revision           int64              `json:"revision"`
+	CreatedAt          time.Time          `json:"createdAt"`
+	UpdatedAt          time.Time          `json:"updatedAt"`
 }
 
 type Contract struct {
@@ -160,8 +173,9 @@ type CreatePurchaseOrderInput struct {
 	Currency           string     `json:"currency"`
 	TotalMinor         int64      `json:"totalMinor"`
 	OrderedOn          *time.Time `json:"orderedOn,omitempty"`
-	AssetIDs           []string   `json:"assetIds,omitempty"`
-	ReceiptDocumentIDs []string   `json:"receiptDocumentIds,omitempty"`
+	AssetIDs           []string            `json:"assetIds,omitempty"`
+	ReceiptDocumentIDs []string            `json:"receiptDocumentIds,omitempty"`
+	Lines              []PurchaseOrderLine `json:"lines,omitempty"`
 }
 
 type UpdatePurchaseOrderStatusInput struct {

@@ -26,6 +26,7 @@ var portableRecordTypes = []string{
 	"atlas.catalog-configuration", "atlas.catalog-price", "atlas.catalog-upgrade-path",
 	"people.site", "people.building", "people.room", "people.department", "people.identity", "people.assignment",
 	"threads.tag", "threads.goal", "threads.tag-rule", "threads.goal-link",
+	"labels.definition", "labels.assignment",
 	"vault.blob",
 	"ledger.vendor", "ledger.purchase-order", "ledger.contract", "ledger.commitment", "ledger.budget", "ledger.cost",
 	"horizon.plan",

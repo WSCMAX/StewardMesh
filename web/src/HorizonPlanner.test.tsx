@@ -68,10 +68,65 @@ function response(value: unknown, status = 200) {
   return new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } })
 }
 
+function ancillaryFetch(path: string) {
+  if (path.startsWith('/api/v1/horizon/kind-defaults')) return response({ items: [] })
+  if (path.startsWith('/api/v1/asset-models')) return response({ items: [] })
+  return null
+}
+
+const labAssetOne: Asset = {
+  ...asset,
+  id: 'lab-asset-1',
+  name: 'Architecture Design Lab Station 001',
+  roomId: 'room-lab-1',
+  deploymentNotes: 'Adobe Creative Cloud lab',
+}
+
+const labAssetTwo: Asset = {
+  ...asset,
+  id: 'lab-asset-2',
+  name: 'Architecture Design Lab Station 002',
+  roomId: 'room-lab-1',
+  deploymentNotes: 'Adobe Creative Cloud lab',
+}
+
+const groupAssets = {
+  scenario: 'baseline',
+  groupKey: 'FY2032',
+  label: 'FY2032',
+  groupBy: 'fiscal_year',
+  currency: 'USD',
+  items: [{
+    planId: plan.id,
+    assetId: asset.id,
+    assetName: asset.name,
+    lifecycleStage: plan.lifecycleStage,
+    expectedUsefulLifeMonths: plan.expectedUsefulLifeMonths,
+    derivedReplacementDate: plan.derivedReplacementDate,
+    fiscalYear: 2032,
+    replacementCostMinor: plan.replacementCostMinor,
+    currency: plan.currency,
+    revision: plan.revision,
+  }],
+}
+
+const groupAssetsMulti = {
+  ...groupAssets,
+  items: [
+    { ...groupAssets.items[0], planId: 'plan-1', assetId: labAssetOne.id, assetName: labAssetOne.name },
+    { ...groupAssets.items[0], planId: 'plan-2', assetId: labAssetTwo.id, assetName: labAssetTwo.name, replacementCostMinor: 250000 },
+  ],
+}
+
 function initialFetch(plans = [plan]) {
-  return vi.fn(async (input: RequestInfo | URL) => String(input).startsWith('/api/v1/horizon/forecast')
-    ? response(forecast)
-    : response({ items: plans }))
+  return vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input)
+    const ancillary = ancillaryFetch(url)
+    if (ancillary) return ancillary
+    if (url.startsWith('/api/v1/horizon/forecast/assets')) return response(groupAssets)
+    if (url.startsWith('/api/v1/horizon/forecast')) return response(forecast)
+    return response({ items: plans })
+  })
 }
 
 beforeEach(() => {
@@ -134,6 +189,8 @@ test('creates an exact-minor-unit plan with the in-memory CSRF token', async () 
   const created = { ...plan, replacementDate: '2032-06-30', derivedReplacementDate: undefined, expectedUsefulLifeMonths: 72, lifecycleStage: 'approved', replacementCostMinor: 123456 }
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input)
+    const ancillary = ancillaryFetch(path)
+    if (ancillary) return ancillary
     if (path === '/api/v1/horizon/plans' && init?.method === 'POST') return response(created, 201)
     if (path.startsWith('/api/v1/horizon/forecast')) return response(forecast)
     if (path === '/api/v1/horizon/plans?scenario=baseline') return response({ items: [] })
@@ -180,6 +237,8 @@ test('updates a plan with its revision and discloses immutable history', async (
   const updated = { ...plan, expectedUsefulLifeMonths: 84, revision: 2 }
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input)
+    const ancillary = ancillaryFetch(path)
+    if (ancillary) return ancillary
     if (path === '/api/v1/horizon/plans/plan-1' && init?.method === 'PUT') return response(updated)
     if (path === '/api/v1/horizon/plans/plan-1/history') return response({ items: history })
     if (path.startsWith('/api/v1/horizon/forecast')) return response(forecast)
@@ -210,9 +269,14 @@ test('updates a plan with its revision and discloses immutable history', async (
 
 test('refreshes grouped scenarios and warns that tag rows are non-additive', async () => {
   const tagForecast = { ...forecast, groupBy: 'tag', scenarios: ['baseline', 'optimistic'], groups: [{ ...forecast.groups[0], key: 'critical', label: 'Critical systems' }] }
-  const fetchMock = vi.fn(async (input: RequestInfo | URL) => String(input).includes('groupBy=tag')
-    ? response(tagForecast)
-    : String(input).startsWith('/api/v1/horizon/forecast') ? response(forecast) : response({ items: [plan] }))
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const path = String(input)
+    const ancillary = ancillaryFetch(path)
+    if (ancillary) return ancillary
+    if (path.includes('groupBy=tag')) return response(tagForecast)
+    if (path.startsWith('/api/v1/horizon/forecast')) return response(forecast)
+    return response({ items: [plan] })
+  })
   vi.stubGlobal('fetch', fetchMock)
   render(<HorizonPlanner assets={[asset]} csrfToken="csrf-token" permissions={['planning.read']} />)
   await screen.findByText('Core server')
@@ -223,4 +287,42 @@ test('refreshes grouped scenarios and warns that tag rows are non-additive', asy
   expect(await screen.findByText(/Non-additive grouping/)).toBeInTheDocument()
   expect(screen.getAllByText('Critical systems').length).toBeGreaterThan(0)
   await waitFor(() => expect(fetchMock.mock.calls.some(([path]) => String(path).includes('scenarios=baseline%2Coptimistic') && String(path).includes('groupBy=tag'))).toBe(true))
+})
+
+test('groups forecast assets by deployment and supports per-group Atlas view', async () => {
+  const onOpenAtlasInventory = vi.fn()
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input)
+    const ancillary = ancillaryFetch(url)
+    if (ancillary) return ancillary
+    if (url.startsWith('/api/v1/horizon/forecast/assets')) return response(groupAssetsMulti)
+    if (url.startsWith('/api/v1/horizon/forecast')) return response(forecast)
+    return response({ items: [plan] })
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  render(<HorizonPlanner assets={[labAssetOne, labAssetTwo]} csrfToken="csrf-token" onOpenAtlasInventory={onOpenAtlasInventory} permissions={['planning.read', 'planning.write', 'assets.read']} />)
+  await screen.findByRole('button', { name: 'FY2032' })
+
+  fireEvent.click(screen.getByRole('button', { name: 'FY2032' }))
+  expect(await screen.findByText('Architecture Design Lab')).toBeInTheDocument()
+  fireEvent.click(screen.getAllByRole('button', { name: 'View in Atlas' })[1])
+  expect(onOpenAtlasInventory).toHaveBeenCalledWith(['lab-asset-1', 'lab-asset-2'], 'FY2032 · Architecture Design Lab', 1)
+})
+
+test('opens a forecast group drawer with assets in the refresh cycle', async () => {
+  const onOpenAtlasInventory = vi.fn()
+  vi.stubGlobal('fetch', initialFetch())
+  render(<HorizonPlanner assets={[asset]} csrfToken="csrf-token" onOpenAtlasInventory={onOpenAtlasInventory} permissions={['planning.read', 'planning.write', 'assets.read']} />)
+  await screen.findByText('Core server')
+
+  fireEvent.click(screen.getByRole('button', { name: 'FY2032' }))
+
+  expect(await screen.findByRole('dialog')).toBeInTheDocument()
+  expect(screen.getByRole('heading', { name: 'FY2032 · Baseline' })).toBeInTheDocument()
+  expect(screen.getAllByText('Core server').length).toBeGreaterThan(1)
+  expect(screen.getByText('Normalize replacement cycles')).toBeInTheDocument()
+  const atlasButtons = screen.getAllByRole('button', { name: 'View in Atlas' })
+  expect(atlasButtons.length).toBeGreaterThan(0)
+  fireEvent.click(atlasButtons[0])
+  expect(onOpenAtlasInventory).toHaveBeenCalledWith([asset.id], 'FY2032 · Baseline', 1)
 })

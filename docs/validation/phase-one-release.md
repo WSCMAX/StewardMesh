@@ -130,7 +130,7 @@ traces.
 
 ## gRPC deployment decision
 
-The all-domain adapter covers all 16 services and 154 RPCs in the checked-in
+The all-domain adapter covers all 16 services and 155 RPCs in the checked-in
 descriptor. Production activation is **APPROVED AND IMPLEMENTED FOR PHASE ONE**
 under `REQ-API-001`, `SEC-MCP-001`, and issue #14's REST/gRPC domain-parity
 acceptance criterion. The standalone command now exposes the complete fixed

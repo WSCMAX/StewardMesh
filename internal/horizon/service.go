@@ -28,6 +28,7 @@ var (
 	currencyPattern = regexp.MustCompile(`^[A-Z]{3}$`)
 	validStages     = stringSet("planned", "in_service", "refresh_due", "approved", "retired")
 	validGroups     = stringSet("fiscal_year", "department", "site", "tag", "goal", "asset_class")
+	validAssetKinds = stringSet("server", "computer", "desktop", "laptop", "tablet", "phone", "network", "peripheral", "virtual", "other")
 )
 
 type ServiceConfig struct {
@@ -163,13 +164,20 @@ func (s *Service) GetPlan(ctx context.Context, id string) (Plan, error) {
 }
 
 func (s *Service) CreatePlan(ctx context.Context, input CreatePlanInput) (Plan, error) {
+	asset, err := s.assets.GetAsset(ctx, strings.TrimSpace(input.AssetID))
+	if err != nil {
+		return Plan{}, mapAssetError(err)
+	}
+	if input.ExpectedUsefulLifeMonths <= 0 {
+		resolved, resolveErr := s.resolveExpectedUsefulLifeMonths(ctx, asset, input.Scenario)
+		if resolveErr != nil {
+			return Plan{}, resolveErr
+		}
+		input.ExpectedUsefulLifeMonths = resolved
+	}
 	normalized, err := normalizePlanInput(input)
 	if err != nil {
 		return Plan{}, err
-	}
-	asset, err := s.assets.GetAsset(ctx, normalized.AssetID)
-	if err != nil {
-		return Plan{}, mapAssetError(err)
 	}
 	id := strings.TrimSpace(normalized.ID)
 	if id == "" {
@@ -201,6 +209,17 @@ func (s *Service) UpdatePlan(ctx context.Context, input UpdatePlanInput) (Plan, 
 	if !stableIDPattern.MatchString(input.ID) || input.Revision < 1 || strings.TrimSpace(input.Scenario) == "" || strings.TrimSpace(input.LifecycleStage) == "" {
 		return Plan{}, ErrInvalidInput
 	}
+	asset, err := s.assets.GetAsset(ctx, strings.TrimSpace(input.AssetID))
+	if err != nil {
+		return Plan{}, mapAssetError(err)
+	}
+	if input.ExpectedUsefulLifeMonths <= 0 {
+		resolved, resolveErr := s.resolveExpectedUsefulLifeMonths(ctx, asset, input.Scenario)
+		if resolveErr != nil {
+			return Plan{}, resolveErr
+		}
+		input.ExpectedUsefulLifeMonths = resolved
+	}
 	normalized, err := normalizePlanInput(CreatePlanInput{
 		AssetID: input.AssetID, Scenario: input.Scenario, ExpectedUsefulLifeMonths: input.ExpectedUsefulLifeMonths,
 		ReplacementDate: input.ReplacementDate, LifecycleStage: input.LifecycleStage,
@@ -221,10 +240,6 @@ func (s *Service) UpdatePlan(ctx context.Context, input UpdatePlanInput) (Plan, 
 	}
 	if normalized.AssetID != existing.AssetID || normalized.Scenario != existing.Scenario || normalized.EffectiveFrom.Before(existing.EffectiveFrom) {
 		return Plan{}, ErrInvalidInput
-	}
-	asset, err := s.assets.GetAsset(ctx, normalized.AssetID)
-	if err != nil {
-		return Plan{}, mapAssetError(err)
 	}
 	now := s.now().UTC()
 	updated := existing
@@ -251,6 +266,58 @@ func (s *Service) UpdatePlan(ctx context.Context, input UpdatePlanInput) (Plan, 
 	return deriveReplacementDate(updated, asset), nil
 }
 
+// EnsureBaselinePlanFromAsset creates or refreshes the baseline Horizon plan from Atlas asset and model defaults.
+func (s *Service) EnsureBaselinePlanFromAsset(ctx context.Context, assetID string) error {
+	assetID = strings.TrimSpace(assetID)
+	if !stableIDPattern.MatchString(assetID) {
+		return ErrInvalidInput
+	}
+	asset, err := s.assets.GetAsset(ctx, assetID)
+	if err != nil {
+		return mapAssetError(err)
+	}
+	var model *domain.AssetModel
+	if asset.ModelID != "" {
+		fetched, modelErr := s.assets.GetModel(ctx, asset.ModelID)
+		if modelErr == nil {
+			model = &fetched
+		}
+	}
+	now := s.now().UTC()
+	stage := LifecycleStage(asset, model, now)
+	usefulLife, err := s.resolveExpectedUsefulLifeMonths(ctx, asset, "baseline")
+	if err != nil {
+		return err
+	}
+	currency := strings.ToUpper(strings.TrimSpace(asset.Currency))
+	if currency == "" {
+		currency = "USD"
+	}
+	costMinor := asset.UnitCostMinor
+	if costMinor <= 0 && model != nil {
+		costMinor = model.UnitCostMinor
+	}
+	plans, err := s.ListPlans(ctx, ListPlansQuery{AssetID: assetID, Scenario: "baseline"})
+	if err != nil {
+		return err
+	}
+	if len(plans) == 0 {
+		effectiveFrom := normalizeDate(now)
+		_, err = s.CreatePlan(ctx, CreatePlanInput{
+			AssetID: assetID, Scenario: "baseline", ExpectedUsefulLifeMonths: usefulLife,
+			LifecycleStage: stage, ReplacementCostMinor: costMinor, Currency: currency, EffectiveFrom: effectiveFrom,
+		})
+		return err
+	}
+	existing := plans[0]
+	_, err = s.UpdatePlan(ctx, UpdatePlanInput{
+		ID: existing.ID, AssetID: assetID, Scenario: "baseline", Revision: existing.Revision,
+		ExpectedUsefulLifeMonths: usefulLife, LifecycleStage: stage,
+		ReplacementCostMinor: costMinor, Currency: currency, EffectiveFrom: existing.EffectiveFrom,
+	})
+	return err
+}
+
 func (s *Service) ListPlanHistory(ctx context.Context, planID string) ([]PlanVersion, error) {
 	planID = strings.TrimSpace(planID)
 	if !stableIDPattern.MatchString(planID) {
@@ -273,8 +340,8 @@ func (s *Service) ListPlanHistory(ctx context.Context, planID string) ([]PlanVer
 			versions[index].DerivedReplacementDate = cloneDate(versions[index].ReplacementDate)
 			continue
 		}
-		if asset.PurchaseDate != nil {
-			date := addCalendarMonths(*asset.PurchaseDate, versions[index].ExpectedUsefulLifeMonths)
+		if anchor := LifecycleAnchor(asset); anchor != nil {
+			date := addCalendarMonths(*anchor, versions[index].ExpectedUsefulLifeMonths)
 			versions[index].DerivedReplacementDate = &date
 		}
 	}
@@ -286,29 +353,13 @@ func (s *Service) Forecast(ctx context.Context, query ForecastQuery) (Forecast, 
 	if err != nil {
 		return Forecast{}, err
 	}
-	plans, err := s.store.ListPlans(ctx, s.organizationID, ListPlansQuery{})
+	forecastCtx, err := s.loadForecastContext(ctx, query)
 	if err != nil {
 		return Forecast{}, err
 	}
-	assetList, err := s.assets.ListAssets(ctx, atlas.Query{Limit: 100})
+	rows, err := s.forecastPlanRows(ctx, forecastCtx)
 	if err != nil {
-		return Forecast{}, mapAssetError(err)
-	}
-	assetsByID := make(map[string]domain.Asset, len(assetList))
-	for _, asset := range assetList {
-		assetsByID[asset.ID] = asset
-	}
-	finance, err := s.finance.Snapshot(ctx)
-	if err != nil {
-		return Forecast{}, fmt.Errorf("read Ledger forecast inputs: %w", err)
-	}
-	goals, err := s.relationships.ListGoals(ctx)
-	if err != nil {
-		return Forecast{}, fmt.Errorf("read Threads goals: %w", err)
-	}
-	goalNames := make(map[string]string, len(goals))
-	for _, goal := range goals {
-		goalNames[goal.ID] = goal.Name
+		return Forecast{}, err
 	}
 	report := Forecast{
 		AsOf: query.AsOf, GroupBy: query.GroupBy, Scenarios: append([]string(nil), query.Scenarios...),
@@ -321,44 +372,19 @@ func (s *Service) Forecast(ctx context.Context, query ForecastQuery) (Forecast, 
 	groups := make(map[string]*groupAccumulator)
 	currencies := make(map[string]struct{})
 	seenAssets := make(map[string]struct{})
-	for _, current := range plans {
-		if !contains(query.Scenarios, current.Scenario) {
-			continue
-		}
-		versions, err := s.store.ListPlanVersions(ctx, s.organizationID, current.ID)
-		if err != nil {
-			return Forecast{}, err
-		}
-		plan, ok := effectivePlan(current, versions, query.AsOf)
-		if !ok || plan.LifecycleStage == "retired" {
-			continue
-		}
-		asset, ok := assetsByID[plan.AssetID]
-		if !ok {
-			asset, err = s.assets.GetAsset(ctx, plan.AssetID)
-			if err != nil {
-				return Forecast{}, mapAssetError(err)
-			}
-			assetsByID[asset.ID] = asset
-		}
-		plan = deriveReplacementDate(plan, asset)
-		if plan.DerivedReplacementDate == nil {
-			continue
-		}
-		fiscalYear := fiscalYearFor(*plan.DerivedReplacementDate, query.FiscalYearStartMonth)
-		if fiscalYear < query.FromYear || fiscalYear > query.ToYear {
-			continue
-		}
+	for _, row := range rows {
+		plan, asset, fiscalYear := row.plan, row.asset, row.fiscalYear
 		currencies[plan.Currency] = struct{}{}
+		var ok bool
 		if report.PlannedReplacementMinor, ok = addMinor(report.PlannedReplacementMinor, plan.ReplacementCostMinor); !ok {
 			return Forecast{}, ErrConflict
 		}
 		seenAssets[asset.ID] = struct{}{}
-		amounts, err := matchingCostAmounts(finance.Costs, plan, fiscalYear)
+		amounts, err := matchingCostAmounts(forecastCtx.finance.Costs, plan, fiscalYear)
 		if err != nil {
 			return Forecast{}, err
 		}
-		for _, cost := range finance.Costs {
+		for _, cost := range forecastCtx.finance.Costs {
 			if cost.AssetID == plan.AssetID && cost.Scenario == plan.Scenario && cost.FiscalPeriod == fmt.Sprintf("FY%d", fiscalYear) {
 				currencies[cost.Currency] = struct{}{}
 			}
@@ -370,11 +396,7 @@ func (s *Service) Forecast(ctx context.Context, query ForecastQuery) (Forecast, 
 				return Forecast{}, ErrConflict
 			}
 		}
-		dimensions, err := s.dimensions(ctx, query.GroupBy, asset, fiscalYear, goalNames)
-		if err != nil {
-			return Forecast{}, err
-		}
-		for _, dimension := range dimensions {
+		for _, dimension := range row.dimensions {
 			mapKey := plan.Scenario + "\x00" + dimension.key
 			group := groups[mapKey]
 			if group == nil {
@@ -417,6 +439,149 @@ func (s *Service) Forecast(ctx context.Context, query ForecastQuery) (Forecast, 
 		return report.Groups[i].Scenario < report.Groups[j].Scenario
 	})
 	return report, nil
+}
+
+func (s *Service) ForecastGroupAssets(ctx context.Context, query ForecastGroupAssetsQuery) (ForecastGroupAssets, error) {
+	query.Scenario = strings.ToLower(strings.TrimSpace(query.Scenario))
+	query.GroupKey = strings.TrimSpace(query.GroupKey)
+	if !scenarioPattern.MatchString(query.Scenario) || query.GroupKey == "" {
+		return ForecastGroupAssets{}, ErrInvalidInput
+	}
+	query.ForecastQuery.Scenarios = []string{query.Scenario}
+	normalized, err := normalizeForecastQuery(query.ForecastQuery, s.now())
+	if err != nil {
+		return ForecastGroupAssets{}, err
+	}
+	forecastCtx, err := s.loadForecastContext(ctx, normalized)
+	if err != nil {
+		return ForecastGroupAssets{}, err
+	}
+	rows, err := s.forecastPlanRows(ctx, forecastCtx)
+	if err != nil {
+		return ForecastGroupAssets{}, err
+	}
+	result := ForecastGroupAssets{
+		Scenario: query.Scenario, GroupKey: query.GroupKey, GroupBy: normalized.GroupBy, Items: []ForecastGroupAsset{},
+	}
+	currencies := make(map[string]struct{})
+	for _, row := range rows {
+		if row.plan.Scenario != query.Scenario {
+			continue
+		}
+		matched := false
+		for _, dimension := range row.dimensions {
+			if dimension.key == query.GroupKey {
+				result.Label = dimension.label
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			continue
+		}
+		currencies[row.plan.Currency] = struct{}{}
+		result.Items = append(result.Items, ForecastGroupAsset{
+			PlanID: row.plan.ID, AssetID: row.asset.ID, AssetName: row.asset.Name,
+			LifecycleStage: row.plan.LifecycleStage, ExpectedUsefulLifeMonths: row.plan.ExpectedUsefulLifeMonths,
+			ReplacementDate: cloneDate(row.plan.ReplacementDate), DerivedReplacementDate: cloneDate(row.plan.DerivedReplacementDate),
+			FiscalYear: row.fiscalYear, ReplacementCostMinor: row.plan.ReplacementCostMinor,
+			Currency: row.plan.Currency, Revision: row.plan.Revision,
+		})
+	}
+	if len(currencies) > 1 {
+		return ForecastGroupAssets{}, ErrMixedCurrency
+	}
+	for currency := range currencies {
+		result.Currency = currency
+	}
+	sort.Slice(result.Items, func(i, j int) bool {
+		if result.Items[i].AssetName == result.Items[j].AssetName {
+			return result.Items[i].AssetID < result.Items[j].AssetID
+		}
+		return result.Items[i].AssetName < result.Items[j].AssetName
+	})
+	return result, nil
+}
+
+type forecastContext struct {
+	query      ForecastQuery
+	finance    ledger.Snapshot
+	goalNames  map[string]string
+	assetsByID map[string]domain.Asset
+}
+
+type forecastPlanRow struct {
+	plan       Plan
+	asset      domain.Asset
+	fiscalYear int
+	dimensions []dimension
+}
+
+func (s *Service) loadForecastContext(ctx context.Context, query ForecastQuery) (forecastContext, error) {
+	assetList, err := s.assets.ListAssets(ctx, atlas.Query{Limit: 100})
+	if err != nil {
+		return forecastContext{}, mapAssetError(err)
+	}
+	assetsByID := make(map[string]domain.Asset, len(assetList))
+	for _, asset := range assetList {
+		assetsByID[asset.ID] = asset
+	}
+	finance, err := s.finance.Snapshot(ctx)
+	if err != nil {
+		return forecastContext{}, fmt.Errorf("read Ledger forecast inputs: %w", err)
+	}
+	goals, err := s.relationships.ListGoals(ctx)
+	if err != nil {
+		return forecastContext{}, fmt.Errorf("read Threads goals: %w", err)
+	}
+	goalNames := make(map[string]string, len(goals))
+	for _, goal := range goals {
+		goalNames[goal.ID] = goal.Name
+	}
+	return forecastContext{query: query, finance: finance, goalNames: goalNames, assetsByID: assetsByID}, nil
+}
+
+func (s *Service) forecastPlanRows(ctx context.Context, forecastCtx forecastContext) ([]forecastPlanRow, error) {
+	plans, err := s.store.ListPlans(ctx, s.organizationID, ListPlansQuery{})
+	if err != nil {
+		return nil, err
+	}
+	rows := make([]forecastPlanRow, 0, len(plans))
+	for _, current := range plans {
+		if !contains(forecastCtx.query.Scenarios, current.Scenario) {
+			continue
+		}
+		versions, err := s.store.ListPlanVersions(ctx, s.organizationID, current.ID)
+		if err != nil {
+			return nil, err
+		}
+		plan, ok := effectivePlan(current, versions, forecastCtx.query.AsOf)
+		if !ok || plan.LifecycleStage == "retired" {
+			continue
+		}
+		asset, ok := forecastCtx.assetsByID[plan.AssetID]
+		if !ok {
+			asset, err = s.assets.GetAsset(ctx, plan.AssetID)
+			if err != nil {
+				return nil, mapAssetError(err)
+			}
+			forecastCtx.assetsByID[asset.ID] = asset
+		}
+		plan = deriveReplacementDate(plan, asset)
+		if plan.DerivedReplacementDate == nil {
+			continue
+		}
+		fiscalYear := fiscalYearFor(*plan.DerivedReplacementDate, forecastCtx.query.FiscalYearStartMonth)
+		if fiscalYear < forecastCtx.query.FromYear || fiscalYear > forecastCtx.query.ToYear {
+			continue
+		}
+		dimensions, err := s.dimensions(ctx, forecastCtx.query.GroupBy, asset, fiscalYear, forecastCtx.goalNames)
+		if err != nil {
+			return nil, err
+		}
+		rows = append(rows, forecastPlanRow{plan: plan, asset: asset, fiscalYear: fiscalYear, dimensions: dimensions})
+	}
+	return rows, nil
 }
 
 func (s *Service) ExportCSV(ctx context.Context, query ForecastQuery) ([]byte, error) {
@@ -613,8 +778,8 @@ func deriveReplacementDate(plan Plan, asset domain.Asset) Plan {
 		plan.DerivedReplacementDate = cloneDate(plan.ReplacementDate)
 		return plan
 	}
-	if asset.PurchaseDate != nil {
-		date := addCalendarMonths(*asset.PurchaseDate, plan.ExpectedUsefulLifeMonths)
+	if anchor := LifecycleAnchor(asset); anchor != nil {
+		date := addCalendarMonths(*anchor, plan.ExpectedUsefulLifeMonths)
 		plan.DerivedReplacementDate = &date
 	}
 	return plan
@@ -801,4 +966,95 @@ func horizonAuditMetadata(plan Plan) map[string]string {
 		"effectiveFrom": plan.EffectiveFrom.Format(time.RFC3339), "currency": plan.Currency,
 		"revision": strconv.FormatInt(plan.Revision, 10),
 	}
+}
+
+func (s *Service) ListKindDefaults(ctx context.Context, scenario string) ([]KindDefault, error) {
+	scenario = strings.ToLower(strings.TrimSpace(scenario))
+	if scenario == "" {
+		scenario = "baseline"
+	}
+	if !scenarioPattern.MatchString(scenario) {
+		return nil, ErrInvalidInput
+	}
+	return s.store.ListKindDefaults(ctx, s.organizationID, scenario)
+}
+
+func (s *Service) UpsertKindDefault(ctx context.Context, input UpsertKindDefaultInput) (KindDefault, error) {
+	normalized, err := normalizeKindDefaultInput(input)
+	if err != nil {
+		return KindDefault{}, err
+	}
+	if normalized.ReplacementModelID != "" {
+		if _, err := s.assets.GetModel(ctx, normalized.ReplacementModelID); err != nil {
+			return KindDefault{}, mapAssetError(err)
+		}
+	}
+	now := s.now().UTC()
+	revision := normalized.Revision
+	if revision < 1 {
+		revision = 1
+	}
+	item := KindDefault{
+		OrganizationID: s.organizationID, AssetKind: normalized.AssetKind, Scenario: normalized.Scenario,
+		ExpectedUsefulLifeMonths: normalized.ExpectedUsefulLifeMonths, ReplacementModelID: normalized.ReplacementModelID,
+		Revision: revision, CreatedAt: now, UpdatedAt: now,
+	}
+	saved, err := s.store.UpsertKindDefault(ctx, item)
+	if err != nil {
+		return KindDefault{}, err
+	}
+	if err := s.audit(ctx, "horizon.kind_default.saved", saved.AssetKind, map[string]string{
+		"assetKind": saved.AssetKind, "scenario": saved.Scenario,
+		"expectedUsefulLifeMonths": strconv.Itoa(saved.ExpectedUsefulLifeMonths),
+		"revision": strconv.FormatInt(saved.Revision, 10),
+	}); err != nil {
+		return KindDefault{}, fmt.Errorf("audit Horizon kind default: %w", err)
+	}
+	return saved, nil
+}
+
+func (s *Service) resolveExpectedUsefulLifeMonths(ctx context.Context, asset domain.Asset, scenario string) (int, error) {
+	var model *domain.AssetModel
+	if asset.ModelID != "" {
+		fetched, err := s.assets.GetModel(ctx, asset.ModelID)
+		if err != nil {
+			if !errors.Is(err, atlas.ErrNotFound) {
+				return 0, mapAssetError(err)
+			}
+		} else {
+			model = &fetched
+		}
+	}
+	if months := UsefulLifeMonths(asset, model); months > 0 {
+		return months, nil
+	}
+	scenario = strings.ToLower(strings.TrimSpace(scenario))
+	if scenario == "" {
+		scenario = "baseline"
+	}
+	defaults, err := s.store.ListKindDefaults(ctx, s.organizationID, scenario)
+	if err != nil {
+		return 0, err
+	}
+	for _, item := range defaults {
+		if item.AssetKind == asset.Kind && item.ExpectedUsefulLifeMonths > 0 {
+			return item.ExpectedUsefulLifeMonths, nil
+		}
+	}
+	return 0, ErrInvalidInput
+}
+
+func normalizeKindDefaultInput(input UpsertKindDefaultInput) (UpsertKindDefaultInput, error) {
+	input.AssetKind = strings.ToLower(strings.TrimSpace(input.AssetKind))
+	input.Scenario = strings.ToLower(strings.TrimSpace(input.Scenario))
+	input.ReplacementModelID = strings.TrimSpace(input.ReplacementModelID)
+	if input.Scenario == "" {
+		input.Scenario = "baseline"
+	}
+	if input.AssetKind == "" || !validAssetKinds[input.AssetKind] || !scenarioPattern.MatchString(input.Scenario) ||
+		input.ExpectedUsefulLifeMonths < 1 || input.ExpectedUsefulLifeMonths > 1200 ||
+		input.ReplacementModelID != "" && !stableIDPattern.MatchString(input.ReplacementModelID) {
+		return UpsertKindDefaultInput{}, ErrInvalidInput
+	}
+	return input, nil
 }

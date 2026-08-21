@@ -31,6 +31,7 @@ const iconForPage: Record<DocumentationTopicID, AreaIconName> = {
   vault: 'vault',
   exchange: 'exchange',
   people: 'people',
+  mesh: 'mesh',
   bridge: 'bridge',
   guard: 'guard',
   guide: 'overview',
@@ -60,13 +61,13 @@ export default function DocumentationSite({ topicID }: DocumentationSiteProps) {
   return (
     <div className="min-h-screen text-steward-mist" data-feature="experience.help" data-requirement="A11Y-001 DOC-001">
       <a className="sr-only rounded-xl bg-steward-teal px-3 py-2 font-semibold text-steward-ink-950 focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-50" href="#documentation-main">Skip to documentation</a>
-      <header className="sticky top-0 z-30 border-b border-white/[0.07] bg-steward-ink-950/90 backdrop-blur-xl">
-        <div className="mx-auto flex max-w-[100rem] items-center justify-between gap-4 px-4 py-3 sm:px-6">
-          <a aria-label="StewardMesh documentation" className="group flex min-w-0 items-center gap-3 rounded-xl" href={documentationHref('overview')}>
-            <span className="grid size-11 shrink-0 place-items-center rounded-xl border border-white/10 bg-steward-ink-900 shadow-sm"><img alt="" aria-hidden="true" className="h-9 w-auto" height="370" src="/brand/stewardmesh-s-mark.svg" width="294" /></span>
+      <header className="sticky top-0 z-30 border-b border-white/[0.08] bg-steward-ink-950/95">
+        <div className="mx-auto flex max-w-[100rem] items-center justify-between gap-3 px-4 py-2.5 sm:px-6">
+          <a aria-label="StewardMesh documentation" className="group flex min-w-0 items-center gap-3 rounded-md" href={documentationHref('overview')}>
+            <span className="grid size-9 shrink-0 place-items-center"><img alt="" aria-hidden="true" className="h-8 w-auto" height="370" src="/brand/stewardmesh-s-mark.svg" width="294" /></span>
             <span className="hidden min-w-0 sm:block">
-              <span className="block truncate text-lg font-bold tracking-tight text-white sm:text-xl">StewardMesh</span>
-              <span className="block text-xs font-semibold uppercase tracking-[0.14em] text-steward-teal">Documentation</span>
+              <span className="block truncate text-lg font-semibold text-white">StewardMesh</span>
+              <span className="block text-xs text-steward-slate">Documentation</span>
             </span>
           </a>
           <a aria-label="Back to application" className={secondaryButtonClass} href={page.appHref}><span className="sm:hidden">Back to app</span><span className="hidden sm:inline">Back to application</span></a>
@@ -94,17 +95,16 @@ export default function DocumentationSite({ topicID }: DocumentationSiteProps) {
         </aside>
 
         <main className="min-w-0" id="documentation-main" tabIndex={-1}>
-          <article className={`${panelClass} relative overflow-hidden px-5 py-7 sm:px-8 sm:py-10 lg:px-10`}>
-            <div aria-hidden="true" className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-steward-green via-steward-teal to-steward-blue" />
-            <div className="flex flex-wrap items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-steward-slate">
+          <article className={`${panelClass} px-5 py-6 sm:px-8 sm:py-8`}>
+            <div className="flex flex-wrap items-center gap-2 text-xs text-steward-slate">
               <a className="rounded-md text-steward-teal hover:text-[#5be0cc]" href={documentationHref('overview')}>Docs</a>
               <ChevronRightIcon className="size-3" />
               <span>{page.group}</span>
             </div>
-            <header className="mt-6 border-b border-white/[0.08] pb-8">
-              <p className="text-sm font-semibold text-steward-teal">{page.kicker}</p>
-              <h1 className="mt-2 text-3xl font-bold tracking-tight text-white sm:text-4xl" ref={headingRef} tabIndex={-1}>{page.title}</h1>
-              <p className="mt-4 max-w-3xl text-base leading-7 text-steward-mist-muted sm:text-lg sm:leading-8">{page.summary}</p>
+            <header className="mt-4 border-b border-white/[0.08] pb-6">
+              <p className="text-[13px] text-steward-slate">{page.kicker}</p>
+              <h1 className="mt-1 text-2xl font-semibold text-white sm:text-3xl" ref={headingRef} tabIndex={-1}>{page.title}</h1>
+              <p className="mt-3 max-w-3xl text-sm leading-7 text-steward-mist-muted sm:text-base">{page.summary}</p>
               <div className="mt-6 flex flex-wrap items-center gap-3">
                 <a className={buttonClass} href={page.appHref}>{page.appLabel}<ChevronRightIcon /></a>
                 <StatusBadge tone="success">Current host</StatusBadge>
@@ -128,7 +128,7 @@ export default function DocumentationSite({ topicID }: DocumentationSiteProps) {
 
         <aside aria-label="On this page" className="hidden xl:block">
           <div className="sticky top-[6.5rem] border-l border-white/[0.08] pl-5">
-            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-steward-slate">On this page</p>
+            <p className="text-[13px] font-medium text-steward-slate">On this page</p>
             <ul className="mt-4 space-y-1">
               {page.sections.map((section) => <li key={section.id}><button className={`${plainButtonClass} min-h-9 w-full justify-start px-2 py-1 text-left text-steward-mist-muted`} onClick={() => scrollToSection(section.id)} type="button">{section.title}</button></li>)}
             </ul>
@@ -145,7 +145,7 @@ function DocumentationNavigation({ current, pages }: { current: DocumentationTop
       const groupPages = pages.filter((page) => page.group === group)
       if (groupPages.length === 0) return null
       return <div className="mb-5 last:mb-0" key={group}>
-        <p className="px-3 text-[0.6875rem] font-semibold uppercase tracking-[0.16em] text-steward-slate">{group}</p>
+        <p className="px-3 text-[13px] text-steward-slate">{group}</p>
         <ul className="mt-2 space-y-1">
           {groupPages.map((page) => <li key={page.id}>
             <a aria-current={page.id === current ? 'page' : undefined} className={cx('group flex min-h-11 items-center gap-3 rounded-xl px-3 py-2 text-sm font-semibold transition', page.id === current ? 'bg-steward-teal/12 text-white ring-1 ring-inset ring-steward-teal/25' : 'text-steward-mist-muted hover:bg-white/[0.045] hover:text-white')} href={documentationHref(page.id)}>
@@ -163,7 +163,7 @@ function DocumentationSectionView({ index, section }: { index: number; section: 
   return <section aria-labelledby={`documentation-section-${section.id}-heading`} className="scroll-mt-24" id={`documentation-section-${section.id}`}>
     <div className="flex items-center gap-3">
       <span aria-hidden="true" className="grid size-8 shrink-0 place-items-center rounded-lg border border-steward-teal/25 bg-steward-teal/10 text-xs font-bold text-steward-teal">{String(index + 1).padStart(2, '0')}</span>
-      <h2 className="text-xl font-bold tracking-tight text-white sm:text-2xl" id={`documentation-section-${section.id}-heading`}>{section.title}</h2>
+      <h2 className="text-lg font-semibold text-white" id={`documentation-section-${section.id}-heading`}>{section.title}</h2>
     </div>
     {section.paragraphs?.map((paragraph) => <p className="mt-4 text-base leading-7 text-steward-mist-muted" key={paragraph}>{paragraph}</p>)}
     {section.bullets && <ul className="mt-5 space-y-3">{section.bullets.map((bullet) => <li className="flex gap-3 text-base leading-7 text-steward-mist-muted" key={bullet}><CheckIcon /><span>{bullet}</span></li>)}</ul>}

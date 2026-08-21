@@ -332,7 +332,7 @@ func TestRelationshipGraphUsesOnlyRequestedBoundedSourceLimits(t *testing.T) {
 func TestRelationshipGraphLoadsRelationshipContextBeyondFiveHundredSourceRecords(t *testing.T) {
 	store, peopleStore, assets := relationshipGraphFixture(t)
 	now := time.Date(2026, time.August, 13, 12, 0, 0, 0, time.UTC)
-	for index := 0; index < MaximumGraphLimit; index++ {
+	for index := 0; index < 500; index++ {
 		name := fmt.Sprintf("Alpha Context Identity %03d", index)
 		if _, err := peopleStore.CreateIdentity(context.Background(), people.Identity{
 			ID: fmt.Sprintf("context-person-%03d", index), OrganizationID: "example-org", Kind: people.IdentityPerson,
@@ -493,7 +493,7 @@ func TestRelationshipGraphAppliesDirectoryVisibilityBeforeAssetLimit(t *testing.
 func TestRelationshipGraphOrganizationContainsSelectsDirectChildrenBeforeSourceLimit(t *testing.T) {
 	store, peopleStore, assets := relationshipGraphFixture(t)
 	now := time.Date(2026, time.August, 13, 12, 0, 0, 0, time.UTC)
-	for index := 0; index < MaximumGraphLimit; index++ {
+	for index := 0; index < 500; index++ {
 		identityName := fmt.Sprintf("Alpha Nested Identity %03d", index)
 		if _, err := peopleStore.CreateIdentity(context.Background(), people.Identity{
 			ID: fmt.Sprintf("nested-person-%03d", index), OrganizationID: "example-org", Kind: people.IdentityPerson,
@@ -589,6 +589,65 @@ func TestMemoryGraphFailsClosedWithoutOrganizationWideVisibility(t *testing.T) {
 	}})
 	if err != nil || !graphHasNode(resourceScoped, "asset:one") || len(resourceScoped.Edges) != 1 {
 		t.Fatalf("memory graph did not honor an explicit asset resource grant: graph=%#v err=%v", resourceScoped, err)
+	}
+}
+
+func TestRelationshipGraphProjectsOccupancyEdges(t *testing.T) {
+	peopleStore := repository.NewMemoryPeopleStore()
+	now := time.Date(2026, time.August, 18, 16, 0, 0, 0, time.UTC)
+	ctx := context.Background()
+	if _, err := peopleStore.CreateSite(ctx, people.Site{ID: "site-occ", OrganizationID: "example-org", Name: "Campus", NormalizedName: "campus", Status: people.StatusActive, Revision: 1, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := peopleStore.CreateBuilding(ctx, people.Building{ID: "building-occ", OrganizationID: "example-org", SiteID: "site-occ", Name: "Hall", NormalizedName: "hall", Status: people.StatusActive, Revision: 1, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := peopleStore.CreateRoom(ctx, people.Room{ID: "room-office", OrganizationID: "example-org", SiteID: "site-occ", BuildingID: "building-occ", Number: "10", NormalizedNumber: "10", Name: "Office", Status: people.StatusActive, Revision: 1, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := peopleStore.CreateRoom(ctx, people.Room{ID: "room-class", OrganizationID: "example-org", SiteID: "site-occ", BuildingID: "building-occ", Number: "20", NormalizedNumber: "20", Name: "Lecture", Status: people.StatusActive, Revision: 1, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := peopleStore.CreateIdentity(ctx, people.Identity{
+		ID: "person-occ", OrganizationID: "example-org", Kind: people.IdentityPerson, DisplayName: "Casey Hall",
+		NormalizedName: "casey hall", Email: "casey@example.invalid", NormalizedEmail: "casey@example.invalid",
+		SiteID: "site-occ", BuildingID: "building-occ", RoomID: "room-office", Status: people.StatusActive, Revision: 1, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := peopleStore.CreateLocationReferenceType(ctx, people.LocationReferenceType{
+		ID: "type-teach", OrganizationID: "example-org", Name: "Instructor", NormalizedName: "instructor",
+		RelationshipKind: people.RelationshipTeachesIn, LocationKind: people.LocationKindRoom, Status: people.StatusActive, Revision: 1, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := peopleStore.CreateLocationReference(ctx, people.LocationReference{
+		ID: "ref-teach", OrganizationID: "example-org", IdentityID: "person-occ", TypeID: "type-teach",
+		LocationKind: people.LocationKindRoom, LocationID: "room-class", Priority: people.LocationPrioritySecondary,
+		Status: people.StatusActive, Revision: 1, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	graphStore, err := NewRelationshipGraphStore(repository.NewMemoryDirectoryImportStore(), peopleStore, graphAssetReader{}, domain.Organization{ID: "example-org", Name: "Example Org"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	graph, err := graphStore.Graph(ctx, GraphQuery{Limit: 50, Scope: GraphScope{Directory: people.Visibility{All: true}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !graphHasNode(graph, "person:person-occ") || !graphHasNode(graph, "room:room-office") || !graphHasNode(graph, "room:room-class") {
+		t.Fatalf("occupancy graph missing person or rooms: %#v", graph.Nodes)
+	}
+	if !graphHasEdge(graph, "person:person-occ", "room:room-office", RelationshipLocatedAt) {
+		t.Fatalf("missing primary located_at edge: %#v", graph.Edges)
+	}
+	if !graphHasEdge(graph, "person:person-occ", "room:room-class", RelationshipTeachesIn) {
+		t.Fatalf("missing teaches_in occupancy edge: %#v", graph.Edges)
+	}
+	filtered, err := graphStore.Graph(ctx, GraphQuery{Search: "Lecture", Kind: NodeRoom, Relationship: RelationshipTeachesIn, Limit: 50, Scope: GraphScope{Directory: people.Visibility{All: true}}})
+	if err != nil || !graphHasNode(filtered, "person:person-occ") || !graphHasEdge(filtered, "person:person-occ", "room:room-class", RelationshipTeachesIn) {
+		t.Fatalf("room usage filter omitted instructor occupancy: graph=%#v err=%v", filtered, err)
 	}
 }
 

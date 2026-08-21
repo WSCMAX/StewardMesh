@@ -138,6 +138,8 @@ type Identity struct {
 	NormalizedEmail string       `json:"-"`
 	DepartmentID    string       `json:"departmentId,omitempty"`
 	SiteID          string       `json:"siteId,omitempty"`
+	BuildingID      string       `json:"buildingId,omitempty"`
+	RoomID          string       `json:"roomId,omitempty"`
 	Status          RecordStatus `json:"status"`
 	Provider        string       `json:"provider,omitempty"`
 	ProviderSubject string       `json:"providerSubject,omitempty"`
@@ -159,6 +161,61 @@ type AssetAssignment struct {
 	CreatedAt      time.Time      `json:"createdAt"`
 }
 
+type LocationKind string
+
+const (
+	LocationKindSite     LocationKind = "site"
+	LocationKindBuilding LocationKind = "building"
+	LocationKindRoom     LocationKind = "room"
+)
+
+type LocationPriority string
+
+const (
+	LocationPriorityPrimary   LocationPriority = "primary"
+	LocationPrioritySecondary LocationPriority = "secondary"
+)
+
+const (
+	RelationshipUsesOffice   = "uses_office"
+	RelationshipTeachesIn    = "teaches_in"
+	RelationshipAttendsClass = "attends_class"
+	RelationshipResidesIn    = "resides_in"
+	RelationshipUsesLab      = "uses_lab"
+)
+
+// LocationReferenceType is an organization-owned catalog of occupancy
+// relationships (office, instructor, dormitory, class enrollment, lab).
+type LocationReferenceType struct {
+	ID               string       `json:"id"`
+	OrganizationID   string       `json:"organizationId"`
+	Name             string       `json:"name"`
+	NormalizedName   string       `json:"-"`
+	Description      string       `json:"description,omitempty"`
+	RelationshipKind string       `json:"relationshipKind"`
+	LocationKind     LocationKind `json:"locationKind"`
+	Status           RecordStatus `json:"status"`
+	Revision         uint64       `json:"revision"`
+	CreatedAt        time.Time    `json:"createdAt"`
+	UpdatedAt        time.Time    `json:"updatedAt"`
+}
+
+// LocationReference links a directory identity to a site, building, or room
+// using a catalog type. Primary vs secondary is per identity and type.
+type LocationReference struct {
+	ID             string           `json:"id"`
+	OrganizationID string           `json:"organizationId"`
+	IdentityID     string           `json:"identityId"`
+	TypeID         string           `json:"typeId"`
+	LocationKind   LocationKind     `json:"locationKind"`
+	LocationID     string           `json:"locationId"`
+	Priority       LocationPriority `json:"priority"`
+	Status         RecordStatus     `json:"status"`
+	Revision       uint64           `json:"revision"`
+	CreatedAt      time.Time        `json:"createdAt"`
+	UpdatedAt      time.Time        `json:"updatedAt"`
+}
+
 // Visibility is mandatory for every read. All means organization-wide access;
 // otherwise records are restricted to the listed department or site scopes.
 type Visibility struct {
@@ -177,6 +234,7 @@ type IdentityQuery struct {
 	Status       RecordStatus
 	DepartmentID string
 	SiteID       string
+	IDs          []string
 	Limit        int
 }
 
@@ -197,7 +255,7 @@ type GraphIdentityQuery struct {
 	Limit                      int
 }
 
-const MaximumGraphIdentityLimit = 500
+const MaximumGraphIdentityLimit = 50000
 
 func (q GraphIdentityQuery) Valid() bool {
 	return q.Limit >= 1 && q.Limit <= MaximumGraphIdentityLimit &&
@@ -309,9 +367,105 @@ type CreateIdentityInput struct {
 	Email           string
 	DepartmentID    string
 	SiteID          string
+	BuildingID      string
+	RoomID          string
 	Status          RecordStatus
 	Provider        string
 	ProviderSubject string
+}
+
+type UpdateSiteInput struct {
+	ID       string
+	Name     string
+	Address  Address
+	Status   RecordStatus
+	Revision uint64
+}
+
+type UpdateBuildingInput struct {
+	ID       string
+	SiteID   string
+	Name     string
+	Status   RecordStatus
+	Revision uint64
+}
+
+type UpdateRoomInput struct {
+	ID         string
+	SiteID     string
+	BuildingID string
+	Number     string
+	Name       string
+	Status     RecordStatus
+	Revision   uint64
+}
+
+type UpdateDepartmentInput struct {
+	ID       string
+	Name     string
+	SiteID   string
+	Status   RecordStatus
+	Revision uint64
+}
+
+type UpdateIdentityInput struct {
+	ID           string
+	Kind         IdentityKind
+	DisplayName  string
+	Email        string
+	DepartmentID string
+	SiteID       string
+	BuildingID   string
+	RoomID       string
+	Status       RecordStatus
+	Revision     uint64
+}
+
+type CreateLocationReferenceTypeInput struct {
+	Name             string
+	Description      string
+	RelationshipKind string
+	LocationKind     LocationKind
+	Status           RecordStatus
+}
+
+type UpdateLocationReferenceTypeInput struct {
+	ID               string
+	Name             string
+	Description      string
+	RelationshipKind string
+	LocationKind     LocationKind
+	Status           RecordStatus
+	Revision         uint64
+}
+
+type CreateLocationReferenceInput struct {
+	IdentityID   string
+	TypeID       string
+	LocationKind LocationKind
+	LocationID   string
+	Priority     LocationPriority
+	Status       RecordStatus
+}
+
+type UpdateLocationReferenceInput struct {
+	ID           string
+	IdentityID   string
+	TypeID       string
+	LocationKind LocationKind
+	LocationID   string
+	Priority     LocationPriority
+	Status       RecordStatus
+	Revision     uint64
+}
+
+type LocationReferenceQuery struct {
+	IdentityIDs  []string
+	LocationIDs  []string
+	TypeID       string
+	LocationKind LocationKind
+	Status       RecordStatus
+	Limit        int
 }
 
 type CreateAssetAssignmentInput struct {
@@ -383,29 +537,44 @@ type Store interface {
 
 	CreateSite(ctx context.Context, site Site) (Site, error)
 	GetSite(ctx context.Context, organizationID, id string) (Site, error)
+	UpdateSite(ctx context.Context, site Site, expectedRevision uint64) (Site, error)
 	ListSites(ctx context.Context, organizationID string, visibility Visibility) ([]Site, error)
 
 	CreateBuilding(ctx context.Context, building Building) (Building, error)
 	GetBuilding(ctx context.Context, organizationID, id string) (Building, error)
+	UpdateBuilding(ctx context.Context, building Building, expectedRevision uint64) (Building, error)
 	ListBuildings(ctx context.Context, organizationID, siteID string, visibility Visibility) ([]Building, error)
 
 	CreateRoom(ctx context.Context, room Room) (Room, error)
 	GetRoom(ctx context.Context, organizationID, id string) (Room, error)
+	UpdateRoom(ctx context.Context, room Room, expectedRevision uint64) (Room, error)
 	ListRooms(ctx context.Context, organizationID, siteID, buildingID string, visibility Visibility) ([]Room, error)
 
 	CreateDepartment(ctx context.Context, department Department) (Department, error)
 	GetDepartment(ctx context.Context, organizationID, id string) (Department, error)
+	UpdateDepartment(ctx context.Context, department Department, expectedRevision uint64) (Department, error)
 	ListDepartments(ctx context.Context, organizationID string, visibility Visibility) ([]Department, error)
 	ListGraphLocations(ctx context.Context, organizationID string, query GraphLocationQuery, visibility Visibility) (GraphLocations, error)
 
 	CreateIdentity(ctx context.Context, identity Identity) (Identity, error)
 	GetIdentity(ctx context.Context, organizationID, id string) (Identity, error)
+	UpdateIdentity(ctx context.Context, identity Identity, expectedRevision uint64) (Identity, error)
 	GetIdentityByProvider(ctx context.Context, organizationID, provider, providerSubject string) (Identity, error)
 	GetIdentityByEmail(ctx context.Context, organizationID, normalizedEmail string) (Identity, error)
 	ReconcileIdentity(ctx context.Context, identity Identity, expectedRevision uint64) (Identity, error)
 	DeleteIdentity(ctx context.Context, organizationID, id string, expectedRevision uint64) error
 	SearchIdentities(ctx context.Context, organizationID string, query IdentityQuery, visibility Visibility) ([]Identity, error)
 	ListGraphIdentities(ctx context.Context, organizationID string, query GraphIdentityQuery, visibility Visibility) ([]Identity, error)
+
+	CreateLocationReferenceType(ctx context.Context, item LocationReferenceType) (LocationReferenceType, error)
+	GetLocationReferenceType(ctx context.Context, organizationID, id string) (LocationReferenceType, error)
+	UpdateLocationReferenceType(ctx context.Context, item LocationReferenceType, expectedRevision uint64) (LocationReferenceType, error)
+	ListLocationReferenceTypes(ctx context.Context, organizationID string) ([]LocationReferenceType, error)
+
+	CreateLocationReference(ctx context.Context, item LocationReference) (LocationReference, error)
+	GetLocationReference(ctx context.Context, organizationID, id string) (LocationReference, error)
+	UpdateLocationReference(ctx context.Context, item LocationReference, expectedRevision uint64) (LocationReference, error)
+	ListLocationReferences(ctx context.Context, organizationID string, query LocationReferenceQuery, visibility Visibility) ([]LocationReference, error)
 
 	CreateAssetAssignment(ctx context.Context, assignment AssetAssignment, replaceActiveRole bool) (AssetAssignment, error)
 	ImportAssetAssignment(ctx context.Context, assignment AssetAssignment) (AssetAssignment, error)

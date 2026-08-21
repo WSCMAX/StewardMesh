@@ -21,7 +21,7 @@ func TestMemoryPeopleStoreContract(t *testing.T) {
 func TestMemoryPeopleGraphIdentitySearchIsLabelOnlyBeforeLimit(t *testing.T) {
 	store := repository.NewMemoryPeopleStore()
 	now := time.Date(2026, time.August, 13, 12, 0, 0, 0, time.UTC)
-	for index := 0; index < people.MaximumGraphIdentityLimit; index++ {
+	for index := 0; index < 500; index++ {
 		name := fmt.Sprintf("Alpha Identity %03d", index)
 		identity := people.Identity{ID: fmt.Sprintf("alpha-%03d", index), OrganizationID: "graph-org", Kind: people.IdentityPerson,
 			DisplayName: name, NormalizedName: strings.ToLower(name), Email: fmt.Sprintf("needle-%03d@example.test", index),

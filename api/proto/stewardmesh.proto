@@ -120,6 +120,7 @@ service PeopleService {
 // request messages deliberately contain no organization or visibility scope.
 service RelationshipGraphService {
   rpc GetRelationshipGraph(GetRelationshipGraphRequest) returns (RelationshipGraph);
+  rpc GetMeshGraph(GetMeshGraphRequest) returns (MeshGraph);
 }
 
 // Durable provider-neutral preview, apply, reconciliation, and retry.
@@ -1336,9 +1337,24 @@ message GetRelationshipGraphRequest {
   uint32 limit = 4;
 }
 
+message GetMeshGraphRequest {
+  string search = 1;
+  RelationshipGraphNodeKind kind = 2;
+  RelationshipGraphEdgeKind relationship = 3;
+  uint32 limit = 4;
+  repeated RelationshipGraphNodeKind kinds = 5;
+  repeated RelationshipGraphEdgeKind relationships = 6;
+}
+
 message RelationshipGraph {
   repeated RelationshipGraphNode nodes = 1;
   repeated RelationshipGraphEdge edges = 2;
+}
+
+message MeshGraph {
+  repeated RelationshipGraphNode nodes = 1;
+  repeated RelationshipGraphEdge edges = 2;
+  repeated string sources = 3;
 }
 
 message RelationshipGraphNode {
@@ -1370,6 +1386,19 @@ enum RelationshipGraphNodeKind {
   RELATIONSHIP_GRAPH_NODE_KIND_GROUP = 10;
   RELATIONSHIP_GRAPH_NODE_KIND_SUBJECT = 11;
   RELATIONSHIP_GRAPH_NODE_KIND_ASSET = 12;
+  RELATIONSHIP_GRAPH_NODE_KIND_MODEL = 13;
+  RELATIONSHIP_GRAPH_NODE_KIND_VENDOR = 14;
+  RELATIONSHIP_GRAPH_NODE_KIND_PURCHASE_ORDER = 15;
+  RELATIONSHIP_GRAPH_NODE_KIND_CONTRACT = 16;
+  RELATIONSHIP_GRAPH_NODE_KIND_BUDGET = 17;
+  RELATIONSHIP_GRAPH_NODE_KIND_COMMITMENT = 18;
+  RELATIONSHIP_GRAPH_NODE_KIND_PRODUCT = 19;
+  RELATIONSHIP_GRAPH_NODE_KIND_VERSION = 20;
+  RELATIONSHIP_GRAPH_NODE_KIND_LICENSE = 21;
+  RELATIONSHIP_GRAPH_NODE_KIND_LABEL = 22;
+  RELATIONSHIP_GRAPH_NODE_KIND_GOAL = 23;
+  RELATIONSHIP_GRAPH_NODE_KIND_DOCUMENT = 24;
+  RELATIONSHIP_GRAPH_NODE_KIND_PLAN = 25;
 }
 
 enum RelationshipGraphEdgeKind {
@@ -1379,6 +1408,15 @@ enum RelationshipGraphEdgeKind {
   RELATIONSHIP_GRAPH_EDGE_KIND_LOCATED_AT = 3;
   RELATIONSHIP_GRAPH_EDGE_KIND_MEMBER_OF = 4;
   RELATIONSHIP_GRAPH_EDGE_KIND_ASSIGNED_TO = 5;
+  RELATIONSHIP_GRAPH_EDGE_KIND_TAGGED_WITH = 6;
+  RELATIONSHIP_GRAPH_EDGE_KIND_ADVANCES = 7;
+  RELATIONSHIP_GRAPH_EDGE_KIND_PURCHASED_VIA = 8;
+  RELATIONSHIP_GRAPH_EDGE_KIND_SUPPLIED_BY = 9;
+  RELATIONSHIP_GRAPH_EDGE_KIND_COVERED_BY = 10;
+  RELATIONSHIP_GRAPH_EDGE_KIND_DOCUMENTED_BY = 11;
+  RELATIONSHIP_GRAPH_EDGE_KIND_MODELED_AS = 12;
+  RELATIONSHIP_GRAPH_EDGE_KIND_INSTALLED_ON = 13;
+  RELATIONSHIP_GRAPH_EDGE_KIND_PLANNED_FOR = 14;
 }
 
 message ListAssetAssignmentsRequest {

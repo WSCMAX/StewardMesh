@@ -335,3 +335,147 @@ func TestPeopleServiceEnforcesDepartmentSiteConsistency(t *testing.T) {
 		t.Fatalf("expected mismatched department and site to fail, got %v", err)
 	}
 }
+
+func TestPeopleServiceUpdatesDirectoryRecords(t *testing.T) {
+	now := time.Date(2026, time.August, 18, 12, 0, 0, 0, time.UTC)
+	service, err := NewService(
+		repository.NewMemoryPeopleStore(),
+		testAssetReader{assets: map[string]domain.Asset{}},
+		foundation.NopAuditor{},
+		ServiceConfig{OrganizationID: "example-org", Now: func() time.Time { return now }},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := foundation.WithScope(context.Background(), foundation.Scope{
+		OrganizationID: "example-org", ActorID: "account-1", CorrelationID: "people-update-test",
+	})
+	site, err := service.CreateSite(ctx, CreateSiteInput{Name: "Main Campus"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	building, err := service.CreateBuilding(ctx, CreateBuildingInput{SiteID: site.ID, Name: "Hall"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	room, err := service.CreateRoom(ctx, CreateRoomInput{SiteID: site.ID, BuildingID: building.ID, Number: "10", Name: "Studio"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	department, err := service.CreateDepartment(ctx, CreateDepartmentInput{Name: "Arts", SiteID: site.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	person, err := service.CreateIdentity(ctx, CreateIdentityInput{
+		Kind: IdentityPerson, DisplayName: "Jordan Lee", Email: "jordan@example.test", DepartmentID: department.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Minute)
+	updatedSite, err := service.UpdateSite(ctx, UpdateSiteInput{ID: site.ID, Name: "East Campus", Status: StatusActive, Revision: site.Revision})
+	if err != nil || updatedSite.Name != "East Campus" || updatedSite.Revision != site.Revision+1 {
+		t.Fatalf("unexpected site update %#v, %v", updatedSite, err)
+	}
+	updatedRoom, err := service.UpdateRoom(ctx, UpdateRoomInput{
+		ID: room.ID, SiteID: site.ID, BuildingID: building.ID, Number: "11", Name: "Gallery", Status: StatusActive, Revision: room.Revision,
+	})
+	if err != nil || updatedRoom.Number != "11" || updatedRoom.Name != "Gallery" {
+		t.Fatalf("unexpected room update %#v, %v", updatedRoom, err)
+	}
+	updatedPerson, err := service.UpdateIdentity(ctx, UpdateIdentityInput{
+		ID: person.ID, Kind: IdentityPerson, DisplayName: "Jordan Lee-Updated", Email: "jordan@example.test",
+		DepartmentID: department.ID, SiteID: site.ID, Status: StatusActive, Revision: person.Revision,
+	})
+	if err != nil || updatedPerson.DisplayName != "Jordan Lee-Updated" {
+		t.Fatalf("unexpected identity update %#v, %v", updatedPerson, err)
+	}
+	if _, err := service.UpdateIdentity(ctx, UpdateIdentityInput{
+		ID: person.ID, Kind: IdentityPerson, DisplayName: "Stale", Email: "jordan@example.test", Revision: person.Revision,
+	}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("expected stale identity update conflict, got %v", err)
+	}
+}
+
+func TestPeopleServiceRecordsTypedLocationReferences(t *testing.T) {
+	now := time.Date(2026, time.August, 18, 15, 0, 0, 0, time.UTC)
+	service, err := NewService(
+		repository.NewMemoryPeopleStore(),
+		testAssetReader{assets: map[string]domain.Asset{}},
+		foundation.NopAuditor{},
+		ServiceConfig{OrganizationID: "example-org", Now: func() time.Time { return now }},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := foundation.WithScope(context.Background(), foundation.Scope{
+		OrganizationID: "example-org", ActorID: "account-1", CorrelationID: "people-occupancy-test",
+	})
+	site, err := service.CreateSite(ctx, CreateSiteInput{Name: "Main Campus"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	building, err := service.CreateBuilding(ctx, CreateBuildingInput{SiteID: site.ID, Name: "Hall"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	office, err := service.CreateRoom(ctx, CreateRoomInput{SiteID: site.ID, BuildingID: building.ID, Number: "10", Name: "Office"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	classroom, err := service.CreateRoom(ctx, CreateRoomInput{SiteID: site.ID, BuildingID: building.ID, Number: "20", Name: "Lecture"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	person, err := service.CreateIdentity(ctx, CreateIdentityInput{
+		Kind: IdentityPerson, DisplayName: "Jordan Lee", Email: "jordan@example.test",
+		BuildingID: building.ID, RoomID: office.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if person.SiteID != site.ID || person.BuildingID != building.ID || person.RoomID != office.ID {
+		t.Fatalf("expected primary location inheritance, got %#v", person)
+	}
+	officeType, err := service.CreateLocationReferenceType(ctx, CreateLocationReferenceTypeInput{
+		Name: "Office", RelationshipKind: RelationshipUsesOffice, LocationKind: LocationKindRoom,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	instructorType, err := service.CreateLocationReferenceType(ctx, CreateLocationReferenceTypeInput{
+		Name: "Instructor", RelationshipKind: RelationshipTeachesIn, LocationKind: LocationKindRoom,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	primary, err := service.CreateLocationReference(ctx, CreateLocationReferenceInput{
+		IdentityID: person.ID, TypeID: officeType.ID, LocationKind: LocationKindRoom, LocationID: office.ID, Priority: LocationPriorityPrimary,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.CreateLocationReference(ctx, CreateLocationReferenceInput{
+		IdentityID: person.ID, TypeID: officeType.ID, LocationKind: LocationKindRoom, LocationID: classroom.ID, Priority: LocationPriorityPrimary,
+	}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("expected one active primary office reference, got %v", err)
+	}
+	secondary, err := service.CreateLocationReference(ctx, CreateLocationReferenceInput{
+		IdentityID: person.ID, TypeID: instructorType.ID, LocationKind: LocationKindRoom, LocationID: classroom.ID, Priority: LocationPrioritySecondary,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := service.ListLocationReferences(ctx, LocationReferenceQuery{LocationIDs: []string{classroom.ID}, Limit: 20}, Visibility{All: true})
+	if err != nil || len(items) != 1 || items[0].ID != secondary.ID {
+		t.Fatalf("expected classroom usage, got %#v, %v", items, err)
+	}
+	if primary.Priority != LocationPriorityPrimary || secondary.TypeID != instructorType.ID {
+		t.Fatalf("unexpected occupancy records %#v %#v", primary, secondary)
+	}
+	if _, err := service.CreateLocationReference(ctx, CreateLocationReferenceInput{
+		IdentityID: person.ID, TypeID: officeType.ID, LocationKind: LocationKindSite, LocationID: site.ID,
+	}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected location kind mismatch, got %v", err)
+	}
+}

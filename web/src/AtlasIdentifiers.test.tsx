@@ -66,6 +66,35 @@ test('associates a manual identifier with CSRF and server-owned state', async ()
   })
 })
 
+test('adopts a camera-scanned QR value into the associate form without saving until confirm', async () => {
+  vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ items: [] })))
+  const stop = vi.fn()
+  vi.stubGlobal('navigator', Object.assign(Object.create(navigator), {
+    mediaDevices: { getUserMedia: vi.fn(async () => ({ getTracks: () => [{ stop }] }) as unknown as MediaStream) },
+  }))
+  vi.stubGlobal('BarcodeDetector', class {
+    detect = vi.fn(async () => [{ format: 'qr_code', rawValue: 'CAMERA-QR-VALUE' }])
+  })
+  vi.stubGlobal('requestAnimationFrame', vi.fn((callback: FrameRequestCallback) => {
+    queueMicrotask(() => callback(1))
+    return 18
+  }))
+  vi.stubGlobal('cancelAnimationFrame', vi.fn())
+  vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined)
+
+  render(<AtlasIdentifiers assetId="asset-1" assetName="Lab server" canWrite csrfToken="csrf-token" />)
+  await screen.findByText('No identifiers are associated with this asset.')
+  fireEvent.click(screen.getByRole('button', { name: 'Associate identifier' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Scan with camera' }))
+
+  expect(await screen.findByText(/Code captured/)).toBeInTheDocument()
+  expect(screen.getByLabelText('Symbology')).toHaveValue('qr')
+  expect(screen.getByLabelText('Encoded value')).toHaveValue('CAMERA-QR-VALUE')
+  expect(screen.getByLabelText(/Display value/)).toHaveValue('CAMERA-QR-VALUE')
+  expect(stop).toHaveBeenCalledTimes(1)
+  expect(screen.getByRole('button', { name: 'Associate identifier', hidden: false })).toBeInTheDocument()
+})
+
 test('replaces and explicitly confirms deactivation using current revisions', async () => {
   const replaced = { ...identifier, status: 'replaced' as const, replacedById: 'identifier-2', revision: 2 }
   const replacement = {

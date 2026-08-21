@@ -1384,6 +1384,10 @@
           "internal/directoryexpansion/graph.go",
           "internal/directoryexpansion/managed_graph.go",
           "internal/httpapi/server.go",
+          "internal/grpcapi/routes.go",
+          "internal/mesh/contracts.go",
+          "internal/mesh/mapping.go",
+          "internal/mesh/service.go",
           "internal/people/contracts.go",
 		  "internal/repository/memory_atlas.go",
           "internal/repository/memory_people.go",
@@ -1393,17 +1397,29 @@
         "tests": [
           "internal/directoryexpansion/relationship_graph_test.go",
           "internal/httpapi/server_test.go",
+          "internal/mesh/mapping_test.go",
+          "internal/mesh/service_test.go",
 		  "internal/repository/contracttest/atlas.go",
           "internal/repository/contracttest/people.go",
 		  "internal/repository/memory_atlas_test.go",
 		  "internal/repository/memory_people_test.go",
           "web/src/PeopleDirectory.test.tsx",
           "web/src/RelationshipGraphView.test.tsx",
+          "web/src/MeshExplorer.test.tsx",
+          "web/src/InteractiveRelationshipGraph.test.tsx",
+          "web/src/GraphNodeBlurb.test.tsx",
+          "web/src/graphRecord.test.ts",
           "web/src/documentation.test.ts"
         ],
         "ui": [
           "web/src/PeopleDirectory.tsx",
           "web/src/RelationshipGraphView.tsx",
+          "web/src/InteractiveRelationshipGraph.tsx",
+          "web/src/MeshExplorer.tsx",
+          "web/src/MeshSectionNav.tsx",
+          "web/src/graphModel.ts",
+          "web/src/graphRecord.ts",
+          "web/src/GraphNodeBlurb.tsx",
           "web/src/documentation.ts"
         ]
       }

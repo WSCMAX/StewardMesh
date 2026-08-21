@@ -42,8 +42,9 @@ function installAuthenticatedFetch(healthAvailable = true, sessionValue = sessio
     if (path === '/api/v1/auth/bootstrap') return jsonResponse({ required: false, tokenRequired: false, minimumPasswordCharacters: 15, oidcEnabled: false, samlEnabled: false })
     if (path === '/api/v1/auth/session') return jsonResponse(sessionValue)
     if (path === '/api/v1/organization') return jsonResponse({ id: 'example-org', name: 'Example Organization' })
-    if (path === '/api/v1/assets') return jsonResponse({ items: [] })
+    if (path === '/api/v1/assets') return jsonResponse({ items: [], nextCursor: '' })
     if (path === '/api/v1/sites' || path === '/api/v1/departments' || path.startsWith('/api/v1/identities?')) return jsonResponse({ items: [] })
+    if (path.startsWith('/api/v1/mesh/graph')) return jsonResponse({ nodes: [], edges: [], sources: [] })
     throw new Error(`unexpected request: ${path}`)
   })
   vi.stubGlobal('fetch', fetchMock)
@@ -107,7 +108,7 @@ test('switches work areas, updates the deep link, and preserves in-progress Atla
   await screen.findByRole('heading', { name: 'Overview — Work queue and product areas' })
 
   fireEvent.click(screen.getByRole('button', { name: 'Open Atlas' }))
-  const search = await screen.findByRole('searchbox', { name: 'Search' })
+  const search = await screen.findByRole('searchbox', { name: 'Search Asset inventory' })
   await waitFor(() => expect(document.getElementById('workspace-context-heading')).toHaveFocus())
   fireEvent.change(search, { target: { value: 'server awaiting deployment' } })
   expect(window.location.hash).toBe('#workspace-atlas')
@@ -115,8 +116,24 @@ test('switches work areas, updates the deep link, and preserves in-progress Atla
   fireEvent.click(screen.getByRole('link', { name: 'Overview — Work queue and product areas' }))
   expect(screen.getByRole('heading', { name: 'Overview — Work queue and product areas' })).toBeVisible()
   fireEvent.click(screen.getByRole('link', { name: 'Atlas — Asset inventory' }))
-  expect(screen.getByRole('searchbox', { name: 'Search' })).toHaveValue('server awaiting deployment')
+  expect(screen.getByRole('searchbox', { name: 'Search Asset inventory' })).toHaveValue('server awaiting deployment')
   expect(document.getElementById('assets-heading')).toBeVisible()
+})
+
+test('opens Mesh for a finance-only session without requiring directory access', async () => {
+  const financeSession = {
+    ...session,
+    permissions: ['organization.read', 'finance.read'],
+    grants: ['organization.read', 'finance.read'].map((permission) => ({ permission, scope: { kind: 'organization', resourceId: 'example-org' } })),
+  }
+  installAuthenticatedFetch(true, financeSession)
+  render(<App />)
+  await screen.findByRole('heading', { name: 'Overview — Work queue and product areas' })
+  fireEvent.click(screen.getByRole('button', { name: 'Open Mesh' }))
+  expect(await screen.findByRole('heading', { name: 'See how records connect across StewardMesh' })).toBeVisible()
+  expect(window.location.hash).toBe('#workspace-mesh')
+  expect(screen.getByRole('tab', { name: 'Graph' })).toBeInTheDocument()
+  expect(screen.getByRole('tab', { name: 'Data' })).toBeInTheDocument()
 })
 
 test('renders the authenticated Workspace without automated accessibility violations', async () => {
@@ -148,7 +165,7 @@ test('shows scoped access without requesting or mounting an organization-wide co
   render(<App />)
   await screen.findByRole('heading', { name: 'Overview — Work queue and product areas' })
 
-  expect(screen.getByText('Scoped')).toBeVisible()
+  expect(screen.getAllByText('Scoped').length).toBeGreaterThan(0)
   fireEvent.click(screen.getByRole('button', { name: 'Open Atlas' }))
   expect(await screen.findByRole('heading', { name: 'Atlas access is limited to assigned records' })).toBeVisible()
   expect(screen.getByText(/Organization-wide lists stay closed/)).toBeVisible()
@@ -199,8 +216,9 @@ test('renders an accessible one-time administrator setup and submits without bro
     }
     if (path === '/api/v1/auth/bootstrap' && init?.method === 'POST') return jsonResponse(session, 201)
     if (path === '/api/v1/organization') return jsonResponse({ id: 'example-org', name: 'Example Organization' })
-    if (path === '/api/v1/assets') return jsonResponse({ items: [] })
+    if (path === '/api/v1/assets') return jsonResponse({ items: [], nextCursor: '' })
     if (path === '/api/v1/sites' || path === '/api/v1/departments' || path.startsWith('/api/v1/identities?')) return jsonResponse({ items: [] })
+    if (path.startsWith('/api/v1/mesh/graph')) return jsonResponse({ nodes: [], edges: [], sources: [] })
     throw new Error(`unexpected request: ${path}`)
   })
   vi.stubGlobal('fetch', fetchMock)
@@ -235,8 +253,9 @@ test('omits the bootstrap token when the deployment does not require one', async
     }
     if (path === '/api/v1/auth/bootstrap' && init?.method === 'POST') return jsonResponse(session, 201)
     if (path === '/api/v1/organization') return jsonResponse({ id: 'example-org', name: 'Example Organization' })
-    if (path === '/api/v1/assets') return jsonResponse({ items: [] })
+    if (path === '/api/v1/assets') return jsonResponse({ items: [], nextCursor: '' })
     if (path === '/api/v1/sites' || path === '/api/v1/departments' || path.startsWith('/api/v1/identities?')) return jsonResponse({ items: [] })
+    if (path.startsWith('/api/v1/mesh/graph')) return jsonResponse({ nodes: [], edges: [], sources: [] })
     throw new Error(`unexpected request: ${path}`)
   })
   vi.stubGlobal('fetch', fetchMock)

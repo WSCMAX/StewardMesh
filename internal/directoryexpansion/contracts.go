@@ -34,8 +34,8 @@ const (
 	MaximumAttributes = 16
 	MaximumGroupLinks = 256
 	DefaultGraphLimit = 100
-	MaximumGraphLimit = 500
-	MaximumGraphEdges = 2000
+	MaximumGraphLimit = 50000
+	MaximumGraphEdges = 200000
 )
 
 var (
@@ -510,11 +510,16 @@ const (
 type RelationshipKind string
 
 const (
-	RelationshipContains   RelationshipKind = "contains"
-	RelationshipBelongsTo  RelationshipKind = "belongs_to"
-	RelationshipLocatedAt  RelationshipKind = "located_at"
-	RelationshipMemberOf   RelationshipKind = "member_of"
-	RelationshipAssignedTo RelationshipKind = "assigned_to"
+	RelationshipContains     RelationshipKind = "contains"
+	RelationshipBelongsTo    RelationshipKind = "belongs_to"
+	RelationshipLocatedAt    RelationshipKind = "located_at"
+	RelationshipMemberOf     RelationshipKind = "member_of"
+	RelationshipAssignedTo   RelationshipKind = "assigned_to"
+	RelationshipUsesOffice   RelationshipKind = "uses_office"
+	RelationshipTeachesIn    RelationshipKind = "teaches_in"
+	RelationshipAttendsClass RelationshipKind = "attends_class"
+	RelationshipResidesIn    RelationshipKind = "resides_in"
+	RelationshipUsesLab      RelationshipKind = "uses_lab"
 )
 
 type Node struct {

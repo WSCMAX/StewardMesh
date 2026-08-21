@@ -1,6 +1,6 @@
 // Requirements: REQ-API-001, SEC-MCP-001, REQ-DIRECTORY-EXPANSION-005, REQ-DIRECTORY-EXPANSION-007, REQ-DIRECTORY-EXPANSION-008, REQ-PATTERNS-001, REQ-SIGNALS-001, REQ-REACH-001, REQ-EXCHANGE-001, DOC-001. Features: platform.foundation, integrations.protocols, threads.relationships, templates.schemas, alerts.rules, messaging.delivery, migration.packages, experience.help.
 
-export type DocumentationTopicID = 'overview' | 'workspace' | 'atlas' | 'horizon' | 'ledger' | 'stack' | 'signals' | 'reach' | 'threads' | 'vault' | 'exchange' | 'people' | 'bridge' | 'guard' | 'guide'
+export type DocumentationTopicID = 'overview' | 'workspace' | 'atlas' | 'horizon' | 'ledger' | 'stack' | 'signals' | 'reach' | 'threads' | 'vault' | 'exchange' | 'people' | 'mesh' | 'bridge' | 'guard' | 'guide'
 
 export type DocumentationStep = {
   title: string
@@ -120,31 +120,33 @@ export const documentationPages: readonly DocumentationPage[] = [
     summary: 'Register organization-owned assets, reuse model defaults, maintain identity and location details, and preserve lifecycle history.',
     appHref: '#workspace-atlas',
     appLabel: 'Open Atlas',
-    searchTerms: ['asset', 'inventory', 'model', 'barcode', 'qr', 'serial', 'hostname', 'lifecycle'],
+    searchTerms: ['asset', 'inventory', 'model', 'barcode', 'qr', 'serial', 'hostname', 'lifecycle', 'filter', 'query', 'group', 'AND', 'OR'],
     sections: [
       {
         id: 'assets',
         title: 'Work with individual assets',
         steps: [
-          { title: 'Find or add the asset', body: 'Search by name, tag, serial number, or hostname, or create a new organization-owned record.' },
-          { title: 'Describe the item', body: 'Record its kind, model, status, purchase date, site, building, room, department, and primary user as available.' },
+          { title: 'Find or add the asset', body: 'Use the Assets tab to search by name, tag, serial number, or hostname, or create a new organization-owned record.' },
+          { title: 'Describe the item', body: 'Record its kind, model, status, purchase date, site, building, room, department, and users. One user can be marked primary; others are additional current users. The Users column is a lookup of People, not a free-text field.' },
+          { title: 'Work in the grid', body: 'Edit cells directly, right-click for row actions, scan a serial number with the camera from that cell, and export the current view as Excel, CSV, or JSON. Grouping, filters, highlights, and column widths are remembered for your signed-in session in this browser.' },
+          { title: 'Filter and report', body: 'Open Filter to build AND/OR groups, or type an encoded query such as status=active^nameLIKElab^ORkind=server. Group by any column to get counts per value. Column filters still narrow by contains, and the same query language is available on other product grids and on Atlas model inventory.' },
           { title: 'Preserve lifecycle context', body: 'Status changes use optimistic revisions and retain an immutable lifecycle note and timestamp history.' },
         ],
       },
       {
         id: 'models',
         title: 'Reuse product models',
-        paragraphs: ['The Model catalog describes a purchased product once and lets many assets reference it. Manufacturer, model identity, kind, vendor identifier, support URL, warranty, and useful-life defaults stay separate from per-item tags, serials, assignments, and lifecycle state.'],
-        bullets: ['Choose Use on a model to prefill a new asset.', 'Edit shared model details without silently overwriting instance-specific asset fields.', 'Retire a model to prevent new assignments while preserving historical references.'],
+        paragraphs: ['The Models tab describes a purchased product once and lets many assets reference it. Manufacturer, model identity, kind, vendor identifier, support URL, warranty, and useful-life defaults stay separate from per-item tags, serials, assignments, and lifecycle state.'],
+        bullets: ['Choose Use on a model to prefill a new asset.', 'Edit shared model details without silently overwriting instance-specific asset fields.', 'Retire a model to prevent new assignments while preserving historical references.', 'With Tags access, connect configured tags on a selected asset or model without leaving Atlas.'],
       },
       {
         id: 'identifiers',
         title: 'Associate barcodes and QR codes',
-        paragraphs: ['Atlas Codes keeps identifier values unique within the organization and attached to a specific asset. Replacement and deactivation preserve history rather than silently reusing an old code.'],
-        callout: { title: 'Scan safely', body: 'Treat a scan as a lookup or association request. Confirm the resolved asset before changing assignments or lifecycle state.', tone: 'warning' },
+        paragraphs: ['The Scan and Labels tabs keep identifier values unique within the organization and attached to a specific asset. Replacement and deactivation preserve history rather than silently reusing an old code. On an asset’s Identifiers panel, Associate identifier can scan with the camera to fill the encoded value from the printed code.'],
+        callout: { title: 'Scan safely', body: 'Open the Scan tab, then treat a scan as a lookup or association request. Confirm the resolved asset before changing assignments or lifecycle state.', tone: 'warning' },
       },
     ],
-    related: ['people', 'horizon', 'vault'],
+    related: ['people', 'horizon', 'vault', 'mesh'],
   },
   {
     id: 'horizon',
@@ -432,7 +434,7 @@ export const documentationPages: readonly DocumentationPage[] = [
     summary: 'Organize places, departments, identities, and effective-dated asset assignments without mixing directory ownership into Atlas.',
     appHref: '#workspace-people',
     appLabel: 'Open People',
-    searchTerms: ['person', 'identity', 'site', 'building', 'room', 'department', 'assignment', 'location', 'grouper', 'nested group', 'peoplesoft', 'campus solutions', 'query access service', 'directory import', 'relationship graph', 'connected records', 'cycles', 'synthetic demo', 'demo seed'],
+    searchTerms: ['person', 'identity', 'site', 'building', 'room', 'department', 'assignment', 'location', 'office', 'dormitory', 'classroom', 'instructor', 'location reference', 'occupancy', 'grouper', 'nested group', 'peoplesoft', 'campus solutions', 'query access service', 'directory import', 'spreadsheet', 'excel', 'tag column', 'floor', 'nested sheet', 'relationship graph', 'connected records', 'cycles', 'synthetic demo', 'demo seed'],
     sections: [
       {
         id: 'directory',
@@ -454,10 +456,30 @@ export const documentationPages: readonly DocumentationPage[] = [
         paragraphs: ['Asset assignments are effective-dated and support primary user, additional user, and responsible department roles. Ending an assignment preserves the prior stewardship record.'],
       },
       {
+        id: 'spreadsheet',
+        title: 'Edit people and locations in a spreadsheet',
+        paragraphs: ['Directory identities and locations use the same Excel-style grid as Atlas. Type to replace a cell, Enter or Tab to commit, and Ctrl+C / Ctrl+V with Excel. Group by department, site, or building from the toolbar.'],
+        bullets: [
+          'Locations are separate sheets for sites, buildings, rooms, and departments. Group buildings by site and rooms by building, or open a nested sheet from a site or building.',
+          'Add a tag column for attributes such as Floor. Floor is a label, not a separate record type.',
+          'Cell edits save with the record revision. Tag edits require labels.write; directory fields require directory.write.',
+        ],
+      },
+      {
+        id: 'location-references',
+        title: 'Record how people use rooms',
+        paragraphs: ['Each identity can keep a primary building and room. Typed location references then add office, instructor, class, dormitory, and lab occupancy, each as primary or secondary for that type.'],
+        bullets: [
+          'The Location references tab has a References sheet and a Types catalog. Group references by room to see occupancy and usage.',
+          'Mesh projects those links as uses_office, teaches_in, attends_class, resides_in, and uses_lab alongside located_at for the person’s primary place.',
+          'Campus demo data includes faculty offices, classrooms, labs, and residence-hall assignments so room usage is visible immediately.',
+        ],
+      },
+      {
         id: 'relationship-graph',
-        title: 'Explore visible record relationships',
-        paragraphs: ['The permission-scoped graph connects visible people, locations, departments, imported groups, and permitted assets without becoming a second source of truth. Filter by record name, record type, relationship type, or result limit.'],
-        bullets: ['The visual is a compact overview; the relationship and disconnected-record tables are the complete keyboard and screen-reader view.', 'Cycles and disconnected records remain visible, while repeated semantic relationships are shown once.', 'Directory and asset grants are intersected by the server. A filter can narrow results but never reveal a record outside your scope.'],
+        title: 'Explore visible record relationships in Mesh',
+        paragraphs: ['People no longer hosts a separate relationship graph. Open Mesh for the permission-scoped graph of people, locations, departments, imported groups, assets, and other products you can already read.'],
+        bullets: ['The visual is a compact overview; Mesh relationship and disconnected-record tables are the complete keyboard and screen-reader view.', 'Cycles and disconnected records remain visible, while repeated semantic relationships are shown once.', 'Directory and asset grants are intersected by the server. A filter can narrow results but never reveal a record outside your scope.'],
         callout: { title: 'Scope stays server-owned', body: 'Graph requests do not accept an organization, site, department, resource, or visibility scope. Guard derives access from the signed-in principal.', tone: 'info' },
       },
       {
@@ -482,7 +504,32 @@ export const documentationPages: readonly DocumentationPage[] = [
         callout: { title: 'PeopleSoft remains read-only', body: 'The adapter executes only synchronous JSON/NONFILE GET queries and has no PeopleSoft write operation.', tone: 'info' },
       },
     ],
-    related: ['atlas', 'workspace', 'guard'],
+    related: ['atlas', 'workspace', 'guard', 'mesh'],
+  },
+  {
+    id: 'mesh',
+    group: 'Product areas',
+    kicker: 'Cross-product graph and data',
+    title: 'Mesh',
+    summary: 'Explore how people, assets, purchase orders, tags, licenses, goals, documents, and plans connect, then inspect the same records in a table.',
+    appHref: '#workspace-mesh',
+    appLabel: 'Open Mesh',
+    searchTerms: ['mesh graph', 'cross-product graph', 'relationship graph', 'purchase order', 'tags', 'licenses', 'gravity', 'zoom', 'spacing', 'grouping', 'fullscreen', 'query editor', 'product hub', 'data grid', 'teaches_in', 'resides_in', 'room usage'],
+    sections: [
+      {
+        id: 'graph',
+        title: 'Explore the cross-product graph',
+        paragraphs: ['Mesh loads records your grants already allow from People, Atlas, Ledger, Stack, Tags, Goals, Vault, and Horizon. It does not become a second source of truth; each product still owns its records.'],
+        bullets: ['Search, relationship, and record-limit filters stay on a compact toolbar so the graph stays on screen. Hide a type from the legend, or restore it from the hidden list.', 'Person occupancy appears as located_at plus uses_office, teaches_in, attends_class, resides_in, and uses_lab so room usage is visible from a classroom or residence hall.', 'Bring product hubs into the chart, and group records as extra nodes from Type, Product, Status, or the Data tab Group by control.', 'The Data tab uses the Atlas spreadsheet: query editor, group-by dropdown, column chooser, and Excel export. Visible rows and groupings feed the graph.', 'Color nodes by record type, product, or status, and use zoom, spacing, gravity, and fullscreen to read dense graphs.'],
+        callout: { title: 'Scope stays server-owned', body: 'Mesh requests do not accept an organization or visibility scope. Guard derives the included products from your signed-in grants. A finance-only operator sees purchase orders and vendors without People records.', tone: 'info' },
+      },
+      {
+        id: 'data',
+        title: 'Review the same records as a table',
+        paragraphs: ['The Data tab uses the shared spreadsheet grid over the loaded graph. Sort and filter records or relationships without changing ownership in any product area.'],
+      },
+    ],
+    related: ['people', 'atlas', 'ledger'],
   },
   {
 	  id: 'bridge',

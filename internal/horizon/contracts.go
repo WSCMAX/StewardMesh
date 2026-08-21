@@ -141,17 +141,68 @@ type Forecast struct {
 	Groups                  []ForecastGroup  `json:"groups"`
 }
 
+type ForecastGroupAssetsQuery struct {
+	ForecastQuery
+	Scenario string
+	GroupKey string
+}
+
+type ForecastGroupAsset struct {
+	PlanID                   string     `json:"planId"`
+	AssetID                  string     `json:"assetId"`
+	AssetName                string     `json:"assetName"`
+	LifecycleStage           string     `json:"lifecycleStage"`
+	ExpectedUsefulLifeMonths int        `json:"expectedUsefulLifeMonths"`
+	ReplacementDate          *time.Time `json:"replacementDate,omitempty"`
+	DerivedReplacementDate   *time.Time `json:"derivedReplacementDate,omitempty"`
+	FiscalYear               int        `json:"fiscalYear"`
+	ReplacementCostMinor     int64      `json:"replacementCostMinor"`
+	Currency                 string     `json:"currency"`
+	Revision                 int64      `json:"revision"`
+}
+
+type ForecastGroupAssets struct {
+	Scenario string               `json:"scenario"`
+	GroupKey string               `json:"groupKey"`
+	Label    string               `json:"label"`
+	GroupBy  string               `json:"groupBy"`
+	Currency string               `json:"currency"`
+	Items    []ForecastGroupAsset `json:"items"`
+}
+
+type KindDefault struct {
+	OrganizationID           string     `json:"organizationId"`
+	AssetKind                string     `json:"assetKind"`
+	Scenario                 string     `json:"scenario"`
+	ExpectedUsefulLifeMonths int        `json:"expectedUsefulLifeMonths"`
+	ReplacementModelID       string     `json:"replacementModelId,omitempty"`
+	Revision                 int64      `json:"revision"`
+	CreatedAt                time.Time  `json:"createdAt"`
+	UpdatedAt                time.Time  `json:"updatedAt"`
+}
+
+type UpsertKindDefaultInput struct {
+	AssetKind                string `json:"assetKind"`
+	Scenario                 string `json:"scenario"`
+	ExpectedUsefulLifeMonths int    `json:"expectedUsefulLifeMonths"`
+	ReplacementModelID       string `json:"replacementModelId,omitempty"`
+	Revision                 int64  `json:"revision,omitempty"`
+}
+
 type Store interface {
 	ListPlans(ctx context.Context, organizationID string, query ListPlansQuery) ([]Plan, error)
 	GetPlan(ctx context.Context, organizationID, id string) (Plan, error)
 	CreatePlan(ctx context.Context, plan Plan, version PlanVersion) (Plan, error)
 	UpdatePlan(ctx context.Context, plan Plan, expectedRevision int64, version PlanVersion) (Plan, error)
 	ListPlanVersions(ctx context.Context, organizationID, planID string) ([]PlanVersion, error)
+	ListKindDefaults(ctx context.Context, organizationID, scenario string) ([]KindDefault, error)
+	UpsertKindDefault(ctx context.Context, item KindDefault) (KindDefault, error)
 }
 
 type AssetReader interface {
 	ListAssets(ctx context.Context, query atlas.Query) ([]domain.Asset, error)
 	GetAsset(ctx context.Context, id string) (domain.Asset, error)
+	GetModel(ctx context.Context, id string) (domain.AssetModel, error)
 }
 
 type FinanceReader interface {

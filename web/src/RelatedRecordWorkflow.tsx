@@ -166,7 +166,7 @@ export function RelatedRecordWorkflowFrame({ boundaries, busy, children, descrip
     <section aria-busy={busy !== null} aria-labelledby={headingId} className="rounded-xl border border-steward-blue/35 bg-steward-ink-950/45 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.025)] sm:p-5" data-feature="experience.workspace" data-requirement="REQ-WORKSPACE-001">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="max-w-3xl">
-          <p className="text-sm font-semibold text-steward-blue">{kicker}</p>
+          <p className="text-sm font-semibold text-[#a9c7ff]">{kicker}</p>
           <h3 className="mt-1 text-lg font-semibold" id={headingId}>{title}</h3>
           <p className="mt-1 text-sm leading-6 text-steward-mist-muted">{description}</p>
         </div>

@@ -37,7 +37,16 @@ type Query struct {
 	DepartmentID      string
 	UserID            string
 	DeploymentContext string
+	Cursor            string
 	Limit             int
+}
+
+// AssetPage is the bounded, name-ordered page returned by the human-facing
+// Atlas asset list. NextCursor is the last asset ID on the page when another
+// page exists; callers pass it back to continue after that record.
+type AssetPage struct {
+	Items      []domain.Asset
+	NextCursor string
 }
 
 // AuthorizedAssetQuery is the bounded keyset query used by non-browser
@@ -125,7 +134,7 @@ type GraphAssetQuery struct {
 	Limit                      int
 }
 
-const MaximumGraphAssetLimit = 500
+const MaximumGraphAssetLimit = 50000
 
 func (q GraphAssetQuery) Valid() bool {
 	return q.Limit >= 1 && q.Limit <= MaximumGraphAssetLimit && q.Visibility.Valid() && q.Directory.Valid() && q.References.Valid() &&
@@ -159,10 +168,11 @@ func validGraphAssetIDs(values []string) bool {
 }
 
 type ModelQuery struct {
-	Search string
-	Kind   string
-	Status string
-	Limit  int
+	Search         string
+	Kind           string
+	Status         string
+	IncludeRetired bool
+	Limit          int
 }
 
 type ModelIdentity struct {
@@ -223,8 +233,17 @@ type CreateAssetInput struct {
 	Hostname        string `json:"hostname,omitempty"`
 	DeploymentNotes string `json:"deploymentNotes,omitempty"`
 	References
-	Status       string     `json:"status"`
-	PurchaseDate *time.Time `json:"purchaseDate,omitempty"`
+	Status            string                  `json:"status"`
+	PurchaseDate      *time.Time              `json:"purchaseDate,omitempty"`
+	LifecycleStartDate *time.Time             `json:"lifecycleStartDate,omitempty"`
+	InstalledDate     *time.Time              `json:"installedDate,omitempty"`
+	ReplacementModelID string                 `json:"replacementModelId,omitempty"`
+	CriticalityScore   int                    `json:"criticalityScore,omitempty"`
+	Attributes        map[string]string       `json:"attributes,omitempty"`
+	Components        []domain.AssetComponent `json:"components,omitempty"`
+	UnitCostMinor     int64                   `json:"unitCostMinor,omitempty"`
+	Currency          string                  `json:"currency,omitempty"`
+	AdditionalUserIDs []string                `json:"additionalUserIds,omitempty"`
 }
 
 type BulkCreateAssetsInput struct {
@@ -246,41 +265,62 @@ type UpdateAssetInput struct {
 	Hostname        string `json:"hostname,omitempty"`
 	DeploymentNotes string `json:"deploymentNotes,omitempty"`
 	References
-	Status        string     `json:"status"`
-	PurchaseDate  *time.Time `json:"purchaseDate,omitempty"`
-	Revision      int64      `json:"revision"`
-	LifecycleNote string     `json:"lifecycleNote,omitempty"`
+	Status            string                  `json:"status"`
+	PurchaseDate      *time.Time              `json:"purchaseDate,omitempty"`
+	LifecycleStartDate *time.Time             `json:"lifecycleStartDate,omitempty"`
+	InstalledDate     *time.Time              `json:"installedDate,omitempty"`
+	ReplacementModelID string                 `json:"replacementModelId,omitempty"`
+	CriticalityScore   int                    `json:"criticalityScore,omitempty"`
+	Attributes        map[string]string       `json:"attributes,omitempty"`
+	Components        []domain.AssetComponent `json:"components,omitempty"`
+	UnitCostMinor     int64                   `json:"unitCostMinor,omitempty"`
+	Currency          string                  `json:"currency,omitempty"`
+	AdditionalUserIDs []string                `json:"additionalUserIds,omitempty"`
+	Revision          int64                   `json:"revision"`
+	LifecycleNote string                  `json:"lifecycleNote,omitempty"`
 }
 
 type CreateModelInput struct {
-	ID               string            `json:"id,omitempty"`
-	Manufacturer     string            `json:"manufacturer"`
-	Name             string            `json:"name"`
-	ModelNumber      string            `json:"modelNumber,omitempty"`
-	Kind             string            `json:"kind"`
-	VendorIdentifier string            `json:"vendorIdentifier,omitempty"`
-	Specifications   map[string]string `json:"specifications,omitempty"`
-	SupportURL       string            `json:"supportUrl,omitempty"`
-	WarrantyMonths   int               `json:"warrantyMonths,omitempty"`
-	UsefulLifeMonths int               `json:"usefulLifeMonths,omitempty"`
-	SourceSystemID   string            `json:"sourceSystemId,omitempty"`
-	SourceRecordID   string            `json:"sourceRecordId,omitempty"`
+	ID               string                     `json:"id,omitempty"`
+	Manufacturer     string                     `json:"manufacturer"`
+	Name             string                     `json:"name"`
+	ModelNumber      string                     `json:"modelNumber,omitempty"`
+	Kind             string                     `json:"kind"`
+	VendorIdentifier string                     `json:"vendorIdentifier,omitempty"`
+	Specifications   map[string]string          `json:"specifications,omitempty"`
+	TemplateFields   []domain.AssetTemplateField `json:"templateFields,omitempty"`
+	SupportURL       string                     `json:"supportUrl,omitempty"`
+	WarrantyMonths    int                        `json:"warrantyMonths,omitempty"`
+	UsefulLifeMonths  int                        `json:"usefulLifeMonths,omitempty"`
+	LastEffectiveDate *time.Time                 `json:"lastEffectiveDate,omitempty"`
+	ReplacementModelID string                    `json:"replacementModelId,omitempty"`
+	CriticalityScore   int                        `json:"criticalityScore,omitempty"`
+	UnitCostMinor     int64                      `json:"unitCostMinor,omitempty"`
+	Currency         string                     `json:"currency,omitempty"`
+	SourceSystemID   string                     `json:"sourceSystemId,omitempty"`
+	SourceRecordID   string                     `json:"sourceRecordId,omitempty"`
 }
 
 type UpdateModelInput struct {
-	ID               string            `json:"-"`
-	Manufacturer     string            `json:"manufacturer"`
-	Name             string            `json:"name"`
-	ModelNumber      string            `json:"modelNumber,omitempty"`
-	Kind             string            `json:"kind"`
-	VendorIdentifier string            `json:"vendorIdentifier,omitempty"`
-	Specifications   map[string]string `json:"specifications,omitempty"`
-	SupportURL       string            `json:"supportUrl,omitempty"`
-	WarrantyMonths   int               `json:"warrantyMonths,omitempty"`
-	UsefulLifeMonths int               `json:"usefulLifeMonths,omitempty"`
-	SourceSystemID   string            `json:"sourceSystemId,omitempty"`
-	SourceRecordID   string            `json:"sourceRecordId,omitempty"`
-	Revision         int64             `json:"revision"`
+	ID               string                     `json:"-"`
+	Manufacturer     string                     `json:"manufacturer"`
+	Name             string                     `json:"name"`
+	ModelNumber      string                     `json:"modelNumber,omitempty"`
+	Kind             string                     `json:"kind"`
+	VendorIdentifier string                     `json:"vendorIdentifier,omitempty"`
+	Specifications   map[string]string          `json:"specifications,omitempty"`
+	TemplateFields   []domain.AssetTemplateField `json:"templateFields,omitempty"`
+	SupportURL       string                     `json:"supportUrl,omitempty"`
+	WarrantyMonths    int                        `json:"warrantyMonths,omitempty"`
+	UsefulLifeMonths  int                        `json:"usefulLifeMonths,omitempty"`
+	LastEffectiveDate *time.Time                 `json:"lastEffectiveDate,omitempty"`
+	ReplacementModelID string                    `json:"replacementModelId,omitempty"`
+	CriticalityScore   int                        `json:"criticalityScore,omitempty"`
+	UnitCostMinor     int64                      `json:"unitCostMinor,omitempty"`
+	Currency         string                     `json:"currency,omitempty"`
+	SourceSystemID   string                     `json:"sourceSystemId,omitempty"`
+	SourceRecordID   string                     `json:"sourceRecordId,omitempty"`
+	Revision         int64                      `json:"revision"`
 }
 
 // ExchangeSnapshot is an organization-consistent, bounded view used only by
@@ -329,6 +369,7 @@ type Store interface {
 	CreateModel(ctx context.Context, model domain.AssetModel) (domain.AssetModel, error)
 	UpdateModel(ctx context.Context, model domain.AssetModel, expectedRevision int64) (domain.AssetModel, error)
 	RetireModel(ctx context.Context, organizationID, id string, expectedRevision int64, retiredAt time.Time) (domain.AssetModel, error)
+	ReactivateModel(ctx context.Context, organizationID, id string, expectedRevision int64, reactivatedAt time.Time) (domain.AssetModel, error)
 	GetModelInventory(ctx context.Context, organizationID, modelID string, query ModelInventoryQuery) (ModelInventory, error)
 	ListAssets(ctx context.Context, organizationID string, query Query) ([]domain.Asset, error)
 	ListAuthorizedAssets(ctx context.Context, organizationID string, query AuthorizedAssetQuery) ([]domain.Asset, error)
@@ -346,4 +387,5 @@ type Store interface {
 
 type ReferenceValidator interface {
 	ValidateAssetReferences(ctx context.Context, organizationID string, references References) error
+	ValidateIdentities(ctx context.Context, organizationID string, identityIDs []string) error
 }

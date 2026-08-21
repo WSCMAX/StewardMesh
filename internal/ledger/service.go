@@ -186,7 +186,7 @@ func (s *Service) CreatePurchaseOrder(ctx context.Context, input CreatePurchaseO
 		ID: id, OrganizationID: s.organizationID, Number: normalized.Number, VendorID: normalized.VendorID,
 		Status: normalized.Status, Currency: normalized.Currency, TotalMinor: normalized.TotalMinor,
 		OrderedOn: cloneDate(normalized.OrderedOn), AssetIDs: normalized.AssetIDs,
-		ReceiptDocumentIDs: normalized.ReceiptDocumentIDs, Revision: 1, CreatedAt: now, UpdatedAt: now,
+		ReceiptDocumentIDs: normalized.ReceiptDocumentIDs, Lines: normalized.Lines, Revision: 1, CreatedAt: now, UpdatedAt: now,
 	})
 	if err != nil {
 		return PurchaseOrder{}, err
@@ -558,6 +558,25 @@ func normalizePurchaseOrder(input CreatePurchaseOrderInput) (CreatePurchaseOrder
 	input.Currency = strings.ToUpper(strings.TrimSpace(input.Currency))
 	input.AssetIDs = normalizeIDs(input.AssetIDs)
 	input.ReceiptDocumentIDs = normalizeIDs(input.ReceiptDocumentIDs)
+	lines, err := normalizePurchaseOrderLines(input.Lines)
+	if err != nil {
+		return CreatePurchaseOrderInput{}, err
+	}
+	input.Lines = lines
+	if len(input.Lines) > 0 {
+		var total int64
+		for _, line := range input.Lines {
+			total += line.AmountMinor
+			if line.AssetID != "" {
+				input.AssetIDs = append(input.AssetIDs, line.AssetID)
+			}
+		}
+		input.AssetIDs = normalizeIDs(input.AssetIDs)
+		if input.TotalMinor == 0 {
+			input.TotalMinor = total
+		}
+		input.AssetIDs = uniqueSortedIDs(input.AssetIDs)
+	}
 	if !optionalID(input.ID) || !validTextRange(input.Number, 1, 100) || !idPattern.MatchString(input.VendorID) || !contains(validPurchaseOrderStatuses, input.Status) || !currencyPattern.MatchString(input.Currency) || input.TotalMinor < 0 {
 		return CreatePurchaseOrderInput{}, ErrInvalidInput
 	}
@@ -776,6 +795,63 @@ func normalizeIDs(values []string) []string {
 	}
 	sort.Strings(result)
 	return result
+}
+
+func uniqueSortedIDs(values []string) []string {
+	values = normalizeIDs(values)
+	if len(values) == 0 {
+		return values
+	}
+	result := values[:1]
+	for _, value := range values[1:] {
+		if value != result[len(result)-1] {
+			result = append(result, value)
+		}
+	}
+	return result
+}
+
+func normalizePurchaseOrderLines(lines []PurchaseOrderLine) ([]PurchaseOrderLine, error) {
+	if len(lines) > 200 {
+		return nil, ErrInvalidInput
+	}
+	normalized := make([]PurchaseOrderLine, 0, len(lines))
+	seen := make(map[string]struct{}, len(lines))
+	validKinds := map[string]struct{}{"asset": {}, "model": {}, "accessory": {}, "software": {}, "other": {}}
+	for index, line := range lines {
+		line.ID = strings.TrimSpace(line.ID)
+		line.Description = strings.TrimSpace(line.Description)
+		line.Kind = strings.ToLower(strings.TrimSpace(line.Kind))
+		line.AssetID = strings.TrimSpace(line.AssetID)
+		line.ModelID = strings.TrimSpace(line.ModelID)
+		line.LicenseID = strings.TrimSpace(line.LicenseID)
+		if line.ID == "" {
+			line.ID = fmt.Sprintf("line-%d", index+1)
+		}
+		if line.Quantity == 0 {
+			line.Quantity = 1
+		}
+		if line.AmountMinor == 0 {
+			if line.UnitCostMinor < 0 || line.Quantity < 1 || line.UnitCostMinor > math.MaxInt64/line.Quantity {
+				return nil, ErrInvalidInput
+			}
+			line.AmountMinor = line.UnitCostMinor * line.Quantity
+		}
+		if !idPattern.MatchString(line.ID) || !validTextRange(line.Description, 1, 300) || !contains(validKinds, line.Kind) ||
+			!optionalID(line.AssetID) || !optionalID(line.ModelID) || !optionalID(line.LicenseID) ||
+			line.Quantity < 1 || line.Quantity > 1_000_000 || line.UnitCostMinor < 0 || line.AmountMinor < 0 {
+			return nil, ErrInvalidInput
+		}
+		if _, exists := seen[line.ID]; exists {
+			return nil, ErrInvalidInput
+		}
+		seen[line.ID] = struct{}{}
+		normalized = append(normalized, line)
+	}
+	if len(normalized) == 0 {
+		return nil, nil
+	}
+	return normalized, nil
 }
 func hasDuplicates(values []string) bool {
 	for index := 1; index < len(values); index++ {

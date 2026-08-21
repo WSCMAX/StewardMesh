@@ -280,6 +280,7 @@ func (s *MemoryGuardStore) AccessForAccount(_ context.Context, organizationID, a
 		}
 		return access.Grants[i].Permission < access.Grants[j].Permission
 	})
+	guard.AugmentAccessGrants(organizationID, &access)
 	return access, nil
 }
 

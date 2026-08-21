@@ -98,6 +98,7 @@ type Config struct {
 	SessionCookieSecure         bool
 	SessionTTL                  time.Duration
 	SeedSynthetic               bool
+	SeedCampus                  bool
 	GrouperURL                  string
 	GrouperSourceSystemID       string
 	GrouperUsername             string
@@ -148,6 +149,7 @@ func FromEnv() Config {
 	s3ForcePathStyle, s3PathStyleErr := envBool("STEWARDMESH_S3_FORCE_PATH_STYLE", false)
 	oidcRequireVerifiedEmail, oidcVerifiedEmailErr := envBool("STEWARDMESH_OIDC_REQUIRE_VERIFIED_EMAIL", true)
 	seedSynthetic, seedSyntheticErr := envBool("STEWARDMESH_SEED_SYNTHETIC", false)
+	seedCampus, seedCampusErr := envBool("STEWARDMESH_SEED_CAMPUS", false)
 	grouperAllowPrivate, grouperPrivateErr := envBool("STEWARDMESH_GROUPER_ALLOW_PRIVATE_NETWORK", false)
 	grouperTimeout, grouperTimeoutErr := envDuration("STEWARDMESH_GROUPER_TIMEOUT", directoryexpansion.DefaultGrouperTimeout)
 	grouperPageSize, grouperPageErr := envInt("STEWARDMESH_GROUPER_PAGE_SIZE", directoryexpansion.DefaultGrouperPageSize)
@@ -227,6 +229,7 @@ func FromEnv() Config {
 		SessionCookieSecure:         sessionCookieSecure,
 		SessionTTL:                  sessionTTL,
 		SeedSynthetic:               seedSynthetic,
+		SeedCampus:                  seedCampus,
 		GrouperURL:                  grouperURL,
 		GrouperSourceSystemID:       grouperSourceSystemID,
 		GrouperUsername:             os.Getenv("STEWARDMESH_GROUPER_USERNAME"),
@@ -253,7 +256,7 @@ func FromEnv() Config {
 		PeopleSoftTimeout:           peopleSoftTimeout,
 		PeopleSoftAllowPrivate:      peopleSoftAllowPrivate,
 		validationError: errors.Join(secureErr, ttlErr, blobTTLErr, blobSizeErr, s3PathStyleErr, oidcVerifiedEmailErr,
-			seedSyntheticErr, grouperPrivateErr, grouperTimeoutErr, grouperPageErr, grouperResponseErr,
+			seedSyntheticErr, seedCampusErr, grouperPrivateErr, grouperTimeoutErr, grouperPageErr, grouperResponseErr,
 			peopleSoftPrivateErr, peopleSoftTimeoutErr, peopleSoftRowsErr, peopleSoftResponseErr),
 	}
 }
@@ -277,6 +280,9 @@ func (c Config) Validate() error {
 	}
 	if c.SeedSynthetic && !strings.HasPrefix(strings.ToLower(strings.TrimSpace(c.OrganizationID)), "demo-") {
 		return errors.New("STEWARDMESH_SEED_SYNTHETIC requires a demo-* STEWARDMESH_ORGANIZATION_ID")
+	}
+	if c.SeedCampus && !strings.HasPrefix(strings.ToLower(strings.TrimSpace(c.OrganizationID)), "demo-") {
+		return errors.New("STEWARDMESH_SEED_CAMPUS requires a demo-* STEWARDMESH_ORGANIZATION_ID")
 	}
 	if !stableConfigurationID(c.ExchangeSourceSystemID) {
 		return errors.New("STEWARDMESH_EXCHANGE_SOURCE_SYSTEM_ID must be a stable identifier")

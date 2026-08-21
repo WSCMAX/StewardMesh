@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -116,13 +117,13 @@ func (s *AtlasStore) ExchangeSnapshot(ctx context.Context, organizationID string
 
 const atlasAssetColumns = `
 	organization_id, id, model_id, model_context, name, kind, asset_tag, serial_number, hostname,
-	deployment_notes, site_id, building_id, room_id, department_id, user_id, status,
-	purchase_date, revision, created_at, updated_at`
+	deployment_notes, site_id, building_id, room_id, department_id, user_id, additional_user_ids, status,
+	purchase_date, lifecycle_start_date, installed_date, replacement_model_id, criticality_score, attributes, components, unit_cost_minor, currency, revision, created_at, updated_at`
 
 const atlasModelColumns = `
 	organization_id, id, manufacturer, name, model_number, kind, vendor_identifier,
-	specifications, support_url, warranty_months, useful_life_months, status,
-	source_system_id, source_record_id, revision, created_at, updated_at`
+	specifications, template_fields, support_url, warranty_months, useful_life_months, last_effective_date,
+	replacement_model_id, criticality_score, unit_cost_minor, currency, status, source_system_id, source_record_id, revision, created_at, updated_at`
 
 func (s *AtlasStore) ListModels(ctx context.Context, organizationID string, query atlas.ModelQuery) ([]domain.AssetModel, error) {
 	rows, err := s.database.QueryContext(ctx, `
@@ -199,20 +200,25 @@ func (s *AtlasStore) CreateModel(ctx context.Context, model domain.AssetModel) (
 	if err != nil {
 		return domain.AssetModel{}, fmt.Errorf("marshal Atlas model specifications: %w", err)
 	}
+	templateFields, err := marshalAtlasTemplateFields(model.TemplateFields)
+	if err != nil {
+		return domain.AssetModel{}, err
+	}
 	created, err := scanAtlasModel(s.database.QueryRowContext(ctx, `
 		INSERT INTO atlas_models (
 			organization_id, id, manufacturer, name, model_number, normalized_manufacturer,
 			normalized_name, normalized_model_number, kind, vendor_identifier, specifications,
-			support_url, warranty_months, useful_life_months, status, source_system_id,
-			source_record_id, revision, created_at, updated_at
+			template_fields, support_url, warranty_months, useful_life_months, last_effective_date, replacement_model_id,
+			criticality_score, unit_cost_minor, currency, status, source_system_id, source_record_id, revision, created_at, updated_at
 		) VALUES (
 			$1, $2, $3, $4, $5, lower(btrim($3)), lower(btrim($4)), lower(btrim($5)), $6, $7,
-			$8, $9, $10, $11, $12, $13, $14, $15, $16, $17
+			$8, $9, $10, $11, $12, $13, NULLIF($14, ''), $15, $16, $17, $18, $19, $20, $21, $22, $23
 		)
 		RETURNING `+atlasModelColumns+`, 0
 	`, model.OrganizationID, model.ID, model.Manufacturer, model.Name, model.ModelNumber, model.Kind,
-		model.VendorIdentifier, specifications, model.SupportURL, model.WarrantyMonths, model.UsefulLifeMonths,
-		model.Status, model.SourceSystemID, model.SourceRecordID, model.Revision, model.CreatedAt, model.UpdatedAt), true)
+		model.VendorIdentifier, specifications, templateFields, model.SupportURL, model.WarrantyMonths, model.UsefulLifeMonths,
+		model.LastEffectiveDate, model.ReplacementModelID, model.CriticalityScore, model.UnitCostMinor, atlasCurrency(model.Currency), model.Status, model.SourceSystemID, model.SourceRecordID,
+		model.Revision, model.CreatedAt, model.UpdatedAt), true)
 	if err != nil {
 		return domain.AssetModel{}, translateAtlasWriteError("create Atlas model", err)
 	}
@@ -224,21 +230,25 @@ func (s *AtlasStore) UpdateModel(ctx context.Context, model domain.AssetModel, e
 	if err != nil {
 		return domain.AssetModel{}, fmt.Errorf("marshal Atlas model specifications: %w", err)
 	}
+	templateFields, err := marshalAtlasTemplateFields(model.TemplateFields)
+	if err != nil {
+		return domain.AssetModel{}, err
+	}
 	updated, err := scanAtlasModel(s.database.QueryRowContext(ctx, `
 		UPDATE atlas_models
 		SET manufacturer = $3, name = $4, model_number = $5, normalized_manufacturer = lower(btrim($3)),
 			normalized_name = lower(btrim($4)), normalized_model_number = lower(btrim($5)),
-			kind = $6, vendor_identifier = $7, specifications = $8, support_url = $9,
-			warranty_months = $10, useful_life_months = $11, source_system_id = $12,
-			source_record_id = $13, revision = revision + 1, updated_at = $14
-		WHERE organization_id = $1 AND id = $2 AND revision = $15 AND status = 'active'
+			kind = $6, vendor_identifier = $7, specifications = $8, template_fields = $9, support_url = $10,
+			warranty_months = $11, useful_life_months = $12, last_effective_date = $13, replacement_model_id = NULLIF($14, ''),
+			criticality_score = $15, unit_cost_minor = $16, currency = $17, source_system_id = $18, source_record_id = $19, revision = revision + 1, updated_at = $20
+		WHERE organization_id = $1 AND id = $2 AND revision = $21 AND status = 'active'
 		RETURNING `+atlasModelColumns+`, (
 			SELECT count(*) FROM atlas_assets AS asset
 			WHERE asset.organization_id = atlas_models.organization_id AND asset.model_id = atlas_models.id
 		)
 	`, model.OrganizationID, model.ID, model.Manufacturer, model.Name, model.ModelNumber, model.Kind,
-		model.VendorIdentifier, specifications, model.SupportURL, model.WarrantyMonths, model.UsefulLifeMonths,
-		model.SourceSystemID, model.SourceRecordID, model.UpdatedAt, expectedRevision), true)
+		model.VendorIdentifier, specifications, templateFields, model.SupportURL, model.WarrantyMonths, model.UsefulLifeMonths,
+		model.LastEffectiveDate, model.ReplacementModelID, model.CriticalityScore, model.UnitCostMinor, atlasCurrency(model.Currency), model.SourceSystemID, model.SourceRecordID, model.UpdatedAt, expectedRevision), true)
 	if errors.Is(err, sql.ErrNoRows) {
 		if exists, checkErr := s.modelExists(ctx, model.OrganizationID, model.ID); checkErr != nil {
 			return domain.AssetModel{}, checkErr
@@ -275,6 +285,30 @@ func (s *AtlasStore) RetireModel(ctx context.Context, organizationID, id string,
 		return domain.AssetModel{}, translateAtlasWriteError("retire Atlas model", err)
 	}
 	return retired, nil
+}
+
+func (s *AtlasStore) ReactivateModel(ctx context.Context, organizationID, id string, expectedRevision int64, reactivatedAt time.Time) (domain.AssetModel, error) {
+	reactivated, err := scanAtlasModel(s.database.QueryRowContext(ctx, `
+		UPDATE atlas_models
+		SET status = 'active', revision = revision + 1, updated_at = $4
+		WHERE organization_id = $1 AND id = $2 AND revision = $3 AND status = 'retired'
+		RETURNING `+atlasModelColumns+`, (
+			SELECT count(*) FROM atlas_assets AS asset
+			WHERE asset.organization_id = atlas_models.organization_id AND asset.model_id = atlas_models.id
+		)
+	`, organizationID, id, expectedRevision, reactivatedAt), true)
+	if errors.Is(err, sql.ErrNoRows) {
+		if exists, checkErr := s.modelExists(ctx, organizationID, id); checkErr != nil {
+			return domain.AssetModel{}, checkErr
+		} else if !exists {
+			return domain.AssetModel{}, atlas.ErrNotFound
+		}
+		return domain.AssetModel{}, atlas.ErrConflict
+	}
+	if err != nil {
+		return domain.AssetModel{}, translateAtlasWriteError("reactivate Atlas model", err)
+	}
+	return reactivated, nil
 }
 
 const atlasAssetFilterWhere = `
@@ -515,12 +549,22 @@ type atlasRowsQueryer interface {
 }
 
 func listAtlasAssets(ctx context.Context, queryer atlasRowsQueryer, organizationID string, query atlas.Query) ([]domain.Asset, error) {
-	arguments := append(atlasAssetFilterArguments(organizationID, query), query.Limit)
+	arguments := atlasAssetFilterArguments(organizationID, query)
+	cursorClause := ""
+	if query.Cursor != "" {
+		arguments = append(arguments, query.Cursor)
+		cursorPosition := len(arguments)
+		cursorClause = fmt.Sprintf(` AND (lower(name), id) > (
+			SELECT lower(name), id FROM atlas_assets WHERE organization_id = $1 AND id = $%d
+		)`, cursorPosition)
+	}
+	arguments = append(arguments, query.Limit)
+	limitPosition := len(arguments)
 	rows, err := queryer.QueryContext(ctx, `
 		SELECT `+atlasAssetColumns+`
-		FROM atlas_assets `+atlasAssetFilterWhere+`
+		FROM atlas_assets `+atlasAssetFilterWhere+cursorClause+`
 		ORDER BY lower(name), id
-		LIMIT $10
+		LIMIT $`+strconv.Itoa(limitPosition)+`
 	`, arguments...)
 	if err != nil {
 		return nil, fmt.Errorf("list Atlas assets: %w", err)
@@ -605,20 +649,35 @@ func (s *AtlasStore) CreateAssets(ctx context.Context, assets []domain.Asset, in
 		if marshalErr != nil {
 			return nil, marshalErr
 		}
+		attributes, attrErr := marshalAtlasSpecifications(asset.Attributes)
+		if attrErr != nil {
+			return nil, fmt.Errorf("marshal Atlas asset attributes: %w", attrErr)
+		}
+		components, componentErr := marshalAtlasComponents(asset.Components)
+		if componentErr != nil {
+			return nil, componentErr
+		}
+		additionalUserIDs, additionalErr := marshalAdditionalUserIDs(asset.AdditionalUserIDs)
+		if additionalErr != nil {
+			return nil, additionalErr
+		}
 		item, createErr := scanAtlasAsset(transaction.QueryRowContext(ctx, `
 		INSERT INTO atlas_assets (
 			organization_id, id, model_id, model_context, name, kind, asset_tag, normalized_asset_tag,
 			serial_number, normalized_serial_number, hostname, deployment_notes, site_id, building_id,
-			room_id, department_id, user_id, status, purchase_date, revision, created_at, updated_at
+			room_id, department_id, user_id, additional_user_ids, status, purchase_date, lifecycle_start_date,
+			installed_date, replacement_model_id, criticality_score, attributes, components, unit_cost_minor, currency, revision, created_at, updated_at
 		) VALUES (
 			$1, $2, NULLIF($3, ''), $4, $5, $6, $7, lower(btrim($7)), $8, lower(btrim($8)), $9,
 			$10, NULLIF($11, ''), NULLIF($12, ''), NULLIF($13, ''), NULLIF($14, ''), NULLIF($15, ''),
-			$16, $17, $18, $19, $20
+			$16, $17, $18, $19, $20, NULLIF($21, ''), $22, $23, $24, $25, $26, $27, $28, $29
 		)
 		RETURNING `+atlasAssetColumns,
 			asset.OrganizationID, asset.ID, asset.ModelID, modelContext, asset.Name, asset.Kind, asset.AssetTag, asset.SerialNumber,
 			asset.Hostname, asset.DeploymentNotes, asset.SiteID, asset.BuildingID, asset.RoomID, asset.DepartmentID, asset.UserID,
-			asset.Status, asset.PurchaseDate, asset.Revision, asset.CreatedAt, asset.UpdatedAt,
+			additionalUserIDs, asset.Status, asset.PurchaseDate, asset.LifecycleStartDate, asset.InstalledDate, asset.ReplacementModelID,
+			asset.CriticalityScore, attributes, components, asset.UnitCostMinor, atlasCurrency(asset.Currency),
+			asset.Revision, asset.CreatedAt, asset.UpdatedAt,
 		))
 		if createErr != nil {
 			return nil, translateAtlasWriteError("create Atlas asset", createErr)
@@ -644,19 +703,35 @@ func (s *AtlasStore) UpdateAsset(ctx context.Context, asset domain.Asset, expect
 	if err != nil {
 		return domain.Asset{}, err
 	}
+	attributes, err := marshalAtlasSpecifications(asset.Attributes)
+	if err != nil {
+		return domain.Asset{}, fmt.Errorf("marshal Atlas asset attributes: %w", err)
+	}
+	components, err := marshalAtlasComponents(asset.Components)
+	if err != nil {
+		return domain.Asset{}, err
+	}
+	additionalUserIDs, err := marshalAdditionalUserIDs(asset.AdditionalUserIDs)
+	if err != nil {
+		return domain.Asset{}, err
+	}
 	updated, err := scanAtlasAsset(transaction.QueryRowContext(ctx, `
 		UPDATE atlas_assets
 		SET model_id = NULLIF($3, ''), model_context = $4, name = $5, kind = $6,
 			asset_tag = $7, normalized_asset_tag = lower(btrim($7)), serial_number = $8,
 			normalized_serial_number = lower(btrim($8)), hostname = $9, deployment_notes = $10,
 			site_id = NULLIF($11, ''), building_id = NULLIF($12, ''), room_id = NULLIF($13, ''),
-			department_id = NULLIF($14, ''), user_id = NULLIF($15, ''), status = $16,
-			purchase_date = $17, revision = revision + 1, updated_at = $18
-		WHERE organization_id = $1 AND id = $2 AND revision = $19
+			department_id = NULLIF($14, ''), user_id = NULLIF($15, ''), additional_user_ids = $16, status = $17,
+			purchase_date = $18, lifecycle_start_date = $19, installed_date = $20, replacement_model_id = NULLIF($21, ''),
+			criticality_score = $22, attributes = $23, components = $24, unit_cost_minor = $25,
+			currency = $26, revision = revision + 1, updated_at = $27
+		WHERE organization_id = $1 AND id = $2 AND revision = $28
 		RETURNING `+atlasAssetColumns,
 		asset.OrganizationID, asset.ID, asset.ModelID, modelContext, asset.Name, asset.Kind, asset.AssetTag, asset.SerialNumber,
 		asset.Hostname, asset.DeploymentNotes, asset.SiteID, asset.BuildingID, asset.RoomID, asset.DepartmentID, asset.UserID,
-		asset.Status, asset.PurchaseDate, asset.UpdatedAt, expectedRevision,
+		additionalUserIDs, asset.Status, asset.PurchaseDate, asset.LifecycleStartDate, asset.InstalledDate, asset.ReplacementModelID,
+		asset.CriticalityScore, attributes, components, asset.UnitCostMinor, atlasCurrency(asset.Currency),
+		asset.UpdatedAt, expectedRevision,
 	))
 	if errors.Is(err, sql.ErrNoRows) {
 		var exists bool
@@ -732,19 +807,24 @@ func (s *AtlasStore) ImportModel(ctx context.Context, model domain.AssetModel) (
 	if err != nil {
 		return domain.AssetModel{}, false, fmt.Errorf("marshal imported Atlas model specifications: %w", err)
 	}
+	templateFields, err := marshalAtlasTemplateFields(model.TemplateFields)
+	if err != nil {
+		return domain.AssetModel{}, false, err
+	}
 	created, err := scanAtlasModel(s.database.QueryRowContext(ctx, `
 		INSERT INTO atlas_models (
 			organization_id, id, manufacturer, name, model_number, normalized_manufacturer,
 			normalized_name, normalized_model_number, kind, vendor_identifier, specifications,
-			support_url, warranty_months, useful_life_months, status, source_system_id,
-			source_record_id, revision, created_at, updated_at
+			template_fields, support_url, warranty_months, useful_life_months, last_effective_date, replacement_model_id,
+			criticality_score, unit_cost_minor, currency, status, source_system_id, source_record_id, revision, created_at, updated_at
 		) VALUES ($1, $2, $3, $4, $5, lower(btrim($3)), lower(btrim($4)), lower(btrim($5)),
-			$6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+			$6, $7, $8, $9, $10, $11, $12, $13, NULLIF($14, ''), $15, $16, $17, $18, $19, $20, $21, $22, $23)
 		ON CONFLICT (organization_id, id) DO NOTHING
 		RETURNING `+atlasModelColumns,
 		model.OrganizationID, model.ID, model.Manufacturer, model.Name, model.ModelNumber, model.Kind,
-		model.VendorIdentifier, specifications, model.SupportURL, model.WarrantyMonths, model.UsefulLifeMonths,
-		model.Status, model.SourceSystemID, model.SourceRecordID, model.Revision, model.CreatedAt, model.UpdatedAt), false)
+		model.VendorIdentifier, specifications, templateFields, model.SupportURL, model.WarrantyMonths, model.UsefulLifeMonths,
+		model.LastEffectiveDate, model.ReplacementModelID, model.CriticalityScore, model.UnitCostMinor, atlasCurrency(model.Currency), model.Status, model.SourceSystemID, model.SourceRecordID,
+		model.Revision, model.CreatedAt, model.UpdatedAt), false)
 	if err == nil {
 		return created, true, nil
 	}
@@ -767,19 +847,34 @@ func (s *AtlasStore) ImportAsset(ctx context.Context, asset domain.Asset) (domai
 	if err != nil {
 		return domain.Asset{}, false, err
 	}
+	attributes, err := marshalAtlasSpecifications(asset.Attributes)
+	if err != nil {
+		return domain.Asset{}, false, fmt.Errorf("marshal imported Atlas asset attributes: %w", err)
+	}
+	components, err := marshalAtlasComponents(asset.Components)
+	if err != nil {
+		return domain.Asset{}, false, err
+	}
+	additionalUserIDs, err := marshalAdditionalUserIDs(asset.AdditionalUserIDs)
+	if err != nil {
+		return domain.Asset{}, false, err
+	}
 	created, err := scanAtlasAsset(s.database.QueryRowContext(ctx, `
 		INSERT INTO atlas_assets (
 			organization_id, id, model_id, model_context, name, kind, asset_tag, normalized_asset_tag,
 			serial_number, normalized_serial_number, hostname, deployment_notes, site_id, building_id,
-			room_id, department_id, user_id, status, purchase_date, revision, created_at, updated_at
+			room_id, department_id, user_id, additional_user_ids, status, purchase_date, lifecycle_start_date,
+			installed_date, replacement_model_id, criticality_score, attributes, components, unit_cost_minor, currency, revision, created_at, updated_at
 		) VALUES ($1, $2, NULLIF($3, ''), $4, $5, $6, $7, lower(btrim($7)), $8, lower(btrim($8)),
 			$9, $10, NULLIF($11, ''), NULLIF($12, ''), NULLIF($13, ''), NULLIF($14, ''), NULLIF($15, ''),
-			$16, $17, $18, $19, $20)
+			$16, $17, $18, $19, $20, NULLIF($21, ''), $22, $23, $24, $25, $26, $27, $28, $29)
 		ON CONFLICT (organization_id, id) DO NOTHING
 		RETURNING `+atlasAssetColumns,
 		asset.OrganizationID, asset.ID, asset.ModelID, modelContext, asset.Name, asset.Kind, asset.AssetTag,
 		asset.SerialNumber, asset.Hostname, asset.DeploymentNotes, asset.SiteID, asset.BuildingID, asset.RoomID,
-		asset.DepartmentID, asset.UserID, asset.Status, asset.PurchaseDate, asset.Revision, asset.CreatedAt, asset.UpdatedAt))
+		asset.DepartmentID, asset.UserID, additionalUserIDs, asset.Status, asset.PurchaseDate, asset.LifecycleStartDate,
+		asset.InstalledDate, asset.ReplacementModelID, asset.CriticalityScore, attributes, components,
+		asset.UnitCostMinor, atlasCurrency(asset.Currency), asset.Revision, asset.CreatedAt, asset.UpdatedAt))
 	if err == nil {
 		return created, true, nil
 	}
@@ -831,13 +926,15 @@ type atlasScanner interface {
 
 func scanAtlasAsset(scanner atlasScanner) (domain.Asset, error) {
 	var asset domain.Asset
-	var modelID, siteID, buildingID, roomID, departmentID, userID sql.NullString
-	var rawModelContext []byte
-	var purchaseDate sql.NullTime
+	var modelID, siteID, buildingID, roomID, departmentID, userID, replacementModelID sql.NullString
+	var rawModelContext, rawAttributes, rawComponents, rawAdditional []byte
+	var purchaseDate, lifecycleStartDate, installedDate sql.NullTime
 	if err := scanner.Scan(
 		&asset.OrganizationID, &asset.ID, &modelID, &rawModelContext, &asset.Name, &asset.Kind, &asset.AssetTag,
 		&asset.SerialNumber, &asset.Hostname, &asset.DeploymentNotes, &siteID, &buildingID, &roomID, &departmentID,
-		&userID, &asset.Status, &purchaseDate, &asset.Revision, &asset.CreatedAt, &asset.UpdatedAt,
+		&userID, &rawAdditional, &asset.Status, &purchaseDate, &lifecycleStartDate, &installedDate, &replacementModelID,
+		&asset.CriticalityScore, &rawAttributes, &rawComponents, &asset.UnitCostMinor, &asset.Currency,
+		&asset.Revision, &asset.CreatedAt, &asset.UpdatedAt,
 	); err != nil {
 		return domain.Asset{}, err
 	}
@@ -848,12 +945,41 @@ func scanAtlasAsset(scanner atlasScanner) (domain.Asset, error) {
 			return domain.Asset{}, fmt.Errorf("decode Atlas asset model context: %w", err)
 		}
 	}
+	if err := json.Unmarshal(rawAttributes, &asset.Attributes); err != nil && len(rawAttributes) > 0 {
+		return domain.Asset{}, fmt.Errorf("decode Atlas asset attributes: %w", err)
+	}
+	if len(asset.Attributes) == 0 {
+		asset.Attributes = nil
+	}
+	if err := json.Unmarshal(rawComponents, &asset.Components); err != nil && len(rawComponents) > 0 {
+		return domain.Asset{}, fmt.Errorf("decode Atlas asset components: %w", err)
+	}
+	if len(asset.Components) == 0 {
+		asset.Components = nil
+	}
+	if asset.Currency == "USD" && asset.UnitCostMinor == 0 {
+		asset.Currency = ""
+	}
 	asset.SiteID, asset.BuildingID, asset.RoomID = siteID.String, buildingID.String, roomID.String
 	asset.DepartmentID, asset.UserID = departmentID.String, userID.String
+	if len(rawAdditional) > 0 && string(rawAdditional) != "[]" && string(rawAdditional) != "null" {
+		if err := json.Unmarshal(rawAdditional, &asset.AdditionalUserIDs); err != nil {
+			return domain.Asset{}, fmt.Errorf("decode Atlas additional users: %w", err)
+		}
+	}
 	if purchaseDate.Valid {
 		value := purchaseDate.Time.UTC()
 		asset.PurchaseDate = &value
 	}
+	if lifecycleStartDate.Valid {
+		value := lifecycleStartDate.Time.UTC()
+		asset.LifecycleStartDate = &value
+	}
+	if installedDate.Valid {
+		value := installedDate.Time.UTC()
+		asset.InstalledDate = &value
+	}
+	asset.ReplacementModelID = replacementModelID.String
 	return asset, nil
 }
 
@@ -875,14 +1001,27 @@ func marshalAtlasSpecifications(value map[string]string) ([]byte, error) {
 	return json.Marshal(value)
 }
 
+func marshalAdditionalUserIDs(ids []string) ([]byte, error) {
+	if len(ids) == 0 {
+		return []byte(`[]`), nil
+	}
+	encoded, err := json.Marshal(ids)
+	if err != nil {
+		return nil, fmt.Errorf("marshal Atlas additional users: %w", err)
+	}
+	return encoded, nil
+}
+
 func scanAtlasModel(scanner atlasScanner, withCount bool) (domain.AssetModel, error) {
 	var model domain.AssetModel
-	var rawSpecifications []byte
+	var rawSpecifications, rawTemplateFields []byte
+	var lastEffectiveDate sql.NullTime
+	var replacementModelID sql.NullString
 	destinations := []any{
 		&model.OrganizationID, &model.ID, &model.Manufacturer, &model.Name, &model.ModelNumber, &model.Kind,
-		&model.VendorIdentifier, &rawSpecifications, &model.SupportURL, &model.WarrantyMonths,
-		&model.UsefulLifeMonths, &model.Status, &model.SourceSystemID, &model.SourceRecordID,
-		&model.Revision, &model.CreatedAt, &model.UpdatedAt,
+		&model.VendorIdentifier, &rawSpecifications, &rawTemplateFields, &model.SupportURL, &model.WarrantyMonths,
+		&model.UsefulLifeMonths, &lastEffectiveDate, &replacementModelID, &model.CriticalityScore, &model.UnitCostMinor, &model.Currency, &model.Status, &model.SourceSystemID,
+		&model.SourceRecordID, &model.Revision, &model.CreatedAt, &model.UpdatedAt,
 	}
 	if withCount {
 		destinations = append(destinations, &model.InstanceCount)
@@ -898,7 +1037,52 @@ func scanAtlasModel(scanner atlasScanner, withCount bool) (domain.AssetModel, er
 	if len(model.Specifications) == 0 {
 		model.Specifications = nil
 	}
+	if len(rawTemplateFields) > 0 {
+		if err := json.Unmarshal(rawTemplateFields, &model.TemplateFields); err != nil {
+			return domain.AssetModel{}, fmt.Errorf("decode Atlas model template fields: %w", err)
+		}
+	}
+	if len(model.TemplateFields) == 0 {
+		model.TemplateFields = nil
+	}
+	if model.Currency == "USD" && model.UnitCostMinor == 0 {
+		model.Currency = ""
+	}
+	if lastEffectiveDate.Valid {
+		value := lastEffectiveDate.Time.UTC()
+		model.LastEffectiveDate = &value
+	}
+	model.ReplacementModelID = replacementModelID.String
 	return model, nil
+}
+
+func marshalAtlasTemplateFields(fields []domain.AssetTemplateField) ([]byte, error) {
+	if len(fields) == 0 {
+		return []byte(`[]`), nil
+	}
+	encoded, err := json.Marshal(fields)
+	if err != nil {
+		return nil, fmt.Errorf("marshal Atlas model template fields: %w", err)
+	}
+	return encoded, nil
+}
+
+func marshalAtlasComponents(components []domain.AssetComponent) ([]byte, error) {
+	if len(components) == 0 {
+		return []byte(`[]`), nil
+	}
+	encoded, err := json.Marshal(components)
+	if err != nil {
+		return nil, fmt.Errorf("marshal Atlas asset components: %w", err)
+	}
+	return encoded, nil
+}
+
+func atlasCurrency(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "USD"
+	}
+	return value
 }
 
 func (s *AtlasStore) modelExists(ctx context.Context, organizationID, id string) (bool, error) {

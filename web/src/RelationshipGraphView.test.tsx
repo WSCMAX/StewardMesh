@@ -1,7 +1,7 @@
 import axe from 'axe-core'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, expect, test, vi } from 'vitest'
-import RelationshipGraphView from './RelationshipGraphView'
+import RelationshipGraphView, { readRelationshipGraph } from './RelationshipGraphView'
 
 // Requirement: REQ-DIRECTORY-EXPANSION-008. Feature: threads.relationships.
 
@@ -32,7 +32,7 @@ test('renders cycles, deduplicates repeated relationships, and provides an acces
   const { container } = render(<RelationshipGraphView permissions={['directory.read']} />)
 
   expect(await screen.findByText(/Relationship graph loaded with 4 records and 2 relationships/)).toBeInTheDocument()
-  expect(screen.getByRole('img', { name: /^Visible relationship graph/ })).toBeInTheDocument()
+  expect(await screen.findByRole('img', { name: 'Interactive relationship graph' })).toBeInTheDocument()
   const relationships = screen.getByRole('region', { name: 'Visible relationships' })
   expect(within(relationships).getAllByText('Member Of')).toHaveLength(2)
   expect(within(relationships).getAllByText('Alpha group')).toHaveLength(2)
@@ -49,6 +49,9 @@ test('renders cycles, deduplicates repeated relationships, and provides an acces
   fireEvent.change(screen.getByLabelText('Maximum records'), { target: { value: '25' } })
   fireEvent.click(screen.getByRole('button', { name: 'Apply graph filters' }))
   await waitFor(() => expect(fetchMock).toHaveBeenLastCalledWith('/api/v1/graph?search=alpha&kind=group&relationship=member_of&limit=25', expect.any(Object)))
+  fireEvent.change(screen.getByLabelText('Maximum records'), { target: { value: 'all' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Apply graph filters' }))
+  await waitFor(() => expect(fetchMock).toHaveBeenLastCalledWith('/api/v1/graph?search=alpha&kind=group&relationship=member_of&limit=all', expect.any(Object)))
 })
 
 test('renders a stable empty state and resets filters', async () => {
@@ -83,6 +86,15 @@ test('accepts bounded Unicode labels by code point rather than UTF-16 code unit'
   render(<RelationshipGraphView permissions={['directory.read']} />)
   expect(await screen.findByText(/Relationship graph loaded with 1 record and 0 relationships/)).toBeInTheDocument()
   expect(screen.getByText(unicodeLabel)).toBeInTheDocument()
+})
+
+test('accepts graph responses above the former 500-node client cap', () => {
+  const nodes = Array.from({ length: 501 }, (_, index) => ({
+    id: `asset:asset-${index}`,
+    kind: 'asset',
+    label: `Asset ${index}`,
+  }))
+  expect(readRelationshipGraph({ nodes, edges: [] }).nodes).toHaveLength(501)
 })
 
 test('does not request graph data without directory read permission', () => {

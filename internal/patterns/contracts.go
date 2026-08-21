@@ -32,6 +32,7 @@ const (
 	FieldEnum       FieldType = "enum"
 	FieldAttachment FieldType = "attachment"
 	FieldReference  FieldType = "reference"
+	FieldTag        FieldType = "tag"
 )
 
 type TemplateStatus string
@@ -61,8 +62,9 @@ type Field struct {
 	Minimum         *float64  `json:"minimum,omitempty"`
 	Maximum         *float64  `json:"maximum,omitempty"`
 	MaximumLength   int       `json:"maximumLength,omitempty"`
-	CurrencyField   string    `json:"currencyField,omitempty"`
-	AccessibleLabel string    `json:"accessibleLabel"`
+	CurrencyField     string    `json:"currencyField,omitempty"`
+	TagDefinitionID   string    `json:"tagDefinitionId,omitempty"`
+	AccessibleLabel   string    `json:"accessibleLabel"`
 	CSVHeader       string    `json:"csvHeader"`
 }
 

@@ -14,6 +14,7 @@ type AssetSummary = {
 }
 
 type AtlasScannerProps = {
+  active?: boolean
   canWrite: boolean
   csrfToken: string
   onAssociated: () => void
@@ -72,7 +73,7 @@ function requestMessage(error: unknown, fallback: string) {
   return error instanceof ApiRequestError ? error.message : fallback
 }
 
-export default function AtlasScanner({ canWrite, csrfToken, onAssociated, onResolveAsset, selectedAsset }: AtlasScannerProps) {
+export default function AtlasScanner({ active, canWrite, csrfToken, onAssociated, onResolveAsset, selectedAsset }: AtlasScannerProps) {
   const [open, setOpen] = useState(false)
   const [mode, setMode] = useState<ScanMode>('find')
   const [symbology, setSymbology] = useState<Symbology>('code128')
@@ -110,6 +111,26 @@ export default function AtlasScanner({ canWrite, csrfToken, onAssociated, onReso
     streamRef.current?.getTracks().forEach((track) => track.stop())
     streamRef.current = null
   }, [])
+
+  useEffect(() => {
+    if (active !== true && active !== false) return
+    if (!active) {
+      scanGenerationRef.current += 1
+      if (frameRef.current !== null) cancelAnimationFrame(frameRef.current)
+      frameRef.current = null
+      streamRef.current?.getTracks().forEach((track) => track.stop())
+      streamRef.current = null
+      if (videoRef.current) videoRef.current.srcObject = null
+      setCameraActive(false)
+      setOpen(false)
+      burstStartRef.current = 0
+      lastKeystrokeRef.current = 0
+      return
+    }
+    setOpen(true)
+    setMessage((current) => current || 'Scan mode active. Choose a workflow and input method.')
+    queueMicrotask(() => inputRef.current?.focus())
+  }, [active])
 
   function closeScanner() {
     stopCamera()
@@ -150,7 +171,7 @@ export default function AtlasScanner({ canWrite, csrfToken, onAssociated, onReso
         const assetID = resolvedAssetID(response)
         if (!assetID) throw new Error('invalid identifier resolution response')
         await onResolveAsset(assetID)
-        setMessage('Identifier matched. The authorized asset is open in Asset details.')
+        setMessage('Identifier matched. The authorized asset is shown below.')
       } else {
         const response = await requestJSON(`/api/v1/assets/${encodeURIComponent(selectedAsset!.id)}/identifiers`, {
           method: 'POST',
@@ -261,9 +282,8 @@ export default function AtlasScanner({ canWrite, csrfToken, onAssociated, onReso
     void submitValue(event.currentTarget.value)
   }
 
-  return <section aria-labelledby="atlas-scanner-heading" className={`${subpanelClass} mt-6 overflow-hidden`} data-feature="inventory.identifiers" data-requirement="REQ-ATLAS-CODES-001">
-    <div aria-hidden="true" className="h-px bg-gradient-to-r from-steward-blue/70 via-steward-teal/70 to-steward-green/70" />
-    <div className="p-5 sm:p-6">
+  return <section aria-labelledby="atlas-scanner-heading" className={`${subpanelClass} overflow-hidden p-5 sm:p-6`} data-feature="inventory.identifiers" data-requirement="REQ-ATLAS-CODES-001">
+    <div>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h3 className="text-lg font-semibold" id="atlas-scanner-heading">Atlas Codes — Scan</h3>

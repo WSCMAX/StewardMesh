@@ -281,7 +281,7 @@ export default function AtlasLabelPrint({ assets, csrfToken }: { assets: readonl
 
   return <>
     {artifact?.previewSrc && createPortal(<div aria-hidden="true" className="atlas-label-print-sheet"><img alt="" src={artifact.previewSrc} /></div>, document.body)}
-    <section aria-labelledby="atlas-label-print-heading" className={`${subpanelClass} mt-6 min-w-0 overflow-hidden`} data-feature="inventory.identifiers" data-requirement="REQ-ATLAS-CODES-001">
+    <section aria-labelledby="atlas-label-print-heading" className={`${subpanelClass} min-w-0 overflow-hidden`} data-feature="inventory.identifiers" data-requirement="REQ-ATLAS-CODES-001">
     <div className="flex flex-wrap items-start justify-between gap-3 p-4">
       <div className="min-w-0"><h3 className="font-semibold" id="atlas-label-print-heading">Atlas Codes — Label printing</h3><p className="mt-1 max-w-3xl text-sm leading-5 text-steward-mist-muted">Select active identifiers across the visible Atlas assets, preview one label or a bounded batch, then explicitly open an operator-controlled output path. StewardMesh never chooses or contacts a printer silently.</p></div>
       <button className={secondaryButtonClass} onClick={() => { if (open) { loadRef.current += 1; invalidateRequest(); setOpen(false) } else void openPanel() }} type="button">{open ? 'Close label printing' : 'Print labels'}</button>

@@ -42,6 +42,7 @@ async page => {
   assert(JSON.stringify(session.permissions) === JSON.stringify(['assets.read', 'directory.read', 'organization.read']), `unexpected reader permissions ${JSON.stringify(session.permissions)}`)
   assert(session.principal.roles.includes('Phase One Reader'), 'reader role is missing from the real session')
 
+  await page.getByRole('tab', { name: 'Workflows & assignments' }).click()
   await page.getByRole('note').filter({ hasText: 'cannot add a person' }).waitFor()
   assert(await page.getByRole('button', { name: 'Start person workflow' }).count() === 0, 'reader can start the People write workflow')
   assert(await page.getByText('Add a site', { exact: true }).count() === 0, 'reader can create a site')
@@ -66,9 +67,17 @@ async page => {
   await page.locator('#assets-heading').waitFor()
   assert(await page.getByRole('button', { name: 'Add asset' }).count() === 0, 'reader can add an asset')
   assert(await page.getByRole('button', { name: 'Print labels' }).count() === 0, 'reader can open label printing')
-  const scannerPanel = page.locator('section[aria-labelledby="atlas-scanner-heading"]')
-  await scannerPanel.getByRole('button', { name: 'Open scanner', exact: true }).click()
-  const scannerForm = scannerPanel.getByRole('form', { name: 'Scan an Atlas Code', exact: true })
+  await page.locator('#atlas-tab-scan').click()
+  await page.locator('#atlas-panel-scan:not([hidden])').waitFor()
+  const scannerPanel = page.locator('#atlas-panel-scan')
+  const scannerForm = scannerPanel.locator('form')
+  const openScanner = scannerPanel.getByRole('button', { name: 'Open scanner', exact: true })
+  try {
+    await scannerForm.waitFor({ timeout: 2000 })
+  } catch {
+    await openScanner.click()
+    await scannerForm.waitFor()
+  }
   const scannerWorkflow = scannerForm.locator('label').filter({ hasText: /^Workflow/ }).locator('select')
   assert(await scannerWorkflow.locator('option[value="associate"]').count() === 0, 'reader scanner exposes association mode')
 

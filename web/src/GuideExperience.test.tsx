@@ -44,10 +44,12 @@ test('keeps walkthrough steps permission-aware, skippable, replayable, and compl
   const onWalkthroughStatus = vi.fn()
   renderGuide({ destination: { view: 'walkthrough', topic: 'workspace' }, onNavigate, onWalkthroughStatus })
 
-  expect(screen.getByText('Step 1 of 3')).toBeInTheDocument()
+  expect(screen.getByText('Step 1 of 4')).toBeInTheDocument()
   expect(screen.queryByText(/Guard — Authentication and authorization/)).not.toBeInTheDocument()
   fireEvent.click(screen.getByRole('button', { name: 'Next' }))
   expect(onNavigate).toHaveBeenLastCalledWith({ view: 'walkthrough', topic: 'atlas' })
+  fireEvent.click(screen.getByRole('button', { name: 'Next' }))
+  expect(onNavigate).toHaveBeenLastCalledWith({ view: 'walkthrough', topic: 'mesh' })
   fireEvent.click(screen.getByRole('button', { name: 'Next' }))
   expect(onNavigate).toHaveBeenLastCalledWith({ view: 'walkthrough', topic: 'guide' })
   fireEvent.click(screen.getByRole('button', { name: 'Finish walkthrough' }))

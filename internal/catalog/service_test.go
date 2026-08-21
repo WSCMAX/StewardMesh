@@ -31,6 +31,7 @@ type catalogTestReferences struct{}
 func (catalogTestReferences) ValidateAssetReferences(context.Context, string, atlas.References) error {
 	return nil
 }
+func (catalogTestReferences) ValidateIdentities(context.Context, string, []string) error { return nil }
 
 type catalogTestWriteGate struct {
 	err   error

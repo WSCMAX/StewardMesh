@@ -12,6 +12,11 @@ tmp/
 
 web/node_modules/
 web/.vite/
+web/public/xlsx.wasm
+web/public/wasm_exec.js
+
+.devcontainer/run/
+.tmpinspect/
 
 *.test
 *.out

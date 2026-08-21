@@ -15,6 +15,12 @@ function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
 }
 
+const emptyRelated = { components: [], purchaseOrders: [], costs: [], installations: [], assignments: [], licenses: [], documents: [] }
+
+function openAtlasTab(name: string) {
+  fireEvent.click(screen.getByRole('tab', { name }))
+}
+
 beforeEach(() => {
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
@@ -22,20 +28,25 @@ beforeEach(() => {
 
 test('filters assets, loads lifecycle details, and has no automated accessibility violations', async () => {
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    if (String(input).includes('/related')) return jsonResponse(emptyRelated)
     if (String(input) === '/api/v1/assets/asset-1/lifecycle') return jsonResponse({ items: [{
       id: 'event-1', toStatus: 'active', note: 'Asset registered', revision: 1,
       actorId: 'account-1', occurredAt: '2026-08-10T12:00:00Z',
     }] })
     if (String(input) === '/api/v1/assets/asset-1/identifiers') return jsonResponse({ items: [] })
+    if (String(input).includes('/related')) return jsonResponse(emptyRelated)
     throw new Error(`unexpected request: ${String(input)}`)
   }))
   const { container } = render(<AtlasInventory assets={[asset]} csrfToken="csrf-token" onAssetsChange={() => undefined} permissions={['assets.read']} />)
   expect(screen.getByRole('heading', { name: 'Atlas — Asset inventory' })).toBeInTheDocument()
   expect(screen.getByRole('region', { name: 'Atlas inventory workflow' })).toBeInTheDocument()
-  fireEvent.change(screen.getByLabelText('Search'), { target: { value: 'missing' } })
+  expect(screen.getByRole('tab', { name: 'Assets' })).toHaveAttribute('aria-selected', 'true')
+  expect(screen.queryByRole('tab', { name: 'Labels' })).not.toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'Find asset' })).not.toBeInTheDocument()
+  fireEvent.change(screen.getByLabelText('Search Asset inventory'), { target: { value: 'missing' } })
   expect(screen.getByText('No assets match these filters.')).toBeInTheDocument()
-  fireEvent.change(screen.getByLabelText('Search'), { target: { value: 'LAB-001' } })
-  fireEvent.click(screen.getByRole('button', { name: /Lab server/ }))
+  fireEvent.change(screen.getByLabelText('Search Asset inventory'), { target: { value: 'LAB-001' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Open Lab server' }))
   expect(await screen.findByText('Asset registered', { exact: false })).toBeInTheDocument()
   expect(screen.queryByRole('button', { name: 'Add asset' })).not.toBeInTheDocument()
   const results = await axe.run(container)
@@ -60,10 +71,11 @@ test('shows immutable model defaults, provenance, effective dates, and instance 
     }] })
     if (path === '/api/v1/assets/asset-1/lifecycle') return jsonResponse({ items: [] })
     if (path === '/api/v1/assets/asset-1/identifiers') return jsonResponse({ items: [] })
+    if (path.includes('/related')) return jsonResponse(emptyRelated)
     throw new Error(`unexpected request: ${path}`)
   }))
   const { container } = render(<AtlasInventory assets={[linked]} csrfToken="csrf-token" onAssetsChange={() => undefined} permissions={['assets.read']} />)
-  fireEvent.click(screen.getByRole('button', { name: /Lab server/ }))
+  fireEvent.click(screen.getByRole('button', { name: 'Open Lab server' }))
   const defaults = await screen.findByRole('heading', { name: 'Model defaults when linked' })
   const section = defaults.closest('section') as HTMLElement
   expect(within(section).getByText('Framework Laptop 13 FW13')).toBeInTheDocument()
@@ -83,6 +95,7 @@ test('creates an asset with CSRF protection and server-managed identity fields',
     if (path === '/api/v1/assets' && init?.method === 'POST') return jsonResponse(created, 201)
     if (path === '/api/v1/assets/asset-2/lifecycle') return jsonResponse({ items: [] })
     if (path === '/api/v1/assets/asset-2/identifiers') return jsonResponse({ items: [] })
+    if (path.includes('/related')) return jsonResponse(emptyRelated)
     throw new Error(`unexpected request: ${path}`)
   })
   vi.stubGlobal('fetch', fetchMock)
@@ -117,11 +130,13 @@ test('creates a model and links a new asset to it', async () => {
     if (path === '/api/v1/assets' && init?.method === 'POST') return jsonResponse(created, 201)
     if (path === '/api/v1/assets/asset-3/lifecycle') return jsonResponse({ items: [] })
     if (path === '/api/v1/assets/asset-3/identifiers') return jsonResponse({ items: [] })
+    if (path.includes('/related')) return jsonResponse(emptyRelated)
     throw new Error(`unexpected request: ${path}`)
   })
   vi.stubGlobal('fetch', fetchMock)
   const onAssetsChange = vi.fn()
   render(<AtlasInventory assets={[]} csrfToken="csrf-token" onAssetsChange={onAssetsChange} permissions={['assets.read', 'assets.write']} />)
+  openAtlasTab('Models')
   fireEvent.click(screen.getByRole('button', { name: 'Add model' }))
   const modelForm = within(screen.getByRole('form', { name: 'Add model' }))
   fireEvent.change(modelForm.getByLabelText('Manufacturer'), { target: { value: 'Framework' } })
@@ -156,20 +171,22 @@ test('searches and inspects complete shared model defaults', async () => {
   }
   const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
     const path = String(input)
-    if (path === '/api/v1/asset-models?limit=100' || path === '/api/v1/asset-models?limit=100&q=Framework&kind=laptop') return jsonResponse({ items: [model] })
+    if (path === '/api/v1/asset-models?limit=100' || path === '/api/v1/asset-models?limit=100&q=Framework&kind=laptop&includeRetired=true') return jsonResponse({ items: [model] })
     if (path === '/api/v1/asset-models/model-detail/inventory?limit=100') return jsonResponse({
       modelId: model.id, totalCount: 0, filteredCount: 0, groups: [], items: [],
     })
+    if (path.includes('/related')) return jsonResponse(emptyRelated)
     throw new Error(`unexpected request: ${path}`)
   })
   vi.stubGlobal('fetch', fetchMock)
   const { container } = render(<AtlasInventory assets={[]} csrfToken="csrf-token" onAssetsChange={() => undefined} permissions={['assets.read']} />)
 
+  openAtlasTab('Models')
   const searchForm = within(screen.getByRole('search', { name: 'Search models' }))
   fireEvent.change(searchForm.getByLabelText('Search models'), { target: { value: 'Framework' } })
   fireEvent.change(searchForm.getByLabelText('Model kind'), { target: { value: 'laptop' } })
   fireEvent.click(searchForm.getByRole('button', { name: 'Search' }))
-  await waitFor(() => expect(fetchMock.mock.calls.some(([path]) => path === '/api/v1/asset-models?limit=100&q=Framework&kind=laptop')).toBe(true))
+  await waitFor(() => expect(fetchMock.mock.calls.some(([path]) => path === '/api/v1/asset-models?limit=100&q=Framework&kind=laptop&includeRetired=true')).toBe(true))
 
   fireEvent.click(await screen.findByRole('link', { name: 'View inventory' }))
   const details = (await screen.findByRole('heading', { name: 'Shared model defaults' })).closest('section') as HTMLElement
@@ -196,11 +213,13 @@ test('updates specifications and import provenance without erasing model default
     const path = String(input)
     if (path === '/api/v1/asset-models?limit=100') return jsonResponse({ items: [model] })
     if (path === '/api/v1/asset-models/model-edit' && init?.method === 'PUT') return jsonResponse(updated)
+    if (path.includes('/related')) return jsonResponse(emptyRelated)
     throw new Error(`unexpected request: ${path}`)
   })
   vi.stubGlobal('fetch', fetchMock)
   const { container } = render(<AtlasInventory assets={[]} csrfToken="csrf-token" onAssetsChange={() => undefined} permissions={['assets.read', 'assets.write']} />)
 
+  openAtlasTab('Models')
   fireEvent.click(await screen.findByRole('button', { name: 'Edit' }))
   const editForm = within(screen.getByRole('form', { name: 'Edit model' }))
   expect(editForm.getByLabelText(/^Source system ID/)).toHaveValue('model-import')
@@ -240,10 +259,12 @@ test('opens model inventory with exact filters, grouped counts, and linked asset
     })
     if (path === '/api/v1/assets/inventory-asset/lifecycle') return jsonResponse({ items: [] })
     if (path === '/api/v1/assets/inventory-asset/identifiers') return jsonResponse({ items: [] })
+    if (path.includes('/related')) return jsonResponse(emptyRelated)
     throw new Error(`unexpected request: ${path}`)
   })
   vi.stubGlobal('fetch', fetchMock)
   const { container } = render(<AtlasInventory assets={[]} csrfToken="csrf-token" onAssetsChange={() => undefined} permissions={['assets.read', 'directory.read']} />)
+  openAtlasTab('Models')
   const viewInventory = await screen.findByRole('link', { name: 'View inventory' })
   expect(viewInventory).toHaveAttribute('href', '#workspace-atlas')
   fireEvent.click(viewInventory)
@@ -288,11 +309,13 @@ test('bulk creates model instances with per-asset deployment fields and accessib
     if (path === '/api/v1/asset-models?limit=100') return jsonResponse({ items: [model] })
     if (['/api/v1/sites', '/api/v1/buildings', '/api/v1/rooms', '/api/v1/departments', '/api/v1/identities?limit=100'].includes(path)) return jsonResponse({ items: [] })
     if (path === '/api/v1/asset-models/model-bulk/assets/bulk' && init?.method === 'POST') return jsonResponse({ items: created }, 201)
+    if (path.includes('/related')) return jsonResponse(emptyRelated)
     throw new Error(`unexpected request: ${path}`)
   })
   vi.stubGlobal('fetch', fetchMock)
   const onAssetsChange = vi.fn()
   const { container } = render(<AtlasInventory assets={[]} csrfToken="csrf-token" onAssetsChange={onAssetsChange} permissions={['assets.read', 'assets.write']} />)
+  openAtlasTab('Models')
   fireEvent.click(await screen.findByRole('button', { name: 'Bulk add' }))
   const first = within(screen.getByRole('group', { name: 'Asset 1' }))
   fireEvent.change(first.getByLabelText('Asset name'), { target: { value: 'Bulk laptop one' } })
@@ -322,12 +345,14 @@ test('updates an asset using its current revision and records a lifecycle note',
     if (path === '/api/v1/assets/asset-1' && init?.method === 'PUT') return jsonResponse(updated)
     if (path === '/api/v1/assets/asset-1/lifecycle') return jsonResponse({ items: [] })
     if (path === '/api/v1/assets/asset-1/identifiers') return jsonResponse({ items: [] })
+    if (path.includes('/related')) return jsonResponse(emptyRelated)
     throw new Error(`unexpected request: ${path}`)
   })
   vi.stubGlobal('fetch', fetchMock)
   const onAssetsChange = vi.fn()
   render(<AtlasInventory assets={[asset]} csrfToken="csrf-token" onAssetsChange={onAssetsChange} permissions={['assets.read', 'assets.write']} />)
-  fireEvent.click(screen.getByRole('button', { name: 'Edit' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Open Lab server' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Edit in full form' }))
   const editForm = within(screen.getByRole('form', { name: 'Edit asset' }))
   fireEvent.change(editForm.getByLabelText('Status'), { target: { value: 'retired' } })
   fireEvent.change(editForm.getByLabelText(/^Lifecycle note/), { target: { value: 'Replacement completed' } })
@@ -338,6 +363,121 @@ test('updates an asset using its current revision and records a lifecycle note',
   await waitFor(() => expect(onAssetsChange).toHaveBeenCalledWith([updated]))
 })
 
+test('edits assets in the grid, asks once for the shared lifecycle note, and writes whole records', async () => {
+  const second: Asset = { ...asset, id: 'asset-2', name: 'Lab printer', assetTag: 'LAB-002', serialNumber: 'SERIAL-002' }
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input)
+    if (['/api/v1/sites', '/api/v1/buildings', '/api/v1/rooms', '/api/v1/departments', '/api/v1/identities?limit=100'].includes(path)) return jsonResponse({ items: [] })
+    if (path === '/api/v1/assets/asset-1' && init?.method === 'PUT') return jsonResponse({ ...asset, status: 'retired', revision: 2 })
+    if (path === '/api/v1/assets/asset-2' && init?.method === 'PUT') return jsonResponse({ ...second, status: 'retired', revision: 2 })
+    throw new Error(`unexpected request: ${path}`)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  const onAssetsChange = vi.fn()
+  render(<AtlasInventory assets={[asset, second]} csrfToken="csrf-token" onAssetsChange={onAssetsChange} permissions={['assets.read', 'assets.write']} />)
+
+  // Select both status cells and fill the second from the first.
+  fireEvent.doubleClick(screen.getByRole('gridcell', { name: 'Lab printer' }))
+  const editing = screen.getByLabelText('Asset name for Lab printer')
+  fireEvent.change(editing, { target: { value: 'Lab plotter' } })
+  fireEvent.keyDown(editing, { key: 'Escape' })
+
+  fireEvent.doubleClick(screen.getAllByRole('gridcell', { name: 'active' })[0])
+  const status = screen.getByLabelText('Status for Lab server')
+  fireEvent.change(status, { target: { value: 'retired' } })
+  fireEvent.keyDown(status, { key: 'Enter' })
+  fireEvent.doubleClick(screen.getByRole('gridcell', { name: 'active' }))
+  const secondStatus = screen.getByLabelText('Status for Lab printer')
+  fireEvent.change(secondStatus, { target: { value: 'retired' } })
+  fireEvent.keyDown(secondStatus, { key: 'Enter' })
+
+  fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+  const note = within(await screen.findByRole('form', { name: 'Lifecycle note' }))
+  expect(screen.getByText('2 assets change status. Atlas stores the note with each lifecycle event.')).toBeInTheDocument()
+  fireEvent.change(note.getByLabelText('Lifecycle note'), { target: { value: 'Replaced by the refresh cycle' } })
+  fireEvent.click(note.getByRole('button', { name: 'Save status changes' }))
+
+  expect(await screen.findByText('2 of 2 records saved.')).toBeInTheDocument()
+  const request = fetchMock.mock.calls.find(([path, init]) => path === '/api/v1/assets/asset-1' && init?.method === 'PUT')
+  // The API replaces the whole record, so untouched fields must be resent verbatim.
+  expect(JSON.parse(String(request?.[1]?.body))).toMatchObject({
+    name: 'Lab server', assetTag: 'LAB-001', serialNumber: 'SERIAL-001', hostname: 'lab.example.test',
+    kind: 'server', status: 'retired', revision: 1, lifecycleNote: 'Replaced by the refresh cycle',
+  })
+  await waitFor(() => expect(onAssetsChange).toHaveBeenCalled())
+})
+
+test('rejects a pasted asset tag that another asset already uses before any request goes out', async () => {
+  const second: Asset = { ...asset, id: 'asset-2', name: 'Lab printer', assetTag: 'LAB-002', serialNumber: 'SERIAL-002' }
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input)
+    if (init?.method && init.method !== 'GET') throw new Error(`unexpected mutation: ${path}`)
+    if (['/api/v1/sites', '/api/v1/buildings', '/api/v1/rooms', '/api/v1/departments', '/api/v1/identities?limit=100'].includes(path)) return jsonResponse({ items: [] })
+    throw new Error(`unexpected request: ${path}`)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  render(<AtlasInventory assets={[asset, second]} csrfToken="csrf-token" onAssetsChange={() => undefined} permissions={['assets.read', 'assets.write']} />)
+
+  fireEvent.doubleClick(screen.getByRole('gridcell', { name: 'LAB-002' }))
+  const tag = screen.getByLabelText('Asset tag for Lab printer')
+  fireEvent.change(tag, { target: { value: 'LAB-001' } })
+  fireEvent.keyDown(tag, { key: 'Enter' })
+  fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+
+  expect(await screen.findByRole('alert')).toHaveTextContent('Asset tags and serial numbers must stay unique for the organization. Already in use: LAB-001.')
+  expect(fetchMock.mock.calls.every(([, init]) => (init?.method ?? 'GET') === 'GET')).toBe(true)
+  expect(screen.getByText('1 cell changed in 1 record')).toBeInTheDocument()
+})
+
+test('creates rows staged past the end of the grid through the atomic bulk endpoint when they share a model', async () => {
+  const model = {
+    id: 'model-1', organizationId: 'example-org', manufacturer: 'Framework', name: 'Laptop 13',
+    kind: 'laptop', status: 'active', instanceCount: 0, revision: 1,
+    createdAt: '2026-08-12T12:00:00Z', updatedAt: '2026-08-12T12:00:00Z',
+  }
+  const created = [
+    { ...asset, id: 'asset-9', name: 'Cart laptop 1', kind: 'laptop', modelId: 'model-1', assetTag: 'CART-001' },
+    { ...asset, id: 'asset-10', name: 'Cart laptop 2', kind: 'laptop', modelId: 'model-1', assetTag: 'CART-002' },
+  ]
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input)
+    if (['/api/v1/sites', '/api/v1/buildings', '/api/v1/rooms', '/api/v1/departments', '/api/v1/identities?limit=100'].includes(path)) return jsonResponse({ items: [] })
+    if (path === '/api/v1/asset-models/model-1/assets/bulk' && init?.method === 'POST') return jsonResponse({ items: created }, 201)
+    if (path.startsWith('/api/v1/asset-models')) return jsonResponse({ items: [model] })
+    throw new Error(`unexpected request: ${path}`)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  const onAssetsChange = vi.fn()
+  render(<AtlasInventory assets={[asset]} csrfToken="csrf-token" onAssetsChange={onAssetsChange} permissions={['assets.read', 'assets.write']} />)
+
+  fireEvent.click(screen.getByRole('button', { name: 'Add row' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Add row' }))
+  const block = 'Cart laptop 1\tCART-001\t\tlaptop\nCart laptop 2\tCART-002\t\tlaptop'
+  fireEvent.keyDown(screen.getByRole('grid'), { key: 'ArrowDown' })
+  fireEvent.paste(screen.getByRole('grid'), { clipboardData: { getData: () => block, setData: () => undefined, types: ['text/plain'] } })
+  expect(screen.getByText('2 new rows')).toBeInTheDocument()
+  expect(screen.getByRole('gridcell', { name: 'Lab server' })).toBeInTheDocument()
+
+  await waitFor(() => expect(fetchMock.mock.calls.some(([path]) => String(path) === '/api/v1/asset-models?limit=100')).toBe(true))
+  const gridRows = within(screen.getByRole('grid')).getAllByRole('row')
+  for (const row of [-2, -1] as const) {
+    fireEvent.doubleClick(within(gridRows.at(row) as HTMLElement).getAllByRole('gridcell')[18])
+    fireEvent.click(await screen.findByRole('option', { name: /Framework Laptop 13/ }))
+  }
+
+  fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+  expect(await screen.findByText('2 assets created.')).toBeInTheDocument()
+  const request = fetchMock.mock.calls.find(([path]) => String(path) === '/api/v1/asset-models/model-1/assets/bulk')
+  expect(request?.[1]?.headers).toMatchObject({ 'X-CSRF-Token': 'csrf-token' })
+  expect(JSON.parse(String(request?.[1]?.body))).toMatchObject({
+    items: [
+      { name: 'Cart laptop 1', assetTag: 'CART-001', kind: 'laptop', modelId: 'model-1' },
+      { name: 'Cart laptop 2', assetTag: 'CART-002', kind: 'laptop', modelId: 'model-1' },
+    ],
+  })
+  await waitFor(() => expect(onAssetsChange).toHaveBeenCalled())
+})
+
 test('opens the authorized asset detail from the explicit Atlas Codes scan-to-find workflow', async () => {
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input)
@@ -345,18 +485,136 @@ test('opens the authorized asset detail from the explicit Atlas Codes scan-to-fi
     if (path === '/api/v1/asset-identifiers/resolve' && init?.method === 'POST') return jsonResponse({ assetId: asset.id })
     if (path === '/api/v1/assets/asset-1/lifecycle') return jsonResponse({ items: [] })
     if (path === '/api/v1/assets/asset-1/identifiers') return jsonResponse({ items: [] })
+    if (path.includes('/related')) return jsonResponse(emptyRelated)
     throw new Error(`unexpected request: ${path}`)
   })
   vi.stubGlobal('fetch', fetchMock)
   render(<AtlasInventory assets={[asset]} csrfToken="csrf-token" onAssetsChange={() => undefined} permissions={['assets.read']} />)
 
-  fireEvent.click(screen.getByRole('button', { name: 'Open scanner' }))
-  fireEvent.change(screen.getByLabelText('Symbology'), { target: { value: 'qr' } })
+  openAtlasTab('Scan')
+  fireEvent.change(await screen.findByLabelText('Symbology'), { target: { value: 'qr' } })
   fireEvent.change(screen.getByLabelText('Scanned or entered value'), { target: { value: 'opaque-asset-route' } })
   fireEvent.click(screen.getByRole('button', { name: 'Find asset' }))
 
   expect(await screen.findByText(/Identifier matched/)).toBeInTheDocument()
   const detail = screen.getByRole('heading', { name: 'Asset details' }).closest('aside') as HTMLElement
   expect(within(detail).getByText('Lab server')).toBeInTheDocument()
+  expect(within(detail).getByText('Instance-specific record')).toBeInTheDocument()
   expect(JSON.parse(String(fetchMock.mock.calls.find(([path]) => path === '/api/v1/asset-identifiers/resolve')?.[1]?.body))).toEqual({ symbology: 'qr', value: 'opaque-asset-route' })
+})
+
+test('keeps Labels available for writers and restores Assets after using a model', async () => {
+  const model = {
+    id: 'model-1', organizationId: 'example-org', manufacturer: 'Framework', name: 'Laptop 13',
+    kind: 'laptop', status: 'active', instanceCount: 0, revision: 1,
+    createdAt: '2026-08-12T12:00:00Z', updatedAt: '2026-08-12T12:00:00Z',
+  }
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    const path = String(input)
+    if (path === '/api/v1/asset-models?limit=100') return jsonResponse({ items: [model] })
+    if (['/api/v1/sites', '/api/v1/buildings', '/api/v1/rooms', '/api/v1/departments', '/api/v1/identities?limit=100'].includes(path)) return jsonResponse({ items: [] })
+    if (path.includes('/related')) return jsonResponse(emptyRelated)
+    throw new Error(`unexpected request: ${path}`)
+  }))
+  const { container } = render(<AtlasInventory assets={[asset]} csrfToken="csrf-token" onAssetsChange={() => undefined} permissions={['assets.read', 'assets.write']} />)
+  expect(screen.getByRole('tab', { name: 'Labels' })).toBeInTheDocument()
+  openAtlasTab('Labels')
+  expect(screen.getByRole('heading', { name: 'Atlas Codes — Label printing' })).toBeInTheDocument()
+  openAtlasTab('Models')
+  fireEvent.click(await screen.findByRole('button', { name: 'Use' }))
+  expect(screen.getByRole('tab', { name: 'Assets' })).toHaveAttribute('aria-selected', 'true')
+  expect(screen.getByRole('form', { name: 'Add asset' })).toBeInTheDocument()
+  expect((await axe.run(container)).violations).toEqual([])
+})
+
+test('connects configured tags on a selected asset and model from Atlas', async () => {
+  const model = {
+    id: 'model-1', organizationId: 'example-org', manufacturer: 'Framework', name: 'Laptop 13',
+    kind: 'laptop', status: 'active', instanceCount: 0, revision: 1,
+    createdAt: '2026-08-12T12:00:00Z', updatedAt: '2026-08-12T12:00:00Z',
+  }
+  const tag = {
+    id: 'loaner', organizationId: 'example-org', name: 'Loaner pool', valueKind: 'flag',
+    applicableRecordTypes: ['atlas.asset', 'atlas.model'], status: 'active', revision: 1,
+  }
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input)
+    if (path === '/api/v1/asset-models?limit=100') return jsonResponse({ items: [model] })
+    if (path === '/api/v1/asset-models/model-1/inventory?limit=100') return jsonResponse({
+      modelId: model.id, totalCount: 0, filteredCount: 0, groups: [], items: [],
+    })
+    if (path === '/api/v1/labels/definitions') return jsonResponse({ items: [tag] })
+    if (path.endsWith('/assignments') && !init?.method) return jsonResponse({ items: [] })
+    if (path.endsWith('/assignments/loaner') && init?.method === 'PUT') {
+      const body = JSON.parse(String(init.body)) as { recordType: string; recordId: string }
+      return jsonResponse({ definitionId: tag.id, recordType: body.recordType, recordId: body.recordId, revision: 1 })
+    }
+    if (path === '/api/v1/assets/asset-1/lifecycle') return jsonResponse({ items: [] })
+    if (path === '/api/v1/assets/asset-1/identifiers') return jsonResponse({ items: [] })
+    if (path.includes('/related')) return jsonResponse(emptyRelated)
+    throw new Error(`unexpected request: ${path}`)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  render(<AtlasInventory assets={[asset]} csrfToken="csrf-token" onAssetsChange={() => undefined} permissions={['assets.read', 'labels.read', 'labels.write']} />)
+
+  fireEvent.click(screen.getByRole('button', { name: 'Open Lab server' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Connect tag' }))
+  expect(await screen.findByText('Connected “Loaner pool” to Lab server.')).toBeInTheDocument()
+
+  openAtlasTab('Models')
+  fireEvent.click(await screen.findByRole('link', { name: 'View inventory' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Connect tag' }))
+  expect(await screen.findByText('Connected “Loaner pool” to Framework Laptop 13.')).toBeInTheDocument()
+  const bodies = fetchMock.mock.calls.filter(([, init]) => init?.method === 'PUT').map(([, init]) => JSON.parse(String(init?.body)))
+  expect(bodies).toEqual(expect.arrayContaining([
+    expect.objectContaining({ recordType: 'atlas.asset', recordId: 'asset-1' }),
+    expect.objectContaining({ recordType: 'atlas.model', recordId: 'model-1' }),
+  ]))
+})
+
+test('opens the matching asset editor when Mesh focuses an Atlas record', async () => {
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    const path = String(input)
+    if (path === '/api/v1/asset-models?limit=100') return jsonResponse({ items: [] })
+    if (['/api/v1/sites', '/api/v1/buildings', '/api/v1/rooms', '/api/v1/departments', '/api/v1/identities?limit=100'].includes(path)) return jsonResponse({ items: [] })
+    throw new Error(`unexpected request: ${path}`)
+  }))
+  render(<AtlasInventory assets={[asset]} csrfToken="csrf-token" focusRecord={{ area: 'atlas', kind: 'asset', nonce: 1, recordId: 'asset-1' }} onAssetsChange={() => undefined} permissions={['assets.read', 'assets.write']} />)
+  const form = await screen.findByRole('form', { name: 'Edit asset' })
+  expect(within(form).getByLabelText('Asset name')).toHaveValue('Lab server')
+})
+
+test('shows configured tag columns in the asset grid and saves multiselect assignments', async () => {
+  const deploymentTag = {
+    id: 'deployment-group',
+    organizationId: 'example-org',
+    name: 'Deployment group',
+    valueKind: 'multiselect',
+    applicableRecordTypes: ['atlas.asset'],
+    options: ['Lab A', 'Office refresh'],
+    status: 'active',
+    revision: 1,
+  }
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input)
+    if (path === '/api/v1/asset-models?limit=100') return jsonResponse({ items: [] })
+    if (['/api/v1/sites', '/api/v1/buildings', '/api/v1/rooms', '/api/v1/departments', '/api/v1/identities?limit=100'].includes(path)) return jsonResponse({ items: [] })
+    if (path === '/api/v1/labels/definitions') return jsonResponse({ items: [deploymentTag] })
+    if (path === '/api/v1/labels/definitions/deployment-group/assignments?recordType=atlas.asset') return jsonResponse({ items: [] })
+    if (path.endsWith('/assignments/deployment-group') && init?.method === 'PUT') {
+      const body = JSON.parse(String(init.body)) as { recordId: string; values?: string[] }
+      return jsonResponse({
+        definitionId: deploymentTag.id,
+        recordType: 'atlas.asset',
+        recordId: body.recordId,
+        values: body.values,
+        revision: 1,
+      })
+    }
+    throw new Error(`unexpected request: ${path}`)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  render(<AtlasInventory assets={[asset]} csrfToken="csrf-token" onAssetsChange={() => undefined} permissions={['assets.read', 'labels.read', 'labels.write']} />)
+  expect(await screen.findByRole('columnheader', { name: 'Deployment group' })).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Add tag column' })).toBeInTheDocument()
 })

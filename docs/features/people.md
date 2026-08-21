@@ -24,8 +24,16 @@ validated structured address and contain buildings; each building contains
 rooms. Buildings and rooms retain both organization and site ownership, and a
 room's site must match its building. A department may belong to a site. An
 identity may belong to a department and a site; when a department has a site
-and the identity does not specify one, the site is inherited. Conflicting
-department, site, building, and room references are rejected.
+and the identity does not specify one, the site is inherited. An identity may
+also keep a primary building and room. Conflicting department, site, building,
+and room references are rejected.
+
+Typed location references add occupancy beyond that primary place. Each
+organization owns a catalog of location reference types (office, instructor,
+class enrollment, dormitory, lab) with a Mesh relationship kind. A person can
+have one active primary reference per type plus any number of secondary
+references. Grouping those records by room shows usage for classrooms, offices,
+and residence halls.
 
 Every record carries its organization owner, stable server-generated ID, status, revision, and timestamps. Provider and provider-subject fields reserve a unique mapping seam for future OIDC, OAuth, and SAML provisioning. People does not store passwords, session tokens, or raw identity-provider claims.
 
@@ -68,11 +76,13 @@ Atlas supplies the asset-existence check through a small `AssetReader` interface
 
 ## APIs and provider boundaries
 
-- `GET|POST /api/v1/sites`
-- `GET|POST /api/v1/buildings`
-- `GET|POST /api/v1/rooms`
-- `GET|POST /api/v1/departments`
-- `GET|POST /api/v1/identities`
+- `GET|POST /api/v1/sites` and `PUT /api/v1/sites/{siteID}`
+- `GET|POST /api/v1/buildings` and `PUT /api/v1/buildings/{buildingID}`
+- `GET|POST /api/v1/rooms` and `PUT /api/v1/rooms/{roomID}`
+- `GET|POST /api/v1/departments` and `PUT /api/v1/departments/{departmentID}`
+- `GET|POST /api/v1/identities` and `PUT /api/v1/identities/{identityID}`
+- `GET|POST /api/v1/location-reference-types` and `PUT /api/v1/location-reference-types/{typeID}`
+- `GET|POST /api/v1/location-references` and `PUT /api/v1/location-references/{referenceID}`
 - `GET /api/v1/users` as a deprecated person-only compatibility alias
 - `GET|POST /api/v1/assets/{assetId}/assignments`
 - `PATCH /api/v1/assets/{assetId}/assignments/{assignmentId}`
@@ -105,24 +115,34 @@ until an imported record is explicitly claimed.
 
 ## Accessibility, help, and walkthrough
 
-The People workspace targets WCAG 2.2 AA. It provides a semantic heading hierarchy, native labels, a keyboard-operable search form, native disclosure controls, explicit help text, visible focus, non-color status text, polite completion announcements, focus-managed errors, and reduced-motion behavior inherited from the application shell. Automated axe coverage runs against the populated directory and assignment interface.
+The People workspace targets WCAG 2.2 AA. It provides a semantic heading hierarchy, native labels, keyboard-operable spreadsheets, native disclosure controls, explicit help text, visible focus, non-color status text, polite completion announcements, focus-managed errors, and reduced-motion behavior inherited from the application shell. Automated axe coverage runs against the populated directory and assignment interface.
 
 The on-page quick guide follows this sequence:
 
-1. Use the guided task to add an individual person and resolve their location together.
-2. Use standalone controls for location hierarchies, departments, and shared-use identities.
-3. Review the scoped directory and location inventory.
-4. Select an asset and add one or more relationships.
+1. Edit the Directory spreadsheet in place, or open Locations for site, building, room, and department sheets.
+2. Open Location references for occupancy types and person-to-room links; group by room for usage.
+3. Open a nested sheet from a site or building, or add a Floor tag column on rooms.
+4. Use the guided task for a person plus location, then review asset assignment history.
+
+Directory identities and locations use the Atlas Excel-style grid. Cell edits
+use `PUT` with the current revision. Tag columns come from configured labels;
+floor is a tag rather than a native room field. Relationship browsing lives in
+Mesh.
 
 Use Workspace's Guide report view to report a People component problem. It includes only the URL pathname, selected component, public version, coarse browser/system/viewport, and a bounded response correlation ID. It excludes the Workspace hash, query string, person and location drafts, selected record values, search terms, roles, permissions, cookies, CSRF values, and request bodies. The editable destination opens only after the user selects **Review issue before submitting**; remove any private directory data added manually.
 
 ## Audit events
 
 - `people.site.created`
+- `people.site.updated`
 - `people.building.created`
+- `people.building.updated`
 - `people.room.created`
+- `people.room.updated`
 - `people.department.created`
+- `people.department.updated`
 - `people.identity.created`
+- `people.identity.updated`
 - `people.asset_assignment.created`
 - `people.asset_assignment.ended`
 

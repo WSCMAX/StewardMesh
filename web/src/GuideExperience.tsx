@@ -58,7 +58,10 @@ export default function GuideExperience({ branding, destination, issuesUrl, onCl
   const guidePanelRef = useRef<HTMLDivElement>(null)
   const openerRef = useRef<HTMLElement | null>(null)
   const wasOpen = useRef(false)
-  const availableTopics = useMemo(() => guideTopics.filter((topic) => !topic.permission || permissions.includes(topic.permission)), [permissions])
+  const availableTopics = useMemo(() => guideTopics.filter((topic) => {
+    if (topic.permissions?.length) return topic.permissions.some((permission) => permissions.includes(permission))
+    return !topic.permission || permissions.includes(topic.permission)
+  }), [permissions])
   const walkthrough = useMemo(() => availableTopics.length > 0 ? availableTopics : guideTopics.filter((topic) => topic.id === 'workspace' || topic.id === 'guide'), [availableTopics])
 
   const closeGuide = useCallback(() => {
@@ -144,7 +147,7 @@ export default function GuideExperience({ branding, destination, issuesUrl, onCl
       <div className="flex items-start justify-between gap-4">
         <div>
           <p className="text-sm font-semibold text-steward-teal">Guide</p>
-          <h2 className="mt-1 text-2xl font-bold tracking-tight">Help, walkthroughs, and feedback</h2>
+          <h2 className="mt-1 text-xl font-semibold">Help, walkthroughs, and feedback</h2>
         </div>
         <button aria-label="Close Guide" className={secondaryButtonClass} onClick={closeGuide} ref={closeButtonRef} type="button">Close</button>
       </div>

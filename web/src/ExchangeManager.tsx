@@ -1,6 +1,6 @@
 import { type FormEvent, useEffect, useRef, useState } from 'react'
 import { ApiRequestError, isRevision, requestArtifact, requestJSON, type Revision } from './api'
-import { StatusBadge, buttonClass, emptyStateClass, panelClass, plainButtonClass, secondaryButtonClass, subpanelClass, tableWrapClass } from './ui'
+import { ProductHeader, StatusBadge, buttonClass, emptyStateClass, panelClass, plainButtonClass, secondaryButtonClass, subpanelClass, tableWrapClass } from './ui'
 
 // Requirements: REQ-EXCHANGE-001, REQ-PATTERNS-001. Features: migration.packages, templates.schemas. GitHub: #8, #9.
 
@@ -291,7 +291,13 @@ export default function ExchangeManager({ csrfToken, permissions, onOpenHelp }: 
   const allSelected = records.length > 0 && records.every((record) => selected.has(referenceKey(record)))
   return <section aria-label="Exchange package workflow" className="min-w-0 space-y-5" data-feature="migration.packages" data-requirement="REQ-EXCHANGE-001">
     <div className={`${panelClass} p-5 sm:p-6`}>
-      <div className="flex flex-wrap items-start justify-between gap-4"><div><p className="text-sm font-semibold text-steward-teal">Portable, dependency-aware archives</p><h2 className="mt-1 text-2xl font-semibold" id="exchange-heading">Exchange — Migration packages</h2><p className="mt-2 max-w-3xl leading-7 text-steward-mist-muted">Export selected records with provenance and checksums, or import a bounded .openinventory package. Imports preserve source identity and remain write-locked until an explicit ownership claim.</p></div>{onOpenHelp && <button className={secondaryButtonClass} onClick={onOpenHelp} type="button">Exchange help</button>}</div>
+      <ProductHeader
+        actions={onOpenHelp ? <button className={secondaryButtonClass} onClick={onOpenHelp} type="button">Exchange help</button> : undefined}
+        description="Export selected records with provenance and checksums, or import a bounded .openinventory package. Imports preserve source identity and remain write-locked until an explicit ownership claim."
+        headingId="exchange-heading"
+        kicker="Portable, dependency-aware archives"
+        title="Exchange — Migration packages"
+      />
       {error && <div className="mt-4 rounded-xl border border-steward-danger/50 bg-steward-danger/15 p-4 text-sm text-[#ffccd1]" ref={errorRef} role="alert" tabIndex={-1}>{error}</div>}
       {providerStatus.portableRecordTypes.length > 0 && <div className={`mt-4 rounded-xl border p-4 text-sm leading-6 ${providerStatus.complete ? 'border-steward-teal/35 bg-steward-teal/10 text-steward-mist-muted' : 'border-steward-warning/45 bg-steward-warning/10 text-[#ffdca8]'}`} role="status"><strong className="text-steward-mist">Provider availability:</strong> {providerStatus.registeredRecordTypes.length} of {providerStatus.portableRecordTypes.length} portable record families are registered.{!providerStatus.complete && ' This build does not satisfy the complete phase-one Exchange provider gate; only records shown below are selectable.'}</div>}
       <p aria-live="polite" className="mt-4 text-sm font-semibold text-[#aaf0c6]" role="status">{message}</p>

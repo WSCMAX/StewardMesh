@@ -19,6 +19,7 @@ import (
 	"github.com/maxlemke/stewardmesh/internal/bootstrap"
 	"github.com/maxlemke/stewardmesh/internal/bridge"
 	"github.com/maxlemke/stewardmesh/internal/cache"
+	"github.com/maxlemke/stewardmesh/internal/campusseed"
 	"github.com/maxlemke/stewardmesh/internal/catalog"
 	"github.com/maxlemke/stewardmesh/internal/config"
 	"github.com/maxlemke/stewardmesh/internal/directoryexpansion"
@@ -30,6 +31,7 @@ import (
 	"github.com/maxlemke/stewardmesh/internal/horizon"
 	"github.com/maxlemke/stewardmesh/internal/httpapi"
 	"github.com/maxlemke/stewardmesh/internal/identity"
+	"github.com/maxlemke/stewardmesh/internal/labels"
 	"github.com/maxlemke/stewardmesh/internal/ledger"
 	"github.com/maxlemke/stewardmesh/internal/patterns"
 	"github.com/maxlemke/stewardmesh/internal/people"
@@ -48,6 +50,7 @@ import (
 // separate deployment operation.
 type Options struct {
 	RunMigrations       bool
+	RunCampusSeed       bool
 	DirectoryConnectors []directoryexpansion.Connector
 	ReachEndpoints      []reach.Endpoint
 	ReachSecrets        reach.SecretResolver
@@ -305,6 +308,39 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 	if err != nil {
 		return fail(fmt.Errorf("initialize Stack: %w", err))
 	}
+	if options.RunCampusSeed || cfg.SeedCampus {
+		campusPeopleService, campusPeopleErr := people.NewService(runtime.peopleStore, atlasService, runtime.auditor, people.ServiceConfig{
+			OrganizationID: cfg.OrganizationID,
+		})
+		if campusPeopleErr != nil {
+			return fail(fmt.Errorf("initialize campus demo People service: %w", campusPeopleErr))
+		}
+		campusAtlasService, campusAtlasErr := atlas.NewService(runtime.assetStore, peopleAssetReferenceValidator{store: runtime.peopleStore}, runtime.auditor, atlas.ServiceConfig{
+			OrganizationID: cfg.OrganizationID,
+		})
+		if campusAtlasErr != nil {
+			return fail(fmt.Errorf("initialize campus demo Atlas service: %w", campusAtlasErr))
+		}
+		campusLedgerService, campusLedgerErr := ledger.NewService(runtime.ledgerStore, ledgerReferenceValidator{
+			atlas: campusAtlasService, vault: vaultService, people: runtime.peopleStore, organizationID: cfg.OrganizationID,
+		}, runtime.auditor, ledger.ServiceConfig{OrganizationID: cfg.OrganizationID})
+		if campusLedgerErr != nil {
+			return fail(fmt.Errorf("initialize campus demo Ledger service: %w", campusLedgerErr))
+		}
+		if _, err := campusseed.Seed(ctx, campusseed.Dependencies{
+			OrganizationID: cfg.OrganizationID,
+			People:         campusPeopleService,
+			Atlas:          campusAtlasService,
+			Stack:          stackService,
+			Ledger:         campusLedgerService,
+			Vault:          vaultService,
+			Guard:          guardService,
+			GuardStore:     runtime.guardStore,
+			Auditor:        runtime.auditor,
+		}); err != nil {
+			return fail(fmt.Errorf("seed campus demo data: %w", err))
+		}
+	}
 	horizonService, horizonImporter, err := horizon.NewServiceWithExchangeImporter(
 		runtime.horizonStore, atlasService, ledgerService, threadsService, horizonWriteGate{guard: guardService}, runtime.auditor,
 		horizon.ServiceConfig{OrganizationID: cfg.OrganizationID},
@@ -313,6 +349,21 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 		return fail(fmt.Errorf("initialize Horizon: %w", err))
 	}
 	application.horizon = horizonService
+	if options.RunCampusSeed || cfg.SeedCampus {
+		campusAtlasService, campusAtlasErr := atlas.NewService(runtime.assetStore, peopleAssetReferenceValidator{store: runtime.peopleStore}, runtime.auditor, atlas.ServiceConfig{
+			OrganizationID: cfg.OrganizationID,
+		})
+		if campusAtlasErr != nil {
+			return fail(fmt.Errorf("initialize campus lifecycle Atlas service: %w", campusAtlasErr))
+		}
+		if err := campusseed.SeedLifecycle(ctx, campusseed.LifecycleDependencies{
+			OrganizationID: cfg.OrganizationID,
+			Atlas:          campusAtlasService,
+			Horizon:        horizonService,
+		}); err != nil {
+			return fail(fmt.Errorf("seed campus lifecycle data: %w", err))
+		}
+	}
 	reachEndpoints := append([]reach.Endpoint(nil), options.ReachEndpoints...)
 	if options.ReachEndpoints == nil {
 		reachEndpoints, err = reach.LoadEndpointsFile(cfg.ReachEndpointsFile)
@@ -354,7 +405,16 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 	if err != nil {
 		return fail(fmt.Errorf("initialize Reach: %w", err))
 	}
-	patternsService, patternsImporter, err := patterns.NewServiceWithExchangeImporter(runtime.patternsStore, guardWriteGate{guard: guardService}, runtime.auditor, patterns.ServiceConfig{OrganizationID: cfg.OrganizationID})
+	labelsService, labelsImporter, err := labels.NewServiceWithExchangeImporter(runtime.labelsStore, labelsRecordValidator{
+		people: runtime.peopleStore, atlas: atlasService, stack: runtime.stackStore, ledger: runtime.ledgerStore,
+		vault: vaultService, horizon: runtime.horizonStore, organizationID: cfg.OrganizationID,
+	}, labelsGoalValidator{store: runtime.threadsStore}, labelsWriteGate{guard: guardService}, runtime.auditor, labels.ServiceConfig{OrganizationID: cfg.OrganizationID})
+	if err != nil {
+		return fail(fmt.Errorf("initialize Labels: %w", err))
+	}
+	patternsService, patternsImporter, err := patterns.NewServiceWithExchangeImporter(runtime.patternsStore, guardWriteGate{guard: guardService}, runtime.auditor, patterns.ServiceConfig{
+		OrganizationID: cfg.OrganizationID, TagValues: patternsTagValidator{labels: labelsService},
+	})
 	if err != nil {
 		return fail(fmt.Errorf("initialize Patterns: %w", err))
 	}
@@ -404,6 +464,10 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 	if err != nil {
 		return fail(fmt.Errorf("initialize Exchange Threads provider: %w", err))
 	}
+	labelsExchangeProvider, err := exchange.NewLabelsProvider(labelsService, labelsImporter)
+	if err != nil {
+		return fail(fmt.Errorf("initialize Exchange Labels provider: %w", err))
+	}
 	patternsExchangeProvider, err := exchange.NewPatternsProvider(patternsService, patternsImporter)
 	if err != nil {
 		return fail(fmt.Errorf("initialize Exchange Patterns provider: %w", err))
@@ -430,7 +494,7 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 	}
 	exchangeProviders := []exchange.Provider{
 		atlasExchangeProvider, atlasCodesExchangeProvider, catalogExchangeProvider,
-		peopleExchangeProvider, threadsExchangeProvider, ledgerExchangeProvider,
+		peopleExchangeProvider, threadsExchangeProvider, labelsExchangeProvider, ledgerExchangeProvider,
 		horizonExchangeProvider, patternsExchangeProvider, signalsExchangeProvider,
 		reachExchangeProvider, directoryExchangeProvider, bridgeExchangeProvider,
 		stackExchangeProvider, vaultExchangeProvider,
@@ -454,6 +518,7 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 		DirectoryImports:    directoryService,
 		Graph:               directoryGraph,
 		Threads:             threadsService,
+		Labels:                labelsService,
 		Vault:               vaultService,
 		Ledger:              ledgerService,
 		Stack:               stackService,
@@ -570,6 +635,7 @@ type foundationRuntime struct {
 	catalogStore         catalog.Store
 	atlasCodesStore      atlascodes.Store
 	threadsStore         threads.Store
+	labelsStore          labels.Store
 	storageStore         storage.MetadataStore
 	ledgerStore          ledger.Store
 	stackStore           stack.Store
@@ -648,6 +714,7 @@ func initializeFoundation(ctx context.Context, cfg config.Config, runMigrations 
 		catalogStore         catalog.Store
 		atlasCodesStore      atlascodes.Store
 		threadsStore         threads.Store
+		labelsStore          labels.Store
 		storageStore         storage.MetadataStore
 		ledgerStore          ledger.Store
 		stackStore           stack.Store
@@ -675,6 +742,7 @@ func initializeFoundation(ctx context.Context, cfg config.Config, runMigrations 
 		catalogStore = repository.NewMemoryCatalogStore()
 		atlasCodesStore = repository.NewMemoryAtlasCodesStore()
 		threadsStore = repository.NewMemoryThreadsStore()
+		labelsStore = repository.NewMemoryLabelsStore()
 		storageStore = repository.NewMemoryStorageStore()
 		ledgerStore = repository.NewMemoryLedgerStore()
 		stackStore = repository.NewMemoryStackStore()
@@ -741,6 +809,11 @@ func initializeFoundation(ctx context.Context, cfg config.Config, runMigrations 
 			return foundationRuntime{}, err
 		}
 		threadsStore, err = postgresrepository.NewThreadsStore(database)
+		if err != nil {
+			_ = database.Close()
+			return foundationRuntime{}, err
+		}
+		labelsStore, err = postgresrepository.NewLabelsStore(database)
 		if err != nil {
 			_ = database.Close()
 			return foundationRuntime{}, err
@@ -837,6 +910,7 @@ func initializeFoundation(ctx context.Context, cfg config.Config, runMigrations 
 		catalogStore:         catalogStore,
 		atlasCodesStore:      atlasCodesStore,
 		threadsStore:         threadsStore,
+		labelsStore:          labelsStore,
 		storageStore:         storageStore,
 		ledgerStore:          ledgerStore,
 		stackStore:           stackStore,
@@ -957,7 +1031,7 @@ func (v stackReferenceValidator) ResolveAsset(ctx context.Context, assetID strin
 	if err != nil {
 		return stack.AssetContext{}, mapStackReferenceError("asset", err)
 	}
-	return stack.AssetContext{ID: asset.ID, SiteID: asset.SiteID, DepartmentID: asset.DepartmentID, IdentityID: asset.UserID}, nil
+	return stack.AssetContext{ID: asset.ID, SiteID: asset.SiteID, DepartmentID: asset.DepartmentID, IdentityID: asset.UserID, RoomID: asset.RoomID}, nil
 }
 
 func (v stackReferenceValidator) ValidateAssignee(ctx context.Context, kind, id string) error {
@@ -976,6 +1050,8 @@ func (v stackReferenceValidator) ValidateAssignee(ctx context.Context, kind, id 
 		_, err = v.people.GetDepartment(ctx, v.organizationID, id)
 	case "site":
 		_, err = v.people.GetSite(ctx, v.organizationID, id)
+	case "room":
+		_, err = v.people.GetRoom(ctx, v.organizationID, id)
 	default:
 		return stack.ErrInvalidInput
 	}
@@ -1186,9 +1262,156 @@ func (v peopleAssetReferenceValidator) ValidateAssetReferences(ctx context.Conte
 	return nil
 }
 
+func (v peopleAssetReferenceValidator) ValidateIdentities(ctx context.Context, organizationID string, identityIDs []string) error {
+	if v.store == nil {
+		return errors.New("people store is required")
+	}
+	for _, id := range identityIDs {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, err := v.store.GetIdentity(ctx, organizationID, id); err != nil {
+			return mapAtlasReferenceError("identity", err)
+		}
+	}
+	return nil
+}
+
 func mapAtlasReferenceError(kind string, err error) error {
 	if errors.Is(err, people.ErrNotFound) || errors.Is(err, people.ErrReferenceMissing) {
 		return fmt.Errorf("%s: %w", kind, atlas.ErrReferenceMissing)
 	}
 	return fmt.Errorf("validate Atlas %s reference: %w", kind, err)
+}
+
+type labelsWriteGate struct{ guard *guard.Service }
+
+func (g labelsWriteGate) CheckResourceWrite(ctx context.Context, resourceType, resourceID string) error {
+	return (guardWriteGate{guard: g.guard}).CheckResourceWrite(ctx, resourceType, resourceID)
+}
+
+type labelsGoalValidator struct {
+	store threads.Store
+}
+
+func (v labelsGoalValidator) ValidateGoal(ctx context.Context, organizationID, goalID string) error {
+	_, err := v.store.GetGoal(ctx, organizationID, goalID)
+	if errors.Is(err, threads.ErrNotFound) {
+		return labels.ErrNotFound
+	}
+	return err
+}
+
+type patternsTagValidator struct{ labels *labels.Service }
+
+func (v patternsTagValidator) NormalizeFieldValue(ctx context.Context, definitionID string, raw any) (any, error) {
+	if v.labels == nil {
+		return nil, labels.ErrInvalidInput
+	}
+	normalized, err := v.labels.NormalizeFieldValue(ctx, definitionID, raw)
+	if err != nil {
+		return nil, err
+	}
+	if len(normalized.Values) > 0 {
+		return normalized.Values, nil
+	}
+	if normalized.ValueText != "" {
+		return normalized.ValueText, nil
+	}
+	return true, nil
+}
+
+type labelsRecordValidator struct {
+	people         people.Store
+	atlas          *atlas.Service
+	stack          stack.Store
+	ledger         ledger.Store
+	vault          *storage.Service
+	horizon        horizon.Store
+	organizationID string
+}
+
+func (v labelsRecordValidator) ValidateRecord(ctx context.Context, organizationID, recordType, recordID string) error {
+	if strings.TrimSpace(organizationID) != v.organizationID {
+		return labels.ErrInvalidInput
+	}
+	var err error
+	switch recordType {
+	case "people.site":
+		_, err = v.people.GetSite(ctx, organizationID, recordID)
+	case "people.building":
+		_, err = v.people.GetBuilding(ctx, organizationID, recordID)
+	case "people.room":
+		_, err = v.people.GetRoom(ctx, organizationID, recordID)
+	case "people.department":
+		_, err = v.people.GetDepartment(ctx, organizationID, recordID)
+	case "people.identity":
+		_, err = v.people.GetIdentity(ctx, organizationID, recordID)
+	case "people.assignment":
+		_, err = v.people.GetAssetAssignment(ctx, organizationID, recordID)
+	case "atlas.asset":
+		_, err = v.atlas.GetAsset(ctx, recordID)
+	case "atlas.model":
+		_, err = v.atlas.GetModel(ctx, recordID)
+	case "stack.product", "stack.version", "stack.installation", "stack.license", "stack.assignment":
+		err = v.validateStackRecord(ctx, organizationID, recordType, recordID)
+	case "ledger.vendor":
+		_, err = v.ledger.GetVendor(ctx, organizationID, recordID)
+	case "ledger.purchase-order":
+		_, err = v.ledger.GetPurchaseOrder(ctx, organizationID, recordID)
+	case "ledger.contract":
+		_, err = v.ledger.GetContract(ctx, organizationID, recordID)
+	case "ledger.budget":
+		_, err = v.ledger.GetBudget(ctx, organizationID, recordID)
+	case "ledger.commitment":
+		_, err = v.ledger.GetCommitment(ctx, organizationID, recordID)
+	case "horizon.plan":
+		_, err = v.horizon.GetPlan(ctx, organizationID, recordID)
+	case "vault.blob":
+		_, err = v.vault.GetBlob(ctx, recordID)
+	default:
+		return labels.ErrInvalidInput
+	}
+	return mapLabelsRecordError(err)
+}
+
+func (v labelsRecordValidator) validateStackRecord(ctx context.Context, organizationID, recordType, recordID string) error {
+	if v.stack == nil {
+		return errors.New("Stack store is required")
+	}
+	var err error
+	switch recordType {
+	case "stack.product":
+		_, err = v.stack.GetProduct(ctx, organizationID, recordID)
+	case "stack.version":
+		_, err = v.stack.GetVersion(ctx, organizationID, recordID)
+	case "stack.installation":
+		_, err = v.stack.GetInstallation(ctx, organizationID, recordID)
+	case "stack.license":
+		_, err = v.stack.GetLicense(ctx, organizationID, recordID)
+	case "stack.assignment":
+		_, err = v.stack.GetAssignment(ctx, organizationID, recordID)
+	default:
+		return labels.ErrInvalidInput
+	}
+	return err
+}
+
+func mapLabelsRecordError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, people.ErrNotFound) || errors.Is(err, people.ErrReferenceMissing) ||
+		errors.Is(err, atlas.ErrNotFound) || errors.Is(err, stack.ErrNotFound) ||
+		errors.Is(err, ledger.ErrNotFound) || errors.Is(err, horizon.ErrNotFound) ||
+		errors.Is(err, storage.ErrNotFound) {
+		return labels.ErrNotFound
+	}
+	if errors.Is(err, people.ErrInvalidInput) || errors.Is(err, atlas.ErrInvalidInput) ||
+		errors.Is(err, stack.ErrInvalidInput) || errors.Is(err, ledger.ErrInvalidInput) ||
+		errors.Is(err, horizon.ErrInvalidInput) || errors.Is(err, storage.ErrInvalidInput) {
+		return labels.ErrInvalidInput
+	}
+	return err
 }

@@ -135,6 +135,7 @@ type allowAssetReferences struct{}
 func (allowAssetReferences) ValidateAssetReferences(context.Context, string, atlas.References) error {
 	return nil
 }
+func (allowAssetReferences) ValidateIdentities(context.Context, string, []string) error { return nil }
 
 type atlasAssetReader struct{ service *atlas.Service }
 

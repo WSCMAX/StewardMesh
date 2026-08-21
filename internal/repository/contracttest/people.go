@@ -99,7 +99,22 @@ func PeopleStore(t *testing.T, store people.Store, organizationID string) {
 	if createdRoom.BuildingID != building.ID || createdRoom.SiteID != site.ID {
 		t.Fatalf("unexpected room %#v", createdRoom)
 	}
-	duplicateRoom := room
+	updatedRoom := room
+	updatedRoom.Number = "102A"
+	updatedRoom.NormalizedNumber = "102a"
+	updatedRoom.Name = "Robotics Lab West"
+	updatedRoom.Revision = 2
+	updatedRoom.UpdatedAt = now.Add(time.Minute)
+	savedRoom, err := store.UpdateRoom(ctx, updatedRoom, 1)
+	if err != nil || savedRoom.Number != "102A" {
+		t.Fatalf("unexpected room update %#v, %v", savedRoom, err)
+	}
+	staleRoom := updatedRoom
+	staleRoom.Revision = 3
+	if _, err := store.UpdateRoom(ctx, staleRoom, 1); !errors.Is(err, people.ErrConflict) {
+		t.Fatalf("expected stale room update conflict, got %v", err)
+	}
+	duplicateRoom := savedRoom
 	duplicateRoom.ID = randomID(t)
 	if _, err := store.CreateRoom(ctx, duplicateRoom); !errors.Is(err, people.ErrConflict) {
 		t.Fatalf("expected duplicate room conflict, got %v", err)

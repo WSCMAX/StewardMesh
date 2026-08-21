@@ -33,16 +33,23 @@ var (
 
 type ServiceConfig struct {
 	OrganizationID string
+	TagValues      TagValueValidator
 	Now            func() time.Time
 }
 
 type Service struct {
 	store          Store
 	writes         WriteGate
+	tagValues      TagValueValidator
 	auditor        foundation.Auditor
 	organizationID string
 	now            func() time.Time
 	builtIns       map[string]map[int64]Template
+}
+
+// TagValueValidator normalizes tag-field values against live label definitions.
+type TagValueValidator interface {
+	NormalizeFieldValue(ctx context.Context, definitionID string, raw any) (normalized any, err error)
 }
 
 type exchangeImporter struct{ service *Service }
@@ -86,7 +93,10 @@ func NewServiceWithExchangeImporter(store Store, writes WriteGate, auditor found
 		}
 		builtIns[candidate.ID][candidate.Version] = candidate
 	}
-	service := &Service{store: store, writes: writes, auditor: auditor, organizationID: configuration.OrganizationID, now: configuration.Now, builtIns: builtIns}
+	service := &Service{
+		store: store, writes: writes, tagValues: configuration.TagValues, auditor: auditor,
+		organizationID: configuration.OrganizationID, now: configuration.Now, builtIns: builtIns,
+	}
 	return service, &exchangeImporter{service: service}, nil
 }
 
@@ -416,7 +426,7 @@ func (s *Service) Validate(ctx context.Context, templateID string, version int64
 			}
 			continue
 		}
-		normalized, code, message := normalizeValue(field, value)
+		normalized, code, message := s.normalizeValue(ctx, field, value)
 		if code != "" {
 			result.Errors = append(result.Errors, fieldError(field, code, message))
 			continue
@@ -502,6 +512,7 @@ func normalizeFields(input []Field) ([]Field, error) {
 		field.CSVHeader = strings.TrimSpace(field.CSVHeader)
 		field.ReferenceType = strings.TrimSpace(field.ReferenceType)
 		field.CurrencyField = strings.TrimSpace(field.CurrencyField)
+		field.TagDefinitionID = strings.TrimSpace(field.TagDefinitionID)
 		if field.AccessibleLabel == "" {
 			field.AccessibleLabel = field.Label
 		}
@@ -548,6 +559,13 @@ func normalizeFields(input []Field) ([]Field, error) {
 		} else if field.CurrencyField != "" {
 			return nil, ErrInvalidInput
 		}
+		if field.Type == FieldTag {
+			if !stableIDPattern.MatchString(field.TagDefinitionID) {
+				return nil, ErrInvalidInput
+			}
+		} else if field.TagDefinitionID != "" {
+			return nil, ErrInvalidInput
+		}
 		if field.Type != FieldText && field.MaximumLength != 0 ||
 			field.Type != FieldNumber && field.Type != FieldMoney && (field.Minimum != nil || field.Maximum != nil) {
 			return nil, ErrInvalidInput
@@ -577,8 +595,17 @@ func normalizeFields(input []Field) ([]Field, error) {
 	return result, nil
 }
 
-func normalizeValue(field Field, raw any) (any, string, string) {
+func (s *Service) normalizeValue(ctx context.Context, field Field, raw any) (any, string, string) {
 	switch field.Type {
+	case FieldTag:
+		if s.tagValues == nil {
+			return nil, "tag", "Tag validation is unavailable."
+		}
+		normalized, err := s.tagValues.NormalizeFieldValue(ctx, field.TagDefinitionID, raw)
+		if err != nil {
+			return nil, "tag", "Enter a valid tag value."
+		}
+		return normalized, "", ""
 	case FieldText:
 		value, ok := raw.(string)
 		if !ok {
@@ -725,7 +752,7 @@ func fieldError(field Field, code, message string) FieldError {
 
 func validFieldType(value FieldType) bool {
 	return value == FieldText || value == FieldNumber || value == FieldDate || value == FieldMoney ||
-		value == FieldEnum || value == FieldAttachment || value == FieldReference
+		value == FieldEnum || value == FieldAttachment || value == FieldReference || value == FieldTag
 }
 
 func validText(value string, minimum, maximum int) bool {

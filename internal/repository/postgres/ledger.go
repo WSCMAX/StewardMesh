@@ -151,17 +151,21 @@ func (s *LedgerStore) GetPurchaseOrder(ctx context.Context, organizationID, id s
 }
 
 func (s *LedgerStore) CreatePurchaseOrder(ctx context.Context, item ledger.PurchaseOrder) (ledger.PurchaseOrder, error) {
+	lines, err := marshalLedgerLines(item.Lines)
+	if err != nil {
+		return ledger.PurchaseOrder{}, err
+	}
 	created, err := scanPurchaseOrder(s.database.QueryRowContext(ctx, `
 		INSERT INTO ledger_purchase_orders (
 			organization_id, id, number, normalized_number, vendor_id, status, currency, total_minor, ordered_on,
-			asset_ids, receipt_document_ids, revision, created_at, updated_at
+			asset_ids, receipt_document_ids, lines, revision, created_at, updated_at
 		) VALUES ($1, $2, $3, lower(btrim($3)), $4, $5, $6, $7, $8,
 			CASE WHEN $9 = '' THEN '{}'::text[] ELSE string_to_array($9, ',') END,
-			CASE WHEN $10 = '' THEN '{}'::text[] ELSE string_to_array($10, ',') END, $11, $12, $13)
+			CASE WHEN $10 = '' THEN '{}'::text[] ELSE string_to_array($10, ',') END, $11, $12, $13, $14)
 		RETURNING organization_id, id, number, vendor_id, status, currency, total_minor, ordered_on,
-			array_to_json(asset_ids)::text, array_to_json(receipt_document_ids)::text, revision, created_at, updated_at
+			array_to_json(asset_ids)::text, array_to_json(receipt_document_ids)::text, COALESCE(lines::text, '[]'), revision, created_at, updated_at
 	`, item.OrganizationID, item.ID, item.Number, item.VendorID, item.Status, item.Currency, item.TotalMinor, item.OrderedOn,
-		strings.Join(item.AssetIDs, ","), strings.Join(item.ReceiptDocumentIDs, ","), item.Revision, item.CreatedAt, item.UpdatedAt))
+		strings.Join(item.AssetIDs, ","), strings.Join(item.ReceiptDocumentIDs, ","), lines, item.Revision, item.CreatedAt, item.UpdatedAt))
 	return created, translateLedgerWriteError("create Ledger purchase order", err)
 }
 
@@ -170,7 +174,7 @@ func (s *LedgerStore) UpdatePurchaseOrder(ctx context.Context, item ledger.Purch
 		UPDATE ledger_purchase_orders SET status = $3, revision = $4, updated_at = $5
 		WHERE organization_id = $1 AND id = $2 AND revision = $6
 		RETURNING organization_id, id, number, vendor_id, status, currency, total_minor, ordered_on,
-			array_to_json(asset_ids)::text, array_to_json(receipt_document_ids)::text, revision, created_at, updated_at
+			array_to_json(asset_ids)::text, array_to_json(receipt_document_ids)::text, COALESCE(lines::text, '[]'), revision, created_at, updated_at
 	`, item.OrganizationID, item.ID, item.Status, item.Revision, item.UpdatedAt, expectedRevision))
 	if errors.Is(err, sql.ErrNoRows) {
 		return ledger.PurchaseOrder{}, s.resolveRevisionConflict(ctx, "ledger_purchase_orders", item.OrganizationID, item.ID)
@@ -289,7 +293,7 @@ func (s *LedgerStore) UpdateCost(ctx context.Context, item ledger.CostRecord, ex
 }
 
 const vendorSelect = `SELECT organization_id, id, name, COALESCE(external_id, ''), status, revision, created_at, updated_at FROM ledger_vendors`
-const purchaseOrderSelect = `SELECT organization_id, id, number, vendor_id, status, currency, total_minor, ordered_on, array_to_json(asset_ids)::text, array_to_json(receipt_document_ids)::text, revision, created_at, updated_at FROM ledger_purchase_orders`
+const purchaseOrderSelect = `SELECT organization_id, id, number, vendor_id, status, currency, total_minor, ordered_on, array_to_json(asset_ids)::text, array_to_json(receipt_document_ids)::text, COALESCE(lines::text, '[]'), revision, created_at, updated_at FROM ledger_purchase_orders`
 const contractSelect = `SELECT organization_id, id, name, vendor_id, operational_status, financial_status, currency, ceiling_minor, starts_on, ends_on, renews_on, array_to_json(document_ids)::text, revision, created_at, updated_at FROM ledger_contracts`
 const commitmentSelect = `SELECT organization_id, id, contract_id, kind, description, currency, amount_minor, starts_on, ends_on, fiscal_period, scenario, revision, created_at, updated_at FROM ledger_commitments`
 const budgetSelect = `SELECT organization_id, id, name, fiscal_period, scenario, COALESCE(department_id, ''), COALESCE(site_id, ''), currency, allocated_minor, revision, created_at, updated_at FROM ledger_budgets`
@@ -307,9 +311,9 @@ func scanVendor(row ledgerScanner) (ledger.Vendor, error) {
 func scanPurchaseOrder(row ledgerScanner) (ledger.PurchaseOrder, error) {
 	var item ledger.PurchaseOrder
 	var orderedOn sql.NullTime
-	var assetJSON, documentJSON string
+	var assetJSON, documentJSON, linesJSON string
 	err := row.Scan(&item.OrganizationID, &item.ID, &item.Number, &item.VendorID, &item.Status, &item.Currency, &item.TotalMinor,
-		&orderedOn, &assetJSON, &documentJSON, &item.Revision, &item.CreatedAt, &item.UpdatedAt)
+		&orderedOn, &assetJSON, &documentJSON, &linesJSON, &item.Revision, &item.CreatedAt, &item.UpdatedAt)
 	if err != nil {
 		return ledger.PurchaseOrder{}, err
 	}
@@ -322,7 +326,24 @@ func scanPurchaseOrder(row ledgerScanner) (ledger.PurchaseOrder, error) {
 	if err := json.Unmarshal([]byte(documentJSON), &item.ReceiptDocumentIDs); err != nil {
 		return ledger.PurchaseOrder{}, fmt.Errorf("decode Ledger receipt ids: %w", err)
 	}
+	if err := json.Unmarshal([]byte(linesJSON), &item.Lines); err != nil {
+		return ledger.PurchaseOrder{}, fmt.Errorf("decode Ledger purchase order lines: %w", err)
+	}
+	if len(item.Lines) == 0 {
+		item.Lines = nil
+	}
 	return item, nil
+}
+
+func marshalLedgerLines(lines []ledger.PurchaseOrderLine) ([]byte, error) {
+	if len(lines) == 0 {
+		return []byte(`[]`), nil
+	}
+	encoded, err := json.Marshal(lines)
+	if err != nil {
+		return nil, fmt.Errorf("marshal Ledger purchase order lines: %w", err)
+	}
+	return encoded, nil
 }
 
 func scanContract(row ledgerScanner) (ledger.Contract, error) {

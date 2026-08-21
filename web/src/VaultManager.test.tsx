@@ -21,7 +21,7 @@ test('loads Vault metadata and prepares a temporary download accessibly', async 
   expect(await screen.findByText('evidence.txt')).toBeInTheDocument()
   expect(screen.getByText(/SHA-256/)).toHaveTextContent(blob.sha256)
   fireEvent.click(screen.getByRole('button', { name: 'Prepare download' }))
-  expect(await screen.findByRole('link', { name: 'Download ready' })).toHaveAttribute('href', `/api/v1/blobs/${blob.id}/content`)
+  expect(await screen.findByRole('link', { name: 'Download ready' })).toHaveAttribute('href', `/api/v1/blobs/${blob.id}/content?download=1`)
   expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({ method: 'POST', headers: { 'X-CSRF-Token': 'csrf-value' } })
   expect((await axe.run(container)).violations).toHaveLength(0)
 })

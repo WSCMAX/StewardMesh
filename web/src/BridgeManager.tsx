@@ -1,6 +1,6 @@
 import { type FormEvent, useCallback, useEffect, useState } from 'react'
 import { ApiRequestError, requestJSON } from './api'
-import { buttonClass, dangerButtonClass, inputClass, labelClass, panelClass, secondaryButtonClass, StatusBadge, subpanelClass } from './ui'
+import { ProductHeader, buttonClass, dangerButtonClass, inputClass, labelClass, panelClass, secondaryButtonClass, StatusBadge, subpanelClass } from './ui'
 
 // Requirements: REQ-API-001, SEC-MCP-001. Feature: integrations.protocols. GitHub: #14.
 
@@ -115,14 +115,21 @@ export default function BridgeManager({ csrfToken, permissions }: { csrfToken: s
 
   return <div className="space-y-5" data-feature="integrations.protocols" data-requirement="REQ-API-001 SEC-MCP-001">
     {consent && <section aria-labelledby="bridge-consent-heading" className={`${panelClass} border-steward-teal/35 p-5 sm:p-7`}>
-      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-steward-teal">Permission request</p>
+      <p className="text-[13px] font-medium text-steward-slate">Permission request</p>
       <h3 className="mt-2 text-2xl font-semibold" id="bridge-consent-heading">Allow {consent.clientName} to use Bridge?</h3>
       <p className="mt-2 text-sm leading-6 text-steward-mist-muted">Only the listed scopes will be granted. StewardMesh rechecks your current Guard permissions on every MCP request.</p>
       <ul className="mt-4 list-disc space-y-1 pl-5 text-sm text-steward-mist">{consent.scopes.map((scope) => <li key={scope}><code>{scope}</code></li>)}</ul>
       <div className="mt-5 flex flex-wrap gap-3"><button className={buttonClass} disabled={busy} onClick={() => void decide(true)} type="button">Allow access</button><button className={secondaryButtonClass} disabled={busy} onClick={() => void decide(false)} type="button">Deny</button></div>
     </section>}
     <section aria-labelledby="bridge-heading" className={`${panelClass} p-5 sm:p-7`}>
-      <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-xs font-semibold uppercase tracking-[0.18em] text-steward-teal">Bridge / MCP and OAuth</p><h3 className="mt-2 text-2xl font-semibold" id="bridge-heading">Connected clients</h3><p className="mt-2 max-w-3xl text-sm leading-6 text-steward-mist-muted">Register exact redirects, grant narrow scopes, and revoke clients or sessions. Raw OAuth tokens are never shown here.</p></div><StatusBadge tone="success">MCP 2026-07-28</StatusBadge></div>
+      <ProductHeader
+        actions={<StatusBadge tone="success">MCP 2026-07-28</StatusBadge>}
+        description="Register exact redirects, grant narrow scopes, and revoke clients or sessions. Raw OAuth tokens are never shown here."
+        headingId="bridge-heading"
+        headingLevel={3}
+        kicker="Bridge / MCP and OAuth"
+        title="Connected clients"
+      />
       {error && <p className="mt-4 rounded-xl border border-steward-danger/40 bg-steward-danger/10 p-3 text-sm" role="alert">{error}</p>}
       {notice && <p className="mt-4 rounded-xl border border-steward-success/40 bg-steward-success/10 p-3 text-sm" role="status">{notice}</p>}
       {canWrite && <form className={`${subpanelClass} mt-5 grid gap-4 p-4`} onSubmit={createClient}>

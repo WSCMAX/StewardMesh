@@ -47,27 +47,51 @@ async page => {
   await page.getByRole('button', { name: 'Sign in' }).click()
   await page.locator('#assets-heading').waitFor()
 
+  const openAtlasTab = async name => {
+    await page.getByRole('tab', { name, exact: true }).click()
+  }
+  const dismissDrawer = async () => {
+    const dialog = page.getByRole('dialog')
+    if (await dialog.count() === 0) return
+    await page.keyboard.press('Escape')
+    await dialog.first().waitFor({ state: 'hidden' })
+  }
   const createAsset = async (name, tag, serial) => {
+    await openAtlasTab('Assets')
+    await dismissDrawer()
     await page.getByRole('button', { name: 'Add asset' }).click()
     const form = page.getByRole('form', { name: 'Add asset' })
     await form.getByLabel('Asset name').fill(name)
     await form.getByLabel('Asset tag').fill(tag)
     await form.getByLabel('Serial number').fill(serial)
+    await form.getByLabel('Status').selectOption('active')
     await form.getByRole('button', { name: 'Create asset' }).click()
     await page.getByText('Asset created.', { exact: true }).waitFor()
-    await page.locator('#asset-identifiers-heading').waitFor()
+    await page.getByRole('button', { name: `Open ${name}` }).waitFor()
+    await dismissDrawer()
   }
   const selectAsset = async name => {
-    await page.getByRole('button', { name: new RegExp(`^${name}`) }).first().click()
+    await openAtlasTab('Assets')
+    await dismissDrawer()
+    await page.getByRole('button', { name: `Open ${name}` }).click()
     await page.locator('#asset-identifiers-heading').waitFor()
     await page.getByText(name, { exact: true }).last().waitFor()
+    await dismissDrawer()
   }
-  const scannerPanel = page.locator('section[aria-labelledby="atlas-scanner-heading"]')
-  const scannerForm = () => scannerPanel.getByRole('form', { name: 'Scan an Atlas Code', exact: true })
+  const scannerPanel = page.locator('#atlas-panel-scan')
+  const scannerForm = () => scannerPanel.locator('form')
   const scannerSelect = label => scannerForm().locator('label').filter({ hasText: new RegExp(`^${label}`) }).locator('select')
   const scannerInput = () => scannerForm().locator('input[placeholder="Scan, paste, or type"]')
   const setScanner = async (mode, symbology = 'code128') => {
-    if (await scannerPanel.getByRole('button', { name: 'Open scanner', exact: true }).count()) await scannerPanel.getByRole('button', { name: 'Open scanner', exact: true }).click()
+    await dismissDrawer()
+    await page.locator('#atlas-tab-scan').click()
+    await page.locator('#atlas-panel-scan:not([hidden])').waitFor()
+    const openScanner = scannerPanel.getByRole('button', { name: 'Open scanner', exact: true })
+    try {
+      await scannerForm().waitFor({ timeout: 2000 })
+    } catch {
+      await openScanner.click()
+    }
     await scannerSelect('Workflow').selectOption(mode)
     await scannerSelect('Symbology').selectOption(symbology)
   }
@@ -123,6 +147,7 @@ async page => {
   assert(associationRequests === requestsBeforeInvalid, 'invalid scanner input reached the association API')
 
   await selectAsset(assetB)
+  await openAtlasTab('Scan')
   await scannerSelect('Symbology').selectOption('code128')
   await scannerSelect('Scanner terminator').selectOption('Enter')
   await scannerSelect('Scanner burst window').selectOption('250')
@@ -160,8 +185,8 @@ async page => {
 
   await setScanner('find', 'code128')
   await associate(codeA)
-  await scannerPanel.getByText('Identifier matched. The authorized asset is open in Asset details.', { exact: true }).waitFor()
-  await page.getByText(assetA, { exact: true }).last().waitFor()
+  await scannerPanel.getByText('Identifier matched. The authorized asset is shown below.', { exact: true }).waitFor()
+  await page.locator('#atlas-panel-scan').getByText(assetA, { exact: true }).waitFor()
   await scannerInput().fill('E2E-CODE-MISSING')
   expectedConsoleErrors.resolve404 = 1
   await scannerForm().getByRole('button', { name: 'Find asset', exact: true }).click()
@@ -170,6 +195,8 @@ async page => {
   await scannerPanel.getByRole('button', { name: 'Cancel scanning', exact: true }).click()
   await scannerPanel.getByText('Scanning cancelled. No asset or identifier was changed.', { exact: true }).waitFor()
 
+  await openAtlasTab('Assets')
+  await page.getByRole('button', { name: `Open ${assetA}` }).click()
   const identifiers = page.locator('section[aria-labelledby="asset-identifiers-heading"]')
   const codeAItem = identifiers.locator('li').filter({ has: page.getByText(codeA, { exact: true }) })
   await codeAItem.getByRole('button', { name: 'Replace' }).click()
@@ -220,7 +247,7 @@ async page => {
   await setScanner('find', 'code128')
   assert(await page.evaluate(() => globalThis.__e2eCamera.calls) === 0, 'camera permission was requested before explicit activation')
   await scannerForm().getByRole('button', { name: 'Use camera', exact: true }).click()
-  await scannerPanel.getByText('Identifier matched. The authorized asset is open in Asset details.', { exact: true }).waitFor()
+  await scannerPanel.getByText('Identifier matched. The authorized asset is shown below.', { exact: true }).waitFor()
   const cameraState = await page.evaluate(() => globalThis.__e2eCamera)
   assert(cameraState.calls === 1, `camera requested ${cameraState.calls} times`)
   assert(cameraState.constraints.audio === false && cameraState.constraints.video.facingMode.ideal === 'environment', 'camera constraints were not narrow and rear-facing')
@@ -237,6 +264,8 @@ async page => {
   await scannerPanel.getByRole('alert').filter({ hasText: 'Camera scanning is not available in this browser.' }).waitFor()
   await scannerPanel.getByRole('button', { name: 'Cancel scanning', exact: true }).click()
 
+  await openAtlasTab('Labels')
+  await dismissDrawer()
   await page.getByRole('button', { name: 'Print labels' }).click()
   const labelPanel = page.locator('section[aria-labelledby="atlas-label-print-heading"]')
   await labelPanel.getByText('1. Select active identifiers', { exact: true }).waitFor()

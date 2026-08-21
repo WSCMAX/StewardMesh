@@ -1,90 +1,71 @@
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Asset } from './AtlasInventory'
-import { ApiRequestError, isRevision, requestJSON, type Revision } from './api'
+import { ApiRequestError, isRevision, requestJSON } from './api'
 import DirectoryImportManager from './DirectoryImportManager'
-import RelationshipGraphView from './RelationshipGraphView'
+import PeopleSectionNav, { type PeopleSection } from './PeopleSectionNav'
+import type { WorkspaceRecordFocus } from './graphRecord'
+import RecordSearchPicker, { type SearchableRecord } from './RecordSearchPicker'
 import { documentationHref } from './documentation'
 import { RelatedRecordModeChooser, RelatedRecordWorkflowFrame, useRelatedRecordWorkflow } from './RelatedRecordWorkflow'
-import { buttonClass, inputClass, labelClass, panelClass, plainButtonClass, secondaryButtonClass, subpanelClass } from './ui'
+import { ProductHeader, buttonClass, cx, inputClass, labelClass, panelClass, plainButtonClass, secondaryButtonClass, subpanelClass } from './ui'
+import DataGrid, { type StagedDraft } from './grid/DataGrid'
+import Drawer from './grid/Drawer'
+import type { GridColumn } from './grid/columns'
+import type { CellEdit } from './grid/useCellEditing'
+import { buildPayload, summarizeReport, tasksFromEdits, useWriteQueue, type WriteTransport } from './grid/writeQueue'
+import type { GridIdentity } from './grid/viewState'
+import {
+  createLabelDefinition,
+  isLabelColumnKey,
+  loadLabelAssignments,
+  loadLabelDefinitionsFor,
+  saveLabelEdits,
+  type LabelAssignment,
+  type LabelDefinition,
+  type LabelValueKind,
+} from './labelsGrid'
+import {
+  buildBuildingColumns,
+  buildDepartmentColumns,
+  buildIdentityColumns,
+  buildLocationReferenceColumns,
+  buildLocationReferenceTypeColumns,
+  buildRoomColumns,
+  buildSiteColumns,
+  buildingPayload,
+  departmentPayload,
+  emptyTagContext,
+  identityPayload,
+  kindLabels,
+  occupancySheets,
+  locationReferencePayload,
+  locationReferenceTypePayload,
+  locationSheets,
+  peopleRecordTypes,
+  roomPayload,
+  sitePayload,
+  type Building,
+  type Department,
+  type Identity,
+  type IdentityKind,
+  type LocationReference,
+  type LocationReferenceType,
+  type LocationSheet,
+  type OccupancySheet,
+  type PeopleColumnContext,
+  type PeopleRecordType,
+  type PeopleTagContext,
+  type RecordStatus,
+  type Room,
+  type Site,
+  type SiteAddress,
+} from './peopleGrid'
 
 // Requirements: REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-008, REQ-WORKSPACE-001, A11Y-001, DOC-001, DOC-002.
-// Features: identity.directory, threads.relationships, experience.workspace.
+// Features: identity.directory, identity.labels, experience.grid, experience.workspace.
 
-type RecordStatus = 'active' | 'inactive'
-type IdentityKind = 'person' | 'shared' | 'public' | 'lab'
 type AssigneeKind = 'identity' | 'department'
 type AssignmentRole = 'primary' | 'user' | 'department'
-
-type SiteAddress = {
-  line1?: string
-  line2?: string
-  city?: string
-  region?: string
-  postalCode?: string
-  country?: string
-}
-
-type Site = {
-  id: string
-  organizationId: string
-  name: string
-  address?: SiteAddress
-  status: RecordStatus
-  revision: Revision
-  createdAt: string
-  updatedAt: string
-}
-
-type Building = {
-  id: string
-  organizationId: string
-  siteId: string
-  name: string
-  status: RecordStatus
-  revision: Revision
-  createdAt: string
-  updatedAt: string
-}
-
-type Room = {
-  id: string
-  organizationId: string
-  siteId: string
-  buildingId: string
-  number: string
-  name?: string
-  status: RecordStatus
-  revision: Revision
-  createdAt: string
-  updatedAt: string
-}
-
-type Department = {
-  id: string
-  organizationId: string
-  name: string
-  siteId?: string
-  status: RecordStatus
-  revision: Revision
-  createdAt: string
-  updatedAt: string
-}
-
-type Identity = {
-  id: string
-  organizationId: string
-  kind: IdentityKind
-  displayName: string
-  email?: string
-  departmentId?: string
-  siteId?: string
-  status: RecordStatus
-  provider?: string
-  providerSubject?: string
-  revision: Revision
-  createdAt: string
-  updatedAt: string
-}
 
 type AssetAssignment = {
   id: string
@@ -130,6 +111,8 @@ type PeopleDirectoryProps = {
   permissions: readonly string[]
   onOpenHelp?: () => void
   onReportIssue?: () => void
+  focusRecord?: WorkspaceRecordFocus | null
+  identity?: GridIdentity | null
 }
 
 const peopleHelpUrl = documentationHref('people')
@@ -149,13 +132,6 @@ const personLocationBoundaries = {
     authorization: 'directory.read; directory.write to create',
   },
 } as const
-
-const kindLabels: Record<IdentityKind, string> = {
-  person: 'Person',
-  shared: 'Shared identity',
-  public: 'Public users',
-  lab: 'Computer lab users',
-}
 
 const roleLabels: Record<AssignmentRole, string> = {
   primary: 'Primary assignee',
@@ -224,6 +200,24 @@ function isIdentity(value: unknown): value is Identity {
     && (value.email === undefined || isString(value.email))
     && (value.departmentId === undefined || isString(value.departmentId))
     && (value.siteId === undefined || isString(value.siteId))
+    && (value.buildingId === undefined || isString(value.buildingId))
+    && (value.roomId === undefined || isString(value.roomId))
+}
+
+function isLocationReferenceType(value: unknown): value is LocationReferenceType {
+  return isBaseRecord(value) && isString(value.name) && value.name.length > 0
+    && ['located_at', 'uses_office', 'teaches_in', 'attends_class', 'resides_in', 'uses_lab'].includes(String(value.relationshipKind))
+    && ['site', 'building', 'room'].includes(String(value.locationKind))
+    && isStatus(value.status)
+    && (value.description === undefined || isString(value.description))
+}
+
+function isLocationReference(value: unknown): value is LocationReference {
+  return isBaseRecord(value)
+    && isString(value.identityId) && isString(value.typeId) && isString(value.locationId)
+    && ['site', 'building', 'room'].includes(String(value.locationKind))
+    && (value.priority === 'primary' || value.priority === 'secondary')
+    && isStatus(value.status)
 }
 
 function isAssignment(value: unknown): value is AssetAssignment {
@@ -271,13 +265,6 @@ function localDateTimeToISO(value: string) {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) throw new Error('Enter a valid effective date and time.')
   return date.toISOString()
-}
-
-function formatSiteAddress(address?: SiteAddress) {
-  if (!address) return []
-  const locality = [address.city, address.region].filter(Boolean).join(', ')
-  const postalCountry = [address.postalCode, address.country].filter(Boolean).join(' ')
-  return [address.line1, address.line2, locality, postalCountry].filter((line): line is string => Boolean(line))
 }
 
 function siteAddressFromForm(values: FormData): SiteAddress | undefined {
@@ -542,7 +529,7 @@ function PersonLocationWorkflow({ buildings, canWrite, departments, rooms, sites
   )
 }
 
-export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissions, onOpenHelp, onReportIssue }: PeopleDirectoryProps) {
+export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissions, onOpenHelp, onReportIssue, focusRecord = null, identity = null }: PeopleDirectoryProps) {
   const [sites, setSites] = useState<Site[]>([])
   const [buildings, setBuildings] = useState<Building[]>([])
   const [rooms, setRooms] = useState<Room[]>([])
@@ -559,10 +546,36 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const [status, setStatus] = useState('')
+  const [activeSection, setActiveSection] = useState<PeopleSection>('directory')
+  const [locationSheet, setLocationSheet] = useState<LocationSheet>('sites')
+  const [occupancySheet, setOccupancySheet] = useState<OccupancySheet>('references')
+  const [locationReferenceTypes, setLocationReferenceTypes] = useState<LocationReferenceType[]>([])
+  const [locationReferences, setLocationReferences] = useState<LocationReference[]>([])
+  const [nestedSite, setNestedSite] = useState<Site | null>(null)
+  const [nestedBuilding, setNestedBuilding] = useState<Building | null>(null)
+  const [identityDepartment, setIdentityDepartment] = useState<SearchableRecord[]>([])
+  const [identitySite, setIdentitySite] = useState<SearchableRecord[]>([])
+  const [tagColumnFormOpen, setTagColumnFormOpen] = useState(false)
+  const [tagColumnBusy, setTagColumnBusy] = useState(false)
+  const [tagColumnRecordType, setTagColumnRecordType] = useState<PeopleRecordType>(peopleRecordTypes.identity)
+  const [identityTags, setIdentityTags] = useState<PeopleTagContext>(emptyTagContext(csrfToken, false))
+  const [siteTags, setSiteTags] = useState<PeopleTagContext>(emptyTagContext(csrfToken, false))
+  const [buildingTags, setBuildingTags] = useState<PeopleTagContext>(emptyTagContext(csrfToken, false))
+  const [roomTags, setRoomTags] = useState<PeopleTagContext>(emptyTagContext(csrfToken, false))
+  const [departmentTags, setDepartmentTags] = useState<PeopleTagContext>(emptyTagContext(csrfToken, false))
   const errorRef = useRef<HTMLDivElement>(null)
+  const identityWrites = useWriteQueue()
+  const siteWrites = useWriteQueue()
+  const buildingWrites = useWriteQueue()
+  const roomWrites = useWriteQueue()
+  const departmentWrites = useWriteQueue()
+  const locationTypeWrites = useWriteQueue()
+  const locationReferenceWrites = useWriteQueue()
 
   const canWriteDirectory = permissions.includes('directory.write')
   const canAssignAssets = canWriteDirectory && permissions.includes('assets.write')
+  const canReadLabels = permissions.includes('labels.read')
+  const canWriteLabels = permissions.includes('labels.write')
   const departmentNames = useMemo(() => new Map(departments.map((department) => [department.id, department.name])), [departments])
   const siteNames = useMemo(() => new Map(sites.map((site) => [site.id, site.name])), [sites])
   const identityNames = useMemo(() => new Map(identities.map((identity) => [identity.id, identity.displayName])), [identities])
@@ -592,6 +605,79 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
     setIdentities(nextIdentities)
   }, [])
 
+  const loadOccupancy = useCallback(async (signal?: AbortSignal) => {
+    const [typeResponse, referenceResponse] = await Promise.all([
+      requestJSON('/api/v1/location-reference-types', { signal }),
+      requestJSON('/api/v1/location-references?limit=500', { signal }),
+    ])
+    setLocationReferenceTypes(readCollection(typeResponse, isLocationReferenceType))
+    setLocationReferences(readCollection(referenceResponse, isLocationReference))
+  }, [])
+
+  const applyTagDefinition = useCallback((definition: LabelDefinition) => {
+    const apply = (current: PeopleTagContext): PeopleTagContext => ({
+      ...current,
+      definitions: current.definitions.some((item) => item.id === definition.id)
+        ? current.definitions.map((item) => item.id === definition.id ? definition : item)
+        : [...current.definitions, definition].sort((left, right) => left.name.localeCompare(right.name)),
+    })
+    setIdentityTags(apply)
+    setSiteTags(apply)
+    setBuildingTags(apply)
+    setRoomTags(apply)
+    setDepartmentTags(apply)
+  }, [])
+
+  const applyTagAssignment = useCallback((
+    setter: (value: PeopleTagContext | ((current: PeopleTagContext) => PeopleTagContext)) => void,
+    definitionId: string,
+    recordId: string,
+    assignment: LabelAssignment | null,
+  ) => {
+    setter((current) => {
+      const next = new Map(current.assignments)
+      const byRecord = new Map(next.get(definitionId) ?? [])
+      if (assignment) byRecord.set(recordId, assignment)
+      else byRecord.delete(recordId)
+      next.set(definitionId, byRecord)
+      return { ...current, assignments: next }
+    })
+  }, [])
+
+  useEffect(() => {
+    if (!canReadLabels) {
+      setIdentityTags(emptyTagContext(csrfToken, canWriteLabels))
+      setSiteTags(emptyTagContext(csrfToken, canWriteLabels))
+      setBuildingTags(emptyTagContext(csrfToken, canWriteLabels))
+      setRoomTags(emptyTagContext(csrfToken, canWriteLabels))
+      setDepartmentTags(emptyTagContext(csrfToken, canWriteLabels))
+      return
+    }
+    let cancelled = false
+    const load = async (recordType: string, setter: (value: PeopleTagContext) => void) => {
+      const definitions = await loadLabelDefinitionsFor(recordType)
+      const assignments = await loadLabelAssignments(definitions, recordType)
+      if (cancelled) return
+      setter({
+        csrfToken,
+        canWriteLabels,
+        definitions,
+        assignments,
+        onDefinitionUpdated: applyTagDefinition,
+      })
+    }
+    void Promise.all([
+      load(peopleRecordTypes.identity, setIdentityTags),
+      load(peopleRecordTypes.site, setSiteTags),
+      load(peopleRecordTypes.building, setBuildingTags),
+      load(peopleRecordTypes.room, setRoomTags),
+      load(peopleRecordTypes.department, setDepartmentTags),
+    ]).catch(() => {
+      if (!cancelled) setError('Directory tags could not be loaded.')
+    })
+    return () => { cancelled = true }
+  }, [applyTagDefinition, canReadLabels, canWriteLabels, csrfToken])
+
   const loadAssignments = useCallback(async (assetId: string, signal?: AbortSignal) => {
     if (!assetId) {
       setAssignments([])
@@ -620,6 +706,17 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
   }, [loadDirectory])
 
   useEffect(() => {
+    if (activeSection !== 'references') return
+    const controller = new AbortController()
+    loadOccupancy(controller.signal).catch((loadError: unknown) => {
+      if (!(loadError instanceof DOMException && loadError.name === 'AbortError')) {
+        setError(loadError instanceof ApiRequestError ? loadError.message : 'Location references could not be loaded.')
+      }
+    })
+    return () => controller.abort()
+  }, [activeSection, loadOccupancy])
+
+  useEffect(() => {
     if (selectedAssetId && assets.some((asset) => asset.id === selectedAssetId)) return
     setSelectedAssetId(assets[0]?.id ?? '')
   }, [assets, selectedAssetId])
@@ -634,6 +731,50 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
     return () => controller.abort()
   }, [loadAssignments, selectedAssetId])
 
+  useEffect(() => {
+    if (!focusRecord) return
+    const locationKinds = new Set(['site', 'building', 'room', 'department'])
+    const identityKinds = new Set(['person', 'shared', 'public', 'lab'])
+    if (locationKinds.has(focusRecord.kind)) {
+      setActiveSection('locations')
+      if (focusRecord.kind === 'site') {
+        setLocationSheet('sites')
+        setNestedSite(sites.find((item) => item.id === focusRecord.recordId) ?? null)
+        setNestedBuilding(null)
+      }
+      if (focusRecord.kind === 'building') {
+        setLocationSheet('buildings')
+        const building = buildings.find((item) => item.id === focusRecord.recordId) ?? null
+        setNestedBuilding(building)
+        setNestedSite(building ? sites.find((item) => item.id === building.siteId) ?? null : null)
+      }
+      if (focusRecord.kind === 'room') {
+        setLocationSheet('rooms')
+        const room = rooms.find((item) => item.id === focusRecord.recordId)
+        const building = room ? buildings.find((item) => item.id === room.buildingId) ?? null : null
+        setNestedBuilding(building)
+        setNestedSite(building ? sites.find((item) => item.id === building.siteId) ?? null : null)
+      }
+      if (focusRecord.kind === 'department') setLocationSheet('departments')
+      return
+    }
+    setActiveSection('directory')
+    const next: Filters = {
+      ...emptyFilters,
+      search: focusRecord.recordId,
+      kind: identityKinds.has(focusRecord.kind) ? focusRecord.kind as IdentityKind : '',
+    }
+    setFilters(next)
+    setLoading(true)
+    loadDirectory(next)
+      .catch((loadError: unknown) => {
+        if (!(loadError instanceof DOMException && loadError.name === 'AbortError')) {
+          setError(loadError instanceof ApiRequestError ? loadError.message : 'The People directory could not be loaded.')
+        }
+      })
+      .finally(() => setLoading(false))
+  }, [buildings, focusRecord?.kind, focusRecord?.nonce, focusRecord?.recordId, loadDirectory, rooms, sites])
+
   function reportMutationError(mutationError: unknown, fallback: string) {
     setStatus('')
     setError(mutationError instanceof ApiRequestError ? mutationError.message : mutationError instanceof Error ? mutationError.message : fallback)
@@ -643,35 +784,6 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
     await loadDirectory(filters)
     if (selectedAssetId) await loadAssignments(selectedAssetId)
     setStatus(message)
-  }
-
-  async function handleSearch(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    setLoading(true)
-    setError('')
-    setStatus('')
-    try {
-      await loadDirectory(filters)
-      setStatus(`${identities.length === 1 ? 'Directory result updated.' : 'Directory results updated.'}`)
-    } catch (searchError) {
-      reportMutationError(searchError, 'The directory search could not be completed.')
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  async function clearSearch() {
-    setFilters(emptyFilters)
-    setLoading(true)
-    setError('')
-    try {
-      await loadDirectory(emptyFilters)
-      setStatus('Directory filters cleared.')
-    } catch (searchError) {
-      reportMutationError(searchError, 'The directory could not be refreshed.')
-    } finally {
-      setLoading(false)
-    }
   }
 
   async function createSiteRecord(name: string, address?: SiteAddress) {
@@ -803,14 +915,16 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
         status: 'active',
       }
       const email = String(values.get('identityEmail') ?? '')
-      const departmentId = String(values.get('identityDepartmentId') ?? '')
-      const siteId = String(values.get('identitySiteId') ?? '')
+      const departmentId = identityDepartment[0]?.id ?? String(values.get('identityDepartmentId') ?? '')
+      const siteId = identitySite[0]?.id ?? String(values.get('identitySiteId') ?? '')
       if (email) body.email = email
       if (departmentId) body.departmentId = departmentId
       if (siteId) body.siteId = siteId
       await createIdentityRecord(body)
       form.reset()
       setIdentityKind('person')
+      setIdentityDepartment([])
+      setIdentitySite([])
       await refreshAfterMutation('Directory identity created.')
     } catch (mutationError) {
       reportMutationError(mutationError, 'The identity could not be created.')
@@ -874,168 +988,487 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
       : departmentNames.get(assignment.assigneeId) ?? 'Department outside the current filter'
   }
 
+  const columnContext = useMemo((): Omit<PeopleColumnContext, 'tags'> => ({
+    sites, buildings, rooms, departments, csrfToken, canWrite: canWriteDirectory,
+    identities, locationTypes: locationReferenceTypes,
+    onCreated: {
+      site: (site) => setSites((current) => current.some((item) => item.id === site.id) ? current : [...current, site]),
+      building: (building) => setBuildings((current) => current.some((item) => item.id === building.id) ? current : [...current, building]),
+      room: (room) => setRooms((current) => current.some((item) => item.id === room.id) ? current : [...current, room]),
+      department: (department) => setDepartments((current) => current.some((item) => item.id === department.id) ? current : [...current, department]),
+    },
+  }), [buildings, canWriteDirectory, csrfToken, departments, identities, locationReferenceTypes, rooms, sites])
+
+  const identityColumns = useMemo(() => buildIdentityColumns({ ...columnContext, tags: identityTags }, canWriteDirectory || canWriteLabels), [canWriteDirectory, canWriteLabels, columnContext, identityTags])
+  const siteColumns = useMemo(() => buildSiteColumns({ ...columnContext, tags: siteTags }, canWriteDirectory || canWriteLabels), [canWriteDirectory, canWriteLabels, columnContext, siteTags])
+  const buildingColumns = useMemo(() => buildBuildingColumns({ ...columnContext, tags: buildingTags }, canWriteDirectory || canWriteLabels), [buildingTags, canWriteDirectory, canWriteLabels, columnContext])
+  const roomColumns = useMemo(() => buildRoomColumns({ ...columnContext, tags: roomTags }, canWriteDirectory || canWriteLabels), [canWriteDirectory, canWriteLabels, columnContext, roomTags])
+  const departmentColumns = useMemo(() => buildDepartmentColumns({ ...columnContext, tags: departmentTags }, canWriteDirectory || canWriteLabels), [canWriteDirectory, canWriteLabels, columnContext, departmentTags])
+  const locationTypeColumns = useMemo(() => buildLocationReferenceTypeColumns(canWriteDirectory), [canWriteDirectory])
+  const locationReferenceColumns = useMemo(() => buildLocationReferenceColumns({ ...columnContext, tags: emptyTagContext(csrfToken, false) }, canWriteDirectory), [canWriteDirectory, columnContext, csrfToken])
+
+  function reportGridError(reason: string): never {
+    setError(reason)
+    queueMicrotask(() => errorRef.current?.focus())
+    throw new Error(reason)
+  }
+
+  async function saveDirectoryEdits<T extends { id: string }>(
+    edits: readonly CellEdit[],
+    rows: readonly T[],
+    columns: readonly GridColumn<T>[],
+    payloadFor: (row: T) => Record<string, unknown>,
+    pathFor: (row: T) => string,
+    read: (value: unknown) => T,
+    tags: PeopleTagContext,
+    recordType: string,
+    writes: ReturnType<typeof useWriteQueue>,
+    onSaved: (items: T[]) => void,
+    onAssignment: (definitionId: string, recordId: string, assignment: LabelAssignment | null) => void,
+  ) {
+    setError('')
+    setStatus('')
+    const stored = new Map(rows.map((row) => [row.id, row]))
+    const saved = new Map<string, T>()
+    const transport: WriteTransport = {
+      concurrency: 4,
+      writeRecord: async (task) => {
+        const row = stored.get(task.rowId)
+        if (!row) throw new Error('The record is no longer loaded.')
+        const fieldEdits = task.edits.filter((edit) => !isLabelColumnKey(edit.columnKey))
+        const labelEdits = task.edits.filter((edit) => isLabelColumnKey(edit.columnKey))
+        if (fieldEdits.length > 0) {
+          if (!canWriteDirectory) throw new Error('Directory write access is required.')
+          const payload = buildPayload(fieldEdits, columns, payloadFor(row))
+          const response = await requestJSON(pathFor(row), {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+            body: JSON.stringify(payload),
+          })
+          saved.set(task.rowId, read(response))
+        }
+        if (labelEdits.length > 0) {
+          await saveLabelEdits(labelEdits, tags.definitions, tags.assignments, csrfToken, canWriteLabels, applyTagDefinition, onAssignment, recordType)
+        }
+      },
+    }
+    const report = await writes.run(tasksFromEdits(edits), transport)
+    if (saved.size > 0) onSaved(rows.map((row) => saved.get(row.id) ?? row))
+    if (report.failed > 0) reportGridError(summarizeReport(report))
+    setStatus(summarizeReport(report))
+  }
+
+  async function createDirectoryRows(
+    drafts: readonly StagedDraft[],
+    path: string,
+    bodyFor: (values: Record<string, string>) => Record<string, unknown>,
+    read: (value: unknown) => { id: string },
+    onCreated: (record: { id: string }) => void,
+  ) {
+    setError('')
+    setStatus('')
+    for (const draft of drafts) {
+      const created = read(await requestJSON(path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+        body: JSON.stringify({ ...bodyFor(draft.values), status: draft.values.status || 'active' }),
+      }))
+      onCreated(created)
+    }
+    setStatus(drafts.length === 1 ? 'Record created from the spreadsheet.' : `${drafts.length} records created from the spreadsheet.`)
+  }
+
+  async function handleCreateTagColumn(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!canWriteLabels) return
+    const values = new FormData(event.currentTarget)
+    const name = String(values.get('name') ?? '').trim()
+    const id = String(values.get('id') ?? '').trim()
+    const valueKind = String(values.get('valueKind') ?? 'multiselect') as LabelValueKind
+    const options = String(values.get('options') ?? '').split(',').map((option) => option.trim()).filter(Boolean)
+    if (!name) {
+      setError('Tag name is required.')
+      return
+    }
+    setTagColumnBusy(true)
+    setError('')
+    try {
+      const created = await createLabelDefinition({ id: id || undefined, name, valueKind, options }, [tagColumnRecordType], csrfToken)
+      applyTagDefinition(created)
+      setTagColumnFormOpen(false)
+      setStatus(`Tag column “${created.name}” is available on this sheet. Use Floor as a text or select tag on rooms when you need floor numbers.`)
+    } catch (createError) {
+      reportMutationError(createError, 'The tag column could not be created.')
+    } finally {
+      setTagColumnBusy(false)
+    }
+  }
+
+  const tagToolbar = (recordType: PeopleRecordType) => (canWriteLabels || canReadLabels) ? <div className="flex flex-wrap items-center gap-2">
+    {canWriteLabels && <button className={plainButtonClass + ' min-h-8 px-2 py-1 text-xs'} onClick={() => { setTagColumnRecordType(recordType); setTagColumnFormOpen(true) }} type="button">Add tag column</button>}
+    {canReadLabels && <a className={plainButtonClass + ' min-h-8 px-2 py-1 text-xs'} href="#workspace-threads">Manage tags</a>}
+  </div> : undefined
+
+  function openNestedBuilding(building: Building) {
+    setNestedBuilding(building)
+    setNestedSite(sites.find((item) => item.id === building.siteId) ?? null)
+  }
+
+  const nestedBuildings = nestedSite ? buildings.filter((building) => building.siteId === nestedSite.id) : []
+  const nestedRooms = nestedBuilding ? rooms.filter((room) => room.buildingId === nestedBuilding.id) : []
+
   return (
-    <section aria-labelledby="people-heading" className={`${panelClass} space-y-6 p-5 sm:p-6`} data-feature="identity.directory threads.relationships experience.workspace" data-requirement="REQ-PEOPLE-001 REQ-DIRECTORY-EXPANSION-001 REQ-DIRECTORY-EXPANSION-008 REQ-WORKSPACE-001">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div className="max-w-3xl">
-          <p className="text-sm font-semibold text-steward-teal">People — Users, locations, departments, and assignments</p>
-          <h2 id="people-heading" className="mt-2 text-2xl font-semibold">Know who uses and stewards each asset</h2>
-          <p className="mt-2 leading-7 text-steward-mist-muted">Organize people and shared-use identities by department, site, building, and room. Assign one primary steward, multiple users, and a responsible department while retaining prior assignments.</p>
-        </div>
-        <div className="flex flex-wrap gap-2">
+    <section aria-labelledby="people-heading" className={`${panelClass} space-y-5 p-4 sm:p-5`} data-feature="identity.directory identity.labels experience.grid experience.workspace" data-requirement="REQ-PEOPLE-001 REQ-DIRECTORY-EXPANSION-001 REQ-DIRECTORY-EXPANSION-008 REQ-WORKSPACE-001">
+      <ProductHeader
+        actions={<>
           {onOpenHelp ? <button className={secondaryButtonClass} onClick={onOpenHelp} type="button">People help</button> : <a className={secondaryButtonClass} href={peopleHelpUrl}>People help</a>}
           {onReportIssue ? <button className={plainButtonClass} onClick={onReportIssue} type="button">Report a People issue</button> : <a className={plainButtonClass} href={issuesUrl}>Report a People issue</a>}
-        </div>
-      </div>
+        </>}
+        description="Organize people and shared-use identities by department, site, building, and room. Assign one primary steward, multiple users, and a responsible department while retaining prior assignments."
+        headingId="people-heading"
+        kicker="People — Users, locations, departments, and assignments"
+        title="Know who uses and stewards each asset"
+      />
 
       {error && <div ref={errorRef} className="rounded-xl border border-steward-danger/50 bg-steward-danger/15 p-4 text-[#ffccd1]" role="alert" tabIndex={-1}>{error}</div>}
       <p className="sr-only" aria-live="polite" role="status">{status}</p>
 
+      <PeopleSectionNav active={activeSection} onChange={setActiveSection} />
+
+      <div aria-labelledby={`people-tab-${activeSection}`} hidden={activeSection !== 'directory'} id="people-panel-directory" role="tabpanel">
       <section aria-labelledby="people-guide-heading" className={`${subpanelClass} border-steward-teal/20 p-4`}>
         <h3 id="people-guide-heading" className="font-semibold text-steward-mist">Quick guide</h3>
         <ol className="mt-2 list-decimal space-y-1 pl-5 text-sm leading-6 text-steward-mist-muted">
-          <li>Use the guided task to add a person and resolve their location together.</li>
-          <li>Use the standalone controls for location hierarchies, departments, and shared-use identities.</li>
-          <li>Review the scoped directory and location inventory.</li>
-          <li>Choose an asset to add primary, additional-user, and department assignments.</li>
+          <li>Edit the <strong className="font-semibold text-steward-mist">Directory</strong> spreadsheet in place: type to replace, Enter or Tab to commit, Ctrl+C / Ctrl+V with Excel, Ctrl+D to fill down.</li>
+          <li>Open <strong className="font-semibold text-steward-mist">Locations</strong> for site, building, and room sheets, or drill into a nested sheet from a site or building.</li>
+          <li>Use <strong className="font-semibold text-steward-mist">Location references</strong> for office, classroom, dorm, and lab occupancy, including a catalog of reference types. Group references by room for usage.</li>
+          <li>Add a <strong className="font-semibold text-steward-mist">tag column</strong> for floor numbers or other labels. Relationship browsing lives in Mesh.</li>
+          <li>Use <strong className="font-semibold text-steward-mist">Workflows &amp; assignments</strong> for guided creation and asset history.</li>
         </ol>
       </section>
 
-      <DirectoryImportManager csrfToken={csrfToken} onApplied={() => loadDirectory(filters)} permissions={permissions} />
-
-      <RelationshipGraphView permissions={permissions} />
-
-      <form aria-label="Filter People directory" className={`${subpanelClass} p-4`} onSubmit={handleSearch} role="search">
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
-          <div className="lg:col-span-2">
-            <label className={labelClass} htmlFor="people-search">Search name or email</label>
-            <input className={inputClass} id="people-search" maxLength={200} onChange={(event) => setFilters((current) => ({ ...current, search: event.target.value }))} type="search" value={filters.search} />
-          </div>
-          <div>
-            <label className={labelClass} htmlFor="people-kind-filter">Identity type</label>
-            <select className={inputClass} id="people-kind-filter" onChange={(event) => setFilters((current) => ({ ...current, kind: event.target.value as Filters['kind'] }))} value={filters.kind}>
-              <option value="">All types</option>
-              {Object.entries(kindLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-            </select>
-          </div>
-          <div>
-            <label className={labelClass} htmlFor="people-department-filter">Department</label>
-            <select className={inputClass} id="people-department-filter" onChange={(event) => setFilters((current) => ({ ...current, departmentId: event.target.value }))} value={filters.departmentId}>
-              <option value="">All departments</option>
-              {departments.map((department) => <option key={department.id} value={department.id}>{department.name}</option>)}
-            </select>
-          </div>
-          <div>
-            <label className={labelClass} htmlFor="people-site-filter">Site</label>
-            <select className={inputClass} id="people-site-filter" onChange={(event) => setFilters((current) => ({ ...current, siteId: event.target.value }))} value={filters.siteId}>
-              <option value="">All sites</option>
-              {sites.map((site) => <option key={site.id} value={site.id}>{site.name}</option>)}
-            </select>
-          </div>
-        </div>
-        <div className="mt-4 flex flex-wrap gap-3">
-          <button className={buttonClass} disabled={loading} type="submit">{loading ? 'Searching…' : 'Apply filters'}</button>
-          <button className={secondaryButtonClass} disabled={loading} onClick={clearSearch} type="button">Clear filters</button>
-        </div>
-      </form>
-
-      <div aria-busy={loading} aria-labelledby="people-results-heading" role="region">
-        <div className="flex flex-wrap items-end justify-between gap-3">
-          <div>
-            <h3 id="people-results-heading" className="text-lg font-semibold">Directory results</h3>
-            <p className="mt-1 text-sm text-steward-mist-muted">{loading ? 'Loading scoped records…' : `${identities.length} ${identities.length === 1 ? 'identity' : 'identities'} visible with your current access and filters.`}</p>
-          </div>
-          <p className="text-sm text-steward-mist-muted">{departments.length} departments · {sites.length} sites</p>
-        </div>
-        {identities.length === 0 && !loading ? (
-          <p className="mt-4 rounded-xl border border-dashed border-steward-ink-800 p-5 text-sm text-steward-mist-muted">No directory identities match these filters.</p>
-        ) : (
-          <ul className="mt-4 grid gap-3 md:grid-cols-2" aria-label="People directory identities">
-            {identities.map((identity) => (
-              <li className={`${subpanelClass} p-4`} key={identity.id}>
-                <div className="flex flex-wrap items-start justify-between gap-2">
-                  <div><p className="font-semibold text-steward-mist">{identity.displayName}</p><p className="mt-1 text-sm text-steward-mist-muted">{kindLabels[identity.kind]} · {identity.status === 'active' ? 'Active' : 'Inactive'}</p></div>
-                  <span className="rounded-full border border-steward-ink-800 px-2 py-1 text-xs text-steward-mist-muted">Revision {identity.revision}</span>
-                </div>
-                {identity.email && <p className="mt-3 break-all text-sm text-steward-mist-muted">{identity.email}</p>}
-                <p className="mt-2 text-sm text-steward-mist-muted">Department: {identity.departmentId ? departmentNames.get(identity.departmentId) ?? 'Not visible' : 'Not assigned'}</p>
-                <p className="mt-1 text-sm text-steward-mist-muted">Site: {identity.siteId ? siteNames.get(identity.siteId) ?? 'Not visible' : 'Not assigned'}</p>
-              </li>
-            ))}
-          </ul>
-        )}
+      <p className="mt-4 text-sm leading-6 text-steward-mist-muted">
+        {canWriteDirectory || canWriteLabels
+          ? `Edit cells directly. Group by department, site, type, or status from the toolbar.${canWriteDirectory ? ' Use + to insert a new identity below a row.' : ''}${canReadLabels ? ' Tag columns use configured labels, including floor or other room attributes when you add them here.' : ''}`
+          : 'Sort, filter, group, and copy directory records. Editing requires directory or tag write access.'}
+      </p>
+      <div className="mt-4">
+        <DataGrid
+          columns={identityColumns}
+          editable={canWriteDirectory || canWriteLabels}
+          emptyMessage="No directory identities match these filters."
+          identity={identity}
+          label="Directory identities"
+          onCreateRows={canWriteDirectory ? async (drafts) => createDirectoryRows(drafts, '/api/v1/identities', (values) => ({
+            kind: values.kind || 'person',
+            displayName: values.displayName,
+            email: values.email,
+            departmentId: values.departmentId,
+            siteId: values.siteId,
+            buildingId: values.buildingId,
+            roomId: values.roomId,
+          }), (value) => readRecord(value, isIdentity), (record) => setIdentities((current) => current.some((item) => item.id === record.id) ? current : [record as Identity, ...current])) : undefined}
+          onSaveEdits={canWriteDirectory || canWriteLabels ? (edits) => saveDirectoryEdits(edits, identities, identityColumns, identityPayload, (row) => `/api/v1/identities/${encodeURIComponent(row.id)}`, (value) => readRecord(value, isIdentity), identityTags, peopleRecordTypes.identity, identityWrites, setIdentities, (definitionId, recordId, assignment) => applyTagAssignment(setIdentityTags, definitionId, recordId, assignment)) : undefined}
+          rowId={(row) => row.id}
+          rowLabel={(row) => row.displayName}
+          rowMessage={(row) => identityWrites.rowMessage(row.id)}
+          rowState={(row) => identityWrites.rowState(row.id)}
+          rows={identities}
+          selectable
+          toolbar={tagToolbar(peopleRecordTypes.identity)}
+          viewDefaults={{ groupBy: 'departmentId', filters: { status: 'active' } }}
+          viewId="people-identities"
+        />
+      </div>
+      <p className="mt-3 text-sm text-steward-mist-muted" role="status">
+        {loading ? 'Loading scoped records…' : `${identities.length} ${identities.length === 1 ? 'identity' : 'identities'} loaded · ${departments.length} departments · ${sites.length} sites`}
+      </p>
       </div>
 
-      <section aria-busy={loading} aria-labelledby="locations-heading" className="border-t border-steward-ink-800 pt-6" data-requirement="REQ-DIRECTORY-EXPANSION-001">
+      <div aria-labelledby="people-tab-locations" hidden={activeSection !== 'locations'} id="people-panel-locations" role="tabpanel">
+      <section aria-busy={loading} aria-labelledby="locations-heading" className="space-y-4" data-requirement="REQ-DIRECTORY-EXPANSION-001">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
             <h3 id="locations-heading" className="text-lg font-semibold">Locations in your scope</h3>
-            <p className="mt-1 text-sm text-steward-mist-muted">Buildings and rooms are grouped beneath the sites you are allowed to see.</p>
+            <p className="mt-1 text-sm text-steward-mist-muted">Use a sheet per level, group rows in the toolbar, or open a nested sheet from a site or building. Add a Floor tag column on rooms when you need floors without a separate record type.</p>
           </div>
-          <p className="text-sm text-steward-mist-muted">{sites.length} sites · {buildings.length} buildings · {rooms.length} rooms</p>
+          <p className="text-sm text-steward-mist-muted">{sites.length} sites · {buildings.length} buildings · {rooms.length} rooms · {departments.length} departments</p>
         </div>
-        {loading ? (
-          <p className="mt-4 text-sm text-steward-mist-muted">Loading scoped locations…</p>
-        ) : sites.length === 0 ? (
-          <p className="mt-4 rounded-xl border border-dashed border-steward-ink-800 p-5 text-sm text-steward-mist-muted">No sites are visible in your directory scope.</p>
-        ) : (
-          <ul aria-label="Visible directory locations" className="mt-4 grid gap-4 lg:grid-cols-2">
-            {sites.map((site) => {
-              const addressLines = formatSiteAddress(site.address)
-              const siteBuildings = buildings.filter((building) => building.siteId === site.id)
+        <div aria-label="Location sheets" className="flex flex-wrap gap-1 border-b border-white/10" role="tablist">
+          {locationSheets.map((sheet) => {
+            const selected = locationSheet === sheet.id
+            return (
+              <button
+                aria-controls={`people-location-sheet-${sheet.id}`}
+                aria-selected={selected}
+                className={cx('relative shrink-0 px-3 py-2 text-sm font-medium transition', selected ? 'text-steward-mist' : `${secondaryButtonClass} min-h-0 rounded-none border-transparent bg-transparent px-3 py-2 text-steward-mist-muted`)}
+                id={`people-location-tab-${sheet.id}`}
+                key={sheet.id}
+                onClick={() => { setLocationSheet(sheet.id); if (sheet.id !== 'sites') setNestedSite(null); if (sheet.id !== 'buildings' && sheet.id !== 'sites') setNestedBuilding(null) }}
+                role="tab"
+                title={sheet.description}
+                type="button"
+              >
+                {sheet.label}
+                {selected && <span aria-hidden="true" className="absolute inset-x-2 -bottom-px h-0.5 rounded-full bg-steward-teal" />}
+              </button>
+            )
+          })}
+        </div>
+        <p className="text-sm text-steward-mist-muted">{locationSheets.find((sheet) => sheet.id === locationSheet)?.description}</p>
+        {loading ? <p className="text-sm text-steward-mist-muted">Loading scoped locations…</p> : null}
+        <div hidden={locationSheet !== 'sites'} id="people-location-sheet-sites" role="tabpanel">
+          <DataGrid
+            columns={siteColumns}
+            editable={canWriteDirectory || canWriteLabels}
+            emptyMessage="No sites are visible in your directory scope."
+            identity={identity}
+            label="Sites"
+            onCreateRows={canWriteDirectory ? async (drafts) => createDirectoryRows(drafts, '/api/v1/sites', (values) => ({
+              name: values.name,
+              address: { line1: values.line1, line2: values.line2, city: values.city, region: values.region, postalCode: values.postalCode, country: values.country },
+            }), (value) => readRecord(value, isSite), (record) => setSites((current) => current.some((item) => item.id === record.id) ? current : [...current, record as Site])) : undefined}
+            onOpenRow={(site) => { setNestedSite(site); setNestedBuilding(null) }}
+            onSaveEdits={canWriteDirectory || canWriteLabels ? (edits) => saveDirectoryEdits(edits, sites, siteColumns, sitePayload, (row) => `/api/v1/sites/${encodeURIComponent(row.id)}`, (value) => readRecord(value, isSite), siteTags, peopleRecordTypes.site, siteWrites, setSites, (definitionId, recordId, assignment) => applyTagAssignment(setSiteTags, definitionId, recordId, assignment)) : undefined}
+            rowId={(row) => row.id}
+            rowLabel={(row) => row.name}
+            rowMessage={(row) => siteWrites.rowMessage(row.id)}
+            rowState={(row) => siteWrites.rowState(row.id)}
+            rows={sites}
+            toolbar={tagToolbar(peopleRecordTypes.site)}
+            viewId="people-sites"
+          />
+        </div>
+        <div hidden={locationSheet !== 'buildings'} id="people-location-sheet-buildings" role="tabpanel">
+          <DataGrid
+            columns={buildingColumns}
+            editable={canWriteDirectory || canWriteLabels}
+            emptyMessage="No buildings are visible in your directory scope."
+            identity={identity}
+            label="Buildings"
+            onCreateRows={canWriteDirectory ? async (drafts) => createDirectoryRows(drafts, '/api/v1/buildings', (values) => ({
+              name: values.name, siteId: values.siteId || nestedSite?.id || '',
+            }), (value) => readRecord(value, isBuilding), (record) => setBuildings((current) => current.some((item) => item.id === record.id) ? current : [...current, record as Building])) : undefined}
+            onOpenRow={openNestedBuilding}
+            onSaveEdits={canWriteDirectory || canWriteLabels ? (edits) => saveDirectoryEdits(edits, buildings, buildingColumns, buildingPayload, (row) => `/api/v1/buildings/${encodeURIComponent(row.id)}`, (value) => readRecord(value, isBuilding), buildingTags, peopleRecordTypes.building, buildingWrites, setBuildings, (definitionId, recordId, assignment) => applyTagAssignment(setBuildingTags, definitionId, recordId, assignment)) : undefined}
+            rowId={(row) => row.id}
+            rowLabel={(row) => row.name}
+            rowMessage={(row) => buildingWrites.rowMessage(row.id)}
+            rowState={(row) => buildingWrites.rowState(row.id)}
+            rows={buildings}
+            toolbar={tagToolbar(peopleRecordTypes.building)}
+            viewDefaults={{ groupBy: 'siteId' }}
+            viewId="people-buildings"
+          />
+        </div>
+        <div hidden={locationSheet !== 'rooms'} id="people-location-sheet-rooms" role="tabpanel">
+          <DataGrid
+            columns={roomColumns}
+            editable={canWriteDirectory || canWriteLabels}
+            emptyMessage="No rooms are visible in your directory scope."
+            identity={identity}
+            label="Rooms"
+            onCreateRows={canWriteDirectory ? async (drafts) => createDirectoryRows(drafts, '/api/v1/rooms', (values) => {
+              const building = buildings.find((item) => item.id === (values.buildingId || nestedBuilding?.id))
+              return { number: values.number, name: values.name, buildingId: building?.id ?? values.buildingId, siteId: building?.siteId ?? values.siteId }
+            }, (value) => readRecord(value, isRoom), (record) => setRooms((current) => current.some((item) => item.id === record.id) ? current : [...current, record as Room])) : undefined}
+            onSaveEdits={canWriteDirectory || canWriteLabels ? (edits) => saveDirectoryEdits(edits, rooms, roomColumns, roomPayload, (row) => `/api/v1/rooms/${encodeURIComponent(row.id)}`, (value) => readRecord(value, isRoom), roomTags, peopleRecordTypes.room, roomWrites, setRooms, (definitionId, recordId, assignment) => applyTagAssignment(setRoomTags, definitionId, recordId, assignment)) : undefined}
+            rowId={(row) => row.id}
+            rowLabel={(row) => row.name ? `${row.number} · ${row.name}` : row.number}
+            rowMessage={(row) => roomWrites.rowMessage(row.id)}
+            rowState={(row) => roomWrites.rowState(row.id)}
+            rows={rooms}
+            toolbar={tagToolbar(peopleRecordTypes.room)}
+            viewDefaults={{ groupBy: 'buildingId' }}
+            viewId="people-rooms"
+          />
+        </div>
+        <div hidden={locationSheet !== 'departments'} id="people-location-sheet-departments" role="tabpanel">
+          <DataGrid
+            columns={departmentColumns}
+            editable={canWriteDirectory || canWriteLabels}
+            emptyMessage="No departments are visible in your directory scope."
+            identity={identity}
+            label="Departments"
+            onCreateRows={canWriteDirectory ? async (drafts) => createDirectoryRows(drafts, '/api/v1/departments', (values) => ({
+              name: values.name, siteId: values.siteId,
+            }), (value) => readRecord(value, isDepartment), (record) => setDepartments((current) => current.some((item) => item.id === record.id) ? current : [...current, record as Department])) : undefined}
+            onSaveEdits={canWriteDirectory || canWriteLabels ? (edits) => saveDirectoryEdits(edits, departments, departmentColumns, departmentPayload, (row) => `/api/v1/departments/${encodeURIComponent(row.id)}`, (value) => readRecord(value, isDepartment), departmentTags, peopleRecordTypes.department, departmentWrites, setDepartments, (definitionId, recordId, assignment) => applyTagAssignment(setDepartmentTags, definitionId, recordId, assignment)) : undefined}
+            rowId={(row) => row.id}
+            rowLabel={(row) => row.name}
+            rowMessage={(row) => departmentWrites.rowMessage(row.id)}
+            rowState={(row) => departmentWrites.rowState(row.id)}
+            rows={departments}
+            toolbar={tagToolbar(peopleRecordTypes.department)}
+            viewDefaults={{ groupBy: 'siteId' }}
+            viewId="people-departments"
+          />
+        </div>
+        {nestedSite && <section aria-label={`Nested buildings at ${nestedSite.name}`} className={`${subpanelClass} p-3`}>
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+            <h4 className="font-semibold">Buildings at {nestedSite.name}</h4>
+            <div className="flex flex-wrap gap-2">
+              <button className={`${plainButtonClass} min-h-8 px-2 py-1 text-xs`} onClick={() => { setLocationSheet('buildings'); setNestedSite(null); setNestedBuilding(null) }} type="button">Open as sheet</button>
+              <button className={`${secondaryButtonClass} min-h-8 px-2 py-1 text-xs`} onClick={() => { setNestedSite(null); setNestedBuilding(null) }} type="button">Close nested sheet</button>
+            </div>
+          </div>
+          <DataGrid
+            columns={buildingColumns}
+            editable={canWriteDirectory || canWriteLabels}
+            emptyMessage="No buildings recorded for this site."
+            identity={identity}
+            label={`Buildings at ${nestedSite.name}`}
+            maximumBodyHeight="18rem"
+            onCreateRows={canWriteDirectory ? async (drafts) => createDirectoryRows(drafts, '/api/v1/buildings', (values) => ({
+              name: values.name, siteId: nestedSite.id,
+            }), (value) => readRecord(value, isBuilding), (record) => setBuildings((current) => current.some((item) => item.id === record.id) ? current : [...current, record as Building])) : undefined}
+            onOpenRow={openNestedBuilding}
+            onSaveEdits={canWriteDirectory || canWriteLabels ? (edits) => saveDirectoryEdits(edits, nestedBuildings, buildingColumns, buildingPayload, (row) => `/api/v1/buildings/${encodeURIComponent(row.id)}`, (value) => readRecord(value, isBuilding), buildingTags, peopleRecordTypes.building, buildingWrites, (next) => setBuildings((current) => current.map((item) => next.find((candidate) => candidate.id === item.id) ?? item)), (definitionId, recordId, assignment) => applyTagAssignment(setBuildingTags, definitionId, recordId, assignment)) : undefined}
+            rowId={(row) => row.id}
+            rowLabel={(row) => row.name}
+            rows={nestedBuildings}
+            viewId={`people-nested-buildings-${nestedSite.id}`}
+          />
+          {nestedBuilding && nestedBuilding.siteId === nestedSite.id && <section aria-label={`Nested rooms in ${nestedBuilding.name}`} className="mt-3 rounded-md border border-steward-teal/30 p-3">
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <h5 className="font-semibold">Rooms in {nestedBuilding.name}</h5>
+              <div className="flex flex-wrap gap-2">
+                <button className={`${plainButtonClass} min-h-8 px-2 py-1 text-xs`} onClick={() => { setLocationSheet('rooms'); setNestedSite(null); setNestedBuilding(null) }} type="button">Open as sheet</button>
+                <button className={`${secondaryButtonClass} min-h-8 px-2 py-1 text-xs`} onClick={() => setNestedBuilding(null)} type="button">Close rooms sheet</button>
+              </div>
+            </div>
+            <DataGrid
+              columns={roomColumns}
+              editable={canWriteDirectory || canWriteLabels}
+              emptyMessage="No rooms recorded for this building."
+              identity={identity}
+              label={`Rooms in ${nestedBuilding.name}`}
+              maximumBodyHeight="16rem"
+              onCreateRows={canWriteDirectory ? async (drafts) => createDirectoryRows(drafts, '/api/v1/rooms', (values) => ({
+                number: values.number, name: values.name, buildingId: nestedBuilding.id, siteId: nestedBuilding.siteId,
+              }), (value) => readRecord(value, isRoom), (record) => setRooms((current) => current.some((item) => item.id === record.id) ? current : [...current, record as Room])) : undefined}
+              onSaveEdits={canWriteDirectory || canWriteLabels ? (edits) => saveDirectoryEdits(edits, nestedRooms, roomColumns, roomPayload, (row) => `/api/v1/rooms/${encodeURIComponent(row.id)}`, (value) => readRecord(value, isRoom), roomTags, peopleRecordTypes.room, roomWrites, (next) => setRooms((current) => current.map((item) => next.find((candidate) => candidate.id === item.id) ?? item)), (definitionId, recordId, assignment) => applyTagAssignment(setRoomTags, definitionId, recordId, assignment)) : undefined}
+              rowId={(row) => row.id}
+              rowLabel={(row) => row.name ? `${row.number} · ${row.name}` : row.number}
+              rows={nestedRooms}
+              viewId={`people-nested-rooms-${nestedBuilding.id}`}
+            />
+          </section>}
+        </section>}
+        {!nestedSite && nestedBuilding && <section aria-label={`Nested rooms in ${nestedBuilding.name}`} className={`${subpanelClass} p-3`}>
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+            <h4 className="font-semibold">Rooms in {nestedBuilding.name}</h4>
+            <div className="flex flex-wrap gap-2">
+              <button className={`${plainButtonClass} min-h-8 px-2 py-1 text-xs`} onClick={() => { setLocationSheet('rooms'); setNestedBuilding(null) }} type="button">Open as sheet</button>
+              <button className={`${secondaryButtonClass} min-h-8 px-2 py-1 text-xs`} onClick={() => setNestedBuilding(null)} type="button">Close nested sheet</button>
+            </div>
+          </div>
+          <DataGrid
+            columns={roomColumns}
+            editable={canWriteDirectory || canWriteLabels}
+            emptyMessage="No rooms recorded for this building."
+            identity={identity}
+            label={`Rooms in ${nestedBuilding.name}`}
+            maximumBodyHeight="16rem"
+            onCreateRows={canWriteDirectory ? async (drafts) => createDirectoryRows(drafts, '/api/v1/rooms', (values) => ({
+              number: values.number, name: values.name, buildingId: nestedBuilding.id, siteId: nestedBuilding.siteId,
+            }), (value) => readRecord(value, isRoom), (record) => setRooms((current) => current.some((item) => item.id === record.id) ? current : [...current, record as Room])) : undefined}
+            onSaveEdits={canWriteDirectory || canWriteLabels ? (edits) => saveDirectoryEdits(edits, nestedRooms, roomColumns, roomPayload, (row) => `/api/v1/rooms/${encodeURIComponent(row.id)}`, (value) => readRecord(value, isRoom), roomTags, peopleRecordTypes.room, roomWrites, (next) => setRooms((current) => current.map((item) => next.find((candidate) => candidate.id === item.id) ?? item)), (definitionId, recordId, assignment) => applyTagAssignment(setRoomTags, definitionId, recordId, assignment)) : undefined}
+            rowId={(row) => row.id}
+            rowLabel={(row) => row.name ? `${row.number} · ${row.name}` : row.number}
+            rows={nestedRooms}
+            viewId={`people-nested-rooms-${nestedBuilding.id}`}
+          />
+        </section>}
+      </section>
+      </div>
+
+      <div aria-labelledby="people-tab-references" hidden={activeSection !== 'references'} id="people-panel-references" role="tabpanel">
+        {activeSection === 'references' ? (
+        <section aria-labelledby="occupancy-heading" className="space-y-4">
+          <div>
+            <h3 id="occupancy-heading" className="text-lg font-semibold">Location references</h3>
+            <p className="mt-1 text-sm text-steward-mist-muted">
+              Typed occupancy links show how people use rooms: office, instructor, class, dormitory, and lab. Group the references sheet by location to see room usage. Primary building and room on a directory identity is the person’s home location; these references add secondary and role-specific places.
+            </p>
+          </div>
+          <div aria-label="Location reference sheets" className="flex flex-wrap gap-1 border-b border-white/10" role="tablist">
+            {occupancySheets.map((sheet) => {
+              const selected = occupancySheet === sheet.id
               return (
-                <li className={`${subpanelClass} min-w-0 p-4`} key={site.id}>
-                  <div className="flex flex-wrap items-start justify-between gap-2">
-                    <div>
-                      <h4 className="font-semibold text-steward-mist">{site.name}</h4>
-                      <p className="mt-1 text-sm text-steward-mist-muted">Site · {site.status === 'active' ? 'Active' : 'Inactive'}</p>
-                    </div>
-                    <span className="rounded-full border border-steward-ink-800 px-2 py-1 text-xs text-steward-mist-muted">Revision {site.revision}</span>
-                  </div>
-                  {addressLines.length > 0 ? (
-                    <address aria-label={`${site.name} address`} className="mt-3 text-sm not-italic leading-6 text-steward-mist-muted">
-                      {addressLines.map((line, index) => <span className="block" key={`${line}-${index}`}>{line}</span>)}
-                    </address>
-                  ) : <p className="mt-3 text-sm text-steward-mist-muted">No address recorded.</p>}
-                  {siteBuildings.length === 0 ? (
-                    <p className="mt-4 rounded-lg border border-dashed border-steward-ink-800 p-3 text-sm text-steward-mist-muted">No buildings recorded for this site.</p>
-                  ) : (
-                    <ul aria-label={`Buildings at ${site.name}`} className="mt-4 space-y-3">
-                      {siteBuildings.map((building) => {
-                        const buildingRooms = rooms.filter((room) => room.siteId === site.id && room.buildingId === building.id)
-                        return (
-                          <li className="rounded-lg border border-steward-ink-800 bg-steward-ink-900/70 p-3" key={building.id}>
-                            <div className="flex flex-wrap items-start justify-between gap-2">
-                              <div>
-                                <h5 className="font-semibold text-steward-mist-muted">{building.name}</h5>
-                                <p className="mt-1 text-xs text-steward-mist-muted">Building · {building.status === 'active' ? 'Active' : 'Inactive'}</p>
-                              </div>
-                              <span className="text-xs text-steward-mist-muted">{buildingRooms.length} {buildingRooms.length === 1 ? 'room' : 'rooms'}</span>
-                            </div>
-                            {buildingRooms.length === 0 ? (
-                              <p className="mt-3 text-sm text-steward-mist-muted">No rooms recorded.</p>
-                            ) : (
-                              <ul aria-label={`Rooms in ${building.name}`} className="mt-3 grid gap-2 sm:grid-cols-2">
-                                {buildingRooms.map((room) => (
-                                  <li className="min-w-0 rounded-lg bg-steward-ink-950/70 px-3 py-2 text-sm" key={room.id}>
-                                    <p className="break-words font-medium text-steward-mist-muted">Room {room.number}{room.name ? ` · ${room.name}` : ''}</p>
-                                    <p className="mt-1 text-xs text-steward-mist-muted">{room.status === 'active' ? 'Active' : 'Inactive'}</p>
-                                  </li>
-                                ))}
-                              </ul>
-                            )}
-                          </li>
-                        )
-                      })}
-                    </ul>
-                  )}
-                </li>
+                <button
+                  aria-controls={`people-occupancy-sheet-${sheet.id}`}
+                  aria-selected={selected}
+                  className={cx('relative shrink-0 px-3 py-2 text-sm font-medium transition', selected ? 'text-steward-mist' : `${secondaryButtonClass} min-h-0 rounded-none border-transparent bg-transparent px-3 py-2 text-steward-mist-muted`)}
+                  id={`people-occupancy-tab-${sheet.id}`}
+                  key={sheet.id}
+                  onClick={() => setOccupancySheet(sheet.id)}
+                  role="tab"
+                  title={sheet.description}
+                  type="button"
+                >
+                  {sheet.label}
+                  {selected && <span aria-hidden="true" className="absolute inset-x-2 -bottom-px h-0.5 rounded-full bg-steward-teal" />}
+                </button>
               )
             })}
-          </ul>
-        )}
-      </section>
+          </div>
+          <p className="text-sm text-steward-mist-muted">{occupancySheets.find((sheet) => sheet.id === occupancySheet)?.description}</p>
+          <div hidden={occupancySheet !== 'references'} id="people-occupancy-sheet-references" role="tabpanel">
+            <DataGrid
+              columns={locationReferenceColumns}
+              editable={canWriteDirectory}
+              emptyMessage="No location references are recorded yet."
+              identity={identity}
+              label="Location references"
+              onCreateRows={canWriteDirectory ? async (drafts) => createDirectoryRows(drafts, '/api/v1/location-references', (values) => ({
+                identityId: values.identityId,
+                typeId: values.typeId,
+                locationKind: values.locationKind || 'room',
+                locationId: values.locationId,
+                priority: values.priority || 'secondary',
+              }), (value) => readRecord(value, isLocationReference), (record) => setLocationReferences((current) => current.some((item) => item.id === record.id) ? current : [record as LocationReference, ...current])) : undefined}
+              onSaveEdits={canWriteDirectory ? (edits) => saveDirectoryEdits(edits, locationReferences, locationReferenceColumns, locationReferencePayload, (row) => `/api/v1/location-references/${encodeURIComponent(row.id)}`, (value) => readRecord(value, isLocationReference), emptyTagContext(csrfToken, false), peopleRecordTypes.identity, locationReferenceWrites, setLocationReferences, () => undefined) : undefined}
+              rowId={(row) => row.id}
+              rowLabel={(row) => identities.find((item) => item.id === row.identityId)?.displayName ?? row.identityId}
+              rowMessage={(row) => locationReferenceWrites.rowMessage(row.id)}
+              rowState={(row) => locationReferenceWrites.rowState(row.id)}
+              rows={locationReferences}
+              selectable
+              viewDefaults={{ groupBy: 'locationId', filters: { status: 'active' } }}
+              viewId="people-location-references"
+            />
+            <p className="mt-3 text-sm text-steward-mist-muted" role="status">{locationReferences.length} {locationReferences.length === 1 ? 'reference' : 'references'} loaded (up to 500).</p>
+          </div>
+          <div hidden={occupancySheet !== 'types'} id="people-occupancy-sheet-types" role="tabpanel">
+            <DataGrid
+              columns={locationTypeColumns}
+              editable={canWriteDirectory}
+              emptyMessage="No location reference types are defined yet."
+              identity={identity}
+              label="Location reference types"
+              onCreateRows={canWriteDirectory ? async (drafts) => createDirectoryRows(drafts, '/api/v1/location-reference-types', (values) => ({
+                name: values.name,
+                description: values.description,
+                relationshipKind: values.relationshipKind || 'uses_office',
+                locationKind: values.locationKind || 'room',
+              }), (value) => readRecord(value, isLocationReferenceType), (record) => setLocationReferenceTypes((current) => current.some((item) => item.id === record.id) ? current : [...current, record as LocationReferenceType])) : undefined}
+              onSaveEdits={canWriteDirectory ? (edits) => saveDirectoryEdits(edits, locationReferenceTypes, locationTypeColumns, locationReferenceTypePayload, (row) => `/api/v1/location-reference-types/${encodeURIComponent(row.id)}`, (value) => readRecord(value, isLocationReferenceType), emptyTagContext(csrfToken, false), peopleRecordTypes.identity, locationTypeWrites, setLocationReferenceTypes, () => undefined) : undefined}
+              rowId={(row) => row.id}
+              rowLabel={(row) => row.name}
+              rowMessage={(row) => locationTypeWrites.rowMessage(row.id)}
+              rowState={(row) => locationTypeWrites.rowState(row.id)}
+              rows={locationReferenceTypes}
+              selectable
+              viewDefaults={{ groupBy: 'relationshipKind' }}
+              viewId="people-location-reference-types"
+            />
+          </div>
+        </section>
+        ) : null}
+      </div>
 
+      <div aria-labelledby="people-tab-workflows" hidden={activeSection !== 'workflows'} id="people-panel-workflows" role="tabpanel">
       <PersonLocationWorkflow
         buildings={buildings}
         canWrite={canWriteDirectory}
@@ -1163,16 +1596,63 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
                     <select className={inputClass} id="identity-kind" name="identityKind" onChange={(event) => setIdentityKind(event.target.value as IdentityKind)} value={identityKind}>{Object.entries(kindLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
                   </div>
                   <div><label className={labelClass} htmlFor="identity-display-name">Display name</label><input autoComplete="name" className={inputClass} id="identity-display-name" maxLength={200} name="identityDisplayName" required /></div>
-                  <div>
-                    <label className={labelClass} htmlFor="identity-email">Email address {identityKind === 'person' ? '(required)' : '(optional)'}</label>
+                  <div><label className={labelClass} htmlFor="identity-email">Email address {identityKind === 'person' ? '(required)' : '(optional)'}</label>
                     <input autoComplete="email" className={inputClass} id="identity-email" maxLength={320} name="identityEmail" required={identityKind === 'person'} type="email" />
                   </div>
-                  <div><label className={labelClass} htmlFor="identity-department">Department (optional)</label><select className={inputClass} id="identity-department" name="identityDepartmentId"><option value="">No department</option>{departments.map((department) => <option key={department.id} value={department.id}>{department.name}</option>)}</select></div>
-                  <div>
-                    <label className={labelClass} htmlFor="identity-site">Site (optional)</label>
-                    <p className="mt-1 text-sm text-steward-mist-muted" id="identity-site-help">Leave blank to inherit the selected department&apos;s site.</p>
-                    <select aria-describedby="identity-site-help" className={inputClass} id="identity-site" name="identitySiteId"><option value="">Inherit or no site</option>{sites.map((site) => <option key={site.id} value={site.id}>{site.name}</option>)}</select>
-                  </div>
+                  <RecordSearchPicker
+                    browseLabel="Open departments"
+                    create={{
+                      label: 'Add department',
+                      fields: [
+                        { key: 'name', label: 'Department name', required: true },
+                        { key: 'siteId', label: 'Site', options: sites.map((site) => ({ id: site.id, label: site.name })), placeholder: 'No site' },
+                      ],
+                      submit: async (values) => {
+                        const body: Record<string, string> = { name: values.name, status: 'active' }
+                        if (values.siteId) body.siteId = values.siteId
+                        const saved = await requestJSON('/api/v1/departments', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+                          body: JSON.stringify(body),
+                        })
+                        const record = readRecord(saved, isDepartment)
+                        setDepartments((current) => [...current, record])
+                        return { id: record.id, label: record.name }
+                      },
+                    }}
+                    kind="department"
+                    label="Department (optional)"
+                    multiple={false}
+                    name="identityDepartmentId"
+                    onChange={setIdentityDepartment}
+                    options={departments.map((department) => ({ id: department.id, label: department.name }))}
+                    selected={identityDepartment}
+                  />
+                  <RecordSearchPicker
+                    browseLabel="Open sites"
+                    create={{
+                      label: 'Add site',
+                      fields: [{ key: 'name', label: 'Site name', required: true }],
+                      submit: async (values) => {
+                        const saved = await requestJSON('/api/v1/sites', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+                          body: JSON.stringify({ name: values.name, status: 'active' }),
+                        })
+                        const record = readRecord(saved, isSite)
+                        setSites((current) => [...current, record])
+                        return { id: record.id, label: record.name }
+                      },
+                    }}
+                    help="Leave blank to inherit the selected department's site."
+                    kind="site"
+                    label="Site (optional)"
+                    multiple={false}
+                    name="identitySiteId"
+                    onChange={setIdentitySite}
+                    options={sites.map((site) => ({ id: site.id, label: site.name }))}
+                    selected={identitySite}
+                  />
                   <button className={`${buttonClass} w-full`} disabled={busy !== ''} type="submit">{busy === 'identity' ? 'Creating identity…' : 'Create identity'}</button>
                 </form>
               </details>
@@ -1237,6 +1717,46 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
           </>
         )}
       </div>
+      </div>
+
+      <div aria-labelledby="people-tab-imports" hidden={activeSection !== 'imports'} id="people-panel-imports" role="tabpanel">
+        <DirectoryImportManager csrfToken={csrfToken} onApplied={() => loadDirectory(filters)} permissions={permissions} />
+      </div>
+
+      <Drawer
+        kicker="People tags"
+        onClose={() => setTagColumnFormOpen(false)}
+        open={tagColumnFormOpen && canWriteLabels}
+        title="Add tag column"
+      >
+        <form aria-label="Add tag column" className="grid gap-4" key={tagColumnRecordType} onSubmit={handleCreateTagColumn}>
+          <p className="text-sm text-steward-mist-muted">
+            {tagColumnRecordType === peopleRecordTypes.room
+              ? 'Create a tag column for this sheet. Use a text or select tag named Floor when rooms need a floor without a separate record type.'
+              : 'Create a tag column for this sheet. The same labels can apply to other People record types from Tags.'}
+          </p>
+          <label className={labelClass}>Tag name
+            <input className={inputClass} defaultValue={tagColumnRecordType === peopleRecordTypes.room ? 'Floor' : ''} maxLength={120} name="name" placeholder={tagColumnRecordType === peopleRecordTypes.room ? 'Floor' : 'Program'} required />
+          </label>
+          <label className={labelClass}>Tag id
+            <span className="mt-1 block font-normal leading-5 text-steward-mist-muted">Optional stable id such as floor.</span>
+            <input className={inputClass} defaultValue={tagColumnRecordType === peopleRecordTypes.room ? 'floor' : ''} maxLength={64} name="id" />
+          </label>
+          <label className={labelClass}>Value type
+            <select className={inputClass} defaultValue={tagColumnRecordType === peopleRecordTypes.room ? 'text' : 'multiselect'} name="valueKind">
+              {['flag', 'text', 'select', 'multiselect'].map((kind) => <option key={kind} value={kind}>{kind}</option>)}
+            </select>
+          </label>
+          <label className={labelClass}>Allowed values
+            <span className="mt-1 block font-normal leading-5 text-steward-mist-muted">Required for select and multi-select tags. Comma separated.</span>
+            <input className={inputClass} name="options" placeholder="1, 2, 3, Basement" />
+          </label>
+          <div className="flex flex-wrap gap-3">
+            <button className={buttonClass} disabled={tagColumnBusy} type="submit">{tagColumnBusy ? 'Creating…' : 'Create tag column'}</button>
+            <button className={secondaryButtonClass} onClick={() => setTagColumnFormOpen(false)} type="button">Cancel</button>
+          </div>
+        </form>
+      </Drawer>
     </section>
   )
 }

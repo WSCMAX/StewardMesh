@@ -43,6 +43,23 @@ func TestMessageObjectUsesRESTEnumWireValues(t *testing.T) {
 	if got := label["output"]; got != "pdf" {
 		t.Fatalf("normal enum = %#v, want pdf", got)
 	}
+
+	mesh, err := messageObject(&stewardmeshv1.GetMeshGraphRequest{
+		Kind: stewardmeshv1.RelationshipGraphNodeKind_RELATIONSHIP_GRAPH_NODE_KIND_PURCHASE_ORDER,
+		Kinds: []stewardmeshv1.RelationshipGraphNodeKind{
+			stewardmeshv1.RelationshipGraphNodeKind_RELATIONSHIP_GRAPH_NODE_KIND_VENDOR,
+			stewardmeshv1.RelationshipGraphNodeKind_RELATIONSHIP_GRAPH_NODE_KIND_LABEL,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := mesh["kind"], "purchase_order"; got != want {
+		t.Fatalf("mesh kind = %#v, want %#v", got, want)
+	}
+	if got, want := mesh["kinds"], []any{"vendor", "label"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("mesh kinds = %#v, want %#v", got, want)
+	}
 }
 
 func TestMessageObjectPreservesEmptyRESTCollections(t *testing.T) {
@@ -353,6 +370,7 @@ func TestConfiguredSearchAndRepeatedScenarioQueriesMatchREST(t *testing.T) {
 		{name: "asset models", fullMethod: "/stewardmesh.v1.AssetService/ListAssetModels", object: map[string]any{"search": "portable workstation"}, wantPath: "/api/v1/asset-models?q=portable+workstation"},
 		{name: "assets", fullMethod: "/stewardmesh.v1.AssetService/ListAssets", object: map[string]any{"search": "asset tag"}, wantPath: "/api/v1/assets?q=asset+tag"},
 		{name: "identities", fullMethod: "/stewardmesh.v1.PeopleService/SearchIdentities", object: map[string]any{"query": "Ada Lovelace"}, wantPath: "/api/v1/identities?q=Ada+Lovelace"},
+		{name: "mesh graph kinds", fullMethod: "/stewardmesh.v1.RelationshipGraphService/GetMeshGraph", object: map[string]any{"kinds": []any{"purchase_order", "vendor"}, "limit": json.Number("50")}, wantPath: "/api/v1/mesh/graph?kinds=purchase_order&kinds=vendor&limit=50"},
 		{name: "horizon scenarios", fullMethod: "/stewardmesh.v1.HorizonService/GetForecast", object: map[string]any{"scenarios": []any{"baseline", "accelerated"}}, wantPath: "/api/v1/horizon/forecast?scenarios=baseline&scenarios=accelerated"},
 	} {
 		t.Run(test.name, func(t *testing.T) {

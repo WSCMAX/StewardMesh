@@ -1,4 +1,4 @@
-# Requirements: REQ-API-001, REQ-ATLAS-001, REQ-ATLAS-MODELS-001, REQ-ATLAS-CODES-001, REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005, REQ-DIRECTORY-EXPANSION-006, REQ-DIRECTORY-EXPANSION-007, REQ-DIRECTORY-EXPANSION-008, REQ-DIRECTORY-EXPANSION-009, REQ-PATTERNS-001, REQ-THREADS-001, REQ-STORAGE-001, REQ-HORIZON-001, REQ-LEDGER-001, REQ-STACK-001, REQ-SIGNALS-001, REQ-REACH-001, REQ-EXCHANGE-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001, SEC-MCP-001.
+# Requirements: REQ-API-001, REQ-ATLAS-001, REQ-ATLAS-MODELS-001, REQ-ATLAS-CODES-001, REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005, REQ-DIRECTORY-EXPANSION-006, REQ-DIRECTORY-EXPANSION-007, REQ-DIRECTORY-EXPANSION-008, REQ-DIRECTORY-EXPANSION-009, REQ-PATTERNS-001, REQ-THREADS-001, REQ-LABELS-001, REQ-STORAGE-001, REQ-HORIZON-001, REQ-LEDGER-001, REQ-STACK-001, REQ-SIGNALS-001, REQ-REACH-001, REQ-EXCHANGE-001, REQ-PLATFORM-VALKEY-001, SEC-GUARD-001, SEC-HTTP-001, SEC-MCP-001.
 # Feature: experience.help.
 openapi: 3.1.0
 info:
@@ -1149,6 +1149,7 @@ paths:
         - {in: query, name: departmentId, schema: {$ref: '#/components/schemas/DirectoryReferenceID'}}
         - {in: query, name: userId, schema: {$ref: '#/components/schemas/DirectoryReferenceID'}}
         - {in: query, name: deploymentContext, description: Case-insensitive substring matched against hostname and deployment notes., schema: {type: string, maxLength: 200}}
+        - {in: query, name: cursor, description: Asset ID returned as nextCursor by the preceding page., schema: {$ref: '#/components/schemas/AssetID'}}
         - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 100, default: 50}}
       responses:
         '200':
@@ -1423,6 +1424,36 @@ paths:
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/departments/{departmentId}:
+    parameters:
+      - in: path
+        name: departmentId
+        required: true
+        schema: {type: string, pattern: '^[a-f0-9]{32}$'}
+    put:
+      summary: Update a department
+      operationId: updateDepartment
+      tags: [People]
+      x-requirement: REQ-PEOPLE-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/UpdateDepartmentRequest'}
+      responses:
+        '200':
+          description: Department updated
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Department'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
   /api/v1/sites:
     get:
       summary: List sites
@@ -1461,6 +1492,36 @@ paths:
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/sites/{siteId}:
+    parameters:
+      - in: path
+        name: siteId
+        required: true
+        schema: {type: string, pattern: '^[a-f0-9]{32}$'}
+    put:
+      summary: Update a site
+      operationId: updateSite
+      tags: [People]
+      x-requirement: REQ-PEOPLE-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/UpdateSiteRequest'}
+      responses:
+        '200':
+          description: Site updated
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Site'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
   /api/v1/buildings:
     get:
       summary: List visible buildings
@@ -1498,6 +1559,36 @@ paths:
       responses:
         '201':
           description: Building created
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Building'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/buildings/{buildingId}:
+    parameters:
+      - in: path
+        name: buildingId
+        required: true
+        schema: {type: string, pattern: '^[a-f0-9]{32}$'}
+    put:
+      summary: Update a building
+      operationId: updateBuilding
+      tags: [People]
+      x-requirement: REQ-DIRECTORY-EXPANSION-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/UpdateBuildingRequest'}
+      responses:
+        '200':
+          description: Building updated
           content:
             application/json:
               schema: {$ref: '#/components/schemas/Building'}
@@ -1555,6 +1646,36 @@ paths:
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/rooms/{roomId}:
+    parameters:
+      - in: path
+        name: roomId
+        required: true
+        schema: {type: string, pattern: '^[a-f0-9]{32}$'}
+    put:
+      summary: Update a room
+      operationId: updateRoom
+      tags: [People]
+      x-requirement: REQ-DIRECTORY-EXPANSION-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/UpdateRoomRequest'}
+      responses:
+        '200':
+          description: Room updated
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Room'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
   /api/v1/directory-import-sources:
     get:
       summary: List configured read-only directory sources
@@ -1598,7 +1719,12 @@ paths:
           schema: {$ref: '#/components/schemas/RelationshipGraphEdgeKind'}
         - name: limit
           in: query
-          schema: {type: integer, minimum: 1, maximum: 500, default: 100}
+          schema:
+            default: 100
+            oneOf:
+              - {type: integer, minimum: 1, maximum: 50000}
+              - {type: string, enum: [all]}
+          description: Maximum records to return. Use `all` to request the server maximum (currently 50000).
       responses:
         '200':
           description: Typed records and relationships restricted to the caller's intersected visibility scopes
@@ -1607,6 +1733,58 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/RelationshipGraph'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+  /api/v1/mesh/graph:
+    get:
+      summary: Read the cross-product relationship graph
+      operationId: getMeshGraph
+      tags: [Mesh]
+      x-requirement: REQ-DIRECTORY-EXPANSION-008
+      description: Projects People, Atlas, Ledger, Stack, Labels, Goals, Vault, and Horizon records the caller is authorized to see into one typed graph. Product visibility is derived exclusively from authenticated Guard grants and cannot be supplied by the client. Callers need at least one of directory.read, assets.read, finance.read, software.read, labels.read, goals.read, storage.read, or planning.read.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - name: search
+          in: query
+          schema: {type: string, maxLength: 200}
+          description: Case-insensitive record-label search. Matching records keep their direct connections within the response limit.
+        - name: kind
+          in: query
+          schema: {$ref: '#/components/schemas/MeshGraphNodeKind'}
+          description: Include a single record type. Combine with `kinds` when selecting more than one type.
+        - name: kinds
+          in: query
+          style: form
+          explode: false
+          schema: {type: array, items: {$ref: '#/components/schemas/MeshGraphNodeKind'}}
+          description: Comma-separated record types to include. Omitted kinds are dropped, including their edges.
+        - name: relationship
+          in: query
+          schema: {$ref: '#/components/schemas/MeshGraphEdgeKind'}
+        - name: relationships
+          in: query
+          style: form
+          explode: false
+          schema: {type: array, items: {$ref: '#/components/schemas/MeshGraphEdgeKind'}}
+          description: Comma-separated relationship types to include.
+        - name: limit
+          in: query
+          schema:
+            default: 100
+            oneOf:
+              - {type: integer, minimum: 1, maximum: 50000}
+              - {type: string, enum: [all]}
+          description: Maximum records to return. Use `all` to request the server maximum (currently 50000).
+      responses:
+        '200':
+          description: Typed records and relationships restricted to the caller's authorized products
+          headers:
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/MeshGraph'}
         '400': {$ref: '#/components/responses/InvalidRequest'}
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
@@ -1848,6 +2026,192 @@ paths:
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/identities/{identityId}:
+    parameters:
+      - in: path
+        name: identityId
+        required: true
+        schema: {type: string, pattern: '^[a-f0-9]{32}$'}
+    put:
+      summary: Update a directory identity
+      operationId: updateDirectoryIdentity
+      tags: [People]
+      x-requirement: REQ-PEOPLE-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/UpdateIdentityRequest'}
+      responses:
+        '200':
+          description: Directory identity updated
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DirectoryIdentity'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/location-reference-types:
+    get:
+      summary: List location reference types
+      operationId: listLocationReferenceTypes
+      tags: [People]
+      x-requirement: REQ-PEOPLE-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200':
+          description: Occupancy relationship types in the caller's organization
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/LocationReferenceTypeCollection'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+    post:
+      summary: Create a location reference type
+      operationId: createLocationReferenceType
+      tags: [People]
+      x-requirement: REQ-PEOPLE-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateLocationReferenceTypeRequest'}
+      responses:
+        '201':
+          description: Location reference type created
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/LocationReferenceType'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/location-reference-types/{typeId}:
+    parameters:
+      - in: path
+        name: typeId
+        required: true
+        schema: {type: string, pattern: '^[a-f0-9]{32}$'}
+    put:
+      summary: Update a location reference type
+      operationId: updateLocationReferenceType
+      tags: [People]
+      x-requirement: REQ-PEOPLE-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/UpdateLocationReferenceTypeRequest'}
+      responses:
+        '200':
+          description: Location reference type updated
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/LocationReferenceType'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/location-references:
+    get:
+      summary: List person location references
+      operationId: listLocationReferences
+      tags: [People]
+      x-requirement: REQ-PEOPLE-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - in: query
+          name: identityId
+          schema: {type: string, pattern: '^[a-f0-9]{32}$'}
+        - in: query
+          name: locationId
+          schema: {type: string, pattern: '^[a-f0-9]{32}$'}
+        - in: query
+          name: typeId
+          schema: {type: string, pattern: '^[a-f0-9]{32}$'}
+        - in: query
+          name: locationKind
+          schema: {$ref: '#/components/schemas/LocationKind'}
+        - in: query
+          name: status
+          schema: {$ref: '#/components/schemas/RecordStatus'}
+        - in: query
+          name: limit
+          schema: {type: integer, minimum: 1, maximum: 500, default: 100}
+      responses:
+        '200':
+          description: Typed person-to-location occupancy links
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/LocationReferenceCollection'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+    post:
+      summary: Create a person location reference
+      operationId: createLocationReference
+      tags: [People]
+      x-requirement: REQ-PEOPLE-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateLocationReferenceRequest'}
+      responses:
+        '201':
+          description: Location reference created
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/LocationReference'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/location-references/{referenceId}:
+    parameters:
+      - in: path
+        name: referenceId
+        required: true
+        schema: {type: string, pattern: '^[a-f0-9]{32}$'}
+    put:
+      summary: Update a person location reference
+      operationId: updateLocationReference
+      tags: [People]
+      x-requirement: REQ-PEOPLE-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/UpdateLocationReferenceRequest'}
+      responses:
+        '200':
+          description: Location reference updated
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/LocationReference'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
   /api/v1/users:
     get:
       summary: List person identities
@@ -2029,6 +2393,233 @@ paths:
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
         '423': {$ref: '#/components/responses/Locked'}
+  /api/v1/labels/definitions:
+    get:
+      summary: List label definitions
+      operationId: listLabelDefinitions
+      tags: [Labels]
+      x-requirement: REQ-LABELS-001
+      description: Requires labels.read. Returns organization-scoped configurable tags.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200':
+          description: Label definition collection
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/LabelDefinitionCollection'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+    post:
+      summary: Create a label definition
+      operationId: createLabelDefinition
+      tags: [Labels]
+      x-requirement: REQ-LABELS-001
+      description: Requires labels.write.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateLabelDefinitionRequest'}
+      responses:
+        '201':
+          description: Label definition created
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/LabelDefinition'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '423': {$ref: '#/components/responses/Locked'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+  /api/v1/labels/definitions/{definitionID}:
+    parameters:
+      - $ref: '#/components/parameters/LabelDefinitionID'
+    get:
+      summary: Get a label definition
+      operationId: getLabelDefinition
+      tags: [Labels]
+      x-requirement: REQ-LABELS-001
+      description: Requires labels.read.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200':
+          description: Label definition
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/LabelDefinition'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+    put:
+      summary: Update a label definition
+      operationId: updateLabelDefinition
+      tags: [Labels]
+      x-requirement: REQ-LABELS-001
+      description: Requires labels.write. Duplicate names return 409. Omitting parentId or goalId clears hierarchy.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/UpdateLabelDefinitionRequest'}
+      responses:
+        '200':
+          description: Label definition updated
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/LabelDefinition'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '423': {$ref: '#/components/responses/Locked'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+    delete:
+      summary: Delete a label definition
+      operationId: deleteLabelDefinition
+      tags: [Labels]
+      x-requirement: REQ-LABELS-001
+      description: Requires labels.write. confirm must be true. Child definitions require an explicit delete mode.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/DeleteLabelDefinitionRequest'}
+      responses:
+        '204': {description: Label definition deleted}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '423': {$ref: '#/components/responses/Locked'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+  /api/v1/labels/definitions/{definitionID}/delete-preview:
+    parameters:
+      - $ref: '#/components/parameters/LabelDefinitionID'
+    get:
+      summary: Preview deleting a label definition
+      operationId: previewDeleteLabelDefinition
+      tags: [Labels]
+      x-requirement: REQ-LABELS-001
+      description: Requires labels.read. Shows child definitions and assignments that each delete mode would remove.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200':
+          description: Delete impact preview
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/LabelDefinitionDeletePreview'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+  /api/v1/labels/definitions/{definitionID}/assignments:
+    parameters:
+      - $ref: '#/components/parameters/LabelDefinitionID'
+    get:
+      summary: List assignments for a label definition
+      operationId: listLabelDefinitionAssignments
+      tags: [Labels]
+      x-requirement: REQ-LABELS-001
+      description: Requires labels.read.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - {in: query, name: recordType, schema: {$ref: '#/components/schemas/LabelRecordType'}}
+      responses:
+        '200':
+          description: Label assignment collection
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/LabelAssignmentCollection'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+  /api/v1/labels/records/{recordType}/{recordID}/assignments:
+    parameters:
+      - $ref: '#/components/parameters/LabelRecordTypeParam'
+      - $ref: '#/components/parameters/LabelRecordID'
+    get:
+      summary: List label assignments on a record
+      operationId: listLabelAssignments
+      tags: [Labels]
+      x-requirement: REQ-LABELS-001
+      description: Requires labels.read.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200':
+          description: Label assignment collection
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/LabelAssignmentCollection'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+  /api/v1/labels/records/{recordType}/{recordID}/assignments/{definitionID}:
+    parameters:
+      - $ref: '#/components/parameters/LabelRecordTypeParam'
+      - $ref: '#/components/parameters/LabelRecordID'
+      - $ref: '#/components/parameters/LabelDefinitionID'
+    put:
+      summary: Set a label assignment
+      operationId: setLabelAssignment
+      tags: [Labels]
+      x-requirement: REQ-LABELS-001
+      description: Requires labels.write. Uses optimistic revision control.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/SetLabelAssignmentRequest'}
+      responses:
+        '200':
+          description: Label assignment stored
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/LabelAssignment'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '423': {$ref: '#/components/responses/Locked'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+    delete:
+      summary: Delete a label assignment
+      operationId: deleteLabelAssignment
+      tags: [Labels]
+      x-requirement: REQ-LABELS-001
+      description: Requires labels.write.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+        - {in: query, name: revision, required: true, schema: {type: integer, minimum: 1}}
+      responses:
+        '204': {description: Label assignment deleted}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '423': {$ref: '#/components/responses/Locked'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
   /api/v1/goals:
     get:
       summary: List goals
@@ -2477,6 +3068,41 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/HorizonForecast'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/horizon/forecast/assets:
+    get:
+      summary: List assets in a forecast group
+      operationId: getHorizonForecastGroupAssets
+      tags: [Horizon]
+      x-requirement: REQ-HORIZON-001
+      description: Returns lifecycle plans and assets that contribute to one forecast group row.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/HorizonScenarios'
+        - $ref: '#/components/parameters/HorizonAsOf'
+        - $ref: '#/components/parameters/HorizonFromYear'
+        - $ref: '#/components/parameters/HorizonToYear'
+        - $ref: '#/components/parameters/HorizonFiscalYearStartMonth'
+        - $ref: '#/components/parameters/HorizonGroupBy'
+        - name: scenario
+          in: query
+          required: true
+          schema: {$ref: '#/components/schemas/HorizonScenario'}
+        - name: groupKey
+          in: query
+          required: true
+          schema: {type: string, minLength: 1}
+      responses:
+        '200':
+          description: Assets contributing to the requested forecast group
+          headers:
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/HorizonForecastGroupAssets'}
         '400': {$ref: '#/components/responses/InvalidRequest'}
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
@@ -3688,6 +4314,21 @@ components:
       name: tagId
       required: true
       schema: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+    LabelDefinitionID:
+      in: path
+      name: definitionID
+      required: true
+      schema: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+    LabelRecordTypeParam:
+      in: path
+      name: recordType
+      required: true
+      schema: {$ref: '#/components/schemas/LabelRecordType'}
+    LabelRecordID:
+      in: path
+      name: recordID
+      required: true
+      schema: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
     GoalID:
       in: path
       name: goalId
@@ -4434,7 +5075,7 @@ components:
       type: object
       required: [id, organizationId, name, kind, status, revision, createdAt, updatedAt]
       properties:
-        id: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        id: {$ref: '#/components/schemas/AssetID'}
         organizationId: {type: string}
         modelId: {$ref: '#/components/schemas/AssetModelID'}
         modelContext: {$ref: '#/components/schemas/AssetModelContext'}
@@ -4449,6 +5090,9 @@ components:
         roomId: {$ref: '#/components/schemas/DirectoryReferenceID'}
         departmentId: {$ref: '#/components/schemas/DirectoryReferenceID'}
         userId: {$ref: '#/components/schemas/DirectoryReferenceID'}
+        additionalUserIds:
+          type: array
+          items: {$ref: '#/components/schemas/DirectoryReferenceID'}
         status: {$ref: '#/components/schemas/AssetStatus'}
         purchaseDate: {type: string, format: date-time}
         revision: {type: integer, format: int64, minimum: 1}
@@ -4650,6 +5294,9 @@ components:
         roomId: {$ref: '#/components/schemas/DirectoryReferenceID'}
         departmentId: {$ref: '#/components/schemas/DirectoryReferenceID'}
         userId: {$ref: '#/components/schemas/DirectoryReferenceID'}
+        additionalUserIds:
+          type: array
+          items: {$ref: '#/components/schemas/DirectoryReferenceID'}
         status: {$ref: '#/components/schemas/AssetStatus'}
         purchaseDate: {type: string, format: date-time}
     BulkCreateAssetFromModelItem:
@@ -4692,6 +5339,9 @@ components:
     AssetStatus:
       type: string
       enum: [draft, active, inactive, retired, disposed]
+    AssetID:
+      type: string
+      pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
     AssetModelID:
       type: string
       pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
@@ -4841,6 +5491,47 @@ components:
           type: array
           maxItems: 2000
           items: {$ref: '#/components/schemas/RelationshipGraphEdge'}
+    MeshGraphNodeKind:
+      type: string
+      enum: [organization, site, building, room, department, person, shared, public, lab, group, subject, asset, model, vendor, purchase_order, contract, budget, commitment, product, version, license, label, goal, document, plan]
+    MeshGraphEdgeKind:
+      type: string
+      enum: [contains, belongs_to, located_at, member_of, assigned_to, tagged_with, advances, purchased_via, supplied_by, covered_by, documented_by, modeled_as, installed_on, planned_for]
+    MeshGraphNode:
+      type: object
+      additionalProperties: false
+      required: [id, kind, label]
+      properties:
+        id: {type: string, pattern: '^[a-z][a-z0-9_-]{0,63}:[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$'}
+        kind: {$ref: '#/components/schemas/MeshGraphNodeKind'}
+        label: {type: string, minLength: 1, maxLength: 320}
+        attributes: {$ref: '#/components/schemas/RelationshipGraphAttributes'}
+    MeshGraphEdge:
+      type: object
+      additionalProperties: false
+      required: [id, from, to, kind]
+      properties:
+        id: {type: string, minLength: 1, maxLength: 320}
+        from: {type: string, pattern: '^[a-z][a-z0-9_-]{0,63}:[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$'}
+        to: {type: string, pattern: '^[a-z][a-z0-9_-]{0,63}:[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$'}
+        kind: {$ref: '#/components/schemas/MeshGraphEdgeKind'}
+        attributes: {$ref: '#/components/schemas/RelationshipGraphAttributes'}
+    MeshGraph:
+      type: object
+      additionalProperties: false
+      required: [nodes, edges, sources]
+      properties:
+        nodes:
+          type: array
+          maxItems: 500
+          items: {$ref: '#/components/schemas/MeshGraphNode'}
+        edges:
+          type: array
+          maxItems: 2000
+          items: {$ref: '#/components/schemas/MeshGraphEdge'}
+        sources:
+          type: array
+          items: {type: string, enum: [people, atlas, ledger, stack, labels, goals, vault, horizon]}
     AssetLifecycleEvent:
       type: object
       required: [id, organizationId, assetId, toStatus, revision, actorId, occurredAt]
@@ -4868,6 +5559,9 @@ components:
         items:
           type: array
           items: {$ref: '#/components/schemas/Asset'}
+        nextCursor:
+          type: string
+          description: Asset ID cursor for the next page. Omitted or empty when no further pages exist.
     RecordStatus:
       type: string
       enum: [active, inactive]
@@ -4908,6 +5602,15 @@ components:
         name: {type: string, minLength: 1, maxLength: 200}
         address: {$ref: '#/components/schemas/Address'}
         status: {$ref: '#/components/schemas/RecordStatus'}
+    UpdateSiteRequest:
+      type: object
+      additionalProperties: false
+      required: [name, revision]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 200}
+        address: {$ref: '#/components/schemas/Address'}
+        status: {$ref: '#/components/schemas/RecordStatus'}
+        revision: {type: integer, minimum: 1}
     SiteCollection:
       type: object
       required: [items]
@@ -4933,6 +5636,15 @@ components:
         siteId: {type: string, pattern: '^[a-f0-9]{32}$'}
         name: {type: string, minLength: 1, maxLength: 200}
         status: {$ref: '#/components/schemas/RecordStatus'}
+    UpdateBuildingRequest:
+      type: object
+      additionalProperties: false
+      required: [siteId, name, revision]
+      properties:
+        siteId: {type: string, pattern: '^[a-f0-9]{32}$'}
+        name: {type: string, minLength: 1, maxLength: 200}
+        status: {$ref: '#/components/schemas/RecordStatus'}
+        revision: {type: integer, minimum: 1}
     BuildingCollection:
       type: object
       required: [items]
@@ -4962,6 +5674,17 @@ components:
         number: {type: string, minLength: 1, maxLength: 100}
         name: {type: string, maxLength: 200}
         status: {$ref: '#/components/schemas/RecordStatus'}
+    UpdateRoomRequest:
+      type: object
+      additionalProperties: false
+      required: [siteId, buildingId, number, revision]
+      properties:
+        siteId: {type: string, pattern: '^[a-f0-9]{32}$'}
+        buildingId: {type: string, pattern: '^[a-f0-9]{32}$'}
+        number: {type: string, minLength: 1, maxLength: 100}
+        name: {type: string, maxLength: 200}
+        status: {$ref: '#/components/schemas/RecordStatus'}
+        revision: {type: integer, minimum: 1}
     RoomCollection:
       type: object
       required: [items]
@@ -5183,6 +5906,15 @@ components:
         name: {type: string, minLength: 1, maxLength: 200}
         siteId: {type: string, pattern: '^[a-f0-9]{32}$'}
         status: {$ref: '#/components/schemas/RecordStatus'}
+    UpdateDepartmentRequest:
+      type: object
+      additionalProperties: false
+      required: [name, revision]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 200}
+        siteId: {type: string, pattern: '^[a-f0-9]{32}$'}
+        status: {$ref: '#/components/schemas/RecordStatus'}
+        revision: {type: integer, minimum: 1}
     DepartmentCollection:
       type: object
       required: [items]
@@ -5199,6 +5931,8 @@ components:
         email: {type: string, format: email, maxLength: 320}
         departmentId: {type: string, pattern: '^[a-f0-9]{32}$'}
         siteId: {type: string, pattern: '^[a-f0-9]{32}$'}
+        buildingId: {type: string, pattern: '^[a-f0-9]{32}$'}
+        roomId: {type: string, pattern: '^[a-f0-9]{32}$'}
         status: {$ref: '#/components/schemas/RecordStatus'}
         provider: {type: string, pattern: '^[a-z0-9][a-z0-9._-]{0,63}$'}
         providerSubject: {type: string, minLength: 1, maxLength: 255}
@@ -5219,9 +5953,120 @@ components:
           description: Required when kind is person; optional for shared, public, and lab identities.
         departmentId: {type: string, pattern: '^[a-f0-9]{32}$'}
         siteId: {type: string, pattern: '^[a-f0-9]{32}$'}
+        buildingId: {type: string, pattern: '^[a-f0-9]{32}$'}
+        roomId: {type: string, pattern: '^[a-f0-9]{32}$'}
         status: {$ref: '#/components/schemas/RecordStatus'}
         provider: {type: string, pattern: '^[a-z0-9][a-z0-9._-]{0,63}$'}
         providerSubject: {type: string, minLength: 1, maxLength: 255}
+    UpdateIdentityRequest:
+      type: object
+      additionalProperties: false
+      required: [kind, displayName, revision]
+      properties:
+        kind: {$ref: '#/components/schemas/IdentityKind'}
+        displayName: {type: string, minLength: 1, maxLength: 200}
+        email:
+          type: string
+          format: email
+          maxLength: 320
+        departmentId: {type: string, pattern: '^[a-f0-9]{32}$'}
+        siteId: {type: string, pattern: '^[a-f0-9]{32}$'}
+        buildingId: {type: string, pattern: '^[a-f0-9]{32}$'}
+        roomId: {type: string, pattern: '^[a-f0-9]{32}$'}
+        status: {$ref: '#/components/schemas/RecordStatus'}
+        revision: {type: integer, minimum: 1}
+    LocationKind:
+      type: string
+      enum: [site, building, room]
+    LocationPriority:
+      type: string
+      enum: [primary, secondary]
+    LocationRelationshipKind:
+      type: string
+      enum: [located_at, uses_office, teaches_in, attends_class, resides_in, uses_lab]
+    LocationReferenceType:
+      type: object
+      required: [id, organizationId, name, relationshipKind, locationKind, status, revision, createdAt, updatedAt]
+      properties:
+        id: {type: string, pattern: '^[a-f0-9]{32}$'}
+        organizationId: {type: string, minLength: 1, maxLength: 128}
+        name: {type: string, minLength: 1, maxLength: 200}
+        description: {type: string, maxLength: 500}
+        relationshipKind: {$ref: '#/components/schemas/LocationRelationshipKind'}
+        locationKind: {$ref: '#/components/schemas/LocationKind'}
+        status: {$ref: '#/components/schemas/RecordStatus'}
+        revision: {type: integer, minimum: 1}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    CreateLocationReferenceTypeRequest:
+      type: object
+      additionalProperties: false
+      required: [name, relationshipKind, locationKind]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 200}
+        description: {type: string, maxLength: 500}
+        relationshipKind: {$ref: '#/components/schemas/LocationRelationshipKind'}
+        locationKind: {$ref: '#/components/schemas/LocationKind'}
+        status: {$ref: '#/components/schemas/RecordStatus'}
+    UpdateLocationReferenceTypeRequest:
+      type: object
+      additionalProperties: false
+      required: [name, relationshipKind, locationKind, revision]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 200}
+        description: {type: string, maxLength: 500}
+        relationshipKind: {$ref: '#/components/schemas/LocationRelationshipKind'}
+        locationKind: {$ref: '#/components/schemas/LocationKind'}
+        status: {$ref: '#/components/schemas/RecordStatus'}
+        revision: {type: integer, minimum: 1}
+    LocationReferenceTypeCollection:
+      type: object
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/LocationReferenceType'}}
+    LocationReference:
+      type: object
+      required: [id, organizationId, identityId, typeId, locationKind, locationId, priority, status, revision, createdAt, updatedAt]
+      properties:
+        id: {type: string, pattern: '^[a-f0-9]{32}$'}
+        organizationId: {type: string, minLength: 1, maxLength: 128}
+        identityId: {type: string, pattern: '^[a-f0-9]{32}$'}
+        typeId: {type: string, pattern: '^[a-f0-9]{32}$'}
+        locationKind: {$ref: '#/components/schemas/LocationKind'}
+        locationId: {type: string, pattern: '^[a-f0-9]{32}$'}
+        priority: {$ref: '#/components/schemas/LocationPriority'}
+        status: {$ref: '#/components/schemas/RecordStatus'}
+        revision: {type: integer, minimum: 1}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    CreateLocationReferenceRequest:
+      type: object
+      additionalProperties: false
+      required: [identityId, typeId, locationKind, locationId]
+      properties:
+        identityId: {type: string, pattern: '^[a-f0-9]{32}$'}
+        typeId: {type: string, pattern: '^[a-f0-9]{32}$'}
+        locationKind: {$ref: '#/components/schemas/LocationKind'}
+        locationId: {type: string, pattern: '^[a-f0-9]{32}$'}
+        priority: {$ref: '#/components/schemas/LocationPriority'}
+        status: {$ref: '#/components/schemas/RecordStatus'}
+    UpdateLocationReferenceRequest:
+      type: object
+      additionalProperties: false
+      required: [identityId, typeId, locationKind, locationId, revision]
+      properties:
+        identityId: {type: string, pattern: '^[a-f0-9]{32}$'}
+        typeId: {type: string, pattern: '^[a-f0-9]{32}$'}
+        locationKind: {$ref: '#/components/schemas/LocationKind'}
+        locationId: {type: string, pattern: '^[a-f0-9]{32}$'}
+        priority: {$ref: '#/components/schemas/LocationPriority'}
+        status: {$ref: '#/components/schemas/RecordStatus'}
+        revision: {type: integer, minimum: 1}
+    LocationReferenceCollection:
+      type: object
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/LocationReference'}}
     IdentityCollection:
       type: object
       required: [items]
@@ -5468,6 +6313,33 @@ components:
         assetCount: {type: integer, minimum: 0}
         totalsByKindMinor: {$ref: '#/components/schemas/HorizonMoneyByKind'}
         groups: {type: array, items: {$ref: '#/components/schemas/HorizonForecastGroup'}}
+    HorizonForecastGroupAsset:
+      type: object
+      additionalProperties: false
+      required: [planId, assetId, assetName, lifecycleStage, expectedUsefulLifeMonths, fiscalYear, replacementCostMinor, currency, revision]
+      properties:
+        planId: {type: string}
+        assetId: {type: string}
+        assetName: {type: string}
+        lifecycleStage: {$ref: '#/components/schemas/HorizonLifecycleStage'}
+        expectedUsefulLifeMonths: {type: integer, minimum: 1, maximum: 1200}
+        replacementDate: {type: string, format: date-time}
+        derivedReplacementDate: {type: string, format: date-time}
+        fiscalYear: {type: integer, minimum: 1970, maximum: 9999}
+        replacementCostMinor: {type: integer, format: int64, minimum: 0, maximum: 9007199254740991}
+        currency: {type: string, pattern: '^[A-Z]{3}$'}
+        revision: {type: integer, format: int64, minimum: 1}
+    HorizonForecastGroupAssets:
+      type: object
+      additionalProperties: false
+      required: [scenario, groupKey, label, groupBy, currency, items]
+      properties:
+        scenario: {$ref: '#/components/schemas/HorizonScenario'}
+        groupKey: {type: string}
+        label: {type: string}
+        groupBy: {$ref: '#/components/schemas/HorizonGroupBy'}
+        currency: {type: string, pattern: '^(?:[A-Z]{3})?$'}
+        items: {type: array, items: {$ref: '#/components/schemas/HorizonForecastGroupAsset'}}
     LedgerID:
       type: string
       pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
@@ -6772,6 +7644,137 @@ components:
         delivered: {type: integer, minimum: 0, maximum: 500}
         retrying: {type: integer, minimum: 0, maximum: 500}
         failed: {type: integer, minimum: 0, maximum: 500}
+    LabelRecordType:
+      type: string
+      pattern: '^[a-z][a-z0-9]*(\.[a-z][a-z0-9-]*)+$'
+      maxLength: 128
+    LabelValueKind:
+      type: string
+      enum: [flag, text, select, multiselect]
+    LabelDefinitionStatus:
+      type: string
+      enum: [active, retired]
+    LabelDefinition:
+      type: object
+      additionalProperties: false
+      required: [id, organizationId, name, valueKind, applicableRecordTypes, status, revision, createdAt, updatedAt]
+      properties:
+        id: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        organizationId: {type: string, minLength: 1, maxLength: 128}
+        name: {type: string, minLength: 1, maxLength: 100}
+        description: {type: string, maxLength: 2000}
+        valueKind: {$ref: '#/components/schemas/LabelValueKind'}
+        applicableRecordTypes: {type: array, minItems: 1, maxItems: 32, items: {$ref: '#/components/schemas/LabelRecordType'}}
+        options: {type: array, maxItems: 200, items: {type: string, minLength: 1, maxLength: 120}}
+        parentId: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        goalId: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        status: {$ref: '#/components/schemas/LabelDefinitionStatus'}
+        revision: {type: integer, minimum: 1}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    CreateLabelDefinitionRequest:
+      type: object
+      additionalProperties: false
+      required: [name, valueKind, applicableRecordTypes]
+      properties:
+        id: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        name: {type: string, minLength: 1, maxLength: 100}
+        description: {type: string, maxLength: 2000}
+        valueKind: {$ref: '#/components/schemas/LabelValueKind'}
+        applicableRecordTypes: {type: array, minItems: 1, maxItems: 32, items: {$ref: '#/components/schemas/LabelRecordType'}}
+        options: {type: array, maxItems: 200, items: {type: string, minLength: 1, maxLength: 120}}
+        parentId: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        goalId: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+    UpdateLabelDefinitionRequest:
+      type: object
+      additionalProperties: false
+      required: [name, valueKind, applicableRecordTypes, status, revision]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 100}
+        description: {type: string, maxLength: 2000}
+        valueKind: {$ref: '#/components/schemas/LabelValueKind'}
+        applicableRecordTypes: {type: array, minItems: 1, maxItems: 32, items: {$ref: '#/components/schemas/LabelRecordType'}}
+        options: {type: array, maxItems: 200, items: {type: string, minLength: 1, maxLength: 120}}
+        parentId: {type: string, maxLength: 128}
+        goalId: {type: string, maxLength: 128}
+        status: {$ref: '#/components/schemas/LabelDefinitionStatus'}
+        revision: {type: integer, minimum: 1}
+    DeleteLabelDefinitionRequest:
+      type: object
+      additionalProperties: false
+      required: [revision, confirm]
+      properties:
+        revision: {type: integer, minimum: 1}
+        confirm: {type: boolean}
+        mode: {type: string, enum: [strict, orphan_children, cascade_children]}
+    LabelDefinitionRef:
+      type: object
+      additionalProperties: false
+      required: [id, name]
+      properties:
+        id: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        name: {type: string, minLength: 1, maxLength: 100}
+    LabelAffectedAssignment:
+      type: object
+      additionalProperties: false
+      required: [definitionId, definitionName, recordType, recordId]
+      properties:
+        definitionId: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        definitionName: {type: string, minLength: 1, maxLength: 100}
+        recordType: {$ref: '#/components/schemas/LabelRecordType'}
+        recordId: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+    LabelDefinitionDeleteImpact:
+      type: object
+      additionalProperties: false
+      required: [definitionsRemoved, assignmentsRemoved]
+      properties:
+        definitionsRemoved: {type: array, items: {$ref: '#/components/schemas/LabelDefinitionRef'}}
+        assignmentsRemoved: {type: array, items: {$ref: '#/components/schemas/LabelAffectedAssignment'}}
+    LabelDefinitionDeletePreview:
+      type: object
+      additionalProperties: false
+      required: [definition, childDefinitions, hasChildren, orphanChildrenOption, cascadeChildrenOption]
+      properties:
+        definition: {$ref: '#/components/schemas/LabelDefinitionRef'}
+        childDefinitions: {type: array, items: {$ref: '#/components/schemas/LabelDefinitionRef'}}
+        hasChildren: {type: boolean}
+        orphanChildrenOption: {$ref: '#/components/schemas/LabelDefinitionDeleteImpact'}
+        cascadeChildrenOption: {$ref: '#/components/schemas/LabelDefinitionDeleteImpact'}
+    LabelDefinitionCollection:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/LabelDefinition'}}
+    LabelAssignment:
+      type: object
+      additionalProperties: false
+      required: [organizationId, definitionId, recordType, recordId, revision, updatedBy, createdAt, updatedAt]
+      properties:
+        organizationId: {type: string, minLength: 1, maxLength: 128}
+        definitionId: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        recordType: {$ref: '#/components/schemas/LabelRecordType'}
+        recordId: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        valueText: {type: string, maxLength: 2000}
+        values: {type: array, maxItems: 200, items: {type: string, minLength: 1, maxLength: 120}}
+        revision: {type: integer, minimum: 1}
+        updatedBy: {type: string, minLength: 1, maxLength: 128}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    LabelAssignmentCollection:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/LabelAssignment'}}
+    SetLabelAssignmentRequest:
+      type: object
+      additionalProperties: false
+      required: [revision]
+      properties:
+        valueText: {type: string, maxLength: 2000}
+        values: {type: array, maxItems: 200, items: {type: string, minLength: 1, maxLength: 120}}
+        revision: {type: integer, minimum: 0}
     Tag:
       type: object
       additionalProperties: false

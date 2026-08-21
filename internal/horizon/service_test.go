@@ -7,6 +7,7 @@ import (
 	"encoding/csv"
 	"errors"
 	"io"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -22,6 +23,7 @@ import (
 )
 
 var horizonNow = time.Date(2026, time.August, 11, 12, 0, 0, 0, time.UTC)
+var horizonAssetIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
 
 type horizonAssets struct {
 	items map[string]domain.Asset
@@ -40,11 +42,18 @@ func (r *horizonAssets) ListAssets(_ context.Context, query atlas.Query) ([]doma
 }
 
 func (r *horizonAssets) GetAsset(_ context.Context, id string) (domain.Asset, error) {
+	if !horizonAssetIDPattern.MatchString(id) {
+		return domain.Asset{}, atlas.ErrInvalidInput
+	}
 	item, exists := r.items[id]
 	if !exists {
 		return domain.Asset{}, atlas.ErrNotFound
 	}
 	return item, nil
+}
+
+func (r *horizonAssets) GetModel(_ context.Context, id string) (domain.AssetModel, error) {
+	return domain.AssetModel{}, atlas.ErrNotFound
 }
 
 type horizonFinance struct {
@@ -415,9 +424,12 @@ func TestHorizonRejectsInvalidInputsAndMissingReferences(t *testing.T) {
 		mutate func(*horizon.CreatePlanInput)
 	}{
 		{name: "invalid id", mutate: func(input *horizon.CreatePlanInput) { input.ID = "bad id" }},
-		{name: "invalid asset", mutate: func(input *horizon.CreatePlanInput) { input.AssetID = "bad asset" }},
+		{name: "invalid asset", mutate: func(input *horizon.CreatePlanInput) { input.AssetID = "bad!" }},
 		{name: "invalid scenario", mutate: func(input *horizon.CreatePlanInput) { input.Scenario = "bad scenario" }},
-		{name: "zero useful life", mutate: func(input *horizon.CreatePlanInput) { input.ExpectedUsefulLifeMonths = 0 }},
+		{name: "zero useful life without model default", mutate: func(input *horizon.CreatePlanInput) {
+			input.ExpectedUsefulLifeMonths = 0
+			input.AssetID = "missing-model-default"
+		}},
 		{name: "excessive useful life", mutate: func(input *horizon.CreatePlanInput) { input.ExpectedUsefulLifeMonths = 1201 }},
 		{name: "invalid stage", mutate: func(input *horizon.CreatePlanInput) { input.LifecycleStage = "disposed" }},
 		{name: "negative cost", mutate: func(input *horizon.CreatePlanInput) { input.ReplacementCostMinor = -1 }},
@@ -428,7 +440,15 @@ func TestHorizonRejectsInvalidInputsAndMissingReferences(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			input := base
 			test.mutate(&input)
-			if _, err := fixture.service.CreatePlan(context.Background(), input); !errors.Is(err, horizon.ErrInvalidInput) {
+			err := error(nil)
+			if test.name == "zero useful life without model default" {
+				fixture.assets.items["missing-model-default"] = domain.Asset{ID: "missing-model-default", Kind: "server"}
+				_, err = fixture.service.CreatePlan(context.Background(), input)
+				delete(fixture.assets.items, "missing-model-default")
+			} else {
+				_, err = fixture.service.CreatePlan(context.Background(), input)
+			}
+			if !errors.Is(err, horizon.ErrInvalidInput) {
 				t.Fatalf("expected invalid input, got %v", err)
 			}
 		})
@@ -464,5 +484,68 @@ func TestPlanWithoutPurchaseOrReplacementDateIsExcludedFromDatedForecast(t *test
 	report, err := fixture.service.Forecast(context.Background(), horizonForecastQuery("fiscal_year"))
 	if err != nil || report.PlannedReplacementMinor != 0 || report.AssetCount != 0 || len(report.Groups) != 0 {
 		t.Fatalf("undated plan must not enter a dated forecast: %#v err=%v", report, err)
+	}
+}
+
+func TestForecastGroupAssetsListsMatchingPlans(t *testing.T) {
+	assetOne := horizonAsset("asset-1", nil)
+	assetTwo := horizonAsset("asset-2", nil)
+	fixture := newHorizonFixture(t, assetOne, assetTwo)
+	replacement := time.Date(2026, time.September, 1, 0, 0, 0, 0, time.UTC)
+	createHorizonPlan(t, fixture, baseHorizonInput("plan-1", assetOne.ID, "baseline", &replacement, 100))
+	createHorizonPlan(t, fixture, baseHorizonInput("plan-2", assetTwo.ID, "baseline", &replacement, 200))
+	createHorizonPlan(t, fixture, baseHorizonInput("plan-3", assetOne.ID, "optimistic", &replacement, 300))
+	report, err := fixture.service.ForecastGroupAssets(context.Background(), horizon.ForecastGroupAssetsQuery{
+		ForecastQuery: horizonForecastQuery("fiscal_year"), Scenario: "baseline", GroupKey: "FY2026",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Label != "FY2026" || report.Currency != "USD" || len(report.Items) != 2 {
+		t.Fatalf("unexpected group assets %#v", report)
+	}
+	if report.Items[0].AssetID != "asset-1" || report.Items[1].AssetID != "asset-2" {
+		t.Fatalf("expected asset name ordering, got %#v", report.Items)
+	}
+}
+
+func TestListPlanHistoryUsesLifecycleAnchor(t *testing.T) {
+	purchaseDate := time.Date(2020, time.January, 1, 0, 0, 0, 0, time.UTC)
+	lifecycleStart := time.Date(2024, time.June, 15, 0, 0, 0, 0, time.UTC)
+	asset := horizonAsset("asset-1", &purchaseDate)
+	asset.LifecycleStartDate = &lifecycleStart
+	fixture := newHorizonFixture(t, asset)
+	created := createHorizonPlan(t, fixture, horizon.CreatePlanInput{
+		ID: "plan-1", AssetID: "asset-1", Scenario: "baseline", ExpectedUsefulLifeMonths: 12,
+		LifecycleStage: "planned", ReplacementCostMinor: 1000, Currency: "USD",
+		EffectiveFrom: time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC),
+	})
+	history, err := fixture.service.ListPlanHistory(context.Background(), created.ID)
+	if err != nil || len(history) != 1 || history[0].DerivedReplacementDate == nil {
+		t.Fatalf("unexpected history %#v err=%v", history, err)
+	}
+	want := time.Date(2025, time.June, 15, 0, 0, 0, 0, time.UTC)
+	if !history[0].DerivedReplacementDate.Equal(want) {
+		t.Fatalf("expected lifecycle-start derived replacement %s, got %s", want, history[0].DerivedReplacementDate)
+	}
+}
+
+func TestUpsertKindDefaultRejectsStaleRevision(t *testing.T) {
+	fixture := newHorizonFixture(t)
+	created, err := fixture.service.UpsertKindDefault(context.Background(), horizon.UpsertKindDefaultInput{
+		AssetKind: "laptop", Scenario: "baseline", ExpectedUsefulLifeMonths: 36,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.service.UpsertKindDefault(context.Background(), horizon.UpsertKindDefaultInput{
+		AssetKind: "laptop", Scenario: "baseline", ExpectedUsefulLifeMonths: 48, Revision: created.Revision,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.service.UpsertKindDefault(context.Background(), horizon.UpsertKindDefaultInput{
+		AssetKind: "laptop", Scenario: "baseline", ExpectedUsefulLifeMonths: 60, Revision: created.Revision,
+	}); !errors.Is(err, horizon.ErrConflict) {
+		t.Fatalf("expected stale kind-default conflict, got %v", err)
 	}
 }

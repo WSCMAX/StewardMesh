@@ -240,7 +240,7 @@ confirmation. See [Bridge](docs/features/bridge.md) and its
 [security review](docs/validation/bridge-security-review.md).
 
 Every domain service in the checked-in protobuf descriptor is active in the
-standalone gRPC command. A fixed adapter routes all 154 RPCs through the same
+standalone gRPC command. A fixed adapter routes all 155 RPCs through the same
 in-process REST application, repositories, Guard authorization, ownership,
 validation, limits, audit, and error handling. The command separates public
 Guard setup/login traffic from protected domain traffic: `9091` contains only

@@ -1,6 +1,7 @@
 import { type FormEvent, useEffect, useRef, useState } from 'react'
 import { ApiRequestError, requestJSON } from './api'
-import { buttonClass, inputClass, labelClass, panelClass, secondaryButtonClass, subpanelClass, tableWrapClass } from './ui'
+import DocumentViewer, { type ViewableDocument } from './DocumentViewer'
+import { ProductHeader, buttonClass, inputClass, labelClass, panelClass, secondaryButtonClass, subpanelClass, tableWrapClass } from './ui'
 
 export type VaultBlob = {
   id: string
@@ -72,6 +73,7 @@ export default function VaultManager({ csrfToken, permissions, onOpenHelp }: Vau
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [download, setDownload] = useState<{ id: string; authorization: DownloadAuthorization } | null>(null)
+  const [preview, setPreview] = useState<ViewableDocument | null>(null)
   const errorRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -135,10 +137,13 @@ export default function VaultManager({ csrfToken, permissions, onOpenHelp }: Vau
 
   return (
     <section aria-labelledby="vault-heading" className={`${panelClass} p-5 sm:p-6`} data-feature="storage.blobs" data-requirement="REQ-STORAGE-001">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div><p className="text-sm font-semibold text-steward-teal">Vault</p><h2 id="vault-heading" className="mt-2 text-2xl font-semibold">Private file storage</h2><p className="mt-2 max-w-3xl leading-7 text-steward-mist-muted">Keep checksummed evidence and attachments with their ownership and provenance. Downloads are authorized only when requested and expire shortly afterward.</p></div>
-        {onOpenHelp && <button className={secondaryButtonClass} onClick={onOpenHelp} type="button">Vault help</button>}
-      </div>
+      <ProductHeader
+        actions={onOpenHelp ? <button className={secondaryButtonClass} onClick={onOpenHelp} type="button">Vault help</button> : undefined}
+        description="Keep checksummed evidence and attachments with their ownership and provenance. Downloads are authorized only when requested and expire shortly afterward."
+        headingId="vault-heading"
+        kicker="Vault"
+        title="Private file storage"
+      />
       {error && <div ref={errorRef} className="mt-4 rounded-lg border border-steward-danger/50 bg-steward-danger/15 p-3 text-[#ffccd1]" role="alert" tabIndex={-1}>{error}</div>}
 
       {canWrite && (
@@ -159,7 +164,7 @@ export default function VaultManager({ csrfToken, permissions, onOpenHelp }: Vau
       <div className={`${tableWrapClass} mt-6`}>
         <table className="w-full min-w-[720px] border-collapse text-left text-sm">
           <caption className="sr-only">Files stored in Vault</caption>
-          <thead><tr className="border-b border-steward-ink-800 text-steward-mist-muted"><th className="px-3 py-3 font-semibold" scope="col">File</th><th className="px-3 py-3 font-semibold" scope="col">Size and type</th><th className="px-3 py-3 font-semibold" scope="col">Provenance</th><th className="px-3 py-3 font-semibold" scope="col">Integrity</th><th className="px-3 py-3 font-semibold" scope="col">Download</th></tr></thead>
+          <thead><tr className="border-b border-steward-ink-800 text-steward-mist-muted"><th className="px-3 py-3 font-semibold" scope="col">File</th><th className="px-3 py-3 font-semibold" scope="col">Size and type</th><th className="px-3 py-3 font-semibold" scope="col">Provenance</th><th className="px-3 py-3 font-semibold" scope="col">Integrity</th><th className="px-3 py-3 font-semibold" scope="col">View or download</th></tr></thead>
           <tbody>
             {blobs.map((blob) => (
               <tr className="border-b border-steward-ink-800/70 align-top" key={blob.id}>
@@ -168,9 +173,12 @@ export default function VaultManager({ csrfToken, permissions, onOpenHelp }: Vau
                 <td className="px-3 py-4 text-steward-mist-muted">{blob.sourceSystemId ? `${blob.sourceSystemId} / ${blob.sourceRecordId}` : 'Direct upload'}{blob.resourceType && <span className="mt-1 block text-xs">{blob.resourceType}: {blob.resourceId}</span>}</td>
                 <td className="px-3 py-4"><code className="block max-w-52 break-all text-xs text-steward-mist-muted">SHA-256 {blob.sha256}</code></td>
                 <td className="px-3 py-4">
-                  {download?.id === blob.id
-                    ? <a className={secondaryButtonClass} href={download.authorization.url}>Download ready</a>
-                    : <button className={secondaryButtonClass} disabled={busy} onClick={() => prepareDownload(blob.id)} type="button">Prepare download</button>}
+                  <div className="flex flex-wrap gap-2">
+                    <button className={secondaryButtonClass} disabled={busy} onClick={() => setPreview({ id: blob.id, name: blob.name, mediaType: blob.mediaType })} type="button">View in browser</button>
+                    {download?.id === blob.id
+                      ? <a className={secondaryButtonClass} href={`${download.authorization.url}${download.authorization.url.includes('?') ? '&' : '?'}download=1`}>Download ready</a>
+                      : <button className={secondaryButtonClass} disabled={busy} onClick={() => prepareDownload(blob.id)} type="button">Prepare download</button>}
+                  </div>
                 </td>
               </tr>
             ))}
@@ -178,6 +186,7 @@ export default function VaultManager({ csrfToken, permissions, onOpenHelp }: Vau
           </tbody>
         </table>
       </div>
+      {preview && <div className="mt-6"><DocumentViewer csrfToken={csrfToken} document={preview} onClose={() => setPreview(null)} /></div>}
     </section>
   )
 }

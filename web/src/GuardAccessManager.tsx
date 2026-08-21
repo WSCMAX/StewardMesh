@@ -1,6 +1,6 @@
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ApiRequestError, requestJSON } from './api'
-import { buttonClass, dangerButtonClass, inputClass, labelClass, panelClass, secondaryButtonClass, subpanelClass, tableWrapClass } from './ui'
+import { ProductHeader, buttonClass, dangerButtonClass, inputClass, labelClass, panelClass, secondaryButtonClass, subpanelClass, tableWrapClass } from './ui'
 
 // Requirements: REQ-HORIZON-001, REQ-EXCHANGE-001, SEC-GUARD-001, SEC-HTTP-001, A11Y-001.
 // Features: lifecycle.planning, migration.packages, authorization.security.
@@ -335,10 +335,13 @@ export default function GuardAccessManager({ csrfToken, onOpenHelp }: GuardAcces
 
   return (
     <section aria-labelledby="guard-access-heading" className={`${panelClass} min-w-0 max-w-full overflow-hidden border-steward-teal/25 p-5 sm:p-6`} data-feature="authorization.security" data-requirement="SEC-GUARD-001">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div><p className="text-sm font-semibold text-steward-teal">Guard · Access administration</p><h2 className="mt-2 text-2xl font-semibold" id="guard-access-heading">Build roles and assign the right access</h2><p className="mt-2 max-w-3xl leading-7 text-steward-mist-muted">Combine direct permissions with reusable policy bundles, then apply a role to the whole organization or limit it to a site, department, or resource. Built-in roles stay protected.</p></div>
-        {onOpenHelp && <button className={secondaryButtonClass} onClick={onOpenHelp} type="button">Guard help</button>}
-      </div>
+      <ProductHeader
+        actions={onOpenHelp ? <button className={secondaryButtonClass} onClick={onOpenHelp} type="button">Guard help</button> : undefined}
+        description="Combine direct permissions with reusable policy bundles, then apply a role to the whole organization or limit it to a site, department, or resource. Built-in roles stay protected."
+        headingId="guard-access-heading"
+        kicker="Guard · Access administration"
+        title="Build roles and assign the right access"
+      />
 
       {error && <div className="mt-5 rounded-xl border border-steward-danger/50 bg-steward-danger/15 p-4 text-[#ffccd1]" ref={errorRef} role="alert" tabIndex={-1}>{error}</div>}
       <p aria-live="polite" className="mt-4 text-sm text-[#67dd99]" role="status">{status}</p>

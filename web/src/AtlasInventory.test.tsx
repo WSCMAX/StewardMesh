@@ -39,7 +39,7 @@ test('filters assets, loads lifecycle details, and has no automated accessibilit
   }))
   const { container } = render(<AtlasInventory assets={[asset]} csrfToken="csrf-token" onAssetsChange={() => undefined} permissions={['assets.read']} />)
   expect(screen.getByRole('heading', { name: 'Asset inventory' })).toBeInTheDocument()
-  expect(screen.getByRole('region', { name: 'Atlas inventory workflow' })).toHaveClass('min-w-0', 'max-w-full', 'overflow-x-clip')
+  expect(screen.getByRole('region', { name: 'Atlas inventory workflow' })).toHaveClass('min-w-0', 'max-w-full')
   expect(screen.getByRole('tablist')).toHaveClass('min-w-0', 'max-w-full')
   expect(screen.getByRole('tab', { name: 'Assets' })).toHaveAttribute('aria-selected', 'true')
   expect(screen.queryByRole('tab', { name: 'Labels' })).not.toBeInTheDocument()

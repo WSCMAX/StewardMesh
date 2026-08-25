@@ -2141,7 +2141,7 @@ export default function AtlasInventory({
   }
 
   return (
-    <section aria-label="Atlas inventory workflow" className={`${panelClass} min-w-0 max-w-full space-y-3 overflow-x-clip p-3 sm:p-4`} data-feature="inventory.assets" data-requirement="REQ-ATLAS-001">
+    <section aria-label="Atlas inventory workflow" className={`${panelClass} min-w-0 max-w-full space-y-3 p-3 sm:p-4`} data-feature="inventory.assets" data-requirement="REQ-ATLAS-001">
       <ProductHeader
         actions={<>
           <a className={plainButtonClass} href="#workspace-mesh">Open Mesh graph</a>

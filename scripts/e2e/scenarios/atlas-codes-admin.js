@@ -91,6 +91,7 @@ async page => {
       await scannerForm().waitFor({ timeout: 2000 })
     } catch {
       await openScanner.click()
+      await scannerForm().waitFor()
     }
     await scannerSelect('Workflow').selectOption(mode)
     await scannerSelect('Symbology').selectOption(symbology)

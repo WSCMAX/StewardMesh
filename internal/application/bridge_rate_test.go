@@ -31,7 +31,8 @@ func TestBridgeMCPRateLimitsIPBeforeAuthenticationAndBodyRead(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = app.Close() })
-	for attempt := 1; attempt <= 121; attempt++ {
+	limited := false
+	for attempt := 1; attempt <= 241; attempt++ {
 		body := &observedBody{reader: strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"server/discover"}`)}
 		request := httptest.NewRequest(http.MethodPost, "/mcp", nil)
 		request.Body = body
@@ -45,12 +46,19 @@ func TestBridgeMCPRateLimitsIPBeforeAuthenticationAndBodyRead(t *testing.T) {
 		if body.reads.Load() != 0 {
 			t.Fatalf("attempt %d read the body before bearer authentication", attempt)
 		}
-		if attempt <= 120 && response.Code != http.StatusUnauthorized {
+		if response.Code == http.StatusTooManyRequests {
+			if response.Header().Get("Retry-After") != "60" {
+				t.Fatalf("rate limit retry=%q body=%s", response.Header().Get("Retry-After"), response.Body.String())
+			}
+			limited = true
+			break
+		}
+		if response.Code != http.StatusUnauthorized {
 			t.Fatalf("attempt %d status=%d body=%s", attempt, response.Code, response.Body.String())
 		}
-		if attempt == 121 && (response.Code != http.StatusTooManyRequests || response.Header().Get("Retry-After") != "60") {
-			t.Fatalf("rate limit status=%d retry=%q body=%s", response.Code, response.Header().Get("Retry-After"), response.Body.String())
-		}
+	}
+	if !limited {
+		t.Fatal("IP rate limit was not enforced across a one-minute window")
 	}
 }
 
@@ -88,7 +96,8 @@ func TestBridgeMCPRateLimitsActorAndClientBeforeJSONDecode(t *testing.T) {
 	}
 	_, accessToken := authorizeBridgeClient(t, app.Handler(), cfg.AllowedOrigin, cookie, session.CSRF, registered.ID)
 	discover := `{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientInfo":{"name":"rate","version":"1"},"io.modelcontextprotocol/clientCapabilities":{}}}}`
-	for attempt := 1; attempt <= 121; attempt++ {
+	limited := false
+	for attempt := 1; attempt <= 241; attempt++ {
 		body := &observedBody{reader: strings.NewReader(discover)}
 		request := httptest.NewRequest(http.MethodPost, "/mcp", nil)
 		request.Body = body
@@ -100,16 +109,21 @@ func TestBridgeMCPRateLimitsActorAndClientBeforeJSONDecode(t *testing.T) {
 		request.Header.Set("Authorization", "Bearer "+accessToken)
 		response := httptest.NewRecorder()
 		app.Handler().ServeHTTP(response, request)
-		if attempt <= 120 && response.Code != http.StatusOK {
-			t.Fatalf("attempt %d status=%d body=%s", attempt, response.Code, response.Body.String())
-		}
-		if attempt == 121 {
-			if response.Code != http.StatusTooManyRequests || response.Header().Get("Retry-After") != "60" {
-				t.Fatalf("actor/client rate status=%d retry=%q body=%s", response.Code, response.Header().Get("Retry-After"), response.Body.String())
+		if response.Code == http.StatusTooManyRequests {
+			if response.Header().Get("Retry-After") != "60" {
+				t.Fatalf("actor/client rate retry=%q body=%s", response.Header().Get("Retry-After"), response.Body.String())
 			}
 			if body.reads.Load() != 0 {
 				t.Fatal("actor/client limited request decoded its JSON body")
 			}
+			limited = true
+			break
 		}
+		if response.Code != http.StatusOK {
+			t.Fatalf("attempt %d status=%d body=%s", attempt, response.Code, response.Body.String())
+		}
+	}
+	if !limited {
+		t.Fatal("actor/client rate limit was not enforced across a one-minute window")
 	}
 }

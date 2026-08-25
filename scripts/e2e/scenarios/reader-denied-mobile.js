@@ -127,7 +127,7 @@ async page => {
       if (!next) break
       node = next
     }
-    return { scroll, client, path: path.join(' > ') }
+    return { scroll, client, path: `${path.join(' > ')} body=${document.body.scrollWidth} inner=${window.innerWidth} active=${document.activeElement ? document.activeElement.tagName + (document.activeElement.id ? '#' + document.activeElement.id : '') : 'none'}` }
   })
   assert(width.scroll <= width.client, `reader mobile overflowed: ${width.scroll} > ${width.client}${width.path ? ` · ${width.path}` : ''}`)
   assert(consumedConsoleErrors.asset403 === 1 && expectedConsoleErrors.asset403 === 0, 'controlled reader 403 console budget was not consumed exactly once')

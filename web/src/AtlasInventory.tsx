@@ -2421,7 +2421,7 @@ export default function AtlasInventory({
       </div>
 
       <div aria-labelledby="atlas-tab-scan" hidden={activeSection !== 'scan'} id="atlas-panel-scan" role="tabpanel">
-        {selected && (
+        {activeSection === 'scan' && selected && (
           <div className="mb-4 flex flex-wrap items-center gap-3 rounded-md border border-steward-teal/30 bg-steward-teal/[0.07] px-4 py-3">
             <StatusBadge tone="success">Matched</StatusBadge>
             <div className="min-w-0">

@@ -201,7 +201,7 @@ async page => {
   await setScanner('find', 'code128')
   await associate(codeA)
   await scannerPanel.getByText('Identifier matched. The authorized asset is shown below.', { exact: true }).waitFor()
-  await page.locator('#atlas-panel-scan').getByText(assetA, { exact: true }).waitFor()
+  await page.locator('#atlas-panel-scan').getByText(assetA, { exact: true }).first().waitFor()
   await scannerInput().fill('E2E-CODE-MISSING')
   expectedConsoleErrors.resolve404 = 1
   await scannerForm().getByRole('button', { name: 'Find asset', exact: true }).click()

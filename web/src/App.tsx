@@ -548,12 +548,12 @@ export default function App() {
   ]
 
   return (
-    <div className="min-h-screen text-steward-mist" data-feature="authorization.security experience.help" data-requirement="SEC-GUARD-001 A11Y-001 DOC-001 DOC-002" style={brandingStyle(branding.appliedTheme) as CSSProperties}>
+    <div className="min-h-screen max-w-full overflow-x-clip text-steward-mist" data-feature="authorization.security experience.help" data-requirement="SEC-GUARD-001 A11Y-001 DOC-001 DOC-002" style={brandingStyle(branding.appliedTheme) as CSSProperties}>
       <a className="sr-only rounded-xl bg-steward-teal px-3 py-2 font-semibold text-steward-ink-950 focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[70]" href="#main-content">Skip to main content</a>
-      <header className="sticky top-0 z-30 border-b border-white/[0.08] bg-steward-ink-950/95">
+      <header className="sticky top-0 z-30 overflow-x-clip border-b border-white/[0.08] bg-steward-ink-950/95">
         <div className="flex min-w-0 max-w-full flex-wrap items-center justify-between gap-3 px-3 py-2 sm:px-4">
           <div className="flex min-w-0 items-center gap-3">
-            <span className="grid size-9 shrink-0 place-items-center"><img alt="" aria-hidden="true" className="h-8 w-auto" height="370" src="/brand/stewardmesh-s-mark.svg" width="294" /></span>
+            <span className="grid size-9 shrink-0 place-items-center overflow-hidden"><img alt="" aria-hidden="true" className="h-8 w-auto max-w-9" height="370" src="/brand/stewardmesh-s-mark.svg" width="294" /></span>
             <div className="min-w-0">
               <div className="flex items-baseline gap-2">
                 <h1 className="truncate text-lg font-semibold text-white">StewardMesh</h1>

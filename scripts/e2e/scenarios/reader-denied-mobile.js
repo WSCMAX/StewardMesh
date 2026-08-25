@@ -117,27 +117,19 @@ async page => {
   const width = await page.evaluate(() => {
     const scroll = document.documentElement.scrollWidth
     const client = document.documentElement.clientWidth
-    if (scroll <= client) return { scroll, client, offender: '' }
-    const contained = (el) => {
-      for (let parent = el.parentElement; parent && parent !== document.body; parent = parent.parentElement) {
-        const overflow = getComputedStyle(parent).overflowX
-        if (overflow === 'auto' || overflow === 'scroll' || overflow === 'hidden') return true
-      }
-      return false
+    if (scroll <= client) return { scroll, client, path: '' }
+    const path = []
+    let node = document.documentElement
+    while (node) {
+      const cls = typeof node.className === 'string' ? node.className.slice(0, 80) : ''
+      path.push(`${node.tagName.toLowerCase()}${node.id ? `#${node.id}` : ''} ${cls} sw=${node.scrollWidth} cw=${node.clientWidth}`)
+      const next = [...node.children].find((child) => child.scrollWidth >= scroll)
+      if (!next) break
+      node = next
     }
-    let offender = ''
-    let worst = client
-    for (const el of document.querySelectorAll('body *')) {
-      if (contained(el)) continue
-      const right = el.getBoundingClientRect().right
-      if (right <= worst) continue
-      worst = right
-      const cls = typeof el.className === 'string' ? el.className.slice(0, 120) : ''
-      offender = `${el.tagName.toLowerCase()}${el.id ? `#${el.id}` : ''} ${cls} right=${Math.round(right)} sw=${el.scrollWidth}`
-    }
-    return { scroll, client, offender }
+    return { scroll, client, path: path.join(' > ') }
   })
-  assert(width.scroll <= width.client, `reader mobile overflowed: ${width.scroll} > ${width.client}${width.offender ? ` · ${width.offender}` : ''}`)
+  assert(width.scroll <= width.client, `reader mobile overflowed: ${width.scroll} > ${width.client}${width.path ? ` · ${width.path}` : ''}`)
   assert(consumedConsoleErrors.asset403 === 1 && expectedConsoleErrors.asset403 === 0, 'controlled reader 403 console budget was not consumed exactly once')
   assert(consumedConsoleErrors.identifier404 === 1 && expectedConsoleErrors.identifier404 === 0, 'controlled identifier 404 console budget was not consumed exactly once')
   assert(browserProblems.length === 0, `browser diagnostics: ${browserProblems.join(' | ')}`)

@@ -68,4 +68,13 @@ func TestWorkspaceFileServerFallsBackToIndexAndKeepsAPI(t *testing.T) {
 	if escaped.Code == http.StatusOK && strings.Contains(escaped.Body.String(), "root:") {
 		t.Fatal("workspace must not serve files outside the web directory")
 	}
+	if escaped.Code == http.StatusOK && !strings.Contains(escaped.Body.String(), "StewardMesh") {
+		t.Fatalf("traversal must not leak non-workspace content, got %d %s", escaped.Code, escaped.Body.String())
+	}
+
+	dotDot := httptest.NewRecorder()
+	served.ServeHTTP(dotDot, httptest.NewRequest(http.MethodGet, "/assets/../../etc/passwd", nil))
+	if dotDot.Code == http.StatusOK && strings.Contains(dotDot.Body.String(), "root:") {
+		t.Fatal("cleaned traversal must not serve files outside the web directory")
+	}
 }

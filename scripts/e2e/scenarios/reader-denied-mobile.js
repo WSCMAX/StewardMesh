@@ -63,7 +63,7 @@ async page => {
   assert(await menu.evaluate(element => element === document.activeElement), 'mobile navigation did not restore focus')
 
   await menu.click()
-  await page.getByRole('dialog', { name: 'Workspace navigation' }).getByRole('link', { name: /^Atlas —/ }).click()
+	await page.getByRole('dialog', { name: 'Workspace navigation' }).getByRole('link', { name: /^Inventory — Atlas/ }).click()
   await page.locator('#assets-heading').waitFor()
   assert(await page.getByRole('button', { name: 'Add asset' }).count() === 0, 'reader can add an asset')
   assert(await page.getByRole('button', { name: 'Print labels' }).count() === 0, 'reader can open label printing')

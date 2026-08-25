@@ -3,6 +3,7 @@ package httpapi
 // Requirement: REQ-WORKSPACE-001. Feature: experience.workspace.
 
 import (
+	"io/fs"
 	"net/http"
 	"os"
 	"path"
@@ -15,8 +16,7 @@ func (s *Server) withWorkspace(next http.Handler) http.Handler {
 	if webDir == "" {
 		return next
 	}
-	root := filepath.Clean(webDir)
-	fileServer := http.FileServer(http.Dir(root))
+	rootPath := filepath.Clean(webDir)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if workspaceReservedPath(r.URL.Path) {
 			next.ServeHTTP(w, r)
@@ -26,34 +26,67 @@ func (s *Server) withWorkspace(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		relative := strings.TrimPrefix(path.Clean("/"+r.URL.Path), "/")
-		if relative == "" {
-			http.ServeFile(w, r, filepath.Join(root, "index.html"))
+		root, err := os.OpenRoot(rootPath)
+		if err != nil {
+			next.ServeHTTP(w, r)
 			return
 		}
-		candidate := filepath.Join(root, filepath.FromSlash(relative))
-		if !isWithinDir(root, candidate) {
+		defer root.Close()
+		relative := strings.TrimPrefix(path.Clean("/"+r.URL.Path), "/")
+		if relative == "" {
+			serveRootFile(w, r, root, "index.html")
+			return
+		}
+		if strings.Contains(relative, "..") || !fs.ValidPath(relative) {
 			http.NotFound(w, r)
 			return
 		}
-		info, err := os.Stat(candidate)
+		safeRelative := path.Clean(relative)
+		if safeRelative == "." || strings.Contains(safeRelative, "..") || !fs.ValidPath(safeRelative) {
+			http.NotFound(w, r)
+			return
+		}
+		info, err := root.Stat(safeRelative)
 		if err == nil && !info.IsDir() {
-			fileServer.ServeHTTP(w, r)
+			serveRootFile(w, r, root, safeRelative)
 			return
 		}
 		if err == nil && info.IsDir() {
-			index := filepath.Join(candidate, "index.html")
-			if indexInfo, indexErr := os.Stat(index); indexErr == nil && !indexInfo.IsDir() {
-				http.ServeFile(w, r, index)
+			index := path.Join(safeRelative, "index.html")
+			if strings.Contains(index, "..") || !fs.ValidPath(index) {
+				http.NotFound(w, r)
+				return
+			}
+			if indexInfo, indexErr := root.Stat(index); indexErr == nil && !indexInfo.IsDir() {
+				serveRootFile(w, r, root, index)
 				return
 			}
 		}
-		if _, err := os.Stat(filepath.Join(root, "index.html")); err == nil {
-			http.ServeFile(w, r, filepath.Join(root, "index.html"))
+		if _, err := root.Stat("index.html"); err == nil {
+			serveRootFile(w, r, root, "index.html")
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func serveRootFile(w http.ResponseWriter, r *http.Request, root *os.Root, name string) {
+	if name != "index.html" && !fs.ValidPath(name) {
+		http.NotFound(w, r)
+		return
+	}
+	file, err := root.Open(name)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil || info.IsDir() {
+		http.NotFound(w, r)
+		return
+	}
+	http.ServeContent(w, r, info.Name(), info.ModTime(), file)
 }
 
 func workspaceReservedPath(requestPath string) bool {
@@ -68,12 +101,4 @@ func workspaceReservedPath(requestPath string) bool {
 	default:
 		return false
 	}
-}
-
-func isWithinDir(root, candidate string) bool {
-	relative, err := filepath.Rel(root, candidate)
-	if err != nil {
-		return false
-	}
-	return relative != ".." && !strings.HasPrefix(relative, ".."+string(os.PathSeparator))
 }

@@ -50,11 +50,11 @@ async page => {
 
   const search = page.getByRole('searchbox', { name: 'Search Asset inventory' })
   await search.fill('phase-one-preserved-filter')
-  await page.getByRole('link', { name: /^People —/ }).click()
-  await page.locator('#people-heading').waitFor()
-  await page.getByRole('link', { name: /^Atlas —/ }).click()
-  assert(await search.inputValue() === 'phase-one-preserved-filter', 'Atlas filter was not preserved across workspace navigation')
-  await page.getByRole('link', { name: /^People —/ }).click()
+	await page.getByRole('link', { name: /^People —/ }).click()
+	await page.locator('#people-heading').waitFor()
+	await page.getByRole('link', { name: /^Inventory — Atlas/ }).click()
+	assert(await search.inputValue() === 'phase-one-preserved-filter', 'Atlas filter was not preserved across workspace navigation')
+	await page.getByRole('link', { name: /^People —/ }).click()
   await page.getByRole('tab', { name: 'Workflows & assignments' }).click()
 
   await page.getByRole('button', { name: 'Start person workflow' }).click()
@@ -145,7 +145,7 @@ async page => {
   await axe('Guide report')
   await guide.getByRole('button', { name: 'Close Guide', exact: true }).click()
 
-  await page.getByRole('link', { name: /^Guard —/ }).click()
+	await page.getByRole('link', { name: /^Access — Guard/ }).click()
   const guard = page.locator('section[aria-labelledby="guard-access-heading"]')
   await guard.waitFor()
   await guard.getByText('Create a custom role', { exact: true }).click()

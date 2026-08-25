@@ -84,6 +84,13 @@ async page => {
   const scannerPanel = page.locator('#atlas-panel-scan')
   const scannerForm = () => scannerPanel.getByRole('form', { name: 'Scan an Atlas Code' })
   const scannerSelect = label => scannerForm().locator('label').filter({ hasText: new RegExp(`^${label}`) }).locator('select')
+  const chooseScanner = async (label, value) => {
+    const select = scannerSelect(label)
+    if (label.startsWith('Scanner ') && !await select.isVisible().catch(() => false)) {
+      await scannerForm().locator('summary').filter({ hasText: 'Scanner settings' }).click()
+    }
+    await select.selectOption(value)
+  }
   const scannerInput = () => scannerForm().locator('input[placeholder="Scan, paste, or type"]')
   const setScanner = async (mode, symbology = 'code128') => {
     await dismissDrawer()
@@ -100,8 +107,8 @@ async page => {
     await form.waitFor({ state: 'attached' })
     await form.scrollIntoViewIfNeeded()
     await form.waitFor()
-    await scannerSelect('Workflow').selectOption(mode)
-    await scannerSelect('Symbology').selectOption(symbology)
+    await chooseScanner('Workflow', mode)
+    await chooseScanner('Symbology', symbology)
   }
   const associate = async (value, terminator = 'Enter') => {
     await scannerInput().fill(value)
@@ -135,8 +142,8 @@ async page => {
   await scannerPanel.getByText('Duplicate scan ignored. The first scan already completed.', { exact: true }).waitFor()
   assert(associationRequests === requestsAfterFirstAssociation, 'duplicate scan reached the association API')
 
-  await scannerSelect('Symbology').selectOption('qr')
-  await scannerSelect('Scanner terminator').selectOption('Tab')
+  await chooseScanner('Symbology', 'qr')
+  await chooseScanner('Scanner terminator', 'Tab')
   await scannerInput().click()
   await page.evaluate(async value => navigator.clipboard.writeText(value), qrA)
   await scannerInput().press('ControlOrMeta+V')
@@ -144,11 +151,11 @@ async page => {
   await scannerPanel.getByText(`Identifier associated with ${assetA}.`, { exact: true }).waitFor()
 
   const requestsBeforeInvalid = associationRequests
-  await scannerSelect('Symbology').selectOption('code128')
+  await chooseScanner('Symbology', 'code128')
   await scannerInput().fill('X'.repeat(129))
   await scannerForm().getByRole('button', { name: 'Associate identifier', exact: true }).click()
   await scannerPanel.getByRole('alert').filter({ hasText: 'Code 128 values must be 1–128 printable ASCII characters.' }).waitFor()
-  await scannerSelect('Symbology').selectOption('qr')
+  await chooseScanner('Symbology', 'qr')
   await scannerInput().fill('é'.repeat(300))
   await scannerForm().getByRole('button', { name: 'Associate identifier', exact: true }).click()
   await scannerPanel.getByRole('alert').filter({ hasText: 'QR values must be control-free UTF-8 no longer than 512 bytes.' }).waitFor()
@@ -156,9 +163,9 @@ async page => {
 
   await selectAsset(assetB)
   await openAtlasTab('Scan')
-  await scannerSelect('Symbology').selectOption('code128')
-  await scannerSelect('Scanner terminator').selectOption('Enter')
-  await scannerSelect('Scanner burst window').selectOption('250')
+  await chooseScanner('Symbology', 'code128')
+  await chooseScanner('Scanner terminator', 'Enter')
+  await chooseScanner('Scanner burst window', '250')
   const slowCode = 'E2E-SLOW-MANUAL'
   await scannerInput().fill('')
   await scannerInput().pressSequentially(slowCode, { delay: 35 })
@@ -169,15 +176,15 @@ async page => {
   await scannerForm().getByRole('button', { name: 'Associate identifier', exact: true }).click()
   await scannerPanel.getByText(`Identifier associated with ${assetB}.`, { exact: true }).waitFor()
   assert(associationRequests === requestsBeforeManual + 1, 'manual scanner fallback did not make one association request')
-  await scannerSelect('Scanner burst window').selectOption('500')
+  await chooseScanner('Scanner burst window', '500')
   await associate(codeB)
   await scannerPanel.getByText(`Identifier associated with ${assetB}.`, { exact: true }).waitFor()
-  await scannerSelect('Symbology').selectOption('qr')
+  await chooseScanner('Symbology', 'qr')
   await associate(qrB)
   await scannerPanel.getByText(`Identifier associated with ${assetB}.`, { exact: true }).waitFor()
 
   await page.waitForTimeout(1600)
-  await scannerSelect('Symbology').selectOption('code128')
+  await chooseScanner('Symbology', 'code128')
   expectedConsoleErrors.association409 = 1
   await associate(codeA)
   const conflict = scannerPanel.getByRole('alert').filter({ hasText: 'the identifier association or revision conflicts with current data' })

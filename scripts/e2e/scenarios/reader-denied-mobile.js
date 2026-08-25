@@ -106,7 +106,13 @@ async page => {
   assert(deniedResponses.missingBody.error.message === 'the requested asset identifier was not found', 'unknown code response was not generic')
 
   await page.addScriptTag({ path: 'web/node_modules/axe-core/axe.min.js' })
-  const violations = await page.evaluate(async () => (await globalThis.axe.run(document)).violations.map(violation => `${violation.id}:${violation.nodes.length}`))
+  const violations = await page.evaluate(async () => {
+    const result = await globalThis.axe.run(document)
+    return result.violations.map(violation => {
+      const nodes = violation.nodes.map(node => `${node.target.join(' ')}: ${(node.any[0] && node.any[0].message) || node.failureSummary || ''}`)
+      return `${violation.id}[${nodes.join(' | ')}]`
+    })
+  })
   assert(violations.length === 0, `reader mobile axe violations: ${violations.join(', ')}`)
   const width = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }))
   assert(width.scroll <= width.client, `reader mobile overflowed: ${width.scroll} > ${width.client}`)

@@ -683,7 +683,7 @@ export default function AtlasScanner({
             type="button"
           >
             <span className="block">{item.label}</span>
-            <span className="mt-0.5 block text-xs font-normal text-steward-slate">{item.hint}</span>
+            <span className="mt-0.5 block text-xs font-normal text-steward-mist-muted">{item.hint}</span>
           </button>
         ))}
       </div>

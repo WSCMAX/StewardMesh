@@ -51,10 +51,13 @@ async page => {
     await page.getByRole('tab', { name, exact: true }).click()
   }
   const dismissDrawer = async () => {
-    const dialog = page.getByRole('dialog')
-    if (await dialog.count() === 0) return
-    await page.keyboard.press('Escape')
-    await dialog.first().waitFor({ state: 'hidden' })
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const dialog = page.getByRole('dialog')
+      const count = await dialog.count()
+      if (count === 0) return
+      await page.keyboard.press('Escape')
+      await dialog.nth(count - 1).waitFor({ state: 'hidden', timeout: 3000 }).catch(() => {})
+    }
   }
   const createAsset = async (name, tag, serial) => {
     await openAtlasTab('Assets')
@@ -84,15 +87,15 @@ async page => {
   const scannerInput = () => scannerForm().locator('input[placeholder="Scan, paste, or type"]')
   const setScanner = async (mode, symbology = 'code128') => {
     await dismissDrawer()
-    await page.locator('#atlas-tab-scan').click()
+    await openAtlasTab('Scan')
     await page.locator('#atlas-panel-scan:not([hidden])').waitFor()
+    await dismissDrawer()
     const openScanner = scannerPanel.getByRole('button', { name: 'Open scanner', exact: true })
-    try {
-      await scannerForm().waitFor({ timeout: 2000 })
-    } catch {
+    const form = scannerForm()
+    if (!await form.isVisible().catch(() => false)) {
       await openScanner.click()
-      await scannerForm().waitFor()
     }
+    await form.waitFor()
     await scannerSelect('Workflow').selectOption(mode)
     await scannerSelect('Symbology').selectOption(symbology)
   }

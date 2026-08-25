@@ -151,7 +151,7 @@ export default function WorkspaceShell({ activeArea, areas, assetCount, healthLa
       </div>}
 
       <div aria-hidden={mobileNavOpen ? true : undefined} className="min-w-0 px-3 py-3 sm:px-4">
-        <header className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-white/[0.07] pb-2">
+        <header className="flex min-w-0 max-w-full flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-white/[0.07] pb-2">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <button aria-expanded={mobileNavOpen} aria-label="Open workspace navigation" className={`${secondaryButtonClass} px-2.5 lg:hidden`} onClick={() => setMobileNavOpen(true)} ref={mobileMenuButtonRef} type="button"><MenuIcon /></button>
@@ -164,7 +164,7 @@ export default function WorkspaceShell({ activeArea, areas, assetCount, healthLa
               <span className="sr-only"> Signed in as {roleSummary}. {recordScope}. {healthLabel}.</span>
             </p>
           </div>
-          <button className={secondaryButtonClass} onClick={() => onOpenHelp(active.id === 'overview' ? 'workspace' : active.id)} type="button">Help for {active.name}</button>
+          <button className={`${secondaryButtonClass} max-w-full`} onClick={() => onOpenHelp(active.id === 'overview' ? 'workspace' : active.id)} type="button">Help for {active.name}</button>
         </header>
 
         <div className="mt-3 min-w-0">

@@ -2141,7 +2141,7 @@ export default function AtlasInventory({
   }
 
   return (
-    <section aria-label="Atlas inventory workflow" className={`${panelClass} space-y-3 p-3 sm:p-4`} data-feature="inventory.assets" data-requirement="REQ-ATLAS-001">
+    <section aria-label="Atlas inventory workflow" className={`${panelClass} min-w-0 max-w-full space-y-3 overflow-x-hidden p-3 sm:p-4`} data-feature="inventory.assets" data-requirement="REQ-ATLAS-001">
       <ProductHeader
         actions={<>
           <a className={plainButtonClass} href="#workspace-mesh">Open Mesh graph</a>
@@ -2430,8 +2430,8 @@ export default function AtlasInventory({
             </div>
           </div>
         )}
-        <div className="grid gap-6 xl:grid-cols-[minmax(0,1.2fr)_minmax(20rem,0.8fr)]">
-          <div>
+        <div className="grid min-w-0 gap-6 xl:grid-cols-[minmax(0,1.2fr)_minmax(20rem,0.8fr)]">
+          <div className="min-w-0">
             <p className="mb-4 text-sm leading-6 text-steward-mist-muted">{selected ? `Working with ${selected.name}. Find another asset, or attach a code to this record.` : 'Find an asset, or search for one when attaching a code. The matching record opens here so you can inspect it without leaving Scan.'}</p>
             <AtlasScanner
               active={activeSection === 'scan'}
@@ -2736,7 +2736,7 @@ function AssetDetailPanel({
   const currentModelPastLifecycle = linkedModel ? modelPastLifecycle(linkedModel) : false
 
   return (
-    <aside aria-labelledby="asset-detail-heading" className={cx(subpanelClass, 'p-5', highlight && 'ring-1 ring-inset ring-steward-teal/30')}>
+    <aside aria-labelledby="asset-detail-heading" className={cx(subpanelClass, 'min-w-0 max-w-full p-5', highlight && 'ring-1 ring-inset ring-steward-teal/30')}>
       <h3 className="text-lg font-semibold outline-none focus-visible:ring-2 focus-visible:ring-steward-teal" id="asset-detail-heading" tabIndex={-1}>Asset details</h3>
       {!selected ? <p className="mt-3 text-sm text-steward-mist-muted">{emptyPrompt}</p> : <>
         <p className="mt-3"><a className={plainButtonClass} href={meshRecordHref('asset', selected.id)}>Show in Mesh</a></p>

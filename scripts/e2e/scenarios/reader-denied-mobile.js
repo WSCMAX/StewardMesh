@@ -114,8 +114,22 @@ async page => {
     })
   })
   assert(violations.length === 0, `reader mobile axe violations: ${violations.join(', ')}`)
-  const width = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }))
-  assert(width.scroll <= width.client, `reader mobile overflowed: ${width.scroll} > ${width.client}`)
+  const width = await page.evaluate(() => {
+    const scroll = document.documentElement.scrollWidth
+    const client = document.documentElement.clientWidth
+    if (scroll <= client) return { scroll, client, offender: '' }
+    let offender = ''
+    let worst = 0
+    for (const el of document.querySelectorAll('body *')) {
+      const right = el.getBoundingClientRect().right
+      if (right <= worst) continue
+      worst = right
+      const cls = typeof el.className === 'string' ? el.className.slice(0, 120) : ''
+      offender = `${el.tagName.toLowerCase()}${el.id ? `#${el.id}` : ''} ${cls} right=${Math.round(right)} sw=${el.scrollWidth}`
+    }
+    return { scroll, client, offender }
+  })
+  assert(width.scroll <= width.client, `reader mobile overflowed: ${width.scroll} > ${width.client}${width.offender ? ` · ${width.offender}` : ''}`)
   assert(consumedConsoleErrors.asset403 === 1 && expectedConsoleErrors.asset403 === 0, 'controlled reader 403 console budget was not consumed exactly once')
   assert(consumedConsoleErrors.identifier404 === 1 && expectedConsoleErrors.identifier404 === 0, 'controlled identifier 404 console budget was not consumed exactly once')
   assert(browserProblems.length === 0, `browser diagnostics: ${browserProblems.join(' | ')}`)

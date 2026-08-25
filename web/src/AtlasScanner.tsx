@@ -655,7 +655,7 @@ export default function AtlasScanner({
 
   return <section aria-labelledby="atlas-scanner-heading" className={`${panelClass} overflow-hidden`} data-feature="inventory.identifiers" data-requirement="REQ-ATLAS-CODES-001">
     <div className="border-b border-white/[0.08] px-5 py-4 sm:px-6">
-      <div className="flex flex-wrap items-start justify-between gap-3">
+      <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 max-w-3xl">
           <p className="text-[13px] font-medium text-steward-slate">Atlas Codes</p>
           <h3 className="mt-1 text-xl font-semibold text-steward-mist" id="atlas-scanner-heading">Atlas Codes — Scan</h3>
@@ -667,13 +667,13 @@ export default function AtlasScanner({
       {error && <p className="mt-4 rounded-md border border-steward-danger/45 bg-steward-danger/10 px-3 py-2.5 text-sm text-[#ffccd1]" role="alert">{error}</p>}
       {!open && !message && <p className="mt-4 rounded-md border border-dashed border-white/12 bg-steward-ink-950/40 px-4 py-5 text-sm leading-6 text-steward-mist-muted">Scanner is idle. Open it to capture with a keyboard wedge, paste, or the camera. Nothing is written until a scan completes.</p>}
     </div>
-    {open && <form aria-label="Scan an Atlas Code" className="p-5 sm:p-6" onSubmit={onSubmit}>
-      <div className="flex flex-wrap gap-2" role="group" aria-label="Scan workflow">
+    {open && <form aria-label="Scan an Atlas Code" className="min-w-0 p-5 sm:p-6" onSubmit={onSubmit}>
+      <div className="flex min-w-0 flex-wrap gap-2" role="group" aria-label="Scan workflow">
         {workflowOptions.filter((item) => !item.write || canWrite).map((item) => (
           <button
             aria-pressed={mode === item.id}
             className={cx(
-              'min-h-11 rounded-md px-3.5 py-2 text-left text-sm transition',
+              'min-h-11 w-full min-w-0 max-w-full rounded-md px-3.5 py-2 text-left text-sm transition sm:w-auto',
               mode === item.id
                 ? 'border border-steward-teal/45 bg-steward-teal/12 font-semibold text-steward-mist'
                 : 'border border-white/12 bg-transparent font-medium text-steward-mist-muted hover:border-white/20 hover:bg-white/[0.04] hover:text-steward-mist',

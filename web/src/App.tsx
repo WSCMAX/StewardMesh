@@ -551,7 +551,7 @@ export default function App() {
     <div className="min-h-screen text-steward-mist" data-feature="authorization.security experience.help" data-requirement="SEC-GUARD-001 A11Y-001 DOC-001 DOC-002" style={brandingStyle(branding.appliedTheme) as CSSProperties}>
       <a className="sr-only rounded-xl bg-steward-teal px-3 py-2 font-semibold text-steward-ink-950 focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[70]" href="#main-content">Skip to main content</a>
       <header className="sticky top-0 z-30 border-b border-white/[0.08] bg-steward-ink-950/95">
-        <div className="flex flex-wrap items-center justify-between gap-3 px-3 py-2 sm:px-4">
+        <div className="flex min-w-0 max-w-full flex-wrap items-center justify-between gap-3 px-3 py-2 sm:px-4">
           <div className="flex min-w-0 items-center gap-3">
             <span className="grid size-9 shrink-0 place-items-center"><img alt="" aria-hidden="true" className="h-8 w-auto" height="370" src="/brand/stewardmesh-s-mark.svg" width="294" /></span>
             <div className="min-w-0">
@@ -562,7 +562,7 @@ export default function App() {
               <p className="truncate text-xs text-steward-mist-muted" aria-live="polite" data-requirement="REQ-FOUNDATION-001">{organizationName}</p>
             </div>
           </div>
-          <div className="flex flex-wrap items-center justify-end gap-2">
+          <div className="flex min-w-0 max-w-full flex-wrap items-center justify-end gap-2">
             {principal && <div className="hidden items-center gap-2 xl:flex"><span aria-hidden="true" className="grid size-7 place-items-center rounded-full bg-steward-ink-800 text-[11px] font-semibold text-steward-mist">{principal.displayName.split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase()}</span><p className="max-w-64 truncate text-sm text-steward-mist-muted">Signed in as <strong className="font-medium text-steward-mist">{principal.displayName}</strong></p></div>}
             <button className={cx(secondaryButtonClass, authPhase === 'authenticated' && 'max-sm:hidden')} onClick={() => openGuide({ view: 'help', topic: authPhase === 'authenticated' ? 'workspace' : 'guard' })} type="button">Open Guide</button>
             {principal && <button className={`${plainButtonClass} text-steward-mist-muted`} disabled={busy} onClick={handleLogout} type="button">Sign out</button>}

@@ -21,8 +21,8 @@ type SectionNavProps<ID extends string> = {
 export default function SectionNav<ID extends string>({ active, ariaLabel, canWrite = true, idPrefix, onChange, tabs }: SectionNavProps<ID>) {
   const visible = tabs.filter((tab) => !tab.write || canWrite)
   return (
-    <nav aria-label={ariaLabel} className="border-b border-white/10">
-      <div className="flex gap-1 overflow-x-auto steward-scrollbar" role="tablist">
+    <nav aria-label={ariaLabel} className="min-w-0 max-w-full border-b border-white/10">
+      <div className="flex min-w-0 max-w-full gap-1 overflow-x-auto steward-scrollbar" role="tablist">
         {visible.map((tab) => {
           const selected = active === tab.id
           return (

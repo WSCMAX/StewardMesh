@@ -17,7 +17,7 @@ import type { AtlasAssetScope, WorkspaceRecordFocus } from './graphRecord'
 import { meshRecordHref } from './graphRecord'
 import { fiscalMonthInYear, fiscalYearForDate } from './horizonPlanning'
 import { ProductHeader, StatusBadge, buttonClass, cx, dangerButtonClass, emptyStateClass, inputClass, labelClass, panelClass, plainButtonClass, secondaryButtonClass, subpanelClass } from './ui'
-import { assetListingWindow, listingFromGrid, remoteAssetFilterKeys, type TranslatedListing } from './assetListing'
+import { assetListingWindow, listingFromGrid, type TranslatedListing } from './assetListing'
 import DataGrid, { type StagedDraft, type GridQueryState } from './grid/DataGrid'
 import Drawer from './grid/Drawer'
 import QueryBuilder from './grid/QueryBuilder'
@@ -1306,13 +1306,14 @@ export default function AtlasInventory({
 
   useEffect(() => {
     if (!assetScope) return
+    const scope = assetScope
     setActiveSection('assets')
     let cancelled = false
     const loaded = new Set(assets.map((asset) => asset.id))
-    let current = assets
+    let current = [...assets]
     async function loadMissing() {
       while (!cancelled) {
-        const missing = assetScope.assetIds.filter((id) => !loaded.has(id)).slice(0, 50)
+        const missing = scope.assetIds.filter((id) => !loaded.has(id)).slice(0, 50)
         if (missing.length === 0) return
         const found = await Promise.all(missing.map(async (id) => {
           const value = await requestJSON(`/api/v1/assets/${encodeURIComponent(id)}`)

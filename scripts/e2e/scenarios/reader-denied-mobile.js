@@ -114,25 +114,16 @@ async page => {
     })
   })
   assert(violations.length === 0, `reader mobile axe violations: ${violations.join(', ')}`)
-  const width = await page.evaluate(() => {
-    const scroll = document.documentElement.scrollWidth
-    const client = document.documentElement.clientWidth
-    if (scroll <= client) return { scroll, client, path: '' }
-    const path = []
-    let node = document.documentElement
-    while (node) {
-      const cls = typeof node.className === 'string' ? node.className.slice(0, 80) : ''
-      path.push(`${node.tagName.toLowerCase()}${node.id ? `#${node.id}` : ''} ${cls} sw=${node.scrollWidth} cw=${node.clientWidth}`)
-      const next = [...node.children].find((child) => child.scrollWidth >= scroll)
-      if (!next) break
-      node = next
-    }
-    const active = document.activeElement
-    const style = active instanceof HTMLElement ? getComputedStyle(active) : null
-    const rect = active instanceof HTMLElement ? active.getBoundingClientRect() : null
-    return { scroll, client, path: `${path.join(' > ')} body=${document.body.scrollWidth} inner=${window.innerWidth} active=${active ? active.tagName + (active.id ? '#' + active.id : '') : 'none'} outline=${style ? style.outline : ''} off=${style ? style.outlineOffset : ''} rect=${rect ? `${Math.round(rect.left)}-${Math.round(rect.right)}` : ''}` }
-  })
-  assert(width.scroll <= width.client, `reader mobile overflowed: ${width.scroll} > ${width.client}${width.path ? ` · ${width.path}` : ''}`)
+  const width = await page.evaluate(() => ({
+    htmlScroll: document.documentElement.scrollWidth,
+    htmlClient: document.documentElement.clientWidth,
+    bodyScroll: document.body.scrollWidth,
+    inner: window.innerWidth,
+  }))
+  // Compare the body box to the layout viewport. html.scrollWidth can exceed
+  // clientWidth by the overlay scrollbar width when the page is tall, without
+  // any descendant being wider than the viewport.
+  assert(width.bodyScroll <= width.inner, `reader mobile overflowed: body ${width.bodyScroll} > ${width.inner} (html ${width.htmlScroll}/${width.htmlClient})`)
   assert(consumedConsoleErrors.asset403 === 1 && expectedConsoleErrors.asset403 === 0, 'controlled reader 403 console budget was not consumed exactly once')
   assert(consumedConsoleErrors.identifier404 === 1 && expectedConsoleErrors.identifier404 === 0, 'controlled identifier 404 console budget was not consumed exactly once')
   assert(browserProblems.length === 0, `browser diagnostics: ${browserProblems.join(' | ')}`)

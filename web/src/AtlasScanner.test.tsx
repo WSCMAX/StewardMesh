@@ -141,6 +141,7 @@ test('keeps manual input available when camera access is unavailable and rejects
 
   fireEvent.click(screen.getByRole('button', { name: 'Open scanner' }))
   expect(screen.getByRole('button', { name: /Find an asset/ })).toHaveClass('max-w-full', 'min-w-0', 'w-full')
+  expect(screen.getByLabelText('Workflow')).toHaveClass('max-w-px', 'min-w-0', 'overflow-hidden')
   expect(screen.queryByRole('option', { name: 'Attach a code to an asset' })).not.toBeInTheDocument()
   fireEvent.click(screen.getByRole('button', { name: 'Use camera' }))
   expect(await screen.findByText(/Camera scanning is not available/)).toBeInTheDocument()

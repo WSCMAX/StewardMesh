@@ -688,7 +688,7 @@ export default function AtlasScanner({
         ))}
       </div>
       <label className="sr-only">Workflow
-        <select onChange={(event) => { setMode(event.target.value as ScanMode); setRetry(false); setError('') }} value={mode}>
+        <select className="h-px w-px min-h-0 min-w-0 max-w-px overflow-hidden" onChange={(event) => { setMode(event.target.value as ScanMode); setRetry(false); setError('') }} value={mode}>
           <option value="find">Find an asset</option>
           <option value="labels">Capture serial, tag, and model</option>
           {canWrite && <option value="associate">Attach a code to an asset</option>}

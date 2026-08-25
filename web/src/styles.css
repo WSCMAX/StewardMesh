@@ -48,6 +48,16 @@ select {
   cursor: pointer;
 }
 
+/* Native selects size to their longest option and can expand the page even
+   inside visually hidden labels. Keep those controls at a 1px clip box. */
+.sr-only select {
+  min-width: 0;
+  width: 1px;
+  max-width: 1px;
+  height: 1px;
+  overflow: hidden;
+}
+
 button:disabled,
 select:disabled {
   cursor: not-allowed;

@@ -79,9 +79,13 @@ option {
   color: var(--color-steward-ink-950);
 }
 
+*:focus {
+  outline: none;
+}
+
 *:focus-visible {
-  outline: 2px solid var(--color-steward-teal);
-  outline-offset: -2px;
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--color-steward-teal);
 }
 
 @keyframes steward-pulse {

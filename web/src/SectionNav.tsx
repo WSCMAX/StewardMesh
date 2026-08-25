@@ -30,7 +30,7 @@ export default function SectionNav<ID extends string>({ active, ariaLabel, canWr
               aria-controls={`${idPrefix}-panel-${tab.id}`}
               aria-selected={selected}
               className={cx(
-                'relative min-w-0 px-3 py-2.5 text-sm font-medium transition',
+                'relative min-w-0 px-3 py-2.5 text-sm font-medium transition focus:outline-none',
                 selected ? 'text-steward-mist' : `${secondaryButtonClass} min-h-0 rounded-none border-transparent bg-transparent px-3 py-2.5 text-steward-mist-muted`,
               )}
               id={`${idPrefix}-tab-${tab.id}`}

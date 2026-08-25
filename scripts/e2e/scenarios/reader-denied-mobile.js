@@ -118,9 +118,17 @@ async page => {
     const scroll = document.documentElement.scrollWidth
     const client = document.documentElement.clientWidth
     if (scroll <= client) return { scroll, client, offender: '' }
+    const contained = (el) => {
+      for (let parent = el.parentElement; parent && parent !== document.body; parent = parent.parentElement) {
+        const overflow = getComputedStyle(parent).overflowX
+        if (overflow === 'auto' || overflow === 'scroll' || overflow === 'hidden') return true
+      }
+      return false
+    }
     let offender = ''
-    let worst = 0
+    let worst = client
     for (const el of document.querySelectorAll('body *')) {
+      if (contained(el)) continue
       const right = el.getBoundingClientRect().right
       if (right <= worst) continue
       worst = right

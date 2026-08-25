@@ -697,9 +697,9 @@ export default function AtlasScanner({
       <p className="mt-2 text-sm text-steward-mist-muted">{workflowHint}</p>
 
       <div className={cx(subpanelClass, 'mt-5 p-4')}>
-        <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
           <p className="text-sm font-medium text-steward-mist">Capture</p>
-          <StatusBadge tone={cameraActive ? 'success' : 'neutral'}>{cameraActive ? 'Camera live' : 'Keyboard, paste, or camera'}</StatusBadge>
+          <StatusBadge tone={cameraActive ? 'success' : 'neutral'}>{cameraActive ? 'Camera live' : 'Manual or camera'}</StatusBadge>
         </div>
         <div className="mt-3 grid gap-3 sm:grid-cols-[minmax(0,1fr)_10.5rem]">
           <label className={labelClass}>Scanned or entered value

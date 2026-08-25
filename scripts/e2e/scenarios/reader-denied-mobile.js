@@ -70,7 +70,7 @@ async page => {
   await page.locator('#atlas-tab-scan').click()
   await page.locator('#atlas-panel-scan:not([hidden])').waitFor()
   const scannerPanel = page.locator('#atlas-panel-scan')
-  const scannerForm = scannerPanel.locator('form')
+  const scannerForm = scannerPanel.getByRole('form', { name: 'Scan an Atlas Code' })
   const openScanner = scannerPanel.getByRole('button', { name: 'Open scanner', exact: true })
   try {
     await scannerForm.waitFor({ timeout: 2000 })

@@ -82,7 +82,7 @@ async page => {
     await dismissDrawer()
   }
   const scannerPanel = page.locator('#atlas-panel-scan')
-  const scannerForm = () => scannerPanel.locator('form')
+  const scannerForm = () => scannerPanel.getByRole('form', { name: 'Scan an Atlas Code' })
   const scannerSelect = label => scannerForm().locator('label').filter({ hasText: new RegExp(`^${label}`) }).locator('select')
   const scannerInput = () => scannerForm().locator('input[placeholder="Scan, paste, or type"]')
   const setScanner = async (mode, symbology = 'code128') => {

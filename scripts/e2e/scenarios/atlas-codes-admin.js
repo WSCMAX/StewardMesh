@@ -90,11 +90,15 @@ async page => {
     await openAtlasTab('Scan')
     await page.locator('#atlas-panel-scan:not([hidden])').waitFor()
     await dismissDrawer()
+    await scannerPanel.getByRole('heading', { name: 'Atlas Codes — Scan' }).waitFor()
     const openScanner = scannerPanel.getByRole('button', { name: 'Open scanner', exact: true })
-    const form = scannerForm()
-    if (!await form.isVisible().catch(() => false)) {
+    if (await openScanner.count()) {
+      await openScanner.scrollIntoViewIfNeeded()
       await openScanner.click()
     }
+    const form = scannerForm()
+    await form.waitFor({ state: 'attached' })
+    await form.scrollIntoViewIfNeeded()
     await form.waitFor()
     await scannerSelect('Workflow').selectOption(mode)
     await scannerSelect('Symbology').selectOption(symbology)

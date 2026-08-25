@@ -342,6 +342,14 @@ export default function AtlasScanner({
       try {
         const assetID = await resolveIdentifier(detectedSymbology === 'qr' ? 'qr' : 'code128', scanned)
         await onResolveAsset(assetID)
+        // Atlas Codes are identifiers, not manufacturer stickers. Drop the
+        // misclassified capture so a later unknown code is a new lookup
+        // instead of a second barcode in the label-mapping flow.
+        capturedRef.current = []
+        identityRef.current = emptyDeviceIdentity()
+        setCaptured([])
+        setIdentity(emptyDeviceIdentity())
+        setMatches([])
         setMessage('Identifier matched. The authorized asset is shown below.')
         return true
       } catch (requestError) {

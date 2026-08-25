@@ -175,6 +175,33 @@ test('retains a failed value for an explicit retry and cancellation closes the a
   expect(screen.getByText(/Scanning cancelled/)).toBeInTheDocument()
 })
 
+test('treats a later unknown Atlas Code as a new find instead of a second captured barcode', async () => {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input)
+    if (path === '/api/v1/asset-identifiers/resolve') {
+      const body = JSON.parse(String(init?.body ?? '{}')) as { value?: string }
+      if (body.value === 'E2E-CODE-A') return jsonResponse({ assetId: 'asset-1' })
+      return jsonResponse({ error: { message: 'No visible match.' } }, 404)
+    }
+    if (path.startsWith('/api/v1/assets')) return jsonResponse({ items: [] })
+    throw new Error(`unexpected request: ${path}`)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  render(<AtlasScanner canWrite csrfToken="csrf" onAssociated={vi.fn()} onResolveAsset={vi.fn(async () => undefined)} selectedAsset={null} />)
+
+  fireEvent.click(screen.getByRole('button', { name: 'Open scanner' }))
+  const input = screen.getByLabelText('Scanned or entered value')
+  fireEvent.change(input, { target: { value: 'E2E-CODE-A' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Find asset' }))
+  expect(await screen.findByText(/Identifier matched/)).toBeInTheDocument()
+
+  fireEvent.change(input, { target: { value: 'E2E-CODE-MISSING' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Find asset' }))
+  expect(await screen.findByRole('button', { name: 'Retry scan' })).toBeInTheDocument()
+  expect(input).toHaveValue('E2E-CODE-MISSING')
+  expect(screen.queryByText(/Multiple values captured/)).not.toBeInTheDocument()
+})
+
 test('decodes a Code 128 camera frame into an explicit find and stops capture', async () => {
   const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({ assetId: 'asset-camera' }))
   vi.stubGlobal('fetch', fetchMock)

@@ -1,7 +1,9 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import BarcodeCameraCapture from '../BarcodeCameraCapture'
 import { compactInputClass, cx, menuSurfaceClass, plainButtonClass } from '../ui'
 import { encodeLookupText, filterLookupOptions, mergeLookupOptions, parseLookupText, type LookupConfig, type LookupOption } from './columns'
+import { useAnchoredPanelStyle, type AnchoredBox } from './anchoredPanel'
 
 // Requirements: REQ-WORKSPACE-001, REQ-ATLAS-001, A11Y-001. Feature: experience.grid.
 
@@ -10,18 +12,18 @@ import { encodeLookupText, filterLookupOptions, mergeLookupOptions, parseLookupT
 // copy, paste, and the write queue never have to know about display names.
 
 export default function CellLookup({
-  anchor, label, lookup, value, onChange, onClose,
+  anchor, label, lookup, value, onChange, onClose, scannable = false,
 }: {
-  anchor: DOMRect
+  anchor: AnchoredBox | HTMLElement | null
   label: string
   lookup: LookupConfig
   value: string
   onChange: (text: string) => void
   onClose: () => void
+  scannable?: boolean
 }) {
-  const panelRef = useRef<HTMLDivElement | null>(null)
+  const { ref: panelRef, style } = useAnchoredPanelStyle(anchor)
   const inputRef = useRef<HTMLInputElement | null>(null)
-  const [position, setPosition] = useState({ x: anchor.left, y: anchor.bottom + 4 })
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<readonly LookupOption[]>(lookup.options ?? [])
   const [busy, setBusy] = useState(false)
@@ -29,6 +31,7 @@ export default function CellLookup({
   const [creating, setCreating] = useState(false)
   const [createValues, setCreateValues] = useState<Record<string, string>>({})
   const [createBusy, setCreateBusy] = useState(false)
+  const [cameraOpen, setCameraOpen] = useState(false)
   const selected = parseLookupText(value)
   const selectedIDs = new Set(selected.map((item) => item.id))
   const known = new Map([...(lookup.options ?? []), ...results].map((option) => [option.id, option]))
@@ -36,19 +39,6 @@ export default function CellLookup({
     () => mergeLookupOptions(filterLookupOptions(lookup.options ?? [], query), filterLookupOptions(results, query)),
     [lookup.options, query, results],
   )
-
-  useLayoutEffect(() => {
-    const element = panelRef.current
-    if (!element) return
-    const { width, height } = element.getBoundingClientRect()
-    const margin = 8
-    setPosition({
-      x: Math.max(margin, Math.min(anchor.left, window.innerWidth - width - margin)),
-      y: anchor.bottom + 4 + height > window.innerHeight - margin
-        ? Math.max(margin, anchor.top - height - 4)
-        : anchor.bottom + 4,
-    })
-  }, [anchor.left, anchor.top, anchor.bottom, visible.length, selected.length, creating])
 
   useEffect(() => {
     inputRef.current?.focus()
@@ -116,6 +106,34 @@ export default function CellLookup({
     void runSearch(trimmed)
   }
 
+  async function adoptScannedValue(value: string) {
+    const trimmed = value.trim()
+    if (!trimmed) return
+    setCameraOpen(false)
+    setQuery(trimmed)
+    setBusy(true)
+    setError('')
+    try {
+      const matches = await lookup.search(trimmed)
+      setResults(matches)
+      const needle = trimmed.toLowerCase()
+      const exact = matches.find((option) => option.label.toLowerCase() === needle
+        || option.id.toLowerCase() === needle
+        || option.label.toLowerCase().includes(needle)
+        || (option.detail ?? '').toLowerCase().includes(needle))
+      if (exact && !lookup.multiple) {
+        choose(exact)
+        return
+      }
+      if (!exact) setError(`No ${label.toLowerCase()} matched that scanned value. Search or add one.`)
+    } catch {
+      setResults(filterLookupOptions(lookup.options ?? [], trimmed))
+      setError(`Matching ${label.toLowerCase()} records could not be searched.`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
   function remove(id: string) {
     const remaining = selected.filter((item) => item.id !== id)
     if (lookup.allowPrimary && remaining.length > 0 && !remaining.some((item) => item.primary)) {
@@ -158,11 +176,11 @@ export default function CellLookup({
   return createPortal(
     <div
       aria-label={`Choose ${label}`}
-      className={cx(menuSurfaceClass, 'fixed z-50 w-80 p-2')}
+      className={cx(menuSurfaceClass, 'fixed z-50 w-80 overflow-y-auto p-2 steward-scrollbar')}
       onWheel={(event) => event.stopPropagation()}
       ref={panelRef}
       role="dialog"
-      style={{ left: position.x, top: position.y }}
+      style={style}
     >
       <div className="flex gap-2">
         <input
@@ -185,7 +203,13 @@ export default function CellLookup({
         <button className={cx(plainButtonClass, 'min-h-8 px-2 py-1 text-xs')} onClick={() => void runSearch()} type="button">
           {busy ? '…' : 'Search'}
         </button>
+        {scannable && <button className={cx(plainButtonClass, 'min-h-8 px-2 py-1 text-xs')} onClick={() => setCameraOpen((open) => !open)} type="button">
+          {cameraOpen ? 'Hide camera' : 'Scan'}
+        </button>}
       </div>
+      {scannable && cameraOpen && <div className="mt-2 border-t border-white/10 pt-2">
+        <BarcodeCameraCapture autoStart onCapture={(code) => { void adoptScannedValue(code.value) }} />
+      </div>}
       <div className="mt-2 flex flex-wrap items-center gap-1">
         {lookup.create && <button className={cx(plainButtonClass, 'min-h-8 px-2 py-1 text-xs')} onClick={() => setCreating((current) => !current)} type="button">
           {creating ? 'Cancel' : `+ ${lookup.create.label}`}

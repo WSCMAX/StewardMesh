@@ -1,0 +1,12 @@
+# Overlay that points the runtime container at the campus demo organization so
+# the optional campus-demo package and the HTTP container share one dataset.
+#
+#   docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.campus-demo.yml --profile campus-demo up -d --wait
+#
+# Requirement: REQ-DIRECTORY-EXPANSION-007. Feature: platform.foundation.
+
+services:
+  stewardmesh:
+    environment:
+      STEWARDMESH_ORGANIZATION_ID: demo-campus
+      STEWARDMESH_ORGANIZATION_NAME: "[Campus Demo] Riverside Community College"

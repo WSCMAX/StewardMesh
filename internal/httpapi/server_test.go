@@ -70,7 +70,9 @@ type allowHTTPAssetReferences struct{}
 func (allowHTTPAssetReferences) ValidateAssetReferences(context.Context, string, atlas.References) error {
 	return nil
 }
-func (allowHTTPAssetReferences) ValidateIdentities(context.Context, string, []string) error { return nil }
+func (allowHTTPAssetReferences) ValidateIdentities(context.Context, string, []string) error {
+	return nil
+}
 
 type allowHTTPLabelRecords struct{}
 
@@ -658,12 +660,70 @@ func TestHorizonLifecyclePlanForecastHistoryAndExport(t *testing.T) {
 		!strings.Contains(groupAssetsResponse.Body.String(), `"groupKey":"FY2027"`) || groupAssetsResponse.Header().Get("Cache-Control") != "no-store" {
 		t.Fatalf("unexpected Horizon forecast group assets %d headers=%v body=%s", groupAssetsResponse.Code, groupAssetsResponse.Header(), groupAssetsResponse.Body.String())
 	}
+	amountsPath := "/api/v1/horizon/forecast/amounts?scenarios=baseline&asOf=2026-08-11T00%3A00%3A00Z&fromYear=2027&toYear=2027&fiscalYearStartMonth=1&groupBy=fiscal_year&amountKind=planned"
+	amountsRequest := authenticatedRequest(http.MethodGet, amountsPath, nil, session)
+	amountsResponse := httptest.NewRecorder()
+	handler.ServeHTTP(amountsResponse, amountsRequest)
+	if amountsResponse.Code != http.StatusOK || !strings.Contains(amountsResponse.Body.String(), `"amountKind":"planned"`) ||
+		!strings.Contains(amountsResponse.Body.String(), `"totalMinor":260000`) || !strings.Contains(amountsResponse.Body.String(), `"assetId":"`+asset.ID+`"`) ||
+		amountsResponse.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("unexpected Horizon forecast amounts %d headers=%v body=%s", amountsResponse.Code, amountsResponse.Header(), amountsResponse.Body.String())
+	}
 	exportRequest := authenticatedRequest(http.MethodGet, strings.Replace(forecastPath, "/forecast", "/export.csv", 1), nil, session)
 	exportResponse := httptest.NewRecorder()
 	handler.ServeHTTP(exportResponse, exportRequest)
 	if exportResponse.Code != http.StatusOK || !strings.HasPrefix(exportResponse.Header().Get("Content-Type"), "text/csv") ||
 		!strings.Contains(exportResponse.Header().Get("Content-Disposition"), "horizon-forecast") || !strings.Contains(exportResponse.Body.String(), "FY2027") {
 		t.Fatalf("unexpected Horizon export %d headers=%v body=%s", exportResponse.Code, exportResponse.Header(), exportResponse.Body.String())
+	}
+}
+
+func TestHorizonReplacementPlansAssignAssetsAndHydrate(t *testing.T) {
+	handler := newGuardServer(t)
+	session := bootstrapAdministrator(t, handler)
+	plan := createPeopleRecord[horizon.ReplacementPlan](t, handler, session, "/api/v1/horizon/replacement-plans", map[string]any{
+		"id": "laptop-refresh", "name": "Laptop refresh", "grouping": "type", "groupKey": "laptop", "scenario": "baseline",
+	})
+	first := createPeopleRecord[domain.Asset](t, handler, session, "/api/v1/assets", map[string]any{
+		"id": "rp-laptop-1", "name": "Laptop one", "kind": "laptop", "status": "active", "replacementPlanId": plan.ID,
+	})
+	second := createPeopleRecord[domain.Asset](t, handler, session, "/api/v1/assets", map[string]any{
+		"id": "rp-laptop-2", "name": "Laptop two", "kind": "laptop", "status": "active", "replacementPlanId": plan.ID,
+	})
+	if first.ReplacementPlanID != plan.ID || second.ReplacementPlanID != plan.ID {
+		t.Fatalf("expected hydrated replacement plan on create, got %#v %#v", first, second)
+	}
+	listRequest := authenticatedRequest(http.MethodGet, "/api/v1/horizon/replacement-plans", nil, session)
+	listResponse := httptest.NewRecorder()
+	handler.ServeHTTP(listResponse, listRequest)
+	if listResponse.Code != http.StatusOK || !strings.Contains(listResponse.Body.String(), `"name":"Laptop refresh"`) ||
+		!strings.Contains(listResponse.Body.String(), `"assetCount":2`) {
+		t.Fatalf("unexpected replacement plan list %d: %s", listResponse.Code, listResponse.Body.String())
+	}
+	assetsRequest := authenticatedRequest(http.MethodGet, "/api/v1/horizon/replacement-plans/"+plan.ID+"/assets", nil, session)
+	assetsResponse := httptest.NewRecorder()
+	handler.ServeHTTP(assetsResponse, assetsRequest)
+	if assetsResponse.Code != http.StatusOK || !strings.Contains(assetsResponse.Body.String(), `"id":"`+first.ID+`"`) ||
+		!strings.Contains(assetsResponse.Body.String(), `"id":"`+second.ID+`"`) {
+		t.Fatalf("unexpected replacement plan assets %d: %s", assetsResponse.Code, assetsResponse.Body.String())
+	}
+	getRequest := authenticatedRequest(http.MethodGet, "/api/v1/assets/"+first.ID, nil, session)
+	getResponse := httptest.NewRecorder()
+	handler.ServeHTTP(getResponse, getRequest)
+	if getResponse.Code != http.StatusOK || !strings.Contains(getResponse.Body.String(), `"replacementPlanId":"`+plan.ID+`"`) {
+		t.Fatalf("expected hydrated replacement plan on get, got %d: %s", getResponse.Code, getResponse.Body.String())
+	}
+	cleared := updatePeopleRecord[domain.Asset](t, handler, session, "/api/v1/assets/"+second.ID, map[string]any{
+		"name": second.Name, "kind": second.Kind, "status": second.Status, "revision": second.Revision, "replacementPlanId": "",
+	})
+	if cleared.ReplacementPlanID != "" {
+		t.Fatalf("expected cleared replacement plan, got %#v", cleared)
+	}
+	listed := updatePeopleRecord[horizon.ReplacementPlan](t, handler, session, "/api/v1/horizon/replacement-plans/"+plan.ID, map[string]any{
+		"name": plan.Name, "grouping": plan.Grouping, "groupKey": plan.GroupKey, "scenario": plan.Scenario, "revision": plan.Revision,
+	})
+	if listed.AssetCount != 1 {
+		t.Fatalf("expected remaining assignment count 1, got %#v", listed)
 	}
 }
 
@@ -1374,6 +1434,18 @@ func TestCreateAndListAssetRequiresPermissionAndCSRF(t *testing.T) {
 	handler.ServeHTTP(listRes, listReq)
 	if listRes.Code != http.StatusOK || !strings.Contains(listRes.Body.String(), "asset-1") {
 		t.Fatalf("expected filtered asset, got %d: %s", listRes.Code, listRes.Body.String())
+	}
+	manufacturerReq := authenticatedRequest(http.MethodGet, "/api/v1/assets?q=framework", nil, session)
+	manufacturerRes := httptest.NewRecorder()
+	handler.ServeHTTP(manufacturerRes, manufacturerReq)
+	if manufacturerRes.Code != http.StatusOK || !strings.Contains(manufacturerRes.Body.String(), "asset-1") {
+		t.Fatalf("expected manufacturer search to find the linked asset, got %d: %s", manufacturerRes.Code, manufacturerRes.Body.String())
+	}
+	fieldReq := authenticatedRequest(http.MethodGet, "/api/v1/assets?manufacturer=Framework&status=active", nil, session)
+	fieldRes := httptest.NewRecorder()
+	handler.ServeHTTP(fieldRes, fieldReq)
+	if fieldRes.Code != http.StatusOK || !strings.Contains(fieldRes.Body.String(), "asset-1") || !strings.Contains(fieldRes.Body.String(), `"filteredCount"`) {
+		t.Fatalf("expected parameterized manufacturer filter, got %d: %s", fieldRes.Code, fieldRes.Body.String())
 	}
 	inventoryReq := authenticatedRequest(http.MethodGet, "/api/v1/asset-models/model-1/inventory?status=active&deploymentContext=LAB-SERVER&groupBy=status&limit=10", nil, session)
 	inventoryRes := httptest.NewRecorder()
@@ -2457,6 +2529,20 @@ func TestPeopleDirectoryCreateSearchAndAssignmentHistory(t *testing.T) {
 	}
 	if !previousFound {
 		t.Fatalf("replacement did not preserve previous primary %#v", historyBody.Items)
+	}
+
+	dueReq := createPeopleRecord[people.AssetAssignment](t, handler, session, "/api/v1/assets/asset-people-1/assignments", map[string]any{
+		"assigneeKind": "identity", "assigneeId": person.ID, "role": "user", "effectiveFrom": "2030-02-15T00:00:00Z", "dueAt": "2030-03-15T00:00:00Z",
+		"conflictPolicy": "proceed",
+	})
+	if dueReq.DueAt == nil || !dueReq.DueAt.Equal(time.Date(2030, time.March, 15, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("expected return-by date on assignment %#v", dueReq)
+	}
+	listReq := authenticatedRequest(http.MethodGet, "/api/v1/people/assignments?assigneeKind=identity&assigneeId="+person.ID, nil, session)
+	listRes := httptest.NewRecorder()
+	handler.ServeHTTP(listRes, listReq)
+	if listRes.Code != http.StatusOK {
+		t.Fatalf("expected identity assignments 200, got %d: %s", listRes.Code, listRes.Body.String())
 	}
 
 	endPayload, _ := json.Marshal(map[string]string{"effectiveTo": "2030-03-01T00:00:00Z"})

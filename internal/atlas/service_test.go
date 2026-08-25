@@ -140,6 +140,10 @@ func TestServiceMaintainsModelsAndAssetCounts(t *testing.T) {
 		len(asset.ModelContext.Overrides) != 0 {
 		t.Fatalf("unexpected initial model context %#v", asset.ModelContext)
 	}
+	found, err := service.ListAssets(context.Background(), atlas.Query{Search: "framework"})
+	if err != nil || len(found) != 1 || found[0].ID != asset.ID {
+		t.Fatalf("expected manufacturer search to find the linked asset %#v err=%v", found, err)
+	}
 	appliedAt := asset.ModelContext.AppliedAt
 	models, err := service.ListModels(context.Background(), atlas.ModelQuery{Search: "framework"})
 	if err != nil || len(models) != 1 || models[0].InstanceCount != 1 {
@@ -389,6 +393,64 @@ func TestServiceListAssetsPageUsesNameOrderedCursor(t *testing.T) {
 	}
 	if len(seen) != 120 {
 		t.Fatalf("pagination lost records: got %d want 120", len(seen))
+	}
+	if first.FilteredCount != 120 {
+		t.Fatalf("expected first-page filtered count 120, got %d", first.FilteredCount)
+	}
+	if second.FilteredCount != 0 {
+		t.Fatalf("expected later pages to skip recount, got %d", second.FilteredCount)
+	}
+}
+
+func TestServiceListAssetsPageAppliesFieldFilters(t *testing.T) {
+	service, err := atlas.NewService(repository.NewMemoryAtlasStore(), testReferenceValidator{}, foundation.NopAuditor{}, atlas.ServiceConfig{
+		OrganizationID: "example-org",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, createErr := service.CreateModel(context.Background(), atlas.CreateModelInput{
+		ID: "model-filter", Manufacturer: "Framework", Name: "Laptop 13", Kind: "laptop",
+	}); createErr != nil {
+		t.Fatal(createErr)
+	}
+	const (
+		buildingOne = "55555555555555555555555555555555"
+		roomOne     = "66666666666666666666666666666666"
+	)
+	if _, createErr := service.CreateAsset(context.Background(), atlas.CreateAssetInput{
+		ID: "asset-match", Name: "Science cart", Kind: "laptop", Status: "active", ModelID: "model-filter",
+		AssetTag: "SCI-101", SerialNumber: "SN-MATCH", Hostname: "cart.lab",
+		References: atlas.References{
+			SiteID: "11111111111111111111111111111111", BuildingID: buildingOne, RoomID: roomOne,
+		},
+	}); createErr != nil {
+		t.Fatal(createErr)
+	}
+	if _, createErr := service.CreateAsset(context.Background(), atlas.CreateAssetInput{
+		ID: "asset-other", Name: "Office tower", Kind: "desktop", Status: "retired",
+		AssetTag: "OFF-9", SerialNumber: "SN-OTHER", Hostname: "tower.office",
+	}); createErr != nil {
+		t.Fatal(createErr)
+	}
+	page, err := service.ListAssetsPage(context.Background(), atlas.Query{Manufacturer: "frame", Status: "active", Limit: 50})
+	if err != nil || len(page.Items) != 1 || page.Items[0].ID != "asset-match" || page.FilteredCount != 1 {
+		t.Fatalf("expected manufacturer+status filter, got %#v err=%v", page, err)
+	}
+	byTag, err := service.ListAssetsPage(context.Background(), atlas.Query{AssetTag: "sci-101", Limit: 50})
+	if err != nil || len(byTag.Items) != 1 || byTag.Items[0].ID != "asset-match" {
+		t.Fatalf("expected asset tag filter, got %#v err=%v", byTag, err)
+	}
+	byBuilding, err := service.ListAssetsPage(context.Background(), atlas.Query{BuildingID: buildingOne, Limit: 50})
+	if err != nil || len(byBuilding.Items) != 1 || byBuilding.Items[0].ID != "asset-match" {
+		t.Fatalf("expected building filter, got %#v err=%v", byBuilding, err)
+	}
+	byRoom, err := service.ListAssetsPage(context.Background(), atlas.Query{RoomID: roomOne, Limit: 50})
+	if err != nil || len(byRoom.Items) != 1 || byRoom.Items[0].ID != "asset-match" {
+		t.Fatalf("expected room filter, got %#v err=%v", byRoom, err)
+	}
+	if _, err := service.ListAssetsPage(context.Background(), atlas.Query{BuildingID: "not-a-reference", Limit: 50}); !errors.Is(err, atlas.ErrInvalidInput) {
+		t.Fatalf("expected invalid building filter, got %v", err)
 	}
 }
 

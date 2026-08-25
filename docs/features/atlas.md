@@ -30,7 +30,7 @@ Locations use People-owned site, building, and room records. Buildings require t
 
 Purchase dates are stored as calendar dates. Updates require the current revision, so a stale browser or integration receives a conflict rather than silently overwriting a newer record.
 
-Shared product models are implemented through the separately traceable Atlas Models extension. An asset may reference one active model while retaining its own tag, serial, hostname, lifecycle, location, user, and override fields. Each link keeps an immutable snapshot of the applied defaults, model revision, source provenance, and effective/application dates so later model changes cannot rewrite asset history.
+Shared product models are implemented through the separately traceable Atlas Models extension. An asset may reference one active model while retaining its own tag, serial, hostname, lifecycle, location, user, and override fields. Manufacturer is catalog data from that model: the Assets grid, search, filters, grouping, and export expose it from the linked `modelContext` snapshot so operators can find Dell or Framework items without opening Models. Each link keeps an immutable snapshot of the applied defaults, model revision, source provenance, and effective/application dates so later model changes cannot rewrite asset history.
 
 Barcode and QR identifiers are implemented through the separately traceable Atlas Codes extension. Its association model supports multiple active or historical identifiers without overloading asset tags or serial numbers.
 
@@ -55,7 +55,7 @@ REST endpoints:
 - `GET|PUT /api/v1/assets/{assetId}`
 - `GET /api/v1/assets/{assetId}/lifecycle`
 
-List filters include bounded search, model, kind, status, site, current asset department, current primary-user reference, deployment context, and limit. Search covers name, asset tag, serial number, and hostname; deployment context is a case-insensitive hostname or deployment-note match shared with model inventory detail. The Atlas `departmentId` and `userId` fields are current instance metadata and do not replace People's effective-dated assignment history. OpenAPI and protobuf contracts carry the same fields and optimistic revision boundary.
+List filters include bounded search, per-field contains matches for name, asset tag, serial number, hostname, and manufacturer, plus model, kind, status, site, current asset department, current primary-user reference, deployment context, keyset cursor, and limit. All of those values are bound as SQL parameters; clients never interpolate operator text into queries. Search covers name, asset tag, serial number, hostname, and model context; field filters search one column across the whole organization without loading every row into the browser. The first page also returns `filteredCount`. The Atlas `departmentId` and `userId` fields are current instance metadata and do not replace People's effective-dated assignment history. OpenAPI and protobuf contracts carry the same fields and optimistic revision boundary.
 
 The `atlas.Store` interface is the adapter contract for memory, PostgreSQL, and a future DynamoDB implementation. Repository conformance tests cover create, retrieve, search, update, stale revisions, conflicts, and lifecycle ordering. Exchange and future provider imports must call the Atlas service rather than bypassing normalization, reference checks, revision behavior, or audits.
 
@@ -63,12 +63,14 @@ Migration `0011_atlas_assets.sql` creates the durable asset and lifecycle tables
 
 ## Accessible workflow
 
-1. Search or filter assets by identifying values, kind, or status.
-2. Choose an asset to inspect its current record and lifecycle timeline.
-3. With write permission, choose **Add asset** or **Edit**.
-4. Enter core identity fields and optional visible People references.
-5. When changing status, add a concise lifecycle note and save with the current revision.
-6. Success, loading, validation, permission, stale-revision, and failure states are announced in text.
+1. Search or filter assets by identifying values, kind, or status. Column filters search the full organization through paged API results.
+2. Scroll the inventory to load the next matching page. The grid keeps a bounded window instead of downloading every asset.
+3. Choose an asset to inspect its current record, lifecycle timeline, and checkout history.
+4. With write permission, check out or reserve the asset from Atlas, or use the Checkouts tab for tagged bulk loans.
+5. With write permission, choose **Add asset** or **Edit**.
+6. Enter core identity fields and optional visible People references.
+7. When changing status, add a concise lifecycle note and save with the current revision.
+8. Success, loading, validation, permission, stale-revision, and failure states are announced in text.
 
 The surface uses semantic headings, a labeled search region, native form controls, minimum-height actions, keyboard-operable details, non-color status text, responsive grids, and a single-column narrow-width reflow. It does not require motion.
 

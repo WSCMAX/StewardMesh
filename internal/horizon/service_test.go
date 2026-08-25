@@ -287,6 +287,8 @@ func TestForecastSupportsEveryDimensionAndMakesMultiTagAndGoalRowsNonAdditive(t 
 		{groupBy: "department", keys: []string{"department-1"}},
 		{groupBy: "site", keys: []string{"site-1"}},
 		{groupBy: "asset_class", keys: []string{"server"}},
+		{groupBy: "manufacturer", keys: []string{"Other"}},
+		{groupBy: "building", keys: []string{"Other"}},
 		{groupBy: "tag", keys: []string{"tag-a", "tag-b"}},
 		{groupBy: "goal", keys: []string{"goal-a", "goal-b"}},
 	} {
@@ -316,6 +318,57 @@ func TestForecastSupportsEveryDimensionAndMakesMultiTagAndGoalRowsNonAdditive(t 
 				t.Fatalf("additive grouping mismatch: groups=%d total=%d", groupedTotal, report.PlannedReplacementMinor)
 			}
 		})
+	}
+}
+
+func TestForecastGroupsManufacturerAndBuildingAndLabelsMissingAsOther(t *testing.T) {
+	labeled := horizonAsset("asset-labeled", nil)
+	labeled.BuildingID = "building-1"
+	labeled.ModelContext = &domain.AssetModelContext{Manufacturer: "Dell"}
+	unlabeled := horizonAsset("asset-other", nil)
+	unlabeled.DepartmentID = ""
+	unlabeled.Kind = ""
+	fixture := newHorizonFixture(t, labeled, unlabeled)
+	replacement := time.Date(2026, time.September, 1, 0, 0, 0, 0, time.UTC)
+	createHorizonPlan(t, fixture, baseHorizonInput("plan-labeled", labeled.ID, "baseline", &replacement, 100))
+	createHorizonPlan(t, fixture, baseHorizonInput("plan-other", unlabeled.ID, "baseline", &replacement, 50))
+
+	query := horizonForecastQuery("manufacturer")
+	query.IncludeItems = true
+	report, err := fixture.service.Forecast(context.Background(), query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := make([]string, 0, len(report.Groups))
+	for _, group := range report.Groups {
+		keys = append(keys, group.Key)
+	}
+	sort.Strings(keys)
+	if strings.Join(keys, ",") != "Dell,Other" || len(report.Items) != 2 {
+		t.Fatalf("unexpected manufacturer forecast %#v", report)
+	}
+	byAsset := map[string]horizon.ForecastItem{}
+	for _, item := range report.Items {
+		byAsset[item.AssetID] = item
+	}
+	if byAsset[labeled.ID].Manufacturer != "Dell" || byAsset[labeled.ID].Building != "building-1" || byAsset[labeled.ID].Department != "department-1" || byAsset[labeled.ID].Kind != "server" {
+		t.Fatalf("unexpected labeled item %#v", byAsset[labeled.ID])
+	}
+	if byAsset[unlabeled.ID].Manufacturer != "Other" || byAsset[unlabeled.ID].Building != "Other" || byAsset[unlabeled.ID].Department != "Other" || byAsset[unlabeled.ID].Kind != "Other" {
+		t.Fatalf("unexpected unlabeled item %#v", byAsset[unlabeled.ID])
+	}
+
+	building, err := fixture.service.Forecast(context.Background(), horizonForecastQuery("building"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	buildingKeys := make([]string, 0, len(building.Groups))
+	for _, group := range building.Groups {
+		buildingKeys = append(buildingKeys, group.Key)
+	}
+	sort.Strings(buildingKeys)
+	if strings.Join(buildingKeys, ",") != "Other,building-1" {
+		t.Fatalf("unexpected building groups %#v", building.Groups)
 	}
 }
 
@@ -487,6 +540,56 @@ func TestPlanWithoutPurchaseOrReplacementDateIsExcludedFromDatedForecast(t *test
 	}
 }
 
+func TestForecastAmountBreakdownListsMatchingItems(t *testing.T) {
+	asset := horizonAsset("asset-1", nil)
+	fixture := newHorizonFixture(t, asset)
+	replacement := time.Date(2026, time.May, 1, 0, 0, 0, 0, time.UTC)
+	createHorizonPlan(t, fixture, baseHorizonInput("plan-1", asset.ID, "baseline", &replacement, 500))
+	fixture.finance.snapshot.Costs = []ledger.CostRecord{
+		{ID: "cost-actual", AssetID: asset.ID, Scenario: "baseline", FiscalPeriod: "FY2026", Kind: "actual", Currency: "USD", AmountMinor: 10, Description: "Refresh invoice"},
+		{ID: "wrong-scenario", AssetID: asset.ID, Scenario: "optimistic", FiscalPeriod: "FY2026", Kind: "actual", Currency: "USD", AmountMinor: 999},
+		{ID: "wrong-period", AssetID: asset.ID, Scenario: "baseline", FiscalPeriod: "FY2027", Kind: "actual", Currency: "USD", AmountMinor: 999},
+		{ID: "wrong-asset", AssetID: "asset-2", Scenario: "baseline", FiscalPeriod: "FY2026", Kind: "actual", Currency: "USD", AmountMinor: 999},
+	}
+	actual, err := fixture.service.ForecastAmountBreakdown(context.Background(), horizon.ForecastAmountQuery{
+		ForecastQuery: horizonForecastQuery("fiscal_year"), AmountKind: "actual",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if actual.AmountKind != "actual" || actual.Label != "All forecast groups" || actual.TotalMinor != 10 || actual.ItemCount != 1 {
+		t.Fatalf("unexpected actual breakdown %#v", actual)
+	}
+	if actual.Items[0].CostID != "cost-actual" || actual.Items[0].AmountMinor != 10 || actual.Items[0].Description != "Refresh invoice" {
+		t.Fatalf("expected only the matching actual cost, got %#v", actual.Items)
+	}
+	planned, err := fixture.service.ForecastAmountBreakdown(context.Background(), horizon.ForecastAmountQuery{
+		ForecastQuery: horizonForecastQuery("fiscal_year"), AmountKind: "planned",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if planned.TotalMinor != 500 || planned.ItemCount != 1 || planned.Items[0].PlanID != "plan-1" || planned.Items[0].CostID != "" {
+		t.Fatalf("unexpected planned breakdown %#v", planned)
+	}
+	grouped, err := fixture.service.ForecastAmountBreakdown(context.Background(), horizon.ForecastAmountQuery{
+		ForecastQuery: horizonForecastQuery("fiscal_year"), AmountKind: "actual", Scenario: "baseline", GroupKey: "FY2026",
+	})
+	if err != nil || grouped.TotalMinor != 10 || grouped.Label != "FY2026" {
+		t.Fatalf("unexpected grouped breakdown %#v err=%v", grouped, err)
+	}
+	if _, err := fixture.service.ForecastAmountBreakdown(context.Background(), horizon.ForecastAmountQuery{
+		ForecastQuery: horizonForecastQuery("fiscal_year"), AmountKind: "actual", Scenario: "baseline",
+	}); !errors.Is(err, horizon.ErrInvalidInput) {
+		t.Fatalf("expected invalid input for scenario without group, got %v", err)
+	}
+	if _, err := fixture.service.ForecastAmountBreakdown(context.Background(), horizon.ForecastAmountQuery{
+		ForecastQuery: horizonForecastQuery("fiscal_year"), AmountKind: "unknown",
+	}); !errors.Is(err, horizon.ErrInvalidInput) {
+		t.Fatalf("expected invalid amount kind, got %v", err)
+	}
+}
+
 func TestForecastGroupAssetsListsMatchingPlans(t *testing.T) {
 	assetOne := horizonAsset("asset-1", nil)
 	assetTwo := horizonAsset("asset-2", nil)
@@ -527,6 +630,48 @@ func TestListPlanHistoryUsesLifecycleAnchor(t *testing.T) {
 	want := time.Date(2025, time.June, 15, 0, 0, 0, 0, time.UTC)
 	if !history[0].DerivedReplacementDate.Equal(want) {
 		t.Fatalf("expected lifecycle-start derived replacement %s, got %s", want, history[0].DerivedReplacementDate)
+	}
+}
+
+func TestReplacementPlanGroupsMultipleAssetsAndClearsAssignment(t *testing.T) {
+	first := horizonAsset("asset-laptop-1", nil)
+	first.Kind = "laptop"
+	second := horizonAsset("asset-laptop-2", nil)
+	second.Kind = "laptop"
+	fixture := newHorizonFixture(t, first, second)
+	created, err := fixture.service.CreateReplacementPlan(context.Background(), horizon.ReplacementPlanInput{
+		ID: "laptop-refresh", Name: "Laptop refresh", Grouping: "type", GroupKey: "laptop", Scenario: "baseline",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.AssetCount != 0 {
+		t.Fatalf("expected empty plan, got %#v", created)
+	}
+	if err := fixture.service.SetAssetReplacementPlan(context.Background(), first.ID, created.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.service.SetAssetReplacementPlan(context.Background(), second.ID, created.ID); err != nil {
+		t.Fatal(err)
+	}
+	listed, err := fixture.service.ListReplacementPlans(context.Background())
+	if err != nil || len(listed) != 1 || listed[0].AssetCount != 2 {
+		t.Fatalf("expected two assigned assets, got %#v %v", listed, err)
+	}
+	assigned, err := fixture.service.AssetReplacementPlanIDs(context.Background())
+	if err != nil || assigned[first.ID] != created.ID || assigned[second.ID] != created.ID {
+		t.Fatalf("expected both assets assigned, got %#v %v", assigned, err)
+	}
+	assets, err := fixture.service.ListReplacementPlanAssets(context.Background(), created.ID)
+	if err != nil || len(assets) != 2 {
+		t.Fatalf("expected two plan assets, got %#v %v", assets, err)
+	}
+	if err := fixture.service.SetAssetReplacementPlan(context.Background(), first.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	listed, err = fixture.service.ListReplacementPlans(context.Background())
+	if err != nil || listed[0].AssetCount != 1 {
+		t.Fatalf("expected remaining assignment, got %#v %v", listed, err)
 	}
 }
 

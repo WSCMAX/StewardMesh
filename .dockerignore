@@ -1,0 +1,16 @@
+.git
+.devcontainer
+.tmpinspect
+tmp
+data
+storage
+output
+.gocache
+web/node_modules
+web/dist
+web/coverage
+**/*_test.go
+*.md
+.env
+.env.*
+!.env.example

@@ -93,18 +93,25 @@ func (s *Seeder) seedSoftwareCatalog(ctx context.Context) error {
 			Kind: "actual", Currency: offering.Currency, AmountMinor: totalMinor,
 			FiscalPeriod: fmt.Sprintf("FY%d", now.Year()), Scenario: "baseline",
 			PurchaseOrderID: softwarePurchaseOrderID(offering.Slug),
+			ContractID:      softwareContractID(offering.Slug),
 			SourceSystemID:  SourceSystemID, SourceRecordID: offering.Slug + "-annual-cost",
 		})
 		if err != nil {
 			return fmt.Errorf("reconcile license cost for %q: %w", offering.Name, err)
 		}
+		offeringExpiresOn := expiresOn
+		if offering.Slug == "adobe-creative-cloud-all-apps" {
+			adobeExpiry := now.Add(45 * 24 * time.Hour)
+			offeringExpiresOn = adobeExpiry
+		}
 		license, err := s.stack.CreateLicense(ctx, stack.CreateLicenseInput{
 			ID: offering.Slug, ProductID: s.productIDs[offering.ProductSlug],
 			VersionID: s.versionIDs[offering.ProductSlug], Name: offering.Name,
 			EntitlementMetric: offering.EntitlementMetric, Quantity: offering.Quantity,
-			Status: "active", StartsOn: &startsOn, ExpiresOn: &expiresOn,
+			Status: "active", StartsOn: &startsOn, ExpiresOn: &offeringExpiresOn,
 			VendorID:        softwareVendorID(offering.ProductSlug, s.vendorIDs),
 			PurchaseOrderID: softwarePurchaseOrderID(offering.Slug),
+			ContractID:      softwareContractID(offering.Slug),
 			CostRecordID:    cost.Record.ID,
 			DocumentIDs:     softwareDocumentIDs(offering.ProductSlug, s.blobIDs),
 			SourceSystemID:  SourceSystemID, SourceRecordID: offering.Slug,
@@ -267,4 +274,17 @@ func (s *Seeder) installLabProductivitySoftware(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func softwareContractID(offeringSlug string) string {
+	switch offeringSlug {
+	case "microsoft-365-a3":
+		return "contract-m365-campus"
+	case "adobe-creative-cloud-all-apps":
+		return "contract-adobe-campus"
+	case "autodesk-education-lab":
+		return "contract-autodesk-campus"
+	default:
+		return ""
+	}
 }

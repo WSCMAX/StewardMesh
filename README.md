@@ -24,6 +24,12 @@ go test ./...
 go run ./cmd/stewardmesh
 ```
 
+To run the API and built workspace from one production-shaped container instead of `go run`, use the same Compose file without limiting it to PostgreSQL. The runtime image reads `deploy/config.example.yaml` by default; see [Runtime container](docs/deployment/runtime.md).
+
+```sh
+docker compose -f deploy/docker-compose.yml up -d --wait
+```
+
 PostgreSQL is the default durable foundation adapter. For a deliberate,
 non-durable evaluation without PostgreSQL, set
 `STEWARDMESH_REPOSITORY_DRIVER=memory`. See
@@ -213,6 +219,16 @@ runtime seeds nothing. To initialize the local demo database once, run
 `docker compose -f deploy/docker-compose.yml --profile demo run --rm demo-seed`.
 The optional Grouper fixture is not contacted by this initializer. See
 [Directory Expansion](docs/features/directory-expansion.md#synthetic-demo-dataset).
+
+The Riverside Community College campus demo loads a large cross-product dataset
+across People, Atlas, Ledger, Stack, Horizon, Tags, Labels, Vault, Signals,
+Reach, Mesh, Exchange, Bridge, and Guard. It requires `STEWARDMESH_SEED_CAMPUS=true`
+with a `demo-*` organization ID (for example `demo-campus`), writes scoped demo
+credentials to `tmp/campus-test-users.env`, and takes several minutes to initialize.
+Run `./scripts/reset-campus-demo.sh` after PostgreSQL is available, or
+`go run -tags campusdemo ./cmd/campus-seed` with the campus seed flag enabled. Compose operators
+can load the separate campus-demo package with
+`docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.campus-demo.yml --profile campus-demo up -d --wait`.
 
 Bridge can also import PeopleSoft Campus Solutions organizations, locations,
 buildings, departments, and their hierarchy through four institution-owned,

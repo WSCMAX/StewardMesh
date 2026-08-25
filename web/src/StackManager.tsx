@@ -3,7 +3,9 @@ import { ApiRequestError, isRevision, requestJSON, type Revision } from './api'
 import type { Asset } from './AtlasInventory'
 import DocumentViewer, { type ViewableDocument } from './DocumentViewer'
 import RecordSearchPicker, { type SearchableRecord } from './RecordSearchPicker'
-import { ProductHeader, StatusBadge, buttonClass, inputClass, panelClass, plainButtonClass, secondaryButtonClass, subpanelClass, tableWrapClass } from './ui'
+import { ProductHeader, StatusBadge, buttonClass, inputClass, panelClass, plainButtonClass, secondaryButtonClass, subpanelClass } from './ui'
+import type { WorkspaceRecordFocus } from './graphRecord'
+import { meshRecordHref } from './graphRecord'
 import DataGrid from './grid/DataGrid'
 import Drawer from './grid/Drawer'
 import type { GridColumn } from './grid/columns'
@@ -24,7 +26,7 @@ type ImportReference = { type: string; id: string }
 type ImportOutcome = ImportReference & { revision: Revision; checksum: string; status: 'created' | 'unchanged' | 'holding'; missingDependencies: ImportReference[]; writeLocked: boolean }
 type ImportOwnership = ImportReference & { writeLocked: boolean }
 export type StackImportResult = { packageId: string; status: 'processing' | 'completed' | 'holding' | 'failed'; created: number; unchanged: number; holding: number; replay: boolean; errorCode?: string; records: ImportOutcome[]; pendingOwnership: ImportOwnership[] }
-type StackManagerProps = { assets: readonly Asset[]; csrfToken: string; permissions: readonly string[]; onOpenHelp?: () => void; identity?: { subject: string; organizationId: string } | null }
+type StackManagerProps = { assets: readonly Asset[]; csrfToken: string; permissions: readonly string[]; onOpenHelp?: () => void; identity?: { subject: string; organizationId: string } | null; focusRecord?: WorkspaceRecordFocus | null }
 
 const emptySnapshot: Snapshot = { products: [], versions: [], installations: [], licenses: [], assignments: [] }
 const emptyAnalytics: Analytics = { asOf: '', expiringWithinDays: 90, products: 0, activeInstallations: 0, activeLicenses: 0, entitledQuantity: 0, assignedQuantity: 0, underusedAssignments: 0, complianceConditions: [] }
@@ -223,6 +225,20 @@ function assignmentColumns(licenses: readonly License[], canWrite: boolean): Gri
   ]
 }
 
+const importOutcomeColumns: GridColumn<ImportOutcome>[] = [
+  { key: 'record', header: 'Record', kind: 'text', width: 18, text: (outcome) => `${outcome.type}:${outcome.id}` },
+  { key: 'status', header: 'Outcome', kind: 'enum', options: ['created', 'unchanged', 'holding'], width: 10, text: (outcome) => outcome.status, display: (outcome) => label(outcome.status) },
+  {
+    key: 'ownership', header: 'Ownership', kind: 'text', width: 16,
+    text: (outcome) => outcome.writeLocked ? 'Write locked until claimed' : outcome.status === 'holding' ? 'Not imported' : 'No import lock',
+  },
+]
+
+const importOwnershipColumns: GridColumn<ImportOwnership>[] = [
+  { key: 'record', header: 'Record', kind: 'text', width: 18, text: (ownership) => `${ownership.type}:${ownership.id}` },
+  { key: 'state', header: 'Guard state', kind: 'text', width: 18, text: (ownership) => ownership.writeLocked ? 'Write locked until claimed' : 'Ownership recorded; writes are not locked' },
+]
+
 type CreateKind = 'product' | 'version' | 'installation' | 'license' | 'assignment' | 'import'
 
 const createTitles: Record<CreateKind, string> = {
@@ -234,7 +250,7 @@ const createTitles: Record<CreateKind, string> = {
   import: 'Import portable records',
 }
 
-export default function StackManager({ assets, csrfToken, permissions, onOpenHelp, identity }: StackManagerProps) {
+export default function StackManager({ assets, csrfToken, permissions, onOpenHelp, identity, focusRecord = null }: StackManagerProps) {
   const canRead = permissions.includes('software.read')
   const canWrite = permissions.includes('software.write')
   const [snapshot, setSnapshot] = useState<Snapshot>(emptySnapshot)
@@ -467,7 +483,10 @@ export default function StackManager({ assets, csrfToken, permissions, onOpenHel
 
   return <section aria-labelledby="stack-heading" className={`${panelClass} min-w-0 max-w-full p-4 sm:p-5`} data-feature="software.licenses" data-requirement="REQ-STACK-001">
     <ProductHeader
-      actions={onOpenHelp ? <button className={secondaryButtonClass} onClick={onOpenHelp} type="button">Stack help</button> : undefined}
+      actions={<>
+        {onOpenHelp ? <button className={secondaryButtonClass} onClick={onOpenHelp} type="button">Stack help</button> : null}
+        <a className={secondaryButtonClass} href="#workspace-mesh">Open Mesh graph</a>
+      </>}
       description="Connect installed versions to Atlas assets, preserve purchased entitlement references, assign seats, and review explicit license conditions."
       headingId="stack-heading"
       kicker="Stack"
@@ -480,11 +499,35 @@ export default function StackManager({ assets, csrfToken, permissions, onOpenHel
       <p className="mt-2 break-all font-mono text-xs text-steward-mist-muted">{lastImport.packageId}</p>
       <p className="mt-2 text-sm text-steward-mist-muted">{label(lastImport.status)} · {lastImport.created} created · {lastImport.unchanged} unchanged · {lastImport.holding} holding{lastImport.replay ? ' · exact replay' : ''}</p>
       {lastImport.errorCode && <p className="mt-2 text-sm text-[#ffccd1]">Failure code: <code>{lastImport.errorCode}</code></p>}
-      {lastImport.records.length > 0 && <div aria-label="Latest Stack import outcomes" className={`${tableWrapClass} mt-3`} role="region" tabIndex={0}><table className="min-w-[40rem] w-full text-left text-sm"><thead><tr><th className="p-3" scope="col">Record</th><th className="p-3" scope="col">Outcome</th><th className="p-3" scope="col">Ownership</th></tr></thead><tbody>{lastImport.records.map((outcome) => <tr className="border-t border-white/[0.07]" key={`${outcome.type}:${outcome.id}`}><th className="p-3 break-all font-mono text-xs" scope="row">{outcome.type}:{outcome.id}</th><td className="p-3">{label(outcome.status)}</td><td className="p-3">{outcome.writeLocked ? 'Write locked until claimed' : outcome.status === 'holding' ? 'Not imported' : 'No import lock'}</td></tr>)}</tbody></table></div>}
+      {lastImport.records.length > 0 && (
+        <div className="mt-3">
+          <DataGrid
+            columns={importOutcomeColumns}
+            identity={identity}
+            label="Latest Stack import outcomes"
+            maximumBodyHeight="24rem"
+            rowId={(outcome) => `${outcome.type}:${outcome.id}`}
+            rowLabel={(outcome) => `${outcome.type}:${outcome.id}`}
+            rows={lastImport.records}
+            viewId="stack-import-outcomes"
+          />
+        </div>
+      )}
       {lastImport.pendingOwnership.length > 0 && <details className="mt-3 rounded-lg border border-steward-warning/40 bg-steward-warning/10 p-3" open>
         <summary className="cursor-pointer font-semibold">Pending Guard ownership locks ({lastImport.pendingOwnership.length})</summary>
         <p className="mt-2 text-sm text-steward-mist-muted">Guard recorded these ownership states before the provider outcome became durable. Review them, then retry the exact import JSON to resume safely.</p>
-        <div aria-label="Pending Stack import ownership locks" className={`${tableWrapClass} mt-3`} role="region" tabIndex={0}><table className="min-w-[32rem] w-full text-left text-sm"><thead><tr><th className="p-3" scope="col">Record</th><th className="p-3" scope="col">Guard state</th></tr></thead><tbody>{lastImport.pendingOwnership.map((ownership) => <tr className="border-t border-white/[0.07]" key={`${ownership.type}:${ownership.id}`}><th className="p-3 break-all font-mono text-xs" scope="row">{ownership.type}:{ownership.id}</th><td className="p-3">{ownership.writeLocked ? 'Write locked until claimed' : 'Ownership recorded; writes are not locked'}</td></tr>)}</tbody></table></div>
+        <div className="mt-3">
+          <DataGrid
+            columns={importOwnershipColumns}
+            identity={identity}
+            label="Pending Stack import ownership locks"
+            maximumBodyHeight="16rem"
+            rowId={(ownership) => `${ownership.type}:${ownership.id}`}
+            rowLabel={(ownership) => `${ownership.type}:${ownership.id}`}
+            rows={lastImport.pendingOwnership}
+            viewId="stack-import-ownership"
+          />
+        </div>
       </details>}
     </section>}
 
@@ -543,6 +586,7 @@ export default function StackManager({ assets, csrfToken, permissions, onOpenHel
             rowMessage={(item) => productWrites.rowMessage(item.id)}
             rowState={(item) => productWrites.rowState(item.id)}
             rows={snapshot.products}
+            focusRowId={focusRecord?.kind === 'product' ? focusRecord.recordId : undefined}
             viewId="stack-products"
           />
         </div>
@@ -562,6 +606,7 @@ export default function StackManager({ assets, csrfToken, permissions, onOpenHel
             rowMessage={(item) => versionWrites.rowMessage(item.id)}
             rowState={(item) => versionWrites.rowState(item.id)}
             rows={snapshot.versions}
+            focusRowId={focusRecord?.kind === 'version' ? focusRecord.recordId : undefined}
             viewId="stack-versions"
           />
         </div>
@@ -588,9 +633,12 @@ export default function StackManager({ assets, csrfToken, permissions, onOpenHel
           <h4 className="mb-2 font-semibold" id="stack-licenses-heading">Licenses</h4>
           <DataGrid
             bulkActions={(selected) => {
+              const first = selected[0]
               const documentIds = [...new Set(selected.flatMap((item) => item.documentIds))]
-              if (documentIds.length === 0) return null
-              return <button className={`${plainButtonClass} min-h-8 px-2 py-1 text-xs`} onClick={() => void openDocument(documentIds[0])} type="button">View first document</button>
+              return <>
+                {first ? <a className={`${plainButtonClass} min-h-8 px-2 py-1 text-xs`} href={meshRecordHref('license', first.id)}>Show in Mesh</a> : null}
+                {documentIds.length > 0 ? <button className={`${plainButtonClass} min-h-8 px-2 py-1 text-xs`} onClick={() => void openDocument(documentIds[0])} type="button">View first document</button> : null}
+              </>
             }}
             columns={columns.licenses}
             editable={canWrite}
@@ -606,6 +654,7 @@ export default function StackManager({ assets, csrfToken, permissions, onOpenHel
             rowState={(item) => licenseWrites.rowState(item.id)}
             rows={snapshot.licenses}
             selectable
+            focusRowId={focusRecord?.kind === 'license' ? focusRecord.recordId : undefined}
             viewId="stack-licenses"
           />
         </div>

@@ -81,6 +81,7 @@ type peopleAssignmentPayload struct {
 	AssigneeID    string `json:"assigneeId"`
 	Role          string `json:"role"`
 	EffectiveFrom string `json:"effectiveFrom"`
+	DueAt         string `json:"dueAt,omitempty"`
 	EffectiveTo   string `json:"effectiveTo,omitempty"`
 	CreatedAt     string `json:"createdAt"`
 }
@@ -166,6 +167,9 @@ func (p *PeopleProvider) ListRecords(ctx context.Context) ([]Record, error) {
 		if err := validatePortableInstants(2000, item.EffectiveFrom, item.CreatedAt); err != nil {
 			return nil, err
 		}
+		if err := validateOptionalPortableInstant(2000, item.DueAt); err != nil {
+			return nil, err
+		}
 		if err := validateOptionalPortableInstant(2000, item.EffectiveTo); err != nil {
 			return nil, err
 		}
@@ -174,7 +178,7 @@ func (p *PeopleProvider) ListRecords(ctx context.Context) ([]Record, error) {
 			assigneeType = "people.department"
 		}
 		dependencies := []Reference{{Type: "atlas.asset", ID: item.AssetID}, {Type: assigneeType, ID: item.AssigneeID}}
-		if err := appendRecord("people.assignment", item.ID, 1, dependencies, peopleAssignmentPayload{AssetID: item.AssetID, AssigneeKind: string(item.AssigneeKind), AssigneeID: item.AssigneeID, Role: string(item.Role), EffectiveFrom: peopleInstant(item.EffectiveFrom), EffectiveTo: peopleOptionalInstant(item.EffectiveTo), CreatedAt: peopleInstant(item.CreatedAt)}); err != nil {
+		if err := appendRecord("people.assignment", item.ID, 1, dependencies, peopleAssignmentPayload{AssetID: item.AssetID, AssigneeKind: string(item.AssigneeKind), AssigneeID: item.AssigneeID, Role: string(item.Role), EffectiveFrom: peopleInstant(item.EffectiveFrom), DueAt: peopleOptionalInstant(item.DueAt), EffectiveTo: peopleOptionalInstant(item.EffectiveTo), CreatedAt: peopleInstant(item.CreatedAt)}); err != nil {
 			return nil, err
 		}
 	}
@@ -345,13 +349,15 @@ func decodePeopleRecord(record Record) (any, []Reference, error) {
 		}
 		payload, err := decodePeoplePayload[peopleAssignmentPayload](record.Payload)
 		effectiveFrom, parseFromErr := parsePeopleInstant(payload.EffectiveFrom)
+		dueAt, parseDueErr := parsePeopleOptionalInstant(payload.DueAt)
 		effectiveTo, parseToErr := parsePeopleOptionalInstant(payload.EffectiveTo)
 		createdAt, parseCreatedErr := parsePeopleInstant(payload.CreatedAt)
-		if err != nil || parseFromErr != nil || parseToErr != nil || parseCreatedErr != nil || !canonicalPeopleAssignmentPayload(payload) ||
-			!validPeopleRecordID(record.ID) || !validPeopleStableID(payload.AssetID) || !validPeopleRecordID(payload.AssigneeID) || effectiveTo != nil && !effectiveTo.After(effectiveFrom) {
+		if err != nil || parseFromErr != nil || parseDueErr != nil || parseToErr != nil || parseCreatedErr != nil || !canonicalPeopleAssignmentPayload(payload) ||
+			!validPeopleRecordID(record.ID) || !validPeopleStableID(payload.AssetID) || !validPeopleRecordID(payload.AssigneeID) || effectiveTo != nil && !effectiveTo.After(effectiveFrom) ||
+			dueAt != nil && dueAt.Before(effectiveFrom) {
 			return nil, nil, ErrInvalidInput
 		}
-		item := people.AssetAssignment{ID: record.ID, AssetID: payload.AssetID, AssigneeKind: people.AssigneeKind(payload.AssigneeKind), AssigneeID: payload.AssigneeID, Role: people.AssignmentRole(payload.Role), EffectiveFrom: effectiveFrom, EffectiveTo: effectiveTo, CreatedBy: "system:exchange", CreatedAt: createdAt}
+		item := people.AssetAssignment{ID: record.ID, AssetID: payload.AssetID, AssigneeKind: people.AssigneeKind(payload.AssigneeKind), AssigneeID: payload.AssigneeID, Role: people.AssignmentRole(payload.Role), EffectiveFrom: effectiveFrom, DueAt: dueAt, EffectiveTo: effectiveTo, CreatedBy: "system:exchange", CreatedAt: createdAt}
 		assigneeType := "people.identity"
 		if item.AssigneeKind == people.AssigneeDepartment {
 			assigneeType = "people.department"
@@ -498,6 +504,7 @@ func samePeopleAssignment(left, right people.AssetAssignment) bool {
 	right.OrganizationID = left.OrganizationID
 	return left.ID == right.ID && left.OrganizationID == right.OrganizationID && left.AssetID == right.AssetID && left.AssigneeKind == right.AssigneeKind &&
 		left.AssigneeID == right.AssigneeID && left.Role == right.Role && left.EffectiveFrom.Equal(right.EffectiveFrom) &&
+		(left.DueAt == nil && right.DueAt == nil || left.DueAt != nil && right.DueAt != nil && left.DueAt.Equal(*right.DueAt)) &&
 		(left.EffectiveTo == nil && right.EffectiveTo == nil || left.EffectiveTo != nil && right.EffectiveTo != nil && left.EffectiveTo.Equal(*right.EffectiveTo)) &&
 		left.CreatedAt.Equal(right.CreatedAt)
 }

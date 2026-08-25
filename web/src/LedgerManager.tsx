@@ -1,8 +1,12 @@
-import { type FormEvent, type ReactNode, useEffect, useId, useRef, useState } from 'react'
+import { type FormEvent, type ReactNode, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { ApiRequestError, isRevision, requestJSON, type Revision } from './api'
 import DocumentViewer, { type ViewableDocument } from './DocumentViewer'
+import DataGrid from './grid/DataGrid'
+import type { GridColumn } from './grid/columns'
 import RecordSearchPicker, { type SearchableRecord } from './RecordSearchPicker'
-import { ProductHeader, buttonClass, compactInputClass, inputClass, panelClass, secondaryButtonClass, subpanelClass, tableWrapClass } from './ui'
+import { ProductHeader, buttonClass, compactInputClass, inputClass, panelClass, secondaryButtonClass, subpanelClass } from './ui'
+import { meshRecordHref } from './graphRecord'
+import type { WorkspaceRecordFocus } from './graphRecord'
 
 // Requirement: REQ-LEDGER-001. Feature: procurement.finance.
 
@@ -15,7 +19,7 @@ type Budget = { id: string; name: string; fiscalPeriod: string; scenario: string
 type CostRecord = { id: string; description: string; kind: string; currency: string; amountMinor: number; fiscalPeriod: string; scenario: string; externalReference?: string; revision: Revision }
 type LedgerSnapshot = { vendors: Vendor[]; purchaseOrders: PurchaseOrder[]; contracts: Contract[]; commitments: Commitment[]; budgets: Budget[]; costs: CostRecord[] }
 type BudgetVariance = { fiscalPeriod: string; scenario: string; currency: string; allocatedMinor: number; recognizedMinor: number; varianceMinor: number; overBudget: boolean; amountsByKindMinor: Record<string, number> }
-type LedgerManagerProps = { csrfToken: string; permissions: readonly string[]; onOpenHelp?: () => void }
+type LedgerManagerProps = { csrfToken: string; permissions: readonly string[]; onOpenHelp?: () => void; focusRecord?: WorkspaceRecordFocus | null }
 
 const purchaseStatuses = ['draft', 'approved', 'ordered', 'partially_received', 'received', 'cancelled']
 const operationalStatuses = ['planned', 'active', 'suspended', 'expired', 'terminated', 'cancelled']
@@ -69,7 +73,7 @@ function minorUnits(value: FormDataEntryValue | null) {
 
 function dateValue(value: FormDataEntryValue | null) { return `${String(value ?? '')}T00:00:00Z` }
 
-export default function LedgerManager({ csrfToken, permissions, onOpenHelp }: LedgerManagerProps) {
+export default function LedgerManager({ csrfToken, permissions, onOpenHelp, focusRecord = null }: LedgerManagerProps) {
   const canRead = permissions.includes('finance.read')
   const canWrite = permissions.includes('finance.write')
   const [snapshot, setSnapshot] = useState<LedgerSnapshot>({ vendors: [], purchaseOrders: [], contracts: [], commitments: [], budgets: [], costs: [] })
@@ -176,12 +180,73 @@ export default function LedgerManager({ csrfToken, permissions, onOpenHelp }: Le
     finally { setBusy('') }
   }
 
+  const purchaseOrderColumns = useMemo((): GridColumn<PurchaseOrder>[] => [
+    {
+      key: 'number', header: 'Number', kind: 'text', width: 14, wrap: true,
+      text: (item) => item.number,
+      display: (item) => <><strong className="block">{item.number}</strong><a className="mt-1 block text-steward-teal underline-offset-2 hover:underline" href={meshRecordHref('purchase_order', item.id)}>Show in Mesh</a></>,
+    },
+    { key: 'vendor', header: 'Vendor', kind: 'text', width: 12, text: (item) => vendorName(snapshot, item.vendorId) },
+    {
+      key: 'amount', header: 'Amount', kind: 'money', width: 14, wrap: true,
+      text: (item) => money(item.totalMinor, item.currency),
+      display: (item) => <>{money(item.totalMinor, item.currency)}{item.lines && item.lines.length > 0 && <span className="mt-1 block text-xs text-steward-mist-muted">{item.lines.length} line{item.lines.length === 1 ? '' : 's'}: {item.lines.map((line) => line.description).join(', ')}</span>}</>,
+    },
+    {
+      key: 'evidence', header: 'Assets and evidence', kind: 'text', width: 16, wrap: true,
+      text: (item) => `${item.assetIds.length} assets · ${item.receiptDocumentIds.length} documents`,
+      display: (item) => <>{item.assetIds.length} assets · {item.receiptDocumentIds.length} documents{item.receiptDocumentIds.map((documentId) => <button className="mt-1 block text-left text-steward-teal" key={documentId} onClick={() => void openDocument(documentId)} type="button">View document</button>)}</>,
+    },
+    {
+      key: 'status', header: 'Status', kind: 'text', width: 16, wrap: true,
+      text: (item) => label(item.status),
+      display: (item) => canWrite
+        ? <form className="flex min-w-56 gap-2" onSubmit={(event) => updatePurchaseStatus(event, item)}><select aria-label={`Status for ${item.number}`} className={compactInputClass} defaultValue={item.status} name="status">{purchaseStatuses.map((status) => <option key={status} value={status}>{label(status)}</option>)}</select><button className={smallButtonClass} disabled={busy !== ''} type="submit">Save</button></form>
+        : label(item.status),
+    },
+  ], [busy, canWrite, snapshot])
+
+  const contractColumns = useMemo((): GridColumn<Contract>[] => [
+    {
+      key: 'contract', header: 'Contract', kind: 'text', width: 16, wrap: true,
+      text: (item) => item.name,
+      display: (item) => <><strong className="block">{item.name}</strong><a className="mt-1 block text-steward-teal underline-offset-2 hover:underline" href={meshRecordHref('contract', item.id)}>Show in Mesh</a><span className="text-xs text-steward-mist-muted">{snapshot.commitments.filter((commitment) => commitment.contractId === item.id).length} commitments</span></>,
+    },
+    {
+      key: 'term', header: 'Term', kind: 'text', width: 14, wrap: true,
+      text: (item) => `${new Date(item.startsOn).toLocaleDateString()} – ${new Date(item.endsOn).toLocaleDateString()}`,
+      display: (item) => <>{new Date(item.startsOn).toLocaleDateString()} – {new Date(item.endsOn).toLocaleDateString()}{item.renewsOn && <span className="block text-xs text-steward-mist-muted">Renews {new Date(item.renewsOn).toLocaleDateString()}</span>}</>,
+    },
+    { key: 'ceiling', header: 'Ceiling', kind: 'money', width: 10, text: (item) => money(item.ceilingMinor, item.currency) },
+    {
+      key: 'statuses', header: 'Statuses', kind: 'text', width: 18, wrap: true,
+      text: (item) => `${label(item.operationalStatus)} · ${label(item.financialStatus)}`,
+      display: (item) => canWrite
+        ? <form className="grid min-w-64 grid-cols-[1fr_1fr_auto] gap-2" onSubmit={(event) => updateContractStatus(event, item)}><select aria-label={`Operational status for ${item.name}`} className={compactInputClass} defaultValue={item.operationalStatus} name="operationalStatus">{operationalStatuses.map((status) => <option key={status} value={status}>{label(status)}</option>)}</select><select aria-label={`Financial status for ${item.name}`} className={compactInputClass} defaultValue={item.financialStatus} name="financialStatus">{financialStatuses.map((status) => <option key={status} value={status}>{label(status)}</option>)}</select><button className={smallButtonClass} disabled={busy !== ''} type="submit">Save</button></form>
+        : `${label(item.operationalStatus)} · ${label(item.financialStatus)}`,
+    },
+  ], [busy, canWrite, snapshot])
+
+  const costColumns = useMemo((): GridColumn<CostRecord>[] => [
+    {
+      key: 'description', header: 'Description', kind: 'text', width: 18, wrap: true,
+      text: (item) => item.description,
+      display: (item) => <><strong className="block">{item.description}</strong>{item.externalReference && <span className="text-xs text-steward-mist-muted">{item.externalReference}</span>}</>,
+    },
+    { key: 'state', header: 'State', kind: 'text', width: 10, text: (item) => label(item.kind) },
+    { key: 'period', header: 'Period', kind: 'text', width: 12, text: (item) => `${item.fiscalPeriod} · ${item.scenario}` },
+    { key: 'amount', header: 'Amount', kind: 'money', width: 10, text: (item) => money(item.amountMinor, item.currency) },
+  ], [])
+
   if (!canRead) return <section aria-labelledby="ledger-heading" className={`${panelClass} p-5 sm:p-6`} data-feature="procurement.finance" data-requirement="REQ-LEDGER-001"><div className="flex flex-wrap items-start justify-between gap-4"><div><h2 id="ledger-heading" className="text-2xl font-semibold">Ledger — Procurement and budgets</h2><p className="mt-2 text-steward-mist-muted">Your role does not include permission to view financial records.</p></div>{onOpenHelp && <button className={secondaryButtonClass} onClick={onOpenHelp} type="button">Ledger help</button>}</div></section>
 
   return (
     <section aria-labelledby="ledger-heading" className={`${panelClass} p-4 sm:p-6`} data-feature="procurement.finance" data-requirement="REQ-LEDGER-001">
       <ProductHeader
-        actions={onOpenHelp ? <button className={secondaryButtonClass} onClick={onOpenHelp} type="button">Ledger help</button> : undefined}
+        actions={<>
+          {onOpenHelp ? <button className={secondaryButtonClass} onClick={onOpenHelp} type="button">Ledger help</button> : null}
+          <a className={secondaryButtonClass} href="#workspace-mesh">Open Mesh graph</a>
+        </>}
         description="Track obligations in exact minor units, keep operational and financial contract states separate, and reconcile source records without creating duplicates."
         headingId="ledger-heading"
         kicker="Ledger"
@@ -241,9 +306,50 @@ export default function LedgerManager({ csrfToken, permissions, onOpenHelp }: Le
       </div>}
 
       <div className="mt-8 grid gap-6">
-        <LedgerTable title="Purchase orders" empty="No purchase orders yet." headings={['Number', 'Vendor', 'Amount', 'Assets and evidence', 'Status']} rows={snapshot.purchaseOrders.map((item) => [item.number, vendorName(snapshot, item.vendorId), <span key={`${item.id}-amount`}>{money(item.totalMinor, item.currency)}{item.lines && item.lines.length > 0 && <span className="mt-1 block text-xs text-steward-mist-muted">{item.lines.length} line{item.lines.length === 1 ? '' : 's'}: {item.lines.map((line) => line.description).join(', ')}</span>}</span>, <span key={`${item.id}-evidence`}>{item.assetIds.length} assets · {item.receiptDocumentIds.length} documents{item.receiptDocumentIds.map((documentId) => <button className="mt-1 block text-left text-steward-teal" key={documentId} onClick={() => void openDocument(documentId)} type="button">View document</button>)}</span>, canWrite ? <form className="flex min-w-56 gap-2" key={item.id} onSubmit={(event) => updatePurchaseStatus(event, item)}><select aria-label={`Status for ${item.number}`} className={compactInputClass} defaultValue={item.status} name="status">{purchaseStatuses.map((status) => <option key={status} value={status}>{label(status)}</option>)}</select><button className={smallButtonClass} disabled={busy !== ''} type="submit">Save</button></form> : label(item.status)])} />
-        <LedgerTable title="Contracts and commitments" empty="No contracts yet." headings={['Contract', 'Term', 'Ceiling', 'Statuses']} rows={snapshot.contracts.map((item) => [<span key={item.id}><strong className="block">{item.name}</strong><span className="text-xs text-steward-mist-muted">{snapshot.commitments.filter((commitment) => commitment.contractId === item.id).length} commitments</span></span>, <span key={`${item.id}-term`}>{new Date(item.startsOn).toLocaleDateString()} – {new Date(item.endsOn).toLocaleDateString()}{item.renewsOn && <span className="block text-xs text-steward-mist-muted">Renews {new Date(item.renewsOn).toLocaleDateString()}</span>}</span>, money(item.ceilingMinor, item.currency), canWrite ? <form className="grid min-w-64 grid-cols-[1fr_1fr_auto] gap-2" key={item.id} onSubmit={(event) => updateContractStatus(event, item)}><select aria-label={`Operational status for ${item.name}`} className={compactInputClass} defaultValue={item.operationalStatus} name="operationalStatus">{operationalStatuses.map((status) => <option key={status} value={status}>{label(status)}</option>)}</select><select aria-label={`Financial status for ${item.name}`} className={compactInputClass} defaultValue={item.financialStatus} name="financialStatus">{financialStatuses.map((status) => <option key={status} value={status}>{label(status)}</option>)}</select><button className={smallButtonClass} disabled={busy !== ''} type="submit">Save</button></form> : `${label(item.operationalStatus)} · ${label(item.financialStatus)}`])} />
-        <LedgerTable title="Costs" empty="No costs match this Ledger yet." headings={['Description', 'State', 'Period', 'Amount']} rows={snapshot.costs.map((item) => [<span key={item.id}><strong className="block">{item.description}</strong>{item.externalReference && <span className="text-xs text-steward-mist-muted">{item.externalReference}</span>}</span>, label(item.kind), `${item.fiscalPeriod} · ${item.scenario}`, money(item.amountMinor, item.currency)])} />
+        <section aria-labelledby="ledger-purchase-orders" className="min-w-0">
+          <h3 className="text-lg font-semibold" id="ledger-purchase-orders">Purchase orders</h3>
+          <div className="mt-3">
+            <DataGrid
+              columns={purchaseOrderColumns}
+              emptyMessage="No purchase orders yet."
+              focusRowId={focusRecord?.kind === 'purchase_order' ? focusRecord.recordId : undefined}
+              label="Scrollable purchase orders table"
+              rowId={(item) => item.id}
+              rowLabel={(item) => item.number}
+              rows={snapshot.purchaseOrders}
+              viewId="ledger-purchase-orders"
+            />
+          </div>
+        </section>
+        <section aria-labelledby="ledger-contracts-and-commitments" className="min-w-0">
+          <h3 className="text-lg font-semibold" id="ledger-contracts-and-commitments">Contracts and commitments</h3>
+          <div className="mt-3">
+            <DataGrid
+              columns={contractColumns}
+              emptyMessage="No contracts yet."
+              focusRowId={focusRecord?.kind === 'contract' ? focusRecord.recordId : undefined}
+              label="Scrollable contracts and commitments table"
+              rowId={(item) => item.id}
+              rowLabel={(item) => item.name}
+              rows={snapshot.contracts}
+              viewId="ledger-contracts"
+            />
+          </div>
+        </section>
+        <section aria-labelledby="ledger-costs" className="min-w-0">
+          <h3 className="text-lg font-semibold" id="ledger-costs">Costs</h3>
+          <div className="mt-3">
+            <DataGrid
+              columns={costColumns}
+              emptyMessage="No costs match this Ledger yet."
+              label="Scrollable costs table"
+              rowId={(item) => item.id}
+              rowLabel={(item) => item.description}
+              rows={snapshot.costs}
+              viewId="ledger-costs"
+            />
+          </div>
+        </section>
       </div>
       {preview && <div className="mt-6"><DocumentViewer csrfToken={csrfToken} document={preview} onClose={() => setPreview(null)} /></div>}
     </section>
@@ -263,4 +369,3 @@ function Select({ name, label: fieldLabel, options, required = false, value, onC
 function MoneyFields({ label: amountLabel = 'Amount' }: { label?: string }) { const currencyID = useId(); return <div className="grid grid-cols-[1fr_7rem] gap-3"><Input name="amount" label={amountLabel} required /><LedgerField id={currencyID} label="Currency"><input className={inputClass} defaultValue="USD" id={currencyID} maxLength={3} name="currency" pattern="[A-Za-z]{3}" required /></LedgerField></div> }
 function PeriodFields({ fiscalPeriod, scenario }: { fiscalPeriod: string; scenario: string }) { const fiscalID = useId(); const scenarioID = useId(); return <div className="grid grid-cols-2 gap-3"><LedgerField id={fiscalID} label="Fiscal period"><input className={inputClass} defaultValue={fiscalPeriod} id={fiscalID} name="fiscalPeriod" required /></LedgerField><LedgerField id={scenarioID} label="Scenario"><input className={inputClass} defaultValue={scenario} id={scenarioID} name="scenario" required /></LedgerField></div> }
 function Submit({ busy, label: buttonLabel }: { busy: boolean; label: string }) { return <button className={buttonClass} disabled={busy} type="submit">{busy ? 'Saving…' : buttonLabel}</button> }
-function LedgerTable({ title, headings, rows, empty }: { title: string; headings: string[]; rows: ReactNode[][]; empty: string }) { return <section className="min-w-0" aria-labelledby={`ledger-${title.replaceAll(' ', '-').toLowerCase()}`}><h3 className="text-lg font-semibold" id={`ledger-${title.replaceAll(' ', '-').toLowerCase()}`}>{title}</h3><div className={`${tableWrapClass} mt-3`}><table className="w-full min-w-[720px] border-collapse text-left text-sm"><thead><tr className="border-b border-steward-ink-800 text-steward-mist-muted">{headings.map((heading) => <th className="px-3 py-3 font-semibold" key={heading} scope="col">{heading}</th>)}</tr></thead><tbody>{rows.map((row, rowIndex) => <tr className="border-b border-steward-ink-800/70 align-top" key={rowIndex}>{row.map((cell, cellIndex) => <td className="px-3 py-4" key={cellIndex}>{cell}</td>)}</tr>)}{rows.length === 0 && <tr><td className="px-3 py-6 text-steward-mist-muted" colSpan={headings.length}>{empty}</td></tr>}</tbody></table></div></section> }

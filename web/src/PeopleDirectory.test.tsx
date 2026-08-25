@@ -50,7 +50,7 @@ async function waitForPeopleDirectory() {
   await screen.findAllByText('Alex Rivera')
 }
 
-function installPeopleFetch(options: { assignments?: unknown[]; buildings?: unknown[]; rooms?: unknown[]; roomCreateFailures?: number; sites?: unknown[]; locationTypes?: unknown[]; locationReferences?: unknown[] } = {}) {
+function installPeopleFetch(options: { assignments?: unknown[]; assignmentsUnavailable?: boolean; buildings?: unknown[]; rooms?: unknown[]; roomCreateFailures?: number; sites?: unknown[]; locationTypes?: unknown[]; locationReferences?: unknown[]; overlapOnCreate?: boolean } = {}) {
   let roomCreateAttempts = 0
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input)
@@ -88,7 +88,54 @@ function installPeopleFetch(options: { assignments?: unknown[]; buildings?: unkn
       const body = JSON.parse(String(init.body)) as Record<string, unknown>
       return jsonResponse({ ...person, ...body, revision: person.revision + 1 })
     }
-    if (path === '/api/v1/assets/asset-1/assignments' && init?.method === 'POST') return jsonResponse(assignment, 201)
+    if (path.startsWith('/api/v1/people/assignments')) {
+      if (options.assignmentsUnavailable) return new Response('404 page not found', { status: 404, headers: { 'Content-Type': 'text/plain; charset=utf-8' } })
+      return jsonResponse({ items: options.assignments ?? [] })
+    }
+    if (path === '/api/v1/people/checkout-groups' && init?.method === 'POST') {
+      const body = JSON.parse(String(init.body)) as Record<string, unknown>
+      return jsonResponse({
+        id: 'group-created', organizationId: 'example-org', name: body.name, description: body.description,
+        memberIds: body.memberIds, status: 'active', revision: 1, createdAt: timestamp, updatedAt: timestamp,
+      }, 201)
+    }
+    if (path.startsWith('/api/v1/people/checkout-groups')) return jsonResponse({ items: [] })
+    if (path === '/api/v1/people/checkout-availability' && init?.method === 'POST') {
+      return jsonResponse({
+        items: [{
+          assetId: asset.id, name: asset.name, kind: asset.kind, rating: 100, overlaps: [],
+        }],
+        quantity: 50,
+      })
+    }
+    if (path === '/api/v1/people/bulk-checkouts' && init?.method === 'POST') {
+      return jsonResponse({
+        bulkCheckout: {
+          id: 'bulk-1', organizationId: 'example-org', assigneeKind: 'identity', assigneeId: person.id,
+          purpose: 'checkout', effectiveFrom: timestamp, requestedCount: 1, createdBy: 'account-1', createdAt: timestamp,
+        },
+        assignments: [{ ...assignment, purpose: 'checkout' }],
+      }, 201)
+    }
+    if (path.startsWith('/api/v1/people/bulk-checkouts')) return jsonResponse({ items: [] })
+    if (path === '/api/v1/assets/asset-1/assignments' && init?.method === 'POST') {
+      const body = JSON.parse(String(init.body)) as Record<string, unknown>
+      if (options.overlapOnCreate && !body.conflictPolicy) {
+        return jsonResponse({
+          error: {
+            code: 'assignment_overlap',
+            message: 'this asset is already checked out',
+            conflictKind: 'checkout',
+            conflicts: [{
+              assetId: asset.id, assignmentId: 'assignment-1', assigneeKind: 'identity', assigneeId: 'identity-2',
+              assigneeLabel: 'Jordan Lee', role: 'user', purpose: 'checkout', eventSummary: 'Editing suite',
+              effectiveFrom: timestamp,
+            }],
+          },
+        }, 409)
+      }
+      return jsonResponse(assignment, 201)
+    }
     if (path === '/api/v1/assets/asset-1/assignments') return jsonResponse({ items: options.assignments ?? [] })
     if (path === '/api/v1/assets/asset-1/assignments/assignment-1' && init?.method === 'PATCH') {
       return jsonResponse({ ...assignment, effectiveTo: '2026-08-10T12:00:00Z' })
@@ -111,16 +158,29 @@ function installPeopleFetch(options: { assignments?: unknown[]; buildings?: unkn
       }, 201)
     }
     if (path.startsWith('/api/v1/location-references')) return jsonResponse({ items: options.locationReferences ?? [] })
-    if (path === '/api/v1/labels/definitions' || path.startsWith('/api/v1/labels/')) return jsonResponse({ items: [] })
+    if (path.startsWith('/api/v1/assets?') || path === '/api/v1/assets') return jsonResponse({ items: [asset], nextCursor: '' })
+    if (path === '/api/v1/labels/definitions') return jsonResponse({
+      items: [{
+        id: 'label-cart', name: 'Checkout pool', valueKind: 'flag', applicableRecordTypes: ['atlas.asset'],
+        status: 'active', revision: 1,
+      }],
+    })
+    if (path.startsWith('/api/v1/labels/')) return jsonResponse({ items: [] })
     throw new Error(`unexpected request: ${path}`)
   })
   vi.stubGlobal('fetch', fetchMock)
   return fetchMock
 }
 
+function pickSearchRecord(form: HTMLElement, label: string, option: string) {
+  fireEvent.change(within(form).getByLabelText(label), { target: { value: option } })
+  fireEvent.click(within(form).getByRole('option', { name: new RegExp(option, 'i') }))
+}
+
 beforeEach(() => {
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
+  window.history.replaceState(null, '', '/')
 })
 
 test('renders a scoped People directory and guided help without automated WCAG violations', async () => {
@@ -128,9 +188,10 @@ test('renders a scoped People directory and guided help without automated WCAG v
   const { container } = render(<PeopleDirectory assets={[asset]} csrfToken="csrf-value" issuesUrl="https://github.com/WSCMAX/StewardMesh/issues" permissions={permissions} />)
   expect(await screen.findByRole('heading', { name: 'Know who uses and stewards each asset' })).toBeInTheDocument()
   expect((await screen.findAllByText('Alex Rivera')).length).toBeGreaterThan(0)
-  expect(screen.getByRole('heading', { name: 'Quick guide' })).toBeInTheDocument()
   expect(screen.queryByRole('tab', { name: 'Relationship graph' })).not.toBeInTheDocument()
   expect(screen.getByRole('region', { name: 'Directory identities' })).toBeInTheDocument()
+  expect(screen.getByRole('columnheader', { name: 'Assigned assets' })).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Assign' })).toBeInTheDocument()
   openPeopleTab('Locations')
   expect(screen.getByRole('heading', { name: 'Locations in your scope' })).toBeInTheDocument()
   expect(screen.getByRole('tab', { name: 'Sites' })).toHaveAttribute('aria-selected', 'true')
@@ -368,6 +429,13 @@ test('rejects malformed location collection responses at runtime', async () => {
   expect(screen.queryByText('Innovation Hall')).not.toBeInTheDocument()
 })
 
+test('still renders the directory when assigned assets are unavailable', async () => {
+  installPeopleFetch({ assignmentsUnavailable: true })
+  render(<PeopleDirectory assets={[asset]} csrfToken="csrf-value" issuesUrl="https://github.com/WSCMAX/StewardMesh/issues" permissions={permissions} />)
+  expect((await screen.findAllByText('Alex Rivera')).length).toBeGreaterThan(0)
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+})
+
 test('requires a complete structured address when any address field is entered', async () => {
   const fetchMock = installPeopleFetch()
   render(<PeopleDirectory assets={[]} csrfToken="csrf-value" issuesUrl="https://github.com/WSCMAX/StewardMesh/issues" permissions={permissions} />)
@@ -410,6 +478,60 @@ test('creates and ends effective-dated asset assignments through guarded mutatio
   await waitFor(() => expect(fetchMock.mock.calls.some(([path, init]) => path === '/api/v1/assets/asset-1/assignments' && init?.method === 'POST')).toBe(true))
   const createCall = fetchMock.mock.calls.find(([path, init]) => path === '/api/v1/assets/asset-1/assignments' && init?.method === 'POST')
   expect(createCall?.[1]?.headers).toMatchObject({ 'X-CSRF-Token': 'csrf-value' })
-  fireEvent.click(screen.getByRole('button', { name: 'End assignment' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Mark returned' }))
   await waitFor(() => expect(fetchMock.mock.calls.some(([path, init]) => String(path).endsWith('/assignment-1') && init?.method === 'PATCH')).toBe(true))
+})
+
+test('assigns an asset from the directory with checkout and return-by dates', async () => {
+  const fetchMock = installPeopleFetch({ assignments: [assignment] })
+  render(<PeopleDirectory assets={[asset]} csrfToken="csrf-value" issuesUrl="https://github.com/WSCMAX/StewardMesh/issues" permissions={permissions} />)
+  await waitForPeopleDirectory()
+  fireEvent.click(screen.getByRole('button', { name: 'Assign' }))
+  const form = await screen.findByRole('form', { name: 'Assign asset' })
+  pickSearchRecord(form, 'Asset', 'Lab computer')
+  fireEvent.change(within(form).getByLabelText('Checked out / reserved from'), { target: { value: '2026-08-21' } })
+  fireEvent.change(within(form).getByLabelText('Return by'), { target: { value: '2026-09-04' } })
+  fireEvent.click(within(form).getByRole('button', { name: 'Assign asset' }))
+  await waitFor(() => expect(fetchMock.mock.calls.some(([path, init]) => path === '/api/v1/assets/asset-1/assignments' && init?.method === 'POST')).toBe(true))
+  const createCall = fetchMock.mock.calls.find(([path, init]) => path === '/api/v1/assets/asset-1/assignments' && init?.method === 'POST')
+  const requestBody = JSON.parse(String(createCall?.[1]?.body)) as Record<string, unknown>
+  expect(requestBody).toMatchObject({
+    assigneeKind: 'identity',
+    assigneeId: person.id,
+    role: 'user',
+    purpose: 'checkout',
+    effectiveFrom: '2026-08-21T00:00:00.000Z',
+    dueAt: '2026-09-04T00:00:00.000Z',
+  })
+})
+
+test('offers replace or group checkout when the asset is already assigned', async () => {
+  const fetchMock = installPeopleFetch({ overlapOnCreate: true })
+  render(<PeopleDirectory assets={[asset]} csrfToken="csrf-value" issuesUrl="https://github.com/WSCMAX/StewardMesh/issues" permissions={permissions} />)
+  await waitForPeopleDirectory()
+  fireEvent.click(screen.getByRole('button', { name: 'Assign' }))
+  const form = await screen.findByRole('form', { name: 'Assign asset' })
+  pickSearchRecord(form, 'Asset', 'Lab computer')
+  fireEvent.click(within(form).getByRole('button', { name: 'Assign asset' }))
+  expect(await screen.findByText(/Jordan Lee/)).toBeInTheDocument()
+  expect(screen.getByText(/Editing suite/)).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Make group checkout' }))
+  await waitFor(() => expect(fetchMock.mock.calls.some(([path, init]) => {
+    if (path !== '/api/v1/assets/asset-1/assignments' || init?.method !== 'POST') return false
+    const body = JSON.parse(String(init.body)) as Record<string, unknown>
+    return body.conflictPolicy === 'group'
+  })).toBe(true))
+})
+
+test('ranks tagged assets for bulk checkout', async () => {
+  const fetchMock = installPeopleFetch()
+  render(<PeopleDirectory assets={[asset]} csrfToken="csrf-value" issuesUrl="https://github.com/WSCMAX/StewardMesh/issues" permissions={permissions} />)
+  await waitForPeopleDirectory()
+  openPeopleTab('Checkouts')
+  expect(await screen.findByRole('heading', { name: 'Tagged bulk checkout' })).toBeInTheDocument()
+  fireEvent.change(screen.getByLabelText('Checkout tag'), { target: { value: 'label-cart' } })
+  fireEvent.change(screen.getByLabelText('Through'), { target: { value: '2026-09-01' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Find available assets' }))
+  expect(await screen.findByText(/Rating 100/)).toBeInTheDocument()
+  expect(fetchMock).toHaveBeenCalledWith('/api/v1/people/checkout-availability', expect.objectContaining({ method: 'POST' }))
 })

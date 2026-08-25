@@ -70,9 +70,13 @@ People records three relationship roles:
 - **Additional user:** any number of active identities per asset, with duplicate active relationships rejected.
 - **Responsible department:** one active department per asset.
 
-Adding a new primary assignee or responsible department automatically closes the previous matching role at the new effective date. Additional users remain concurrent until ended individually. History records effective-from and effective-to timestamps, the creating actor, and the original assignee reference. A replacement cannot predate the active assignment it replaces.
+Adding a new primary assignee or responsible department automatically closes the previous matching role at the new checkout date. Additional users remain concurrent until returned individually unless the asset is already checked out to someone else: in that case People asks whether to **replace** the current user or convert the loan into a **group checkout**. Group checkout creates a checkout group with both people and reassigns the asset to that group. History records checkout (`effectiveFrom`), optional return-by (`dueAt`) for temporary loans, actual returned date (`effectiveTo`), optional event description, the creating actor, and the original assignee reference. A replacement cannot predate the active assignment it replaces.
 
-Atlas supplies the asset-existence check through a small `AssetReader` interface backed by its organization-scoped service. The assignment schema deliberately does not retrofit a database foreign key because earlier deployments could contain assignment history created while Atlas was memory-backed. New assignments verify durable Atlas existence before persistence, preserving People service and API contracts while avoiding an unsafe upgrade migration.
+**Reservations** are future-dated assignments with an event description. Checking out or reserving an asset for dates that overlap another reservation or checkout returns a warning that includes the event description. Operators can continue anyway, replace the current checkout, or convert it to a group.
+
+**Tagged bulk checkout** lives on the People Checkouts tab. A Tags grouping on Atlas assets is the pool. Operators choose dates, quantity, and preferred models; StewardMesh returns a ranked list. Available preferred models rank highest. Assets with a future reservation or current checkout stay in the list with a lower rating so they can still be reserved or checked out. Selected rows, or an individual row, create a bulk checkout assignment to a person or a checkout group.
+
+The Directory spreadsheet includes an **Assigned assets** column. From a person row, operators can assign an asset with checkout and return-by dates, then mark it returned. Atlas supplies the asset-existence check through a small `AssetReader` interface backed by its organization-scoped service. The assignment schema deliberately does not retrofit a database foreign key because earlier deployments could contain assignment history created while Atlas was memory-backed. New assignments verify durable Atlas existence before persistence, preserving People service and API contracts while avoiding an unsafe upgrade migration.
 
 ## APIs and provider boundaries
 
@@ -85,10 +89,15 @@ Atlas supplies the asset-existence check through a small `AssetReader` interface
 - `GET|POST /api/v1/location-references` and `PUT /api/v1/location-references/{referenceID}`
 - `GET /api/v1/users` as a deprecated person-only compatibility alias
 - `GET|POST /api/v1/assets/{assetId}/assignments`
+- `GET /api/v1/people/assignments`
+- `GET|POST /api/v1/people/checkout-groups`
+- `POST /api/v1/people/checkout-groups/{groupID}/members`
+- `POST /api/v1/people/checkout-availability`
+- `GET|POST /api/v1/people/bulk-checkouts`
 - `PATCH /api/v1/assets/{assetId}/assignments/{assignmentId}`
 - OpenAPI: `api/openapi/openapi.yaml`
 - gRPC contract: `api/proto/stewardmesh.proto`
-- PostgreSQL migrations: `internal/repository/postgres/migrations/0005_people_directory.sql` and `0006_directory_expansion.sql`
+- PostgreSQL migrations: `internal/repository/postgres/migrations/0005_people_directory.sql`, `0006_directory_expansion.sql`, `0050_people_assignment_due_at.sql`, and `0051_people_checkout.sql`
 
 The `people.Store` interface is the behavior contract for memory, PostgreSQL, and future DynamoDB adapters. The same conformance suite validates organization isolation, scoped search, unique email and provider mappings, multi-user assignments, replacement history, and ending assignments.
 
@@ -123,6 +132,7 @@ The on-page quick guide follows this sequence:
 2. Open Location references for occupancy types and person-to-room links; group by room for usage.
 3. Open a nested sheet from a site or building, or add a Floor tag column on rooms.
 4. Use the guided task for a person plus location, then review asset assignment history.
+5. Open **Checkouts** to reserve or loan tagged assets, convert overlapping loans into group checkout, and record return-by dates.
 
 Directory identities and locations use the Atlas Excel-style grid. Cell edits
 use `PUT` with the current revision. Tag columns come from configured labels;

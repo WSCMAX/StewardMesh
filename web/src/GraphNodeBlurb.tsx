@@ -242,7 +242,7 @@ export default function GraphNodeBlurb({
 
       {related.length > 0 ? (
         <ul className="mt-4 space-y-2 text-sm">
-          {related.slice(0, 8).map((edge) => {
+          {related.map((edge) => {
             const outward = edge.from === node.id
             const other = nodesByID.get(outward ? edge.to : edge.from)
             return (
@@ -257,7 +257,6 @@ export default function GraphNodeBlurb({
       ) : (
         <p className="mt-4 text-sm text-steward-mist-muted">This record has no direct relationships in the current graph view.</p>
       )}
-      {related.length > 8 && <p className="mt-2 text-xs text-steward-mist-muted">{related.length - 8} more connections are in the data table.</p>}
 
       <div className="mt-4 flex flex-wrap gap-2">
         {target && href && (

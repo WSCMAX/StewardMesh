@@ -47,6 +47,31 @@ const forecast = {
     assetCount: 1,
     amountsByKindMinor: { actual: 125000, estimated: 500000, committed: 75000, normalized_real: 510000, tco: 650000 },
   }],
+  items: [{
+    planId: plan.id,
+    assetId: asset.id,
+    assetName: asset.name,
+    scenario: 'baseline',
+    fiscalYear: 2032,
+    replacementCostMinor: 500000,
+    currency: 'USD',
+    department: 'department-1',
+    kind: 'server',
+    manufacturer: 'Dell',
+    building: 'Other',
+  }, {
+    planId: 'plan-2',
+    assetId: 'asset-2',
+    assetName: 'Unassigned laptop',
+    scenario: 'baseline',
+    fiscalYear: 2033,
+    replacementCostMinor: 120000,
+    currency: 'USD',
+    department: 'Other',
+    kind: 'laptop',
+    manufacturer: 'Other',
+    building: 'Other',
+  }],
 }
 
 const history = [{
@@ -70,7 +95,12 @@ function response(value: unknown, status = 200) {
 
 function ancillaryFetch(path: string) {
   if (path.startsWith('/api/v1/horizon/kind-defaults')) return response({ items: [] })
+  if (path.startsWith('/api/v1/horizon/replacement-plans')) return response({ items: [] })
   if (path.startsWith('/api/v1/asset-models')) return response({ items: [] })
+  if (path.startsWith('/api/v1/departments')) return response({ items: [{ id: 'department-1', name: 'Information Technology' }] })
+  if (path.startsWith('/api/v1/buildings')) return response({ items: [{ id: 'building-1', name: 'Science Hall' }] })
+  if (path.startsWith('/api/v1/sites')) return response({ items: [] })
+  if (path.startsWith('/api/v1/rooms')) return response({ items: [] })
   return null
 }
 
@@ -129,6 +159,10 @@ function initialFetch(plans = [plan]) {
   })
 }
 
+function openHorizonTab(name: 'Due now' | 'Forecast' | 'Plans' | 'Defaults') {
+  fireEvent.click(screen.getByRole('tab', { name }))
+}
+
 beforeEach(() => {
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
@@ -151,11 +185,14 @@ test('loads plans and an authoritative forecast without accessibility violations
   vi.stubGlobal('fetch', fetchMock)
   const { container } = render(<HorizonPlanner assets={[asset]} csrfToken="csrf-token" permissions={['planning.read']} />)
 
+  expect(await screen.findByRole('tab', { name: 'Due now' })).toBeInTheDocument()
+  openHorizonTab('Plans')
   expect(await screen.findByText('Core server')).toBeInTheDocument()
-  expect(screen.getAllByText('FY2032').length).toBeGreaterThan(0)
   expect(screen.getByText('60 months')).toBeInTheDocument()
   expect(screen.getByText(/derived/)).toBeInTheDocument()
-  expect(screen.getByRole('table', { name: /Authoritative forecast values/ })).toBeInTheDocument()
+  openHorizonTab('Forecast')
+  expect(screen.getAllByText('FY2032').length).toBeGreaterThan(0)
+  expect(screen.getByRole('grid', { name: /Authoritative forecast values/ })).toBeInTheDocument()
   expect(screen.queryByRole('button', { name: 'Add lifecycle plan' })).not.toBeInTheDocument()
   const exportLink = screen.getByRole('link', { name: 'Export CSV' })
   expect(exportLink).toHaveAttribute('href', expect.stringContaining('/api/v1/horizon/export.csv?scenarios=baseline'))
@@ -164,10 +201,36 @@ test('loads plans and an authoritative forecast without accessibility violations
   expect((await axe.run(container)).violations).toEqual([])
 })
 
+test('shows due now assets in an inventory grid and reveals extra asset columns from the gear', async () => {
+  const duePlan = { ...plan, lifecycleStage: 'refresh_due' }
+  const dueAsset = { ...asset, assetTag: 'SRV-001', serialNumber: 'SN-88', criticalityScore: 5 }
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const path = String(input)
+    const ancillary = ancillaryFetch(path)
+    if (ancillary) return ancillary
+    if (path.startsWith('/api/v1/horizon/forecast/assets')) return response(groupAssets)
+    if (path.startsWith('/api/v1/horizon/forecast')) return response(forecast)
+    if (path === '/api/v1/horizon/plans?scenario=baseline') return response({ items: [duePlan] })
+    return response({ items: [duePlan] })
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  render(<HorizonPlanner assets={[dueAsset]} csrfToken="csrf-token" permissions={['planning.read']} />)
+  const dueNow = await screen.findByRole('region', { name: 'Due now assets' })
+  expect(within(dueNow).getByText('Core server')).toBeInTheDocument()
+  expect(within(dueNow).getByText('Refresh due under baseline planning')).toBeInTheDocument()
+  expect(within(dueNow).queryByRole('columnheader', { name: /Asset tag/ })).not.toBeInTheDocument()
+
+  fireEvent.click(screen.getByRole('button', { name: 'Columns' }))
+  fireEvent.click(screen.getByLabelText('Asset tag'))
+  expect(within(dueNow).getByRole('columnheader', { name: /Asset tag/ })).toBeInTheDocument()
+  expect(within(dueNow).getByText('SRV-001')).toBeInTheDocument()
+})
+
 test('disables export without crashing while forecast controls are temporarily invalid', async () => {
   vi.stubGlobal('fetch', initialFetch())
   render(<HorizonPlanner assets={[asset]} csrfToken="csrf-token" permissions={['planning.read']} />)
-  await screen.findByText('Core server')
+  expect(await screen.findByRole('tab', { name: 'Forecast' })).toBeInTheDocument()
+  openHorizonTab('Forecast')
 
   fireEvent.change(screen.getByLabelText('As of'), { target: { value: '' } })
 
@@ -180,6 +243,8 @@ test('renders replacement timestamps as calendar dates without local timezone dr
   vi.stubGlobal('fetch', initialFetch([{ ...plan, derivedReplacementDate: '2032-06-30T00:00:00Z' }]))
 
   render(<HorizonPlanner assets={[asset]} csrfToken="csrf-token" permissions={['planning.read']} />)
+  expect(await screen.findByRole('tab', { name: 'Plans' })).toBeInTheDocument()
+  openHorizonTab('Plans')
 
   expect(await screen.findByText('UTC calendar date (derived)')).toBeInTheDocument()
   expect(dateSpy).toHaveBeenCalledWith(undefined, { timeZone: 'UTC' })
@@ -198,6 +263,8 @@ test('creates an exact-minor-unit plan with the in-memory CSRF token', async () 
   })
   vi.stubGlobal('fetch', fetchMock)
   render(<HorizonPlanner assets={[asset]} csrfToken="csrf-token" permissions={['planning.read', 'planning.write']} />)
+  expect(await screen.findByRole('tab', { name: 'Plans' })).toBeInTheDocument()
+  openHorizonTab('Plans')
   await screen.findByText(/No lifecycle plans match/)
 
   fireEvent.click(screen.getByRole('button', { name: 'Add lifecycle plan' }))
@@ -247,6 +314,8 @@ test('updates a plan with its revision and discloses immutable history', async (
   })
   vi.stubGlobal('fetch', fetchMock)
   render(<HorizonPlanner assets={[asset]} csrfToken="csrf-token" permissions={['planning.read', 'planning.write']} />)
+  expect(await screen.findByRole('tab', { name: 'Plans' })).toBeInTheDocument()
+  openHorizonTab('Plans')
   await screen.findByText('Core server')
 
   fireEvent.click(screen.getByRole('button', { name: 'Edit plan for Core server' }))
@@ -279,7 +348,8 @@ test('refreshes grouped scenarios and warns that tag rows are non-additive', asy
   })
   vi.stubGlobal('fetch', fetchMock)
   render(<HorizonPlanner assets={[asset]} csrfToken="csrf-token" permissions={['planning.read']} />)
-  await screen.findByText('Core server')
+  expect(await screen.findByRole('tab', { name: 'Forecast' })).toBeInTheDocument()
+  openHorizonTab('Forecast')
 
   fireEvent.change(screen.getByLabelText('Scenarios'), { target: { value: 'baseline, optimistic' } })
   fireEvent.change(screen.getByLabelText('Group by'), { target: { value: 'tag' } })
@@ -287,6 +357,30 @@ test('refreshes grouped scenarios and warns that tag rows are non-additive', asy
   expect(await screen.findByText(/Non-additive grouping/)).toBeInTheDocument()
   expect(screen.getAllByText('Critical systems').length).toBeGreaterThan(0)
   await waitFor(() => expect(fetchMock.mock.calls.some(([path]) => String(path).includes('scenarios=baseline%2Coptimistic') && String(path).includes('groupBy=tag'))).toBe(true))
+})
+
+test('switches forecast views and charts department plus type with Other buckets', async () => {
+  const fetchMock = initialFetch()
+  vi.stubGlobal('fetch', fetchMock)
+  render(<HorizonPlanner assets={[asset]} csrfToken="csrf-token" permissions={['planning.read']} />)
+  expect(await screen.findByRole('tab', { name: 'Forecast' })).toBeInTheDocument()
+  openHorizonTab('Forecast')
+
+  fireEvent.click(screen.getByRole('button', { name: 'Type' }))
+  await waitFor(() => expect(fetchMock.mock.calls.some(([path]) => String(path).includes('groupBy=asset_class') && String(path).includes('includeItems=true'))).toBe(true))
+
+  fireEvent.click(screen.getByRole('button', { name: 'Manufacturer' }))
+  await waitFor(() => expect(fetchMock.mock.calls.some(([path]) => String(path).includes('groupBy=manufacturer'))).toBe(true))
+
+  fireEvent.click(screen.getByRole('button', { name: 'Building' }))
+  await waitFor(() => expect(fetchMock.mock.calls.some(([path]) => String(path).includes('groupBy=building'))).toBe(true))
+
+  fireEvent.click(screen.getByRole('button', { name: 'Department + type' }))
+  expect(await screen.findByRole('heading', { name: 'Replacement by year and type' })).toBeInTheDocument()
+  expect(screen.getByRole('heading', { name: 'Replacement by year and department' })).toBeInTheDocument()
+  expect(screen.getByRole('heading', { name: 'Type mix by department' })).toBeInTheDocument()
+  expect(screen.getAllByText('Information Technology').length).toBeGreaterThan(0)
+  expect(screen.getAllByText('Other').length).toBeGreaterThan(0)
 })
 
 test('groups forecast assets by deployment and supports per-group Atlas view', async () => {
@@ -301,6 +395,8 @@ test('groups forecast assets by deployment and supports per-group Atlas view', a
   })
   vi.stubGlobal('fetch', fetchMock)
   render(<HorizonPlanner assets={[labAssetOne, labAssetTwo]} csrfToken="csrf-token" onOpenAtlasInventory={onOpenAtlasInventory} permissions={['planning.read', 'planning.write', 'assets.read']} />)
+  expect(await screen.findByRole('tab', { name: 'Forecast' })).toBeInTheDocument()
+  openHorizonTab('Forecast')
   await screen.findByRole('button', { name: 'FY2032' })
 
   fireEvent.click(screen.getByRole('button', { name: 'FY2032' }))
@@ -309,11 +405,71 @@ test('groups forecast assets by deployment and supports per-group Atlas view', a
   expect(onOpenAtlasInventory).toHaveBeenCalledWith(['lab-asset-1', 'lab-asset-2'], 'FY2032 · Architecture Design Lab', 1)
 })
 
+test('opens an amount breakdown drawer from forecast totals and group cells', async () => {
+  const amountBreakdown = {
+    amountKind: 'actual',
+    label: 'All forecast groups',
+    groupBy: 'fiscal_year',
+    currency: 'USD',
+    totalMinor: 125000,
+    itemCount: 1,
+    items: [{
+      assetId: asset.id,
+      assetName: asset.name,
+      planId: plan.id,
+      costId: 'cost-actual',
+      description: 'Refresh invoice',
+      fiscalYear: 2032,
+      fiscalPeriod: 'FY2032',
+      scenario: 'baseline',
+      amountMinor: 125000,
+      currency: 'USD',
+      kind: 'actual',
+    }],
+  }
+  const groupBreakdown = {
+    ...amountBreakdown,
+    scenario: 'baseline',
+    groupKey: 'FY2032',
+    label: 'FY2032',
+  }
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input)
+    const ancillary = ancillaryFetch(url)
+    if (ancillary) return ancillary
+    if (url.startsWith('/api/v1/horizon/forecast/amounts')) {
+      return response(url.includes('groupKey=FY2032') ? groupBreakdown : amountBreakdown)
+    }
+    if (url.startsWith('/api/v1/horizon/forecast/assets')) return response(groupAssets)
+    if (url.startsWith('/api/v1/horizon/forecast')) return response(forecast)
+    return response({ items: [plan] })
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  render(<HorizonPlanner assets={[asset]} csrfToken="csrf-token" onOpenAtlasInventory={vi.fn()} permissions={['planning.read', 'assets.read']} />)
+  expect(await screen.findByRole('tab', { name: 'Forecast' })).toBeInTheDocument()
+  openHorizonTab('Forecast')
+
+  fireEvent.click(screen.getByRole('button', { name: /Show actual items totaling/ }))
+  expect(await screen.findByRole('heading', { name: 'Actual' })).toBeInTheDocument()
+  expect(screen.getByText('Refresh invoice')).toBeInTheDocument()
+  expect(screen.getByText(/1 item/)).toBeInTheDocument()
+  expect(fetchMock.mock.calls.some(([path]) => String(path).includes('/api/v1/horizon/forecast/amounts') && String(path).includes('amountKind=actual') && !String(path).includes('groupKey='))).toBe(true)
+
+  fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+  await waitFor(() => expect(screen.queryByRole('heading', { name: 'Actual' })).not.toBeInTheDocument())
+  fireEvent.click(screen.getByRole('button', { name: /Show FY2032 actual items totaling/ }))
+  expect(await screen.findByRole('heading', { name: 'Actual · FY2032' })).toBeInTheDocument()
+  expect(screen.getByText('Refresh invoice')).toBeInTheDocument()
+  expect(fetchMock.mock.calls.some(([path]) => String(path).includes('amountKind=actual') && String(path).includes('groupKey=FY2032') && String(path).includes('scenario=baseline'))).toBe(true)
+})
+
 test('opens a forecast group drawer with assets in the refresh cycle', async () => {
   const onOpenAtlasInventory = vi.fn()
   vi.stubGlobal('fetch', initialFetch())
   render(<HorizonPlanner assets={[asset]} csrfToken="csrf-token" onOpenAtlasInventory={onOpenAtlasInventory} permissions={['planning.read', 'planning.write', 'assets.read']} />)
-  await screen.findByText('Core server')
+  expect(await screen.findByRole('tab', { name: 'Forecast' })).toBeInTheDocument()
+  openHorizonTab('Forecast')
+  await screen.findByRole('button', { name: 'FY2032' })
 
   fireEvent.click(screen.getByRole('button', { name: 'FY2032' }))
 
@@ -325,4 +481,40 @@ test('opens a forecast group drawer with assets in the refresh cycle', async () 
   expect(atlasButtons.length).toBeGreaterThan(0)
   fireEvent.click(atlasButtons[0])
   expect(onOpenAtlasInventory).toHaveBeenCalledWith([asset.id], 'FY2032 · Baseline', 1)
+})
+
+test('lists named replacement plans with asset counts on the Plans tab', async () => {
+  const replacementPlan = {
+    id: 'laptop-refresh',
+    organizationId: 'organization-1',
+    name: 'Laptop refresh',
+    grouping: 'type',
+    groupKey: 'laptop',
+    scenario: 'baseline',
+    assetCount: 2,
+    revision: 1,
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+  }
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const path = String(input)
+    if (path === '/api/v1/horizon/replacement-plans') return response({ items: [replacementPlan] })
+    if (path === '/api/v1/horizon/replacement-plans/laptop-refresh/assets') {
+      return response({ items: [asset, { ...asset, id: 'asset-2', name: 'Lab laptop' }] })
+    }
+    const ancillary = ancillaryFetch(path)
+    if (ancillary) return ancillary
+    if (path.startsWith('/api/v1/horizon/forecast')) return response(forecast)
+    return response({ items: [plan] })
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  render(<HorizonPlanner assets={[asset]} csrfToken="csrf-token" permissions={['planning.read']} />)
+  expect(await screen.findByRole('tab', { name: 'Plans' })).toBeInTheDocument()
+  openHorizonTab('Plans')
+  expect(await screen.findByRole('heading', { name: 'Replacement plans' })).toBeInTheDocument()
+  expect(screen.getByText('Laptop refresh')).toBeInTheDocument()
+  expect(screen.getByText('2')).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Open Laptop refresh' }))
+  expect(await screen.findByText('Lab laptop')).toBeInTheDocument()
+  expect(screen.getByText(/Type · laptop · 2 assets/)).toBeInTheDocument()
 })

@@ -178,6 +178,7 @@
         ],
         "code": [
           "internal/httpapi/server.go",
+          "internal/httpapi/workspace.go",
           "web/src/App.tsx",
           "web/src/GuideExperience.tsx",
           "web/src/PeopleDirectory.tsx",
@@ -193,6 +194,7 @@
         ],
         "tests": [
           "internal/httpapi/server_test.go",
+          "internal/httpapi/workspace_test.go",
           "web/src/App.test.tsx",
           "web/src/api.test.ts",
           "web/src/GuideExperience.test.tsx",
@@ -441,7 +443,9 @@
         "schema": [
           "internal/repository/postgres/migrations/0018_horizon_lifecycle_planning.sql",
           "internal/repository/postgres/migrations/0019_horizon_administrator_permissions.sql",
-          "internal/repository/postgres/migrations/0020_horizon_exact_money_boundary.sql"
+          "internal/repository/postgres/migrations/0020_horizon_exact_money_boundary.sql",
+          "internal/repository/postgres/migrations/0046_asset_lifecycle_planning.sql",
+          "internal/repository/postgres/migrations/0052_horizon_replacement_plans.sql"
         ],
         "tests": [
           "internal/application/application_test.go",
@@ -454,11 +458,15 @@
           "internal/repository/postgres/horizon_exchange_integration_test.go",
           "internal/repository/postgres/migrate_test.go",
           "internal/repository/postgres/postgres_integration_test.go",
-          "web/src/HorizonPlanner.test.tsx"
+          "web/src/HorizonPlanner.test.tsx",
+          "web/src/horizonForecastViews.test.ts"
         ],
         "ui": [
           "web/src/App.tsx",
-          "web/src/HorizonPlanner.tsx"
+          "web/src/HorizonForecastCharts.tsx",
+          "web/src/HorizonPlanner.tsx",
+          "web/src/HorizonReplacementPlans.tsx",
+          "web/src/HorizonSectionNav.tsx"
         ]
       }
     },
@@ -1021,18 +1029,24 @@
         "code": [
           "internal/exchange/providers_people.go",
           "internal/httpapi/server.go",
+          "internal/people/checkout.go",
           "internal/people/contracts.go",
           "internal/people/exchange.go",
           "internal/people/service.go",
+          "internal/repository/memory_checkout.go",
           "internal/repository/memory_people.go",
-          "internal/repository/postgres/people.go"
+          "internal/repository/postgres/people.go",
+          "internal/repository/postgres/people_checkout.go"
         ],
         "schema": [
-          "internal/repository/postgres/migrations/0005_people_directory.sql"
+          "internal/repository/postgres/migrations/0005_people_directory.sql",
+          "internal/repository/postgres/migrations/0050_people_assignment_due_at.sql",
+          "internal/repository/postgres/migrations/0051_people_checkout.sql"
         ],
         "tests": [
           "internal/exchange/providers_people_test.go",
           "internal/httpapi/server_test.go",
+          "internal/people/checkout_test.go",
           "internal/people/exchange_test.go",
           "internal/people/service_test.go",
           "internal/repository/contracttest/people.go",
@@ -1042,6 +1056,8 @@
           "web/src/PeopleDirectory.test.tsx"
         ],
         "ui": [
+          "web/src/AssetAssignments.tsx",
+          "web/src/CheckoutDesk.tsx",
           "web/src/PeopleDirectory.tsx"
         ]
       }
@@ -1326,22 +1342,32 @@
         "documentation": [
           ".env.example",
           "README.md",
+          "docs/deployment/runtime.md",
           "docs/features/dictionary.md",
           "docs/features/directory-expansion.md",
+          "docs/features/foundation.md",
           "docs/requirements/initial.md"
         ],
         "api": [
           "api/openapi/openapi.yaml"
         ],
         "code": [
+          "cmd/campus-seed/main.go",
           "cmd/stewardmesh/main.go",
+          "deploy/Dockerfile",
           "internal/application/application.go",
+          "internal/application/campus_seed.go",
+          "internal/application/campus_seed_stub.go",
           "internal/config/config.go",
+          "internal/config/file.go",
           "internal/directoryexpansion/importer.go",
           "internal/directoryexpansion/synthetic.go"
         ],
         "schema": [
           ".env.example",
+          "deploy/config.campus-demo.yaml",
+          "deploy/config.example.yaml",
+          "deploy/docker-compose.campus-demo.yml",
           "deploy/docker-compose.yml"
         ],
         "tests": [
@@ -1349,6 +1375,7 @@
           "cmd/stewardmesh/main_test.go",
           "internal/application/application_test.go",
           "internal/config/config_test.go",
+          "internal/config/file_test.go",
           "internal/directoryexpansion/contracts_test.go",
           "internal/directoryexpansion/synthetic_test.go",
           "web/src/documentation.test.ts"

@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/maxlemke/stewardmesh/internal/horizon"
@@ -207,6 +208,144 @@ func (s *HorizonStore) UpsertKindDefault(ctx context.Context, item horizon.KindD
 		return horizon.KindDefault{}, translateHorizonWriteError("upsert Horizon kind default", err)
 	}
 	return saved, nil
+}
+
+const horizonReplacementPlanColumns = `organization_id, id, name, grouping, group_key, scenario, revision, created_at, updated_at`
+const horizonReplacementPlanSelect = `p.organization_id, p.id, p.name, p.grouping, p.group_key, p.scenario, p.revision, p.created_at, p.updated_at`
+
+func (s *HorizonStore) ListReplacementPlans(ctx context.Context, organizationID string) ([]horizon.ReplacementPlan, error) {
+	rows, err := s.database.QueryContext(ctx, `
+		SELECT `+horizonReplacementPlanSelect+`, COALESCE(c.asset_count, 0)
+		FROM horizon_replacement_plans p
+		LEFT JOIN (
+			SELECT organization_id, plan_id, COUNT(*)::int AS asset_count
+			FROM horizon_replacement_plan_assets
+			WHERE organization_id = $1
+			GROUP BY organization_id, plan_id
+		) c ON c.organization_id = p.organization_id AND c.plan_id = p.id
+		WHERE p.organization_id = $1
+		ORDER BY lower(p.name), p.id`, organizationID)
+	if err != nil {
+		return nil, fmt.Errorf("list replacement plans: %w", err)
+	}
+	defer rows.Close()
+	items := make([]horizon.ReplacementPlan, 0)
+	for rows.Next() {
+		item, err := scanHorizonReplacementPlan(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan replacement plan: %w", err)
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *HorizonStore) GetReplacementPlan(ctx context.Context, organizationID, id string) (horizon.ReplacementPlan, error) {
+	item, err := scanHorizonReplacementPlan(s.database.QueryRowContext(ctx, `
+		SELECT `+horizonReplacementPlanSelect+`, COALESCE(c.asset_count, 0)
+		FROM horizon_replacement_plans p
+		LEFT JOIN (
+			SELECT organization_id, plan_id, COUNT(*)::int AS asset_count
+			FROM horizon_replacement_plan_assets
+			WHERE organization_id = $1 AND plan_id = $2
+			GROUP BY organization_id, plan_id
+		) c ON c.organization_id = p.organization_id AND c.plan_id = p.id
+		WHERE p.organization_id = $1 AND p.id = $2`, organizationID, id))
+	return item, translateHorizonReadError("get replacement plan", err)
+}
+
+func (s *HorizonStore) CreateReplacementPlan(ctx context.Context, item horizon.ReplacementPlan) (horizon.ReplacementPlan, error) {
+	created, err := scanHorizonReplacementPlan(s.database.QueryRowContext(ctx, `
+		INSERT INTO horizon_replacement_plans (organization_id, id, name, grouping, group_key, scenario, revision, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		RETURNING `+horizonReplacementPlanColumns+`, 0`,
+		item.OrganizationID, item.ID, item.Name, item.Grouping, item.GroupKey, item.Scenario, item.Revision, item.CreatedAt, item.UpdatedAt))
+	if err != nil {
+		return horizon.ReplacementPlan{}, translateHorizonWriteError("create replacement plan", err)
+	}
+	return created, nil
+}
+
+func (s *HorizonStore) UpdateReplacementPlan(ctx context.Context, item horizon.ReplacementPlan, expectedRevision int64) (horizon.ReplacementPlan, error) {
+	updated, err := scanHorizonReplacementPlan(s.database.QueryRowContext(ctx, `
+		UPDATE horizon_replacement_plans SET name = $3, grouping = $4, group_key = $5, scenario = $6, revision = $7, updated_at = $8
+		WHERE organization_id = $1 AND id = $2 AND revision = $9
+		RETURNING `+horizonReplacementPlanColumns+`, (
+			SELECT COUNT(*)::int FROM horizon_replacement_plan_assets
+			WHERE organization_id = $1 AND plan_id = $2
+		)`,
+		item.OrganizationID, item.ID, item.Name, item.Grouping, item.GroupKey, item.Scenario, item.Revision, item.UpdatedAt, expectedRevision))
+	if errors.Is(err, sql.ErrNoRows) {
+		var exists bool
+		if checkErr := s.database.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM horizon_replacement_plans WHERE organization_id = $1 AND id = $2)`, item.OrganizationID, item.ID).Scan(&exists); checkErr != nil {
+			return horizon.ReplacementPlan{}, fmt.Errorf("check replacement plan revision: %w", checkErr)
+		}
+		if exists {
+			return horizon.ReplacementPlan{}, horizon.ErrConflict
+		}
+		return horizon.ReplacementPlan{}, horizon.ErrNotFound
+	}
+	if err != nil {
+		return horizon.ReplacementPlan{}, translateHorizonWriteError("update replacement plan", err)
+	}
+	return updated, nil
+}
+
+func (s *HorizonStore) AssetReplacementPlanIDs(ctx context.Context, organizationID string) (map[string]string, error) {
+	rows, err := s.database.QueryContext(ctx, `
+		SELECT asset_id, plan_id FROM horizon_replacement_plan_assets WHERE organization_id = $1`, organizationID)
+	if err != nil {
+		return nil, fmt.Errorf("list replacement plan assignments: %w", err)
+	}
+	defer rows.Close()
+	assigned := make(map[string]string)
+	for rows.Next() {
+		var assetID, planID string
+		if err := rows.Scan(&assetID, &planID); err != nil {
+			return nil, fmt.Errorf("scan replacement plan assignment: %w", err)
+		}
+		assigned[assetID] = planID
+	}
+	return assigned, rows.Err()
+}
+
+func (s *HorizonStore) ListReplacementPlanAssetIDs(ctx context.Context, organizationID, planID string) ([]string, error) {
+	rows, err := s.database.QueryContext(ctx, `
+		SELECT asset_id FROM horizon_replacement_plan_assets
+		WHERE organization_id = $1 AND plan_id = $2 ORDER BY asset_id`, organizationID, planID)
+	if err != nil {
+		return nil, fmt.Errorf("list replacement plan assets: %w", err)
+	}
+	defer rows.Close()
+	ids := make([]string, 0)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan replacement plan asset: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+func (s *HorizonStore) SetAssetReplacementPlan(ctx context.Context, organizationID, assetID, planID string) error {
+	if strings.TrimSpace(planID) == "" {
+		_, err := s.database.ExecContext(ctx, `
+			DELETE FROM horizon_replacement_plan_assets WHERE organization_id = $1 AND asset_id = $2`, organizationID, assetID)
+		return translateHorizonWriteError("clear replacement plan assignment", err)
+	}
+	_, err := s.database.ExecContext(ctx, `
+		INSERT INTO horizon_replacement_plan_assets (organization_id, plan_id, asset_id)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (organization_id, asset_id) DO UPDATE SET plan_id = EXCLUDED.plan_id`, organizationID, planID, assetID)
+	return translateHorizonWriteError("assign replacement plan", err)
+}
+
+func scanHorizonReplacementPlan(row horizonScanner) (horizon.ReplacementPlan, error) {
+	var item horizon.ReplacementPlan
+	err := row.Scan(&item.OrganizationID, &item.ID, &item.Name, &item.Grouping, &item.GroupKey, &item.Scenario,
+		&item.Revision, &item.CreatedAt, &item.UpdatedAt, &item.AssetCount)
+	return item, err
 }
 
 func scanHorizonKindDefault(row horizonScanner) (horizon.KindDefault, error) {

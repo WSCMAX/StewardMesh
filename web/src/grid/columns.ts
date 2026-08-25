@@ -88,6 +88,8 @@ export type ColumnRules = {
   lookup?: LookupConfig
   /** Hides the column until the operator turns it on in the column chooser. */
   hiddenByDefault?: boolean
+  /** Lets buttons, forms, and other rich cell content wrap instead of truncating. */
+  wrap?: boolean
 }
 
 export type GridColumn<T> = ColumnRules & {

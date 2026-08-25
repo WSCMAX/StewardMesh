@@ -736,8 +736,12 @@ func (s *Service) audit(ctx context.Context, action, resourceType, resourceID st
 		}
 		correlationID = id
 	}
+	eventID, err := foundation.NewCorrelationID()
+	if err != nil {
+		return err
+	}
 	return s.auditor.Record(ctx, foundation.AuditEvent{
-		ID: correlationID, OrganizationID: s.organizationID, ActorID: actorIDValue, CorrelationID: correlationID,
+		ID: eventID, OrganizationID: s.organizationID, ActorID: actorIDValue, CorrelationID: correlationID,
 		Action: action, ResourceType: resourceType, ResourceID: resourceID, OccurredAt: s.now().UTC(), Metadata: metadata,
 	})
 }

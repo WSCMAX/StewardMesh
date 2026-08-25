@@ -71,7 +71,10 @@ docker compose -f deploy/docker-compose.yml config --quiet
 docker compose -f deploy/docker-compose.yml --profile cache config --quiet
 docker compose -f deploy/docker-compose.yml --profile demo config --quiet
 docker compose -f deploy/docker-compose.yml --profile integrations config --quiet
+docker compose -f deploy/docker-compose.yml --profile campus-demo config --quiet
+docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.campus-demo.yml --profile campus-demo config --quiet
 docker build --file deploy/Dockerfile --target stewardmesh --tag stewardmesh:release-check .
+docker build --file deploy/Dockerfile --target campus-demo --tag stewardmesh-campus-demo:release-check .
 docker build --file deploy/Dockerfile --target grouper-fixture --tag stewardmesh-grouper-fixture:release-check .
 ```
 

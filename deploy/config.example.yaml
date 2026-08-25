@@ -1,0 +1,43 @@
+# Production runtime configuration. Copy to config.yaml and replace secrets
+# before any shared deployment. Environment variables override these values.
+#
+#   docker compose -f deploy/docker-compose.yml up -d --wait
+#
+# Requirement: REQ-DIRECTORY-EXPANSION-007. Feature: platform.foundation.
+
+listen:
+  addr: "0.0.0.0:8080"
+  allowed_origin: "http://127.0.0.1:8080"
+  # Allows the container to bind every interface while the browser origin stays
+  # on loopback HTTP. Omit this for production and terminate TLS in front of the
+  # container with an HTTPS allowed origin, secure cookies, and a bootstrap token.
+  insecure_bind: true
+
+organization:
+  id: local-organization
+  name: "StewardMesh Local Organization"
+
+repository:
+  driver: postgres
+  url: "postgres://stewardmesh:stewardmesh@postgres:5432/stewardmesh?sslmode=disable"
+
+storage:
+  driver: local
+  blob_dir: /var/lib/stewardmesh/blobs
+
+cache:
+  driver: none
+
+web:
+  dir: /web
+
+session:
+  cookie_secure: false
+  ttl: 12h
+
+seed:
+  synthetic: false
+  campus: false
+
+reach:
+  endpoints_file: /etc/stewardmesh/reach-endpoints.json

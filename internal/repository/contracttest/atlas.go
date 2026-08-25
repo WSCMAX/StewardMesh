@@ -117,9 +117,13 @@ func AtlasStore(t testing.TB, subject atlas.Store, organizationID, suffix string
 	if _, err := subject.CreateAsset(ctx, asset, initial); !errors.Is(err, atlas.ErrConflict) {
 		t.Fatalf("expected duplicate Atlas conflict, got %v", err)
 	}
-	items, err := subject.ListAssets(ctx, organizationID, atlas.Query{Search: "CONTRACT", Kind: "server", Status: "draft", ModelID: model.ID, Limit: 10})
+	items, err := subject.ListAssets(ctx, organizationID, atlas.Query{Search: "TAG-" + suffix, Kind: "server", Status: "draft", ModelID: model.ID, Limit: 10})
 	if err != nil || len(items) != 1 || items[0].ID != assetID {
 		t.Fatalf("unexpected Atlas search result %#v err=%v", items, err)
+	}
+	manufacturerItems, err := subject.ListAssets(ctx, organizationID, atlas.Query{Search: "contract", Kind: "server", Status: "draft", ModelID: model.ID, Limit: 10})
+	if err != nil || len(manufacturerItems) != 3 {
+		t.Fatalf("expected manufacturer search to find linked assets %#v err=%v", manufacturerItems, err)
 	}
 	graphItems, err := subject.ListGraphAssets(ctx, organizationID, atlas.GraphAssetQuery{
 		LabelSearch: "contract server", Visibility: atlas.GraphAssetVisibility{All: true},

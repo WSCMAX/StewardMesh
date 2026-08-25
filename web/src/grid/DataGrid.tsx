@@ -4,12 +4,13 @@ import { buttonClass, compactInputClass, cx, gridActionButtonClass, gridActionCe
 import { lockScroll } from '../scrollLock'
 import type { ColumnRules, GridColumn, ValidationRule } from './columns'
 import QueryBuilder from './QueryBuilder'
-import { describeQuery, emptyQuery, encodeQuery, isQueryEmpty, matchQuery, maximumEncodedQueryLength, maximumSavedQueries, newQueryId, parseQuery, sanitizeQueryName, type QueryModel } from './queryLanguage'
+import { describeQuery, emptyQuery, encodeQuery, isQueryEmpty, matchQuery, maximumEncodedQueryLength, maximumSavedQueries, newQueryId, parseQuery, sanitizeQueryName, type QueryField, type QueryModel, type QueryValueOption } from './queryLanguage'
 import { isEmptyRule, lookupExportText, lookupLabel, parseLookupText, withValidation } from './columns'
 import { useGridSelection, type CellPosition } from './useGridSelection'
 import { groupEditsByRow, useCellEditing, type CellEdit } from './useCellEditing'
 import { copyRange, describeOutcome, fillDown, pasteText, type ClipboardSurface } from './useGridClipboard'
 import ContextMenu, { separator, type MenuAnchor, type MenuEntry } from './ContextMenu'
+import BarcodeCameraCapture from '../BarcodeCameraCapture'
 import CellCamera from './CellCamera'
 import CellLookup from './CellLookup'
 import Drawer from './Drawer'
@@ -58,6 +59,10 @@ export type DataGridProps<T> = {
   rowMessage?: (row: T) => string | undefined
   /** Renders a leading checkbox column and enables bulk actions. */
   selectable?: boolean
+  /** Controlled row-checkbox ids. When omitted, the grid keeps its own selection. */
+  selectedRowIds?: readonly string[]
+  /** Reports the checked row ids after a click or keyboard toggle. */
+  onSelectedRowIdsChange?: (ids: readonly string[]) => void
   /** Rendered in the toolbar whenever at least one row is checked. */
   bulkActions?: (selected: readonly T[]) => ReactNode
   /** Renders a trailing action column that opens the full record. */
@@ -79,6 +84,23 @@ export type DataGridProps<T> = {
   onDeleteRows?: (rows: readonly T[]) => Promise<void> | void
   /** Reports the filtered, grouped listing so another surface can follow the grid. */
   onListingChange?: (listing: GridListing) => void
+  /** Reports filter, search, and encoded query so a parent can refetch server-backed pages. */
+  onQueryChange?: (query: GridQueryState) => void
+  /** Column keys already applied by the server; those filters are not re-applied locally. */
+  remoteFilterKeys?: readonly string[]
+  /** Skip the toolbar search locally because the parent sent it as a server `q`. */
+  remoteSearch?: boolean
+  /** Skip the encoded query locally because the parent translated it to API params. */
+  remoteQuery?: boolean
+  /** Exact match count from the server for the current filters. */
+  remoteTotal?: number
+  /** Load the next server page when the user scrolls near the end of the body. */
+  onReachEnd?: () => void
+  hasMore?: boolean
+  loadingMore?: boolean
+  /** Open the query builder on first render so Atlas inventory is not just a hidden filter. */
+  queryOpenByDefault?: boolean
+  focusRowId?: string
   /** Controlled grouping. When set, the toolbar Group by select writes through. */
   groupBy?: string | null
   onGroupByChange?: (groupBy: string | null) => void
@@ -91,9 +113,24 @@ export type GridListing = {
   groups: readonly { value: string; rowIds: readonly string[] }[]
 }
 
+export type GridQueryState = {
+  filters: Readonly<Record<string, string>>
+  search: string
+  encodedQuery: string
+}
+
 function compareText(left: string, right: string, column: ColumnRules) {
   if (column.kind === 'number' || column.kind === 'money') return Number(left) - Number(right)
   return left.localeCompare(right, undefined, { numeric: true, sensitivity: 'base' })
+}
+
+function groupLabelForRow<T>(column: GridColumn<T>, row: T | undefined, fallback: string) {
+  if (!row) return fallback
+  const exported = column.exportText?.(row)?.trim()
+  if (exported) return exported
+  const rendered = column.display?.(row)
+  if (typeof rendered === 'string' && rendered.trim()) return rendered.trim()
+  return column.text(row).trim() || fallback
 }
 
 export function sortRows<T>(rows: readonly T[], columns: readonly GridColumn<T>[], sort: SortState | null) {
@@ -122,11 +159,14 @@ export function filterRows<T>(rows: readonly T[], columns: readonly GridColumn<T
     for (const [key, value] of active) {
       const column = columns.find((candidate) => candidate.key === key)
       if (!column) continue
-      if (!column.text(row).toLowerCase().includes(value.trim().toLowerCase())) return false
+      if (!columnSearchText(column, row).toLowerCase().includes(value.trim().toLowerCase())) return false
     }
-    if (queryActive && !matchQuery(row, fields, query, (item, field) => columns.find((column) => column.key === field)?.text(item) ?? '')) return false
+    if (queryActive && !matchQuery(row, fields, query, (item, field) => {
+      const column = columns.find((candidate) => candidate.key === field)
+      return column ? columnQueryTexts(column, item) : ''
+    })) return false
     if (!term) return true
-    return columns.some((column) => column.text(row).toLowerCase().includes(term))
+    return columns.some((column) => columnSearchText(column, row).toLowerCase().includes(term))
   })
 }
 
@@ -156,6 +196,100 @@ function isPrintableKey(event: KeyboardEvent<HTMLTableElement>) {
   return event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey
 }
 
+function isFieldTarget(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) return false
+  if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement) return true
+  return target.isContentEditable
+}
+
+/** Visible and canonical text a contains-filter or search box should match. */
+export function columnSearchText<T>(column: GridColumn<T>, row: T) {
+  const raw = column.text(row)
+  const exported = column.exportText?.(row) ?? ''
+  const labeled = column.lookup ? lookupExportText(raw, column.lookup.options, Boolean(column.lookup.multiple)) : ''
+  return [raw, exported, labeled].filter((value) => value.trim()).join(' ')
+}
+
+/**
+ * Every candidate text a query condition can match for one cell: the stored
+ * value, the export text, and — for lookup columns — each selected record's id
+ * and label on its own, so "Users is <person>" matches without the operator
+ * having to reproduce the whole concatenated cell text.
+ */
+export function columnQueryTexts<T>(column: GridColumn<T>, row: T): string[] {
+  const raw = column.text(row)
+  const candidates = [raw, column.exportText?.(row) ?? '']
+  if (column.lookup) {
+    for (const item of parseLookupText(raw)) {
+      candidates.push(item.id)
+      candidates.push(lookupLabel(item.id, column.lookup.options))
+    }
+  }
+  const seen = new Set<string>()
+  const unique: string[] = []
+  for (const candidate of candidates) {
+    const trimmed = candidate.trim()
+    if (!trimmed || seen.has(trimmed.toLowerCase())) continue
+    seen.add(trimmed.toLowerCase())
+    unique.push(trimmed)
+  }
+  return unique.length > 0 ? unique : ['']
+}
+
+const maximumQueryValueOptions = 300
+
+/**
+ * The unique values a query condition on this column can pick from: distinct
+ * values across the loaded rows first (with how often each appears), then the
+ * rest of the column's lookup catalog, such as people or models not yet on any
+ * visible row. The catalog is skipped while other conditions narrow the rows,
+ * so the list only offers values that can still match.
+ */
+export function columnValueOptions<T>(column: GridColumn<T>, rows: readonly T[], includeCatalog = true): QueryValueOption[] {
+  const counted = new Map<string, QueryValueOption>()
+  const record = (value: string, label: string) => {
+    const key = value.toLowerCase()
+    const existing = counted.get(key)
+    if (existing) existing.count = (existing.count ?? 0) + 1
+    else counted.set(key, { value, label, count: 1 })
+  }
+  for (const row of rows) {
+    if (column.lookup) {
+      for (const item of parseLookupText(column.text(row))) {
+        record(item.id, lookupLabel(item.id, column.lookup.options))
+      }
+    } else {
+      const value = column.text(row).trim()
+      if (!value) continue
+      const label = column.exportText?.(row)?.trim() || value
+      record(value, label)
+    }
+  }
+  const options = [...counted.values()].sort((left, right) =>
+    (right.count ?? 0) - (left.count ?? 0)
+    || (left.label ?? left.value).localeCompare(right.label ?? right.value, undefined, { numeric: true, sensitivity: 'base' }))
+  const known = new Set(counted.keys())
+  const catalog: QueryValueOption[] = []
+  if (!includeCatalog) return options.slice(0, maximumQueryValueOptions)
+  if (column.lookup?.options) {
+    for (const option of column.lookup.options) {
+      if (known.has(option.id.toLowerCase())) continue
+      catalog.push({ value: option.id, label: option.label })
+    }
+  } else if (column.options) {
+    for (const option of column.options) {
+      if (known.has(option.toLowerCase())) continue
+      catalog.push({ value: option, label: option })
+    }
+  }
+  catalog.sort((left, right) => (left.label ?? left.value).localeCompare(right.label ?? right.value, undefined, { numeric: true, sensitivity: 'base' }))
+  return [...options, ...catalog].slice(0, maximumQueryValueOptions)
+}
+
+function keepFieldEvents(event: { stopPropagation: () => void }) {
+  event.stopPropagation()
+}
+
 /** A staged row and where it sits: below `after`, or above `before`. */
 type StagedRow = { id: string; after: string | null; before?: string }
 
@@ -168,8 +302,11 @@ type GridSnapshot = { edits: ReadonlyMap<string, CellEdit>; staged: readonly Sta
 export default function DataGrid<T>({
   label, rows, columns: sourceColumns, rowId, rowLabel, emptyMessage = 'No records yet.',
   editable = false, isRowEditable, onSaveEdits, onCreateRows, rowState, rowMessage,
-  selectable = false, bulkActions, onOpenRow, onEditRow, exportAllRows, toolbar, maximumBodyHeight = '60vh',
-  viewId, identity, viewDefaults: viewDefaultsProp, onDeleteRows, onListingChange, groupBy: groupByProp, onGroupByChange,
+  selectable = false, selectedRowIds: selectedRowIdsProp, onSelectedRowIdsChange, bulkActions, onOpenRow, onEditRow, exportAllRows, toolbar, maximumBodyHeight = 'calc(100svh - 14rem)',
+  viewId, identity, viewDefaults: viewDefaultsProp, onDeleteRows, onListingChange, onQueryChange,
+  remoteFilterKeys, remoteSearch = false, remoteQuery = false, remoteTotal, onReachEnd, hasMore = false,
+  loadingMore = false, queryOpenByDefault = false, groupBy: groupByProp, onGroupByChange,
+  focusRowId,
 }: DataGridProps<T>) {
   const viewDefaults = useMemo(() => ({
     hiddenColumns: sourceColumns.filter((column) => column.hiddenByDefault).map((column) => column.key),
@@ -193,7 +330,7 @@ export default function DataGrid<T>({
   const [exportOpen, setExportOpen] = useState(false)
   const [columnsOpen, setColumnsOpen] = useState(false)
   const [cameraOpen, setCameraOpen] = useState(false)
-  const [queryOpen, setQueryOpen] = useState(() => Boolean(view.query.trim()))
+  const [queryOpen, setQueryOpen] = useState(() => queryOpenByDefault || Boolean(view.query.trim()))
   const [queryName, setQueryName] = useState('')
   const [fullscreen, setFullscreen] = useState(false)
   const [cellEditorExpanded, setCellEditorExpanded] = useState(false)
@@ -205,6 +342,8 @@ export default function DataGrid<T>({
   const exportRef = useRef<HTMLDivElement | null>(null)
   const columnsRef = useRef<HTMLDivElement | null>(null)
   const rootRef = useRef<HTMLDivElement | null>(null)
+  const bodyRef = useRef<HTMLDivElement | null>(null)
+  const sentinelRef = useRef<HTMLDivElement | null>(null)
   const fullscreenButtonRef = useRef<HTMLButtonElement | null>(null)
   const exitFullscreenRef = useRef<HTMLButtonElement | null>(null)
   const stagedCounter = useRef(0)
@@ -221,6 +360,29 @@ export default function DataGrid<T>({
     () => columns.map((column) => ({ key: column.key, header: column.header, kind: column.kind, options: column.options })),
     [columns],
   )
+  // Unique values are computed lazily per field and cached until the loaded
+  // rows change, so opening the filter does not walk every column up front.
+  // The context is the query without the condition being edited: with
+  // "Manufacturer is Lenovo" in place, the Model list only offers values from
+  // rows that condition still matches.
+  const queryValueOptionsCache = useMemo(() => new Map<string, QueryValueOption[]>(), [columns, rows])
+  const optionsForQueryField = useCallback((field: QueryField, context?: QueryModel) => {
+    const contextActive = Boolean(context && !isQueryEmpty(context))
+    const cacheKey = `${field.key}\u0000${contextActive && context ? encodeQuery(context) : ''}`
+    const cached = queryValueOptionsCache.get(cacheKey)
+    if (cached) return cached
+    const column = columns.find((candidate) => candidate.key === field.key)
+    const scope = contextActive && context
+      ? rows.filter((row) => matchQuery(row, queryFields, context, (item, key) => {
+        const match = columns.find((candidate) => candidate.key === key)
+        return match ? columnQueryTexts(match, item) : ''
+      }))
+      : rows
+    const options = column ? columnValueOptions(column, scope, !contextActive) : []
+    if (queryValueOptionsCache.size > 64) queryValueOptionsCache.clear()
+    queryValueOptionsCache.set(cacheKey, options)
+    return options
+  }, [columns, queryFields, queryValueOptionsCache, rows])
   const parsedQuery = parseQuery(view.query, queryFields)
   const queryError = view.query.trim() && !parsedQuery.ok ? parsedQuery.error : ''
 
@@ -228,10 +390,12 @@ export default function DataGrid<T>({
   const listedRows = useMemo(
     () => {
       const parsed = parseQuery(view.query, queryFields)
-      const query = parsed.ok && !isQueryEmpty(parsed.model) ? parsed.model : undefined
-      return sortRows(filterRows(rows.filter((row) => !hiddenRows.has(rowId(row))), columns, filters, search, query), columns, sort)
+      const query = !remoteQuery && parsed.ok && !isQueryEmpty(parsed.model) ? parsed.model : undefined
+      const skip = new Set(remoteFilterKeys ?? [])
+      const localFilters = Object.fromEntries(Object.entries(filters).filter(([key]) => !skip.has(key)))
+      return sortRows(filterRows(rows.filter((row) => !hiddenRows.has(rowId(row))), columns, localFilters, remoteSearch ? '' : search, query), columns, sort)
     },
-    [rows, columns, filters, search, sort, hiddenRows, rowId, view.query, queryFields],
+    [rows, columns, filters, search, sort, hiddenRows, rowId, view.query, queryFields, remoteFilterKeys, remoteSearch, remoteQuery],
   )
   const groupColumn = useMemo(
     () => (activeGroupBy ? visibleColumns.find((column) => column.key === activeGroupBy) ?? columns.find((column) => column.key === activeGroupBy) : undefined),
@@ -250,7 +414,11 @@ export default function DataGrid<T>({
         order.push(value)
       }
     }
-    return order.map((value) => ({ value, rows: buckets.get(value) ?? [] }))
+    return order.map((value) => ({
+      value,
+      label: groupLabelForRow(groupColumn, buckets.get(value)?.[0], value || '(blank)'),
+      rows: buckets.get(value) ?? [],
+    }))
   }, [groupColumn, listedRows])
   const onListingChangeRef = useRef(onListingChange)
   onListingChangeRef.current = onListingChange
@@ -262,10 +430,35 @@ export default function DataGrid<T>({
       groups: grouped?.map((group) => ({ value: group.value, rowIds: group.rows.map(rowId) })) ?? [],
     })
   }, [activeGroupBy, grouped, listedRows, rows.length])
+  const onQueryChangeRef = useRef(onQueryChange)
+  onQueryChangeRef.current = onQueryChange
+  useEffect(() => {
+    onQueryChangeRef.current?.({ filters, search, encodedQuery: view.query })
+  }, [filters, search, view.query])
+  const onReachEndRef = useRef(onReachEnd)
+  onReachEndRef.current = onReachEnd
+  useEffect(() => {
+    if (!hasMore || loadingMore) return
+    const root = bodyRef.current
+    const target = sentinelRef.current
+    if (!root || !target) return
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) onReachEndRef.current?.()
+    }, { root, rootMargin: '240px' })
+    observer.observe(target)
+    return () => observer.disconnect()
+  }, [hasMore, loadingMore, listedRows.length])
   const visibleRows = useMemo(() => {
     if (!grouped) return listedRows
     return grouped.flatMap((group) => collapsedGroups.has(group.value) ? [] : group.rows)
   }, [grouped, listedRows, collapsedGroups])
+
+  useEffect(() => {
+    const id = focusRowId?.trim()
+    if (!id) return
+    const row = rootRef.current?.querySelector<HTMLElement>(`[data-grid-row-id="${CSS.escape(id)}"]`)
+    if (typeof row?.scrollIntoView === 'function') row.scrollIntoView({ block: 'nearest' })
+  }, [focusRowId, visibleRows])
 
   // Navigable columns are the checkbox column, the data columns, then the open
   // action column. Data columns keep their own contiguous index space so the
@@ -314,7 +507,11 @@ export default function DataGrid<T>({
 
   const totalRowCount = slots.length
   const selection = useGridSelection({ rowCount: totalRowCount, columnCount: navColumnCount })
-  const { active, dragging, focusVersion, selectedRowIds } = selection
+  const { active, dragging, focusVersion, selectedRowIds: internalSelectedRowIds } = selection
+  const selectedRowIds = useMemo(
+    () => selectedRowIdsProp ? new Set(selectedRowIdsProp) : internalSelectedRowIds,
+    [selectedRowIdsProp, internalSelectedRowIds],
+  )
 
   const columnWidth = (column: GridColumn<T>) => view.columnWidths[column.key] ?? column.width ?? 12
   const totalWidth = useMemo(
@@ -324,6 +521,31 @@ export default function DataGrid<T>({
 
   const selectedRows = useMemo(() => rows.filter((row) => selectedRowIds.has(rowId(row))), [rows, selectedRowIds, rowId])
   const allVisibleChecked = visibleRows.length > 0 && visibleRows.every((row) => selectedRowIds.has(rowId(row)))
+
+  function commitRowSelection(ids: readonly string[]) {
+    onSelectedRowIdsChange?.(ids)
+    if (!selectedRowIdsProp) selection.setAllRowIds(ids)
+  }
+
+  function commitVisibleRowSelection(selectAll: boolean) {
+    const visibleIds = visibleRows.map(rowId)
+    if (!selectedRowIdsProp) {
+      commitRowSelection(selectAll ? visibleIds : [])
+      return
+    }
+    const visible = new Set(visibleIds)
+    const kept = selectedRowIdsProp.filter((id) => !visible.has(id))
+    const already = selectedRowIdsProp.filter((id) => visible.has(id))
+    const added = visibleIds.filter((id) => !selectedRowIds.has(id))
+    commitRowSelection(selectAll ? [...kept, ...already, ...added] : kept)
+  }
+
+  function toggleRowSelection(id: string) {
+    const next = new Set(selectedRowIds)
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+    commitRowSelection([...next])
+  }
   const nameOf = (row: T) => rowLabel ? rowLabel(row) : rowId(row)
   const stagedSet = useMemo(() => new Set(staged.map((item) => item.id)), [staged])
 
@@ -336,10 +558,14 @@ export default function DataGrid<T>({
   const canEditActive = editable && Boolean(activeColumn?.editable) && activeRowId !== undefined && rowEditable(activeRow)
 
   // Move real DOM focus with the active cell so screen readers and the browser
-  // agree on where the user is. The initial render must not steal focus.
+  // agree on where the user is. The initial render must not steal focus, and a
+  // filter or search field that already has focus must keep it.
   useEffect(() => {
     if (focusVersion === 0 || editor.editing || menu) return
-    cellRefs.current.get(`${active.row}:${active.column}`)?.focus({ preventScroll: false })
+    const focused = document.activeElement
+    const activeCell = cellRefs.current.get(`${active.row}:${active.column}`)
+    if (isFieldTarget(focused) && !activeCell?.contains(focused)) return
+    activeCell?.focus({ preventScroll: false })
   }, [focusVersion, active.row, active.column, editor.editing, menu])
 
   useEffect(() => {
@@ -820,7 +1046,7 @@ export default function DataGrid<T>({
   }
 
   function handleCopy(event: ClipboardEvent<HTMLTableElement>) {
-    if (editor.editing) return
+    if (editor.editing || isFieldTarget(event.target)) return
     event.clipboardData.setData('text/plain', copyRange(surface, dataRange()))
     event.preventDefault()
   }
@@ -832,7 +1058,7 @@ export default function DataGrid<T>({
 
   function handlePaste(event: ClipboardEvent<HTMLTableElement>) {
     nativeClipboard.current = true
-    if (!editable || editor.editing) return
+    if (!editable || editor.editing || isFieldTarget(event.target)) return
     const text = event.clipboardData.getData('text/plain')
     if (!text) return
     applyPaste(text)
@@ -878,8 +1104,7 @@ export default function DataGrid<T>({
 
   function handleKeyDown(event: KeyboardEvent<HTMLTableElement>) {
     if (editor.editing) return
-    const target = event.target
-    if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement) return
+    if (isFieldTarget(event.target) || isFieldTarget(document.activeElement)) return
     const extend = event.shiftKey
     const stride = event.ctrlKey || event.metaKey
     if (event.key === 'ArrowUp') { selection.moveBy(stride ? -totalRowCount : -1, 0, extend); event.preventDefault(); return }
@@ -935,7 +1160,7 @@ export default function DataGrid<T>({
       return
     }
     if (event.key === ' ' && selectable && active.column === 0) {
-      if (activeRow) selection.toggleRowId(rowId(activeRow))
+      if (activeRow) toggleRowSelection(rowId(activeRow))
       event.preventDefault()
       return
     }
@@ -971,7 +1196,7 @@ export default function DataGrid<T>({
     setCellEditorExpanded(false)
     if (move === 'down') selection.moveBy(1, 0, false)
     else if (move === 'right') selection.moveBy(0, 1, false)
-    else selection.focusCell(active, false)
+    else if (!isFieldTarget(document.activeElement)) selection.focusCell(active, false)
   }
 
   function registerCell(row: number, column: number, element: HTMLTableCellElement | null) {
@@ -982,6 +1207,7 @@ export default function DataGrid<T>({
 
   function cellPointerDown(position: CellPosition, event: PointerEvent<HTMLTableCellElement>) {
     if (event.button !== 0 || editor.editing) return
+    if ((event.target as HTMLElement).closest('button, a, input, select, textarea, label')) return
     if (event.shiftKey) selection.focusCell(position, true)
     else selection.beginDrag(position)
   }
@@ -1006,14 +1232,13 @@ export default function DataGrid<T>({
       }
     }
     const draft = editor.editing?.draft ?? ''
-    const cell = cellRefs.current.get(`${active.row}:${active.column}`)
-    const anchor = cell?.getBoundingClientRect() ?? new DOMRect(8, 8, 0, 0)
+    const cell = cellRefs.current.get(`${active.row}:${active.column}`) ?? null
     const lookup = column.resolveLookup?.({ row: context.row, values: effectiveRowValues(context.id, context.row) }) ?? column.lookup
     if (lookup) {
       return <>
         <span className="sr-only">{name}</span>
         <CellLookup
-          anchor={anchor}
+          anchor={cell}
           label={column.header}
           lookup={lookup}
           onChange={(text) => {
@@ -1021,6 +1246,7 @@ export default function DataGrid<T>({
             else editor.updateDraft(text)
           }}
           onClose={() => finishEdit(column, stored, 'none')}
+          scannable={column.scannable}
           value={draft}
         />
       </>
@@ -1075,7 +1301,7 @@ export default function DataGrid<T>({
           type="button"
         >Scan</button>
         {cameraOpen && <CellCamera
-          anchor={anchor}
+          anchor={cell}
             onCapture={(value) => {
             editor.updateDraft(value)
             setCameraOpen(false)
@@ -1085,11 +1311,11 @@ export default function DataGrid<T>({
         />}
       </>}
       {cellEditorExpanded && createPortal(
-        <div className="fixed inset-0 z-50 flex items-stretch justify-center bg-steward-ink-950/80 p-4 sm:p-6">
+        <div className="fixed inset-0 z-50 flex items-stretch justify-center overflow-hidden bg-steward-ink-950 p-4 sm:p-6">
           <div
             aria-labelledby="grid-cell-editor-title"
             aria-modal="true"
-            className={cx(subpanelClass, 'flex h-full w-full max-w-5xl flex-col bg-steward-ink-900 p-4 shadow-2xl')}
+            className={cx(menuSurfaceClass, 'flex h-full max-h-full min-h-0 w-full max-w-5xl flex-col overflow-hidden p-4 shadow-2xl')}
             role="dialog"
           >
             <div className="flex items-start justify-between gap-3">
@@ -1106,7 +1332,7 @@ export default function DataGrid<T>({
               <span className="sr-only">{name}</span>
               <textarea
                 autoFocus
-                className={cx(compactInputClass, 'min-h-0 w-full flex-1 resize-none p-3 font-mono text-sm')}
+                className={cx(compactInputClass, 'min-h-0 w-full flex-1 resize-none bg-steward-ink-950 p-3 font-mono text-sm')}
                 onChange={(event) => editor.updateDraft(event.target.value)}
                 onKeyDown={(event) => {
                   if (event.key === 'Escape') {
@@ -1120,6 +1346,9 @@ export default function DataGrid<T>({
                 value={draft}
               />
             </label>
+            {column.scannable && <div className="mt-3 min-h-0 shrink-0 overflow-y-auto border-t border-white/10 pt-3 steward-scrollbar">
+              <BarcodeCameraCapture onCapture={(code) => editor.updateDraft(code.value)} />
+            </div>}
           </div>
         </div>,
         document.body,
@@ -1140,6 +1369,7 @@ export default function DataGrid<T>({
       className={cx(
         gridCellClass,
         rowDensityClasses[view.density],
+        column.wrap && 'whitespace-normal !h-auto !max-w-none overflow-visible py-1',
         column.align === 'right' && 'text-right tabular-nums',
         selection.isSelected(rowIndex, navIndex) && !isEditing && 'bg-steward-teal/15',
         selection.isActive(rowIndex, navIndex) && !isEditing && 'ring-2 ring-inset ring-steward-teal',
@@ -1149,7 +1379,12 @@ export default function DataGrid<T>({
       )}
       key={column.key}
       onContextMenu={(event) => openMenu(rowIndex, navIndex, event)}
-      onDoubleClick={() => cellEditable && editor.beginEdit(id, column, stored)}
+      onDoubleClick={(event) => {
+        if (cellEditable) {
+          event.stopPropagation()
+          editor.beginEdit(id, column, stored)
+        }
+      }}
       onPointerDown={(event) => cellPointerDown({ row: rowIndex, column: navIndex }, event)}
       onPointerEnter={() => dragging && selection.extendDrag({ row: rowIndex, column: navIndex })}
       ref={(element) => registerCell(rowIndex, navIndex, element)}
@@ -1177,8 +1412,14 @@ export default function DataGrid<T>({
     return <tr
       aria-rowindex={rowIndex + 2}
       aria-selected={selectable && row ? selectedRowIds.has(id) : undefined}
-      className={cx('group/row bg-steward-ink-950', !row && 'bg-steward-ink-900', highlight && highlightRowClasses[highlight])}
+      className={cx('group/row bg-steward-ink-950', !row && 'bg-steward-ink-900', highlight && highlightRowClasses[highlight], focusRowId === id && 'ring-2 ring-inset ring-steward-teal')}
+      data-grid-row-id={id}
       key={id}
+      onDoubleClick={(event) => {
+        if (!row || !onOpenRow) return
+        if ((event.target as HTMLElement).closest('input, textarea, select, button')) return
+        onOpenRow(row)
+      }}
       role="row"
     >
       {selectable && (row
@@ -1195,7 +1436,7 @@ export default function DataGrid<T>({
           <input
             aria-label={`Select ${name}`}
             checked={selectedRowIds.has(id)}
-            onChange={() => selection.toggleRowId(id)}
+            onChange={() => toggleRowSelection(id)}
             tabIndex={-1}
             type="checkbox"
           />
@@ -1246,7 +1487,7 @@ export default function DataGrid<T>({
     </tr>
   }
 
-  function renderGroupHeader(value: string, count: number) {
+  function renderGroupHeader(value: string, label: string, count: number) {
     const collapsed = collapsedGroups.has(value)
     return <tr className="bg-steward-ink-900" key={`group-${value}`}>
       <td className="border-b border-white/10 px-2.5 py-1" colSpan={Math.max(navColumnCount, 1)}>
@@ -1260,7 +1501,7 @@ export default function DataGrid<T>({
           type="button"
         >
           <span aria-hidden="true">{collapsed ? '▸' : '▾'}</span>
-          {groupColumn?.header ?? 'Group'}: {value || '(blank)'} · {count}
+          {groupColumn?.header ?? 'Group'}: {label || '(blank)'} · {count}
         </button>
       </td>
     </tr>
@@ -1274,7 +1515,7 @@ export default function DataGrid<T>({
     const nodes: ReactNode[] = []
     let slotIndex = 0
     for (const group of grouped) {
-      nodes.push(renderGroupHeader(group.value, group.rows.length))
+      nodes.push(renderGroupHeader(group.value, group.label, group.rows.length))
       if (collapsedGroups.has(group.value)) continue
       while (slotIndex < slots.length) {
         const slot = slots[slotIndex]
@@ -1304,7 +1545,7 @@ export default function DataGrid<T>({
     className={cx(
       'min-w-0',
       fullscreen
-        ? 'fixed inset-0 z-30 flex flex-col bg-steward-ink-950'
+        ? 'fixed inset-0 z-50 flex flex-col bg-steward-ink-950'
         : subpanelClass,
     )}
     ref={rootRef}
@@ -1322,12 +1563,21 @@ export default function DataGrid<T>({
         <input
           className={cx(gridFilterClass, 'w-56')}
           onChange={(event) => setSearch(event.target.value)}
+          onCopy={keepFieldEvents}
+          onCut={keepFieldEvents}
+          onKeyDown={keepFieldEvents}
+          onPaste={keepFieldEvents}
+          onPointerDown={keepFieldEvents}
           placeholder={`Search ${label.toLowerCase()}`}
           type="search"
           value={search}
         />
       </label>
-      <p className="text-xs text-steward-mist-muted">{filtered ? `${visibleRows.length} of ${rows.length} rows` : `${rows.length} rows`}</p>
+      <p className="text-xs text-steward-mist-muted">{
+        typeof remoteTotal === 'number'
+          ? `${visibleRows.length} of ${remoteTotal} matching`
+          : filtered ? `${visibleRows.length} of ${rows.length} rows` : `${rows.length} rows`
+      }</p>
       <button
         aria-expanded={queryOpen}
         className={cx(plainButtonClass, 'min-h-8 px-2 py-1 text-xs', (view.query.trim() || queryOpen) && 'text-steward-mist')}
@@ -1391,10 +1641,11 @@ export default function DataGrid<T>({
         <button
           aria-expanded={columnsOpen}
           aria-haspopup="menu"
+          aria-label="Columns"
           className={cx(plainButtonClass, 'min-h-8 px-2 py-1 text-xs')}
           onClick={() => setColumnsOpen((open) => !open)}
           type="button"
-        >Columns</button>
+        ><GearIcon /> Columns</button>
         {columnsOpen && <div className={cx(menuSurfaceClass, 'absolute right-0 z-20 mt-1 max-h-72 w-56 overflow-y-auto p-2 steward-scrollbar')} onWheel={(event) => event.stopPropagation()} role="menu">
           <fieldset>
             <legend className="sr-only">Visible columns for {label}</legend>
@@ -1418,6 +1669,7 @@ export default function DataGrid<T>({
         model={queryModel}
         onEncodedChange={applyEncodedQuery}
         onModelChange={applyQueryModel}
+        optionsForField={optionsForQueryField}
       />
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <button className={cx(secondaryButtonClass, 'min-h-8 px-3 py-1 text-xs')} onClick={() => { applyQueryModel(emptyQuery()); setQueryOpen(false) }} type="button">Clear filter</button>
@@ -1469,9 +1721,10 @@ export default function DataGrid<T>({
       </button>
       <button className={cx(secondaryButtonClass, 'min-h-8 px-3 py-1 text-xs')} disabled={saving} onClick={discardAll} type="button">Discard</button>
     </div>}
-    <div aria-label={label} className={cx(gridWrapClass, fullscreen && 'min-h-0 flex-1')} role="region" style={fullscreen ? undefined : { maxHeight: maximumBodyHeight }} tabIndex={0}>
+    <div aria-label={label} className={cx(gridWrapClass, fullscreen && 'min-h-0 flex-1')} ref={bodyRef} role="region" style={fullscreen ? undefined : { maxHeight: maximumBodyHeight }} tabIndex={0}>
       <table
         aria-colcount={navColumnCount}
+        aria-label={label}
         aria-multiselectable={selectable || undefined}
         aria-rowcount={totalRowCount + 1}
         className={cx(gridTableClass, dragging && 'select-none')}
@@ -1487,7 +1740,7 @@ export default function DataGrid<T>({
               <input
                 aria-label={`Select all visible ${label.toLowerCase()}`}
                 checked={allVisibleChecked}
-                onChange={() => allVisibleChecked ? selection.clearRowIds() : selection.setAllRowIds(visibleRows.map(rowId))}
+                onChange={() => commitVisibleRowSelection(!allVisibleChecked)}
                 type="checkbox"
               />
             </th>}
@@ -1509,8 +1762,11 @@ export default function DataGrid<T>({
                   aria-label={`Filter ${column.header}`}
                   className={cx(gridFilterClass, 'mt-1')}
                   onChange={(event) => setFilter(column.key, event.target.value)}
-                  onKeyDown={(event) => event.stopPropagation()}
-                  onPointerDown={(event) => event.stopPropagation()}
+                  onCopy={keepFieldEvents}
+                  onCut={keepFieldEvents}
+                  onKeyDown={keepFieldEvents}
+                  onPaste={keepFieldEvents}
+                  onPointerDown={keepFieldEvents}
                   placeholder="Filter"
                   value={filters[column.key] ?? ''}
                 />
@@ -1545,6 +1801,8 @@ export default function DataGrid<T>({
         </thead>
         <tbody>{renderBody()}</tbody>
       </table>
+      {hasMore && <div aria-hidden="true" className="h-8" ref={sentinelRef} />}
+      {loadingMore && <p className="px-3 py-2 text-xs text-steward-mist-muted" role="status">Loading more records…</p>}
     </div>
     {menu && <ContextMenu anchor={menu.anchor} entries={menuEntries()} label={`Actions for ${label}`} onClose={closeMenu} />}
     <Drawer
@@ -1571,6 +1829,15 @@ export default function DataGrid<T>({
   </div>
 
   return fullscreen ? createPortal(grid, document.body) : grid
+}
+
+function GearIcon() {
+  return (
+    <svg aria-hidden="true" className="size-3.5" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="3" />
+      <path d="M12 4.5v2M12 17.5v2M4.5 12h2M17.5 12h2M6.4 6.4l1.4 1.4M16.2 16.2l1.4 1.4M6.4 17.6l1.4-1.4M16.2 7.8l1.4-1.4" />
+    </svg>
+  )
 }
 
 function ExpandIcon() {

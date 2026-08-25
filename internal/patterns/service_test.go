@@ -34,6 +34,9 @@ func TestBuiltInTemplatesCoverCoreRecordsAndEveryFieldType(t *testing.T) {
 			strings.HasPrefix(item.RecordType, "people.") || strings.HasPrefix(item.RecordType, "threads.") || strings.HasPrefix(item.RecordType, "labels.") || strings.HasPrefix(item.RecordType, "ledger.") || strings.HasPrefix(item.RecordType, "signals.") && item.RecordType != "signals.alert" || strings.HasPrefix(item.RecordType, "reach.") && item.RecordType != "reach.message" || strings.HasPrefix(item.RecordType, "directory.") && item.RecordType != "directory.import-batch" || item.RecordType == "patterns.template" || item.RecordType == "bridge.oauth-client" {
 			wantVersion = 2
 		}
+		if item.RecordType == "people.assignment" {
+			wantVersion = 3
+		}
 		if !item.BuiltIn || item.Version != wantVersion || item.Status != patterns.StatusActive {
 			t.Fatalf("unexpected built-in metadata: %#v", item)
 		}
@@ -56,6 +59,9 @@ func TestBuiltInTemplatesCoverCoreRecordsAndEveryFieldType(t *testing.T) {
 				record == "atlas.asset" || record == "atlas.model" || record == "atlas.identifier" || record == "atlas.lifecycle-event" ||
 				strings.HasPrefix(record, "people.") || strings.HasPrefix(record, "threads.") || strings.HasPrefix(record, "labels.") || strings.HasPrefix(record, "ledger.") || strings.HasPrefix(record, "signals.") && record != "signals.alert" || strings.HasPrefix(record, "reach.") && record != "reach.message" || strings.HasPrefix(record, "directory.") && record != "directory.import-batch" || record == "patterns.template" || record == "bridge.oauth-client" {
 				wantVersion = 2
+			}
+			if record == "people.assignment" {
+				wantVersion = 3
 			}
 			if !ok || id == "" || version != wantVersion {
 				t.Errorf("missing stable built-in reference for %s: %q v%d", record, id, version)
@@ -97,7 +103,7 @@ func TestBuiltInTemplateContractFingerprint(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := fmt.Sprintf("%x", sha256.Sum256(encoded))
-	const want = "a2a3f5120d622e7d70388d572e2b602867f303dc2f9abb04fca67b859882496a"
+	const want = "0b3f774fc6eaf9cf9cbf13b928289adea2303b3bd7d760929cb990b7c944c99b"
 	if got != want {
 		t.Fatalf("built-in contract changed; review domain parity and intentionally update the fingerprint: got %s want %s", got, want)
 	}
@@ -183,7 +189,7 @@ func TestPeopleV2SchemasPreservePortableStateAndHistory(t *testing.T) {
 	service := newPatternsService(t)
 	for _, recordType := range []string{"people.site", "people.building", "people.room", "people.department", "people.identity", "people.assignment"} {
 		latest, err := service.ActiveTemplateForRecordType(context.Background(), recordType)
-		if err != nil || latest.Version != 2 {
+		if err != nil || latest.Version < 2 {
 			t.Fatalf("unexpected active People schema for %s: %#v err=%v", recordType, latest, err)
 		}
 		legacy, err := service.GetTemplate(context.Background(), latest.ID, 1)
@@ -209,7 +215,7 @@ func TestPeopleV2SchemasPreservePortableStateAndHistory(t *testing.T) {
 	}
 	valid, err = service.Validate(context.Background(), assignment.ID, assignment.Version, patterns.ValidationInput{Values: map[string]any{
 		"assetId": "asset-one", "assigneeKind": "identity", "assigneeId": "identity-one", "role": "user",
-		"effectiveFrom": "2026-08-13T12:00:00Z", "effectiveTo": "2026-08-14T12:00:00Z", "createdAt": "2026-08-13T12:00:00Z",
+		"effectiveFrom": "2026-08-13T12:00:00Z", "dueAt": "2026-08-20T12:00:00Z", "effectiveTo": "2026-08-14T12:00:00Z", "createdAt": "2026-08-13T12:00:00Z",
 	}})
 	if err != nil || valid.Status != patterns.ValidationValid {
 		t.Fatalf("People assignment v2 rejected ended history: %#v err=%v", valid, err)

@@ -3,7 +3,9 @@ import { ApiRequestError, requestJSON } from './api'
 import GraphNodeBlurb from './GraphNodeBlurb'
 import InteractiveRelationshipGraph, { type GraphEdge, type GraphNode } from './InteractiveRelationshipGraph'
 import MeshSectionNav, { type MeshSection } from './MeshSectionNav'
-import { atlasInventoryCounts, applyOverlayGroups, chartGroupID, chartGroupKind, displayType, defaultKindColorKey, formatAtlasInventorySummary, graphLimitLabel, graphRecordLimits, kindsBySource, meshNodeKinds, meshRelationshipKinds, parseKindColorOverrides, sourceForKind, sourceGroupKind, sourceHubsFor, sourceLabels, type GraphColorMode, type GraphPaletteKey } from './graphModel'
+import { atlasInventoryCounts, applyOverlayGroups, annotateCampusAttributes, chartGroupID, chartGroupKind, displayType, defaultKindColorKey, formatAtlasInventorySummary, graphLimitLabel, graphRecordLimits, identityKindHubsFor, isSyntheticGraphKind, kindsBySource, meshNodeKinds, meshRelationshipKinds, nodePassesCampusFilters, occupancyRoleHubsFor, parseKindColorOverrides, roleGroupKind, sourceForKind, sourceGroupKind, sourceHubsFor, sourceLabels, withoutUnlinkedNodes, type GraphColorMode, type GraphPaletteKey } from './graphModel'
+import { meshNodeFromHash } from './graphRecord'
+import { defaultMeshQuickView, matchingQuickView, MeshViewPills, type MeshQuickView } from './MeshViewPills'
 import { readMeshGraph } from './RelationshipGraphView'
 import DataGrid, { type GridListing } from './grid/DataGrid'
 import type { GridColumn } from './grid/columns'
@@ -14,12 +16,12 @@ import { meshReadPermissions } from './workspaceAccess'
 // Requirement: REQ-DIRECTORY-EXPANSION-008. Feature: threads.relationships.
 
 type MeshGraphState = { nodes: GraphNode[]; edges: GraphEdge[]; sources: string[] }
-type Filters = { search: string; relationship: string; limit: string }
+type Filters = { search: string; relationship: string; limit: string; node: string }
 type RecordRow = { id: string; label: string; type: string; source: string; status: string; connections: number }
 type RelationshipRow = { id: string; from: string; fromType: string; relationship: string; to: string; toType: string }
 
 const emptyGraph: MeshGraphState = { nodes: [], edges: [], sources: [] }
-const emptyFilters: Filters = { search: '', relationship: '', limit: '100' }
+const emptyFilters: Filters = { search: '', relationship: '', limit: '100', node: '' }
 const allKindIDs = meshNodeKinds.map((kind) => kind.id)
 const sourceGroups = kindsBySource()
 const meshKindColorStorageKey = 'stewardmesh:mesh-kind-colors'
@@ -51,19 +53,29 @@ const relationshipColumns: GridColumn<RelationshipRow>[] = [
 function meshQuery(filters: Filters, kinds: readonly string[]) {
   const query = new URLSearchParams()
   if (filters.search.trim()) query.set('search', filters.search.trim())
+  if (filters.node.trim()) query.set('node', filters.node.trim())
   if (filters.relationship) query.set('relationship', filters.relationship)
   if (kinds.length > 0 && kinds.length < allKindIDs.length) query.set('kinds', kinds.join(','))
   query.set('limit', filters.limit)
   return query.toString()
 }
 
+function filtersFromHash(): Filters {
+  const node = meshNodeFromHash(window.location.hash)
+  return node ? { ...emptyFilters, node } : emptyFilters
+}
+
 export default function MeshExplorer({ csrfToken = '', identity = null, onOpenRecord, permissions }: { csrfToken?: string; identity?: GridIdentity | null; onOpenRecord?: (node: GraphNode) => void; permissions: readonly string[] }) {
   const [section, setSection] = useState<MeshSection>('graph')
-  const [filters, setFilters] = useState<Filters>(emptyFilters)
+  const [filters, setFilters] = useState<Filters>(filtersFromHash)
   const [selectedKinds, setSelectedKinds] = useState<string[]>(allKindIDs)
   const [groupedKinds, setGroupedKinds] = useState<string[]>([])
-  const [colorMode, setColorMode] = useState<GraphColorMode>('type')
+  const [colorMode, setColorMode] = useState<GraphColorMode>(defaultMeshQuickView.colorMode)
   const [kindColorOverrides, setKindColorOverrides] = useState<Record<string, GraphPaletteKey>>(readStoredKindColors)
+  const [hideInactivePeople, setHideInactivePeople] = useState(defaultMeshQuickView.hideInactivePeople)
+  const [hideInactiveAssets, setHideInactiveAssets] = useState(defaultMeshQuickView.hideInactiveAssets)
+  const [occupancyHubs, setOccupancyHubs] = useState(defaultMeshQuickView.occupancyHubs)
+  const [identityHubs, setIdentityHubs] = useState(defaultMeshQuickView.identityHubs)
   const [graph, setGraph] = useState<MeshGraphState>(emptyGraph)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -73,6 +85,8 @@ export default function MeshExplorer({ csrfToken = '', identity = null, onOpenRe
   const [optionsOpen, setOptionsOpen] = useState(false)
   const [enabledSourceHubs, setEnabledSourceHubs] = useState<string[]>([])
   const [chartGroupBy, setChartGroupBy] = useState<string | null>(null)
+  const [showUnlinked, setShowUnlinked] = useState(false)
+  const [isolatedOnly, setIsolatedOnly] = useState(false)
   const [listing, setListing] = useState<GridListing | null>(null)
   const errorRef = useRef<HTMLDivElement>(null)
   const canRead = meshReadPermissions.some((permission) => permissions.includes(permission))
@@ -84,8 +98,9 @@ export default function MeshExplorer({ csrfToken = '', identity = null, onOpenRe
       const response = await requestJSON(`/api/v1/mesh/graph?${meshQuery(activeFilters, kinds)}`, { signal })
       const next = readMeshGraph(response)
       setGraph(next)
-      setSelectedNodeID('')
-      setFocusNodeID('')
+      const anchor = activeFilters.node.trim()
+      setSelectedNodeID(anchor && next.nodes.some((node) => node.id === anchor) ? anchor : '')
+      setFocusNodeID(anchor && next.nodes.some((node) => node.id === anchor) ? anchor : '')
       const sourceSummary = next.sources.length > 0 ? ` from ${next.sources.map((source) => sourceLabels[source] ?? source).join(', ')}` : ''
       const inventorySummary = formatAtlasInventorySummary(atlasInventoryCounts(next.nodes))
       const inventoryText = inventorySummary ? ` Includes ${inventorySummary}.` : ''
@@ -100,11 +115,20 @@ export default function MeshExplorer({ csrfToken = '', identity = null, onOpenRe
   }, [])
 
   useEffect(() => {
+    function syncHash() {
+      const node = meshNodeFromHash(window.location.hash)
+      setFilters((current) => current.node === node ? current : { ...current, node })
+    }
+    window.addEventListener('hashchange', syncHash)
+    return () => window.removeEventListener('hashchange', syncHash)
+  }, [])
+
+  useEffect(() => {
     if (!canRead) return
     const controller = new AbortController()
-    void loadGraph(emptyFilters, allKindIDs, controller.signal)
+    void loadGraph(filters.node ? { ...emptyFilters, node: filters.node } : emptyFilters, allKindIDs, controller.signal)
     return () => controller.abort()
-  }, [canRead, loadGraph])
+  }, [canRead, filters.node, loadGraph])
 
   useEffect(() => {
     if (error) errorRef.current?.focus()
@@ -121,14 +145,53 @@ export default function MeshExplorer({ csrfToken = '', identity = null, onOpenRe
     return { nodes, edges: graph.edges.filter((edge) => ids.has(edge.from) && ids.has(edge.to)), sources: graph.sources }
   }, [graph, selectedKindSet])
 
+  const statusFiltered = useMemo(() => {
+    const keep = filters.node.trim()
+    const nodes = kindFiltered.nodes.filter((node) => node.id === keep || nodePassesCampusFilters(node, { hideInactivePeople, hideInactiveAssets }))
+    const ids = new Set(nodes.map((node) => node.id))
+    return { nodes, edges: kindFiltered.edges.filter((edge) => ids.has(edge.from) && ids.has(edge.to)), sources: kindFiltered.sources }
+  }, [filters.node, hideInactiveAssets, hideInactivePeople, kindFiltered])
+
+  const campusGraph = useMemo(() => ({
+    nodes: annotateCampusAttributes(statusFiltered.nodes, statusFiltered.edges),
+    edges: statusFiltered.edges,
+    sources: statusFiltered.sources,
+  }), [statusFiltered])
+
   const listingIDs = useMemo(() => {
     if (!listing || listing.total === 0 || listing.rowIds.length >= listing.total) return null
     return new Set(listing.rowIds)
   }, [listing])
-  const visibleGraph = useMemo(() => {
-    const nodes = listingIDs ? kindFiltered.nodes.filter((node) => listingIDs.has(node.id)) : kindFiltered.nodes
+  const plottedGraph = useMemo(() => {
+    let nodes = listingIDs ? campusGraph.nodes.filter((node) => listingIDs.has(node.id)) : campusGraph.nodes
+    if (isolatedOnly) {
+      const linked = new Set<string>()
+      for (const edge of campusGraph.edges) {
+        linked.add(edge.from)
+        linked.add(edge.to)
+      }
+      nodes = nodes.filter((node) => !linked.has(node.id))
+    }
     const ids = new Set(nodes.map((node) => node.id))
-    const edges = kindFiltered.edges.filter((edge) => ids.has(edge.from) && ids.has(edge.to))
+    return { nodes, edges: campusGraph.edges.filter((edge) => ids.has(edge.from) && ids.has(edge.to)) }
+  }, [campusGraph, isolatedOnly, listingIDs])
+  const unlinkedCount = useMemo(() => {
+    const linked = new Set<string>()
+    for (const edge of plottedGraph.edges) {
+      linked.add(edge.from)
+      linked.add(edge.to)
+    }
+    return plottedGraph.nodes.reduce((count, node) => count + (linked.has(node.id) ? 0 : 1), 0)
+  }, [plottedGraph])
+  const visibleGraph = useMemo(() => {
+    const includeUnlinked = showUnlinked || isolatedOnly
+    let { nodes, edges } = includeUnlinked ? plottedGraph : withoutUnlinkedNodes(plottedGraph.nodes, plottedGraph.edges)
+    const anchor = filters.node.trim()
+    if (anchor && !nodes.some((node) => node.id === anchor)) {
+      const kept = plottedGraph.nodes.find((node) => node.id === anchor)
+      if (kept) nodes = [...nodes, kept]
+    }
+    const ids = new Set(nodes.map((node) => node.id))
     const chartOverlays = listing?.groupBy && listing.groups.length > 0
       ? listing.groups.map((group) => ({
         id: chartGroupID(listing.groupBy ?? 'group', group.value),
@@ -137,9 +200,15 @@ export default function MeshExplorer({ csrfToken = '', identity = null, onOpenRe
       })).filter((group) => group.memberIDs.length > 0)
       : []
     const grouped = applyOverlayGroups(nodes, edges, chartOverlays, chartGroupKind)
+    const withRoles = occupancyHubs
+      ? applyOverlayGroups(grouped.nodes, grouped.edges, occupancyRoleHubsFor(grouped.nodes, grouped.edges), roleGroupKind)
+      : grouped
+    const withIdentities = identityHubs
+      ? applyOverlayGroups(withRoles.nodes, withRoles.edges, identityKindHubsFor(withRoles.nodes), roleGroupKind)
+      : withRoles
     const hubSources = listing?.groupBy === 'source' ? [] : enabledSourceHubs
-    return applyOverlayGroups(grouped.nodes, grouped.edges, sourceHubsFor(grouped.nodes, hubSources), sourceGroupKind)
-  }, [enabledSourceHubs, kindFiltered, listing, listingIDs])
+    return applyOverlayGroups(withIdentities.nodes, withIdentities.edges, sourceHubsFor(withIdentities.nodes, hubSources), sourceGroupKind)
+  }, [enabledSourceHubs, filters.node, identityHubs, isolatedOnly, listing, occupancyHubs, plottedGraph, showUnlinked])
 
   const nodesByID = useMemo(() => new Map(visibleGraph.nodes.map((node) => [node.id, node])), [visibleGraph.nodes])
   const selectedNode = selectedNodeID ? nodesByID.get(selectedNodeID) : undefined
@@ -153,12 +222,12 @@ export default function MeshExplorer({ csrfToken = '', identity = null, onOpenRe
 
   const recordRows = useMemo<RecordRow[]>(() => {
     const degree = new Map<string, number>()
-    for (const node of kindFiltered.nodes) degree.set(node.id, 0)
-    for (const edge of kindFiltered.edges) {
+    for (const node of campusGraph.nodes) degree.set(node.id, 0)
+    for (const edge of campusGraph.edges) {
       degree.set(edge.from, (degree.get(edge.from) ?? 0) + 1)
       degree.set(edge.to, (degree.get(edge.to) ?? 0) + 1)
     }
-    return kindFiltered.nodes.map((node) => ({
+    return campusGraph.nodes.map((node) => ({
       id: node.id,
       label: node.label,
       type: displayType(node.kind),
@@ -166,32 +235,50 @@ export default function MeshExplorer({ csrfToken = '', identity = null, onOpenRe
       status: node.attributes?.status ? displayType(node.attributes.status) : '',
       connections: degree.get(node.id) ?? 0,
     }))
-  }, [kindFiltered])
+  }, [campusGraph])
 
-  const relationshipRows = useMemo<RelationshipRow[]>(() => kindFiltered.edges.map((edge) => ({
+  const displayedRecordRows = useMemo(
+    () => (isolatedOnly ? recordRows.filter((row) => row.connections === 0) : recordRows),
+    [isolatedOnly, recordRows],
+  )
+
+  const relationshipRows = useMemo<RelationshipRow[]>(() => campusGraph.edges.map((edge) => ({
     id: edge.id,
     from: nodesByID.get(edge.from)?.label ?? edge.from,
     fromType: displayType(nodesByID.get(edge.from)?.kind ?? ''),
     relationship: displayType(edge.kind),
     to: nodesByID.get(edge.to)?.label ?? edge.to,
     toType: displayType(nodesByID.get(edge.to)?.kind ?? ''),
-  })), [kindFiltered.edges, nodesByID])
+  })), [campusGraph.edges, nodesByID])
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     void loadGraph(filters, selectedKinds)
   }
 
+  function applyQuickView(view: MeshQuickView) {
+    setColorMode(view.colorMode)
+    setHideInactivePeople(view.hideInactivePeople)
+    setHideInactiveAssets(view.hideInactiveAssets)
+    setOccupancyHubs(view.occupancyHubs)
+    setIdentityHubs(view.identityHubs)
+  }
+
   function reset() {
     setFilters(emptyFilters)
     setSelectedKinds(allKindIDs)
     setGroupedKinds([])
-    setColorMode('type')
+    applyQuickView(defaultMeshQuickView)
     setKindColorOverrides({})
     setOptionsOpen(false)
     setEnabledSourceHubs([])
     setChartGroupBy(null)
+    setShowUnlinked(false)
+    setIsolatedOnly(false)
     setListing(null)
+    if (meshNodeFromHash(window.location.hash)) {
+      window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}#workspace-mesh`)
+    }
     void loadGraph(emptyFilters, allKindIDs)
   }
 
@@ -264,7 +351,16 @@ export default function MeshExplorer({ csrfToken = '', identity = null, onOpenRe
     }))
   }
 
-  const colorModeLabel = colorMode === 'source' ? 'product' : colorMode === 'status' ? 'status' : 'record type'
+  const colorModeLabel = colorMode === 'campus'
+    ? 'occupancy and model'
+    : colorMode === 'occupancy'
+      ? 'occupancy role'
+      : colorMode === 'model'
+        ? 'asset model'
+        : colorMode === 'source'
+          ? 'product'
+          : colorMode === 'status' ? 'status' : 'record type'
+  const quickView = matchingQuickView({ colorMode, hideInactivePeople, hideInactiveAssets, occupancyHubs, identityHubs })
   const typeSummary = `${selectedKinds.length} of ${allKindIDs.length} types`
   const hiddenKinds = useMemo(() => {
     const present = new Set(graph.nodes.map((node) => node.kind))
@@ -272,16 +368,18 @@ export default function MeshExplorer({ csrfToken = '', identity = null, onOpenRe
   }, [graph.nodes, selectedKindSet])
   const availableSources = useMemo(() => {
     const sources = new Set<string>()
-    for (const node of kindFiltered.nodes) sources.add(sourceForKind(node.kind, node.attributes) || 'organization')
+    for (const node of visibleGraph.nodes) {
+      if (isSyntheticGraphKind(node.kind)) continue
+      sources.add(sourceForKind(node.kind, node.attributes) || 'organization')
+    }
     return [...sources]
-  }, [kindFiltered.nodes])
+  }, [visibleGraph.nodes])
 
   return (
-    <section aria-labelledby="mesh-heading" className={`${panelClass} space-y-4 p-4 sm:p-5`} data-feature="threads.relationships" data-requirement="REQ-DIRECTORY-EXPANSION-008">
+    <section aria-labelledby="mesh-heading" className={`${panelClass} space-y-3 p-3 sm:p-4`} data-feature="threads.relationships" data-requirement="REQ-DIRECTORY-EXPANSION-008">
       <ProductHeader
-        description="Use the graph to explore connections, or the Data tab to filter with the same query editor and grouping as Atlas. Hide a type from the legend, or bring product hubs and group nodes into the chart."
+        description="Search, then apply filters. Open graph options only when you need occupancy colors or product hubs."
         headingId="mesh-heading"
-        kicker="Mesh — Cross-product graph and data"
         title="See how records connect across StewardMesh"
       />
 
@@ -328,6 +426,9 @@ export default function MeshExplorer({ csrfToken = '', identity = null, onOpenRe
               </button>
               <p className="text-sm text-steward-mist-muted">
                 {typeSummary} visible · Colored by {colorModeLabel}
+                {!showUnlinked && unlinkedCount > 0
+                  ? ` · ${unlinkedCount} unlinked ${unlinkedCount === 1 ? 'record' : 'records'} hidden`
+                  : showUnlinked ? ' · Showing unlinked records' : ''}
                 {graph.sources.length > 0 ? ` · Included products: ${graph.sources.map((source) => sourceLabels[source] ?? source).join(', ')}` : ''}
                 {graph.nodes.length > 0 && (loadedInventory.assets > 0 || loadedInventory.models > 0)
                   ? ` · Atlas inventory in this graph: ${formatAtlasInventorySummary(loadedInventory)}.`
@@ -380,7 +481,7 @@ export default function MeshExplorer({ csrfToken = '', identity = null, onOpenRe
                 <fieldset>
                   <legend className={labelClass}>Color records by</legend>
                   <div className="mt-2 flex flex-wrap gap-4">
-                    {([['type', 'Record type'], ['source', 'Product'], ['status', 'Status']] as const).map(([value, label]) => (
+                    {([['campus', 'Campus: occupancy + model'], ['occupancy', 'Occupancy role'], ['model', 'Asset model'], ['type', 'Record type'], ['source', 'Product'], ['status', 'Status']] as const).map(([value, label]) => (
                       <label className="flex min-h-9 items-center gap-2 text-sm text-steward-mist" key={value}>
                         <input checked={colorMode === value} name="mesh-color-mode" onChange={() => setColorMode(value)} type="radio" value={value} />
                         {label}
@@ -391,6 +492,21 @@ export default function MeshExplorer({ csrfToken = '', identity = null, onOpenRe
               </div>
             )}
           </form>
+
+          <MeshViewPills
+            colorMode={colorMode}
+            hideInactiveAssets={hideInactiveAssets}
+            hideInactivePeople={hideInactivePeople}
+            identityHubs={identityHubs}
+            occupancyHubs={occupancyHubs}
+            onColorModeChange={setColorMode}
+            onHideInactiveAssetsChange={setHideInactiveAssets}
+            onHideInactivePeopleChange={setHideInactivePeople}
+            onIdentityHubsChange={setIdentityHubs}
+            onOccupancyHubsChange={setOccupancyHubs}
+            onQuickViewChange={applyQuickView}
+            quickView={quickView}
+          />
 
           <div className="flex flex-wrap items-end gap-4">
             {availableSources.length > 0 && (
@@ -431,17 +547,35 @@ export default function MeshExplorer({ csrfToken = '', identity = null, onOpenRe
                 {recordColumns.map((column) => <option key={column.key} value={column.key}>{column.header}</option>)}
               </select>
             </div>
+            <label className="flex min-h-10 items-center gap-2 text-sm text-steward-mist" htmlFor="mesh-show-unlinked">
+              <input checked={showUnlinked} id="mesh-show-unlinked" onChange={(event) => setShowUnlinked(event.target.checked)} type="checkbox" />
+              Show unlinked records
+            </label>
+            <label className="flex min-h-10 items-center gap-2 text-sm text-steward-mist" htmlFor="mesh-isolated-only">
+              <input checked={isolatedOnly} id="mesh-isolated-only" onChange={(event) => setIsolatedOnly(event.target.checked)} type="checkbox" />
+              Isolated records only
+            </label>
           </div>
+
+          {filters.node ? (
+            <p className="text-sm text-steward-mist-muted">
+              Showing the neighborhood of <strong className="font-medium text-steward-mist">{nodesByID.get(filters.node)?.label ?? filters.node}</strong>. Reset graph filters to return to the full graph.
+            </p>
+          ) : null}
 
           {error && <div className="rounded-xl border border-steward-danger/50 bg-steward-danger/15 p-4 text-[#ffccd1]" ref={errorRef} role="alert" tabIndex={-1}>{error}</div>}
           <p aria-live="polite" className="sr-only" role="status">{status}</p>
-          {graph.nodes.length > 0 && (loadedInventory.assets > 0 || loadedInventory.models > 0) && (visibleInventory.assets !== loadedInventory.assets || visibleInventory.models !== loadedInventory.models) && (
-            <p className="text-sm text-steward-mist-muted">{formatAtlasInventorySummary(visibleInventory)} visible with the current type filters.</p>
+          {graph.nodes.length > 0 && (loadedInventory.assets > 0 || loadedInventory.models > 0) && (visibleInventory.assets !== loadedInventory.assets || visibleInventory.models !== loadedInventory.models) && formatAtlasInventorySummary(visibleInventory) !== '' && (
+            <p className="text-sm text-steward-mist-muted">{formatAtlasInventorySummary(visibleInventory)} visible with the current graph filters.</p>
           )}
 
           <div aria-labelledby="mesh-tab-graph" hidden={section !== 'graph'} id="mesh-panel-graph" role="tabpanel">
             {!error && !loading && visibleGraph.nodes.length === 0 && hiddenKinds.length === 0 ? (
-              <p className={`${emptyStateClass} mt-2`}>No visible records match these graph filters.</p>
+              <p className={`${emptyStateClass} mt-2`}>
+                {!showUnlinked && unlinkedCount > 0
+                  ? `No connected records match these graph filters. Turn on Show unlinked records to include ${unlinkedCount} isolated ${unlinkedCount === 1 ? 'record' : 'records'}.`
+                  : 'No visible records match these graph filters.'}
+              </p>
             ) : !error ? (
               <div aria-busy={loading} className={cx(subpanelClass, 'p-3 sm:p-4')}>
                 <InteractiveRelationshipGraph
@@ -479,16 +613,21 @@ export default function MeshExplorer({ csrfToken = '', identity = null, onOpenRe
           </div>
 
           <div aria-labelledby="mesh-tab-data" hidden={section !== 'data'} id="mesh-panel-data" role="tabpanel">
-            {section === 'data' && !error && !loading && kindFiltered.nodes.length === 0 ? (
-              <p className={`${emptyStateClass} mt-2`}>No visible records match these graph filters.</p>
+            {section === 'data' && !error && !loading && displayedRecordRows.length === 0 ? (
+              <p className={`${emptyStateClass} mt-2`}>
+                {isolatedOnly
+                  ? 'No isolated records match these graph filters. Isolated means no operational relationships in the current graph.'
+                  : 'No visible records match these graph filters.'}
+              </p>
             ) : !error ? (
               <div aria-busy={loading} className="grid min-w-0 gap-6" hidden={section !== 'data'}>
                 <p className="text-sm leading-6 text-steward-mist-muted">
-                  Filter with the query editor, group rows from the dropdown, and export the current view to Excel. Grouping and visible rows also become extra nodes on the graph.
+                  Filter with the query editor, group rows from the dropdown, and export the current view to Excel. Isolated records have no operational relationships; organization membership is not counted. Grouping and visible rows also become extra nodes on the graph.
                 </p>
                 <DataGrid
                   columns={recordColumns}
-                  emptyMessage="No records match these graph filters."
+                  emptyMessage={isolatedOnly ? 'No isolated records match these graph filters.' : 'No records match these graph filters.'}
+                  focusRowId={selectedNodeID}
                   groupBy={chartGroupBy}
                   identity={identity}
                   label="Mesh records"
@@ -497,7 +636,7 @@ export default function MeshExplorer({ csrfToken = '', identity = null, onOpenRe
                   onOpenRow={openRecord}
                   rowId={(row) => row.id}
                   rowLabel={(row) => row.label}
-                  rows={recordRows}
+                  rows={displayedRecordRows}
                   viewId="mesh-records"
                 />
                 <DataGrid

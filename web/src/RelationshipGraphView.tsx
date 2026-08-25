@@ -3,7 +3,9 @@ import { ApiRequestError, requestJSON } from './api'
 import GraphNodeBlurb from './GraphNodeBlurb'
 import InteractiveRelationshipGraph, { type GraphEdge, type GraphNode } from './InteractiveRelationshipGraph'
 import { graphLimitLabel, graphRecordLimits, maximumGraphEdges, maximumGraphNodes } from './graphModel'
-import { buttonClass, emptyStateClass, inputClass, labelClass, secondaryButtonClass, subpanelClass, tableWrapClass } from './ui'
+import DataGrid from './grid/DataGrid'
+import type { GridColumn } from './grid/columns'
+import { buttonClass, emptyStateClass, inputClass, labelClass, secondaryButtonClass, subpanelClass } from './ui'
 
 // Requirement: REQ-DIRECTORY-EXPANSION-008. Feature: threads.relationships.
 
@@ -152,6 +154,26 @@ export default function RelationshipGraphView({ csrfToken = '', onOpenRecord, pe
     return graph.edges.filter((edge) => edge.from === selectedNodeID || edge.to === selectedNodeID)
   }, [graph.edges, selectedNodeID])
 
+  const relationshipColumns = useMemo((): GridColumn<GraphEdge>[] => [
+    {
+      key: 'from', header: 'From', kind: 'text', width: 16,
+      text: (edge) => nodesByID.get(edge.from)?.label ?? edge.from,
+      display: (edge) => <><span className="font-medium text-steward-mist">{nodesByID.get(edge.from)?.label}</span><span className="block text-xs text-steward-mist-muted">{displayType(nodesByID.get(edge.from)?.kind ?? '')}</span></>,
+    },
+    { key: 'relationship', header: 'Relationship', kind: 'text', width: 12, text: (edge) => displayType(edge.kind) },
+    {
+      key: 'to', header: 'To', kind: 'text', width: 16,
+      text: (edge) => nodesByID.get(edge.to)?.label ?? edge.to,
+      display: (edge) => <><span className="font-medium text-steward-mist">{nodesByID.get(edge.to)?.label}</span><span className="block text-xs text-steward-mist-muted">{displayType(nodesByID.get(edge.to)?.kind ?? '')}</span></>,
+    },
+  ], [nodesByID])
+
+  const disconnectedColumns = useMemo((): GridColumn<GraphNode>[] => [
+    { key: 'label', header: 'Disconnected record', kind: 'text', width: 16, text: (node) => node.label },
+    { key: 'type', header: 'Type', kind: 'text', width: 12, text: (node) => displayType(node.kind) },
+    { key: 'connections', header: 'Connections', kind: 'number', width: 8, align: 'right', text: () => '0' },
+  ], [])
+
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     void loadGraph(filters)
@@ -219,11 +241,28 @@ export default function RelationshipGraphView({ csrfToken = '', onOpenRecord, pe
                 selectedNodeID={selectedNodeID}
               />
 
-              <div aria-label="Visible relationships" className={tableWrapClass} role="region" tabIndex={0}>
-                <table className="w-full min-w-[680px] border-collapse text-left text-sm"><caption className="sr-only">Visible record relationships</caption><thead><tr className="border-b border-white/10 text-steward-mist-muted"><th className="px-4 py-3" scope="col">From</th><th className="px-4 py-3" scope="col">Relationship</th><th className="px-4 py-3" scope="col">To</th></tr></thead><tbody>{graph.edges.map((edge) => <tr className="border-b border-white/[0.06]" key={`${edge.from}-${edge.kind}-${edge.to}`}><td className="px-4 py-3"><span className="font-medium text-steward-mist">{nodesByID.get(edge.from)?.label}</span><span className="block text-xs text-steward-mist-muted">{displayType(nodesByID.get(edge.from)?.kind ?? '')}</span></td><td className="px-4 py-3 text-steward-teal">{displayType(edge.kind)}</td><td className="px-4 py-3"><span className="font-medium text-steward-mist">{nodesByID.get(edge.to)?.label}</span><span className="block text-xs text-steward-mist-muted">{displayType(nodesByID.get(edge.to)?.kind ?? '')}</span></td></tr>)}{graph.edges.length === 0 && <tr><td className="px-4 py-6 text-steward-mist-muted" colSpan={3}>No relationships connect the matching records.</td></tr>}</tbody></table>
-              </div>
+              <DataGrid
+                columns={relationshipColumns}
+                emptyMessage="No relationships connect the matching records."
+                label="Visible relationships"
+                maximumBodyHeight="24rem"
+                rowId={(edge) => edge.id}
+                rowLabel={(edge) => `${nodesByID.get(edge.from)?.label ?? edge.from} ${displayType(edge.kind)} ${nodesByID.get(edge.to)?.label ?? edge.to}`}
+                rows={graph.edges}
+                viewId="relationship-graph-edges"
+              />
 
-              {disconnected.length > 0 && <div aria-label="Disconnected visible records" className={tableWrapClass} role="region" tabIndex={0}><table className="w-full min-w-[480px] border-collapse text-left text-sm"><caption className="sr-only">Visible records without a matching relationship</caption><thead><tr className="border-b border-white/10 text-steward-mist-muted"><th className="px-4 py-3" scope="col">Disconnected record</th><th className="px-4 py-3" scope="col">Type</th><th className="px-4 py-3" scope="col">Connections</th></tr></thead><tbody>{disconnected.map((node) => <tr className="border-b border-white/[0.06]" key={node.id}><td className="px-4 py-3 font-medium text-steward-mist">{node.label}</td><td className="px-4 py-3 text-steward-mist-muted">{displayType(node.kind)}</td><td className="px-4 py-3 text-steward-mist-muted">0</td></tr>)}</tbody></table></div>}
+              {disconnected.length > 0 && (
+                <DataGrid
+                  columns={disconnectedColumns}
+                  label="Disconnected visible records"
+                  maximumBodyHeight="16rem"
+                  rowId={(node) => node.id}
+                  rowLabel={(node) => node.label}
+                  rows={disconnected}
+                  viewId="relationship-graph-disconnected"
+                />
+              )}
             </div>
           ) : null}
         </>

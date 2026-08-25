@@ -68,6 +68,18 @@ export function workspaceRecordHref(kind: string) {
   return target ? workspaceHash(target.area) : ''
 }
 
+export function meshRecordHref(kind: string, recordId: string) {
+  const id = `${kind}:${recordId}`
+  return `${workspaceHash('mesh')}?node=${encodeURIComponent(id)}`
+}
+
+export function meshNodeFromHash(hash: string) {
+  const raw = hash.startsWith('#') ? hash.slice(1) : hash
+  const queryIndex = raw.indexOf('?')
+  if (queryIndex < 0) return ''
+  return new URLSearchParams(raw.slice(queryIndex + 1)).get('node')?.trim() ?? ''
+}
+
 export function openRecordLabel(kind: string, canWrite: boolean) {
   const target = workspaceRecordTarget(kind)
   if (!target) return ''

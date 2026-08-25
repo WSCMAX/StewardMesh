@@ -2,6 +2,7 @@ import { type FormEvent, useEffect, useRef, useState } from 'react'
 import { ApiRequestError, isRevision, requestJSON, type Revision } from './api'
 import BarcodeCameraCapture from './BarcodeCameraCapture'
 import { validateScannedValue } from './AtlasScanner'
+import { isAtlasCodeSymbology } from './barcodeCapture'
 import { buttonClass, emptyStateClass, inputClass, secondaryButtonClass, subpanelClass } from './ui'
 
 // Requirement: REQ-ATLAS-CODES-001. Feature: inventory.identifiers.
@@ -283,6 +284,12 @@ function IdentifierForm({ busy, initialPrimary = false, initialSymbology = 'code
       <p className="mt-2 text-sm text-steward-mist-muted">Scan a Code 128 or QR code on the asset to fill the encoded value, then review and save.</p>
       <div className="mt-3">
         <BarcodeCameraCapture disabled={busy} onCapture={(code) => {
+          if (!isAtlasCodeSymbology(code.symbology)) {
+            setValue(code.value)
+            setDisplayValue((current) => current || code.value)
+            setScanError('Atlas Codes accept Code 128 and QR. Capture a serial, asset tag, or model from the Assets grid or the Scan tab label workflow.')
+            return
+          }
           const validation = validateScannedValue(code.symbology, code.value)
           setSymbology(code.symbology)
           setValue(validation.value)
@@ -290,7 +297,7 @@ function IdentifierForm({ busy, initialPrimary = false, initialSymbology = 'code
           setScanError(validation.error)
         }} />
       </div>
-      {scanError && <p className="mt-3 rounded-lg border border-red-400/50 bg-red-950/50 p-3 text-sm" role="alert">{scanError}</p>}
+      {scanError && <p className="mt-3 rounded-md border border-steward-danger/45 bg-steward-danger/10 p-3 text-sm text-[#ffccd1]" role="alert">{scanError}</p>}
       <div className="mt-3 grid gap-3">
         <label className="text-sm font-semibold text-steward-mist-muted">Symbology
           <select className={inputClass} name="symbology" onChange={(event) => { setSymbology(event.target.value as AssetIdentifier['symbology']); setScanError('') }} value={symbology}><option value="code128">Code 128</option><option value="qr">QR</option></select>

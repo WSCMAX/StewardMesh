@@ -42,8 +42,10 @@ function installAuthenticatedFetch(healthAvailable = true, sessionValue = sessio
     if (path === '/api/v1/auth/bootstrap') return jsonResponse({ required: false, tokenRequired: false, minimumPasswordCharacters: 15, oidcEnabled: false, samlEnabled: false })
     if (path === '/api/v1/auth/session') return jsonResponse(sessionValue)
     if (path === '/api/v1/organization') return jsonResponse({ id: 'example-org', name: 'Example Organization' })
-    if (path === '/api/v1/assets') return jsonResponse({ items: [], nextCursor: '' })
+    if (path.startsWith('/api/v1/assets')) return jsonResponse({ items: [], nextCursor: '' })
     if (path === '/api/v1/sites' || path === '/api/v1/departments' || path.startsWith('/api/v1/identities?')) return jsonResponse({ items: [] })
+    if (path.startsWith('/api/v1/signals/alerts')) return jsonResponse({ items: [] })
+    if (path === '/api/v1/directory-imports') return jsonResponse({ items: [] })
     if (path.startsWith('/api/v1/mesh/graph')) return jsonResponse({ nodes: [], edges: [], sources: [] })
     throw new Error(`unexpected request: ${path}`)
   })
@@ -63,20 +65,20 @@ test('restores a server-managed session and renders StewardMesh modules', async 
   render(<App />)
   expect(screen.getByRole('heading', { name: 'StewardMesh' })).toBeInTheDocument()
   expect(document.querySelector('img[src="/brand/stewardmesh-s-mark.svg"]')).toBeInTheDocument()
-  expect(await screen.findByRole('heading', { name: 'Overview — Work queue and product areas' })).toBeInTheDocument()
-  expect(screen.getByRole('heading', { name: 'Atlas — Asset inventory' })).toBeInTheDocument()
-  expect(screen.getByText('Signed in as', { exact: false })).toHaveTextContent('Example Administrator')
-  expect(screen.getByText('Your access').parentElement).toHaveTextContent('Administrator')
+  expect(await screen.findByRole('heading', { name: 'Overview' })).toBeInTheDocument()
+  expect(screen.getByRole('heading', { name: 'Inventory' })).toBeInTheDocument()
+  expect(screen.getAllByText('Signed in as', { exact: false })[0]).toHaveTextContent('Example Administrator')
+  expect(screen.getByRole('heading', { name: 'Work queue' })).toBeInTheDocument()
 })
 
 test('opens contextual Guide help and a sanitized issue report from the workspace', async () => {
   installAuthenticatedFetch()
   render(<App />)
-  await screen.findByRole('heading', { name: 'Overview — Work queue and product areas' })
+  await screen.findByRole('heading', { name: 'Overview' })
 
-  fireEvent.click(screen.getByRole('button', { name: 'Open Atlas' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Open Inventory' }))
   await waitFor(() => expect(document.getElementById('assets-heading')).toBeVisible())
-  fireEvent.click(screen.getByRole('button', { name: 'Help for Atlas' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Help for Inventory' }))
   expect(screen.getByRole('heading', { name: 'What you can do here' })).toBeInTheDocument()
   expect(screen.queryByRole('heading', { name: 'Take a quick tour of your workspace' })).not.toBeInTheDocument()
   expect(screen.getByRole('link', { name: 'Read Atlas documentation' })).toBeInTheDocument()
@@ -88,7 +90,7 @@ test('opens contextual Guide help and a sanitized issue report from the workspac
 test('activates a focused work area before Guide follows its section link', async () => {
   installAuthenticatedFetch()
   render(<App />)
-  await screen.findByRole('heading', { name: 'Overview — Work queue and product areas' })
+  await screen.findByRole('heading', { name: 'Overview' })
   const atlasTarget = document.getElementById('guide-atlas') as HTMLElement
   const scrollIntoView = vi.fn<(arg?: boolean | ScrollIntoViewOptions) => void>()
   atlasTarget.scrollIntoView = scrollIntoView
@@ -105,17 +107,17 @@ test('activates a focused work area before Guide follows its section link', asyn
 test('switches work areas, updates the deep link, and preserves in-progress Atlas context', async () => {
   installAuthenticatedFetch()
   render(<App />)
-  await screen.findByRole('heading', { name: 'Overview — Work queue and product areas' })
+  await screen.findByRole('heading', { name: 'Overview' })
 
-  fireEvent.click(screen.getByRole('button', { name: 'Open Atlas' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Open Inventory' }))
   const search = await screen.findByRole('searchbox', { name: 'Search Asset inventory' })
   await waitFor(() => expect(document.getElementById('workspace-context-heading')).toHaveFocus())
   fireEvent.change(search, { target: { value: 'server awaiting deployment' } })
   expect(window.location.hash).toBe('#workspace-atlas')
 
-  fireEvent.click(screen.getByRole('link', { name: 'Overview — Work queue and product areas' }))
-  expect(screen.getByRole('heading', { name: 'Overview — Work queue and product areas' })).toBeVisible()
-  fireEvent.click(screen.getByRole('link', { name: 'Atlas — Asset inventory' }))
+  fireEvent.click(screen.getByRole('link', { name: 'Overview — Work queue' }))
+  expect(screen.getByRole('heading', { name: 'Overview' })).toBeVisible()
+  fireEvent.click(screen.getByRole('link', { name: 'Inventory — Atlas · assets and equipment' }))
   expect(screen.getByRole('searchbox', { name: 'Search Asset inventory' })).toHaveValue('server awaiting deployment')
   expect(document.getElementById('assets-heading')).toBeVisible()
 })
@@ -128,8 +130,8 @@ test('opens Mesh for a finance-only session without requiring directory access',
   }
   installAuthenticatedFetch(true, financeSession)
   render(<App />)
-  await screen.findByRole('heading', { name: 'Overview — Work queue and product areas' })
-  fireEvent.click(screen.getByRole('button', { name: 'Open Mesh' }))
+  await screen.findByRole('heading', { name: 'Overview' })
+  fireEvent.click(screen.getByRole('button', { name: 'Open Graph' }))
   expect(await screen.findByRole('heading', { name: 'See how records connect across StewardMesh' })).toBeVisible()
   expect(window.location.hash).toBe('#workspace-mesh')
   expect(screen.getByRole('tab', { name: 'Graph' })).toBeInTheDocument()
@@ -139,7 +141,7 @@ test('opens Mesh for a finance-only session without requiring directory access',
 test('renders the authenticated Workspace without automated accessibility violations', async () => {
   installAuthenticatedFetch()
   const { container } = render(<App />)
-  await screen.findByRole('heading', { name: 'Overview — Work queue and product areas' })
+  await screen.findByRole('heading', { name: 'Overview' })
   const results = await axe.run(container)
   expect(results.violations).toEqual([])
 })
@@ -147,10 +149,10 @@ test('renders the authenticated Workspace without automated accessibility violat
 test('explains permission-limited areas without mounting protected feature content', async () => {
   installAuthenticatedFetch()
   render(<App />)
-  await screen.findByRole('heading', { name: 'Overview — Work queue and product areas' })
+  await screen.findByRole('heading', { name: 'Overview' })
 
-  fireEvent.click(screen.getByRole('button', { name: 'Open Horizon' }))
-  expect(await screen.findByRole('heading', { name: 'Horizon data is protected' })).toBeVisible()
+  fireEvent.click(screen.getByRole('button', { name: 'Open Planning' }))
+  expect(await screen.findByRole('heading', { name: 'Planning data is protected' })).toBeVisible()
   expect(screen.getByText('planning.read')).toBeVisible()
   expect(document.getElementById('horizon-heading')).not.toBeInTheDocument()
 })
@@ -163,14 +165,14 @@ test('shows scoped access without requesting or mounting an organization-wide co
   }
   const fetchMock = installAuthenticatedFetch(true, scopedSession)
   render(<App />)
-  await screen.findByRole('heading', { name: 'Overview — Work queue and product areas' })
+  await screen.findByRole('heading', { name: 'Overview' })
 
   expect(screen.getAllByText('Scoped').length).toBeGreaterThan(0)
-  fireEvent.click(screen.getByRole('button', { name: 'Open Atlas' }))
-  expect(await screen.findByRole('heading', { name: 'Atlas access is limited to assigned records' })).toBeVisible()
+  fireEvent.click(screen.getByRole('button', { name: 'Open Inventory' }))
+  expect(await screen.findByRole('heading', { name: 'Inventory access is limited to assigned records' })).toBeVisible()
   expect(screen.getByText(/Organization-wide lists stay closed/)).toBeVisible()
   expect(document.getElementById('assets-heading')).not.toBeInTheDocument()
-  expect(fetchMock.mock.calls.some(([path]) => path === '/api/v1/assets')).toBe(false)
+  expect(fetchMock.mock.calls.some(([path]) => String(path).startsWith('/api/v1/assets'))).toBe(false)
 })
 
 test('labels organization-wide readers as read only and keeps mutation actions hidden', async () => {
@@ -181,10 +183,10 @@ test('labels organization-wide readers as read only and keeps mutation actions h
   }
   installAuthenticatedFetch(true, readOnlySession)
   render(<App />)
-  await screen.findByRole('heading', { name: 'Overview — Work queue and product areas' })
+  await screen.findByRole('heading', { name: 'Overview' })
 
-  expect(screen.getByText('Read only')).toBeVisible()
-  fireEvent.click(screen.getByRole('button', { name: 'Open Atlas' }))
+  expect(screen.getAllByText('Read only').length).toBeGreaterThan(0)
+  fireEvent.click(screen.getByRole('button', { name: 'Open Inventory' }))
   expect(await screen.findByText('Requires assets.write')).toBeVisible()
   expect(screen.queryByRole('button', { name: 'Add asset' })).not.toBeInTheDocument()
 })
@@ -192,7 +194,7 @@ test('labels organization-wide readers as read only and keeps mutation actions h
 test('returns to a recoverable login state when an authenticated request reports an expired session', async () => {
   installAuthenticatedFetch()
   render(<App />)
-  await screen.findByRole('heading', { name: 'Overview — Work queue and product areas' })
+  await screen.findByRole('heading', { name: 'Overview' })
 
   window.dispatchEvent(new CustomEvent(authenticationRequiredEventName))
   expect(await screen.findByRole('heading', { name: 'Sign in to StewardMesh' })).toBeVisible()
@@ -202,7 +204,7 @@ test('returns to a recoverable login state when an authenticated request reports
 test('marks retained work as potentially stale while the service is unavailable', async () => {
   installAuthenticatedFetch(false)
   render(<App />)
-  await screen.findByRole('heading', { name: 'Overview — Work queue and product areas' })
+  await screen.findByRole('heading', { name: 'Overview' })
   expect(await screen.findByText('Service unavailable.')).toBeVisible()
   expect(screen.getByText(/Previously loaded context may be stale/)).toBeVisible()
 })
@@ -216,8 +218,10 @@ test('renders an accessible one-time administrator setup and submits without bro
     }
     if (path === '/api/v1/auth/bootstrap' && init?.method === 'POST') return jsonResponse(session, 201)
     if (path === '/api/v1/organization') return jsonResponse({ id: 'example-org', name: 'Example Organization' })
-    if (path === '/api/v1/assets') return jsonResponse({ items: [], nextCursor: '' })
+    if (path.startsWith('/api/v1/assets')) return jsonResponse({ items: [], nextCursor: '' })
     if (path === '/api/v1/sites' || path === '/api/v1/departments' || path.startsWith('/api/v1/identities?')) return jsonResponse({ items: [] })
+    if (path.startsWith('/api/v1/signals/alerts')) return jsonResponse({ items: [] })
+    if (path === '/api/v1/directory-imports') return jsonResponse({ items: [] })
     if (path.startsWith('/api/v1/mesh/graph')) return jsonResponse({ nodes: [], edges: [], sources: [] })
     throw new Error(`unexpected request: ${path}`)
   })
@@ -235,7 +239,7 @@ test('renders an accessible one-time administrator setup and submits without bro
   fireEvent.change(screen.getByLabelText('Deployment bootstrap token'), { target: { value: 'deployment-bootstrap-token-value' } })
   fireEvent.click(screen.getByRole('button', { name: 'Create administrator' }))
 
-  expect(await screen.findByText('Atlas — Asset inventory')).toBeInTheDocument()
+  expect(await screen.findByRole('heading', { name: 'Overview' })).toBeInTheDocument()
   const bootstrapCall = fetchMock.mock.calls.find(([path, init]) => path === '/api/v1/auth/bootstrap' && init?.method === 'POST')
   expect(bootstrapCall).toBeDefined()
   expect(bootstrapCall?.[1]).toMatchObject({ credentials: 'same-origin' })
@@ -253,8 +257,10 @@ test('omits the bootstrap token when the deployment does not require one', async
     }
     if (path === '/api/v1/auth/bootstrap' && init?.method === 'POST') return jsonResponse(session, 201)
     if (path === '/api/v1/organization') return jsonResponse({ id: 'example-org', name: 'Example Organization' })
-    if (path === '/api/v1/assets') return jsonResponse({ items: [], nextCursor: '' })
+    if (path.startsWith('/api/v1/assets')) return jsonResponse({ items: [], nextCursor: '' })
     if (path === '/api/v1/sites' || path === '/api/v1/departments' || path.startsWith('/api/v1/identities?')) return jsonResponse({ items: [] })
+    if (path.startsWith('/api/v1/signals/alerts')) return jsonResponse({ items: [] })
+    if (path === '/api/v1/directory-imports') return jsonResponse({ items: [] })
     if (path.startsWith('/api/v1/mesh/graph')) return jsonResponse({ nodes: [], edges: [], sources: [] })
     throw new Error(`unexpected request: ${path}`)
   })
@@ -269,7 +275,7 @@ test('omits the bootstrap token when the deployment does not require one', async
   fireEvent.change(screen.getByLabelText('Confirm password'), { target: { value: 'correct horse battery staple' } })
   fireEvent.click(screen.getByRole('button', { name: 'Create administrator' }))
 
-  await screen.findByText('Atlas — Asset inventory')
+  await screen.findByRole('heading', { name: 'Overview' })
   const bootstrapCall = fetchMock.mock.calls.find(([path, init]) => path === '/api/v1/auth/bootstrap' && init?.method === 'POST')
   const requestBody = JSON.parse(String(bootstrapCall?.[1]?.body)) as Record<string, unknown>
   expect(requestBody).not.toHaveProperty('bootstrapToken')

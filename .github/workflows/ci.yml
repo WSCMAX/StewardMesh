@@ -133,8 +133,14 @@ jobs:
         run: docker compose -f deploy/docker-compose.yml --profile demo config --quiet
       - name: Validate integrations Compose profile
         run: docker compose -f deploy/docker-compose.yml --profile integrations config --quiet
+      - name: Validate campus-demo Compose profile
+        run: docker compose -f deploy/docker-compose.yml --profile campus-demo config --quiet
+      - name: Validate campus-demo Compose overlay
+        run: docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.campus-demo.yml --profile campus-demo config --quiet
       - name: Build application container
         run: docker build --file deploy/Dockerfile --target stewardmesh --tag stewardmesh:ci .
+      - name: Build campus demo package container
+        run: docker build --file deploy/Dockerfile --target campus-demo --tag stewardmesh-campus-demo:ci .
       - name: Build all-domain gRPC container
         run: docker build --file deploy/Dockerfile --target stewardmesh-grpc --tag stewardmesh-grpc:ci .
       - name: Build Grouper fixture container

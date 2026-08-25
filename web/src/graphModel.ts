@@ -1,6 +1,12 @@
 // Requirement: REQ-DIRECTORY-EXPANSION-008. Feature: threads.relationships.
 
-export type GraphColorMode = 'type' | 'source' | 'status'
+export type GraphColorMode = 'type' | 'source' | 'status' | 'campus' | 'model' | 'occupancy'
+
+export type NodePaint = {
+  fill: string
+  stroke: string
+  fills?: readonly string[]
+}
 
 export type GraphPaletteColor = {
   id: string
@@ -68,6 +74,7 @@ export const meshKindColorKeys: Record<string, GraphPaletteKey> = {
   plan: 'cyan',
   source_group: 'navy',
   chart_group: 'gold',
+  role_group: 'gold',
 }
 
 export type KindMeta = {
@@ -177,7 +184,24 @@ export const sourceColors: Record<string, { fill: string; stroke: string }> = Ob
 )
 
 const defaultPalette = graphPaletteColor('slate')
-const defaultColors = { fill: defaultPalette.fill, stroke: defaultPalette.stroke }
+const defaultColors: NodePaint = { fill: defaultPalette.fill, stroke: defaultPalette.stroke }
+
+export const identityNodeKinds = ['person', 'shared', 'public', 'lab'] as const
+export type OccupancyRole = 'instructor' | 'student' | 'resident' | 'office' | 'lab'
+
+export const occupancyRoleMeta: Record<OccupancyRole, { edge: string; label: string; plural: string; colorKey: GraphPaletteKey }> = {
+  instructor: { edge: 'teaches_in', label: 'Instructor', plural: 'Instructors', colorKey: 'violet' },
+  student: { edge: 'attends_class', label: 'Student', plural: 'Students', colorKey: 'sky' },
+  resident: { edge: 'resides_in', label: 'Resident', plural: 'Residents', colorKey: 'amber' },
+  office: { edge: 'uses_office', label: 'Office', plural: 'Office users', colorKey: 'teal' },
+  lab: { edge: 'uses_lab', label: 'Lab user', plural: 'Lab users', colorKey: 'rose' },
+}
+
+export const occupancyRoles = Object.keys(occupancyRoleMeta) as OccupancyRole[]
+const occupancyRoleByEdge = new Map(occupancyRoles.map((role) => [occupancyRoleMeta[role].edge, role]))
+
+export const inactiveAssetStatuses = ['retired', 'disposed', 'draft', 'inactive'] as const
+export const inactivePersonStatuses = ['inactive', 'retired'] as const
 
 export const maximumGraphNodes = 50_000
 export const maximumGraphEdges = 200_000
@@ -210,9 +234,10 @@ const kindByID = new Map(meshNodeKinds.map((kind) => [kind.id, kind]))
 
 export const sourceGroupKind = 'source_group'
 export const chartGroupKind = 'chart_group'
+export const roleGroupKind = 'role_group'
 
 export function isSyntheticGraphKind(kind: string) {
-  return kind === sourceGroupKind || kind === chartGroupKind
+  return kind === sourceGroupKind || kind === chartGroupKind || kind === roleGroupKind
 }
 
 export function graphSlug(value: string) {
@@ -231,6 +256,7 @@ export function chartGroupID(field: string, value: string) {
 export function displayType(value: string) {
   if (value === sourceGroupKind) return 'Product hub'
   if (value === chartGroupKind) return 'Group'
+  if (value === roleGroupKind) return 'User type'
   return kindByID.get(value)?.label ?? value.replaceAll('_', ' ').replace(/\b\w/g, (character) => character.toUpperCase())
 }
 
@@ -258,12 +284,65 @@ export function parseKindColorOverrides(raw: unknown): Record<string, GraphPalet
   return result
 }
 
+export function isIdentityNodeKind(kind: string) {
+  return (identityNodeKinds as readonly string[]).includes(kind)
+}
+
+export function parseOccupancyRoles(value: string | undefined): OccupancyRole[] {
+  if (!value?.trim()) return []
+  const known = new Set<OccupancyRole>()
+  const roles: OccupancyRole[] = []
+  for (const token of value.split(',')) {
+    const role = token.trim() as OccupancyRole
+    if (!occupancyRoleMeta[role] || known.has(role)) continue
+    known.add(role)
+    roles.push(role)
+  }
+  return roles
+}
+
+export function occupancyRolesFor(nodeID: string, edges: readonly { from: string; to: string; kind: string }[]): OccupancyRole[] {
+  const known = new Set<OccupancyRole>()
+  const roles: OccupancyRole[] = []
+  for (const edge of edges) {
+    if (edge.from !== nodeID && edge.to !== nodeID) continue
+    const role = occupancyRoleByEdge.get(edge.kind)
+    if (!role || known.has(role)) continue
+    known.add(role)
+    roles.push(role)
+  }
+  return roles
+}
+
+export function occupancyRoleHubID(role: OccupancyRole) {
+  return `${roleGroupKind}:${role}`
+}
+
+export function paletteKeyForLabel(value: string): GraphPaletteKey {
+  const normalized = value.trim().toLowerCase()
+  if (!normalized) return 'slate'
+  let hash = 0
+  for (let index = 0; index < normalized.length; index += 1) {
+    hash = (hash * 33 + normalized.charCodeAt(index)) >>> 0
+  }
+  return graphTypePalette[hash % graphTypePalette.length].id
+}
+
+export function gradientDOMID(nodeID: string) {
+  return `mesh-grad-${nodeID.replace(/[^A-Za-z0-9_-]/g, '_')}`
+}
+
+export function paintFill(paint: NodePaint, nodeID: string) {
+  if (paint.fills && paint.fills.length >= 2) return `url(#${gradientDOMID(nodeID)})`
+  return paint.fill
+}
+
 export function colorsForNode(
   kind: string,
   attributes: Record<string, string> | undefined,
   mode: GraphColorMode,
   kindColorOverrides?: Readonly<Record<string, GraphPaletteKey>>,
-) {
+): NodePaint {
   if (mode === 'source') {
     const source = sourceForKind(kind, attributes)
     const key = sourceColorKeys[source]
@@ -273,6 +352,26 @@ export function colorsForNode(
     const status = attributes?.status?.trim().toLowerCase() ?? ''
     const key = statusColorKeys[status]
     return key ? graphPaletteColor(key) : defaultColors
+  }
+  if (kind === roleGroupKind) {
+    const role = parseOccupancyRoles(attributes?.role)[0]
+    if (role) return graphPaletteColor(occupancyRoleMeta[role].colorKey)
+    const identityKind = attributes?.identityKind?.trim()
+    if (identityKind) return graphPaletteColor(defaultKindColorKey(identityKind))
+  }
+  if (mode === 'occupancy' || (mode === 'campus' && isIdentityNodeKind(kind))) {
+    const roles = parseOccupancyRoles(attributes?.roles)
+    if (roles.length >= 2) {
+      const paints = roles.map((role) => graphPaletteColor(occupancyRoleMeta[role].colorKey))
+      return { fill: paints[0].fill, stroke: paints[0].stroke, fills: paints.map((paint) => paint.stroke) }
+    }
+    if (roles.length === 1) return graphPaletteColor(occupancyRoleMeta[roles[0]].colorKey)
+    if (mode === 'occupancy') return defaultColors
+  }
+  if (mode === 'model' || (mode === 'campus' && kind === 'asset')) {
+    const model = attributes?.model?.trim()
+    if (model) return graphPaletteColor(paletteKeyForLabel(model))
+    if (mode === 'model') return defaultColors
   }
   const key = kindColorOverrides?.[kind] ?? defaultKindColorKey(kind)
   return graphPaletteColor(key)
@@ -303,6 +402,7 @@ export type OverlayGroup = {
   id: string
   label: string
   memberIDs: readonly string[]
+  attributes?: Record<string, string>
 }
 
 type OverlayNode = { id: string; kind: string; label: string; attributes?: Record<string, string> }
@@ -331,6 +431,118 @@ export function sourceHubsFor(nodes: readonly OverlayNode[], sources: readonly s
   })
 }
 
+export function annotateCampusAttributes<N extends OverlayNode, E extends OverlayEdge>(
+  nodes: readonly N[],
+  edges: readonly E[],
+): N[] {
+  const modelLabelByID = new Map<string, string>()
+  for (const node of nodes) {
+    if (node.kind === 'model') modelLabelByID.set(node.id, node.label)
+  }
+  const modelByAsset = new Map<string, string>()
+  for (const edge of edges) {
+    if (edge.kind !== 'modeled_as') continue
+    const label = modelLabelByID.get(edge.to) ?? modelLabelByID.get(edge.from)
+    if (!label) continue
+    if (edge.from.startsWith('asset:')) modelByAsset.set(edge.from, label)
+    if (edge.to.startsWith('asset:')) modelByAsset.set(edge.to, label)
+  }
+  return nodes.map((node) => {
+    const next = { ...(node.attributes ?? {}) }
+    let changed = false
+    if (isIdentityNodeKind(node.kind)) {
+      const roles = occupancyRolesFor(node.id, edges)
+      if (roles.length > 0) {
+        next.roles = roles.join(',')
+        changed = true
+      }
+    }
+    if (node.kind === 'asset') {
+      const model = modelByAsset.get(node.id)
+      if (model) {
+        next.model = model
+        changed = true
+      }
+    }
+    return changed ? { ...node, attributes: next } : node
+  })
+}
+
+export function occupancyRoleHubsFor(nodes: readonly OverlayNode[], edges: readonly OverlayEdge[]): OverlayGroup[] {
+  const members = new Map<OccupancyRole, string[]>()
+  for (const node of nodes) {
+    if (!isIdentityNodeKind(node.kind) || isSyntheticGraphKind(node.kind)) continue
+    for (const role of occupancyRolesFor(node.id, edges)) {
+      const list = members.get(role)
+      if (list) list.push(node.id)
+      else members.set(role, [node.id])
+    }
+  }
+  return occupancyRoles.flatMap((role) => {
+    const memberIDs = members.get(role) ?? []
+    if (memberIDs.length === 0) return []
+    return [{
+      id: occupancyRoleHubID(role),
+      label: occupancyRoleMeta[role].plural,
+      memberIDs,
+      attributes: { role },
+    }]
+  })
+}
+
+export function identityKindHubsFor(nodes: readonly OverlayNode[]): OverlayGroup[] {
+  const members = new Map<string, string[]>()
+  for (const node of nodes) {
+    if (!isIdentityNodeKind(node.kind)) continue
+    const list = members.get(node.kind)
+    if (list) list.push(node.id)
+    else members.set(node.kind, [node.id])
+  }
+  return identityNodeKinds.flatMap((kind) => {
+    const memberIDs = members.get(kind) ?? []
+    if (memberIDs.length === 0) return []
+    return [{
+      id: `${roleGroupKind}:identity_${kind}`,
+      label: kindByID.get(kind)?.label ?? displayType(kind),
+      memberIDs,
+      attributes: { identityKind: kind },
+    }]
+  })
+}
+
+export type CampusStatusFilters = {
+  hideInactivePeople?: boolean
+  hideInactiveAssets?: boolean
+}
+
+export function nodePassesCampusFilters(
+  node: { kind: string; attributes?: Record<string, string> },
+  filters: CampusStatusFilters,
+) {
+  const status = node.attributes?.status?.trim().toLowerCase() ?? ''
+  if (filters.hideInactivePeople && isIdentityNodeKind(node.kind) && (inactivePersonStatuses as readonly string[]).includes(status)) {
+    return false
+  }
+  if (filters.hideInactiveAssets && node.kind === 'asset' && (inactiveAssetStatuses as readonly string[]).includes(status)) {
+    return false
+  }
+  return true
+}
+
+export function withoutUnlinkedNodes<N extends { id: string }, E extends { from: string; to: string }>(
+  nodes: readonly N[],
+  edges: readonly E[],
+): { nodes: N[]; edges: E[] } {
+  const linked = new Set<string>()
+  for (const edge of edges) {
+    linked.add(edge.from)
+    linked.add(edge.to)
+  }
+  const nextNodes = nodes.filter((node) => linked.has(node.id))
+  const ids = new Set(nextNodes.map((node) => node.id))
+  return { nodes: nextNodes, edges: edges.filter((edge) => ids.has(edge.from) && ids.has(edge.to)) }
+}
+
 export function applyOverlayGroups(
   nodes: readonly OverlayNode[],
   edges: readonly OverlayEdge[],
@@ -347,7 +559,11 @@ export function applyOverlayGroups(
         id: overlay.id,
         kind,
         label: overlay.label,
-        attributes: { overlay: kind, source: kind === sourceGroupKind ? overlay.id.slice(`${sourceGroupKind}:`.length) : '' },
+        attributes: {
+          overlay: kind,
+          source: kind === sourceGroupKind ? overlay.id.slice(`${sourceGroupKind}:`.length) : '',
+          ...overlay.attributes,
+        },
       })
       known.add(overlay.id)
     }

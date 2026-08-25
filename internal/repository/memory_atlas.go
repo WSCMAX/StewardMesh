@@ -266,6 +266,18 @@ func (s *MemoryAtlasStore) ListAssets(_ context.Context, organizationID string, 
 	return items, nil
 }
 
+func (s *MemoryAtlasStore) CountAssets(_ context.Context, organizationID string, query atlas.Query) (int, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	count := 0
+	for _, asset := range s.assets {
+		if asset.OrganizationID == organizationID && assetMatchesQuery(asset, query) {
+			count++
+		}
+	}
+	return count, nil
+}
+
 func (s *MemoryAtlasStore) ListAuthorizedAssets(_ context.Context, organizationID string, query atlas.AuthorizedAssetQuery) ([]domain.Asset, error) {
 	if organizationID == "" || query.Limit < 1 || query.Limit > 100 || !query.Visibility.Valid() {
 		return nil, atlas.ErrInvalidInput
@@ -353,16 +365,44 @@ func sliceContains(values []string, target string) bool {
 	return false
 }
 
+func assetSearchValues(asset domain.Asset) []string {
+	values := []string{asset.Name, asset.AssetTag, asset.SerialNumber, asset.Hostname}
+	if asset.ModelContext != nil {
+		values = append(values, asset.ModelContext.Manufacturer, asset.ModelContext.Name, asset.ModelContext.ModelNumber)
+	}
+	return values
+}
+
 func assetMatchesQuery(asset domain.Asset, query atlas.Query) bool {
 	if (query.Kind != "" && asset.Kind != query.Kind) || (query.Status != "" && asset.Status != query.Status) ||
 		(query.ModelID != "" && asset.ModelID != query.ModelID) || (query.SiteID != "" && asset.SiteID != query.SiteID) ||
+		(query.BuildingID != "" && asset.BuildingID != query.BuildingID) || (query.RoomID != "" && asset.RoomID != query.RoomID) ||
 		(query.DepartmentID != "" && asset.DepartmentID != query.DepartmentID) || (query.UserID != "" && asset.UserID != query.UserID) {
 		return false
 	}
-	if query.Search != "" && !strings.Contains(strings.ToLower(strings.Join([]string{
-		asset.Name, asset.AssetTag, asset.SerialNumber, asset.Hostname,
-	}, "\n")), strings.ToLower(query.Search)) {
+	if query.Search != "" && !strings.Contains(strings.ToLower(strings.Join(assetSearchValues(asset), "\n")), strings.ToLower(query.Search)) {
 		return false
+	}
+	if query.Name != "" && !strings.Contains(strings.ToLower(asset.Name), strings.ToLower(query.Name)) {
+		return false
+	}
+	if query.AssetTag != "" && !strings.Contains(strings.ToLower(asset.AssetTag), strings.ToLower(query.AssetTag)) {
+		return false
+	}
+	if query.SerialNumber != "" && !strings.Contains(strings.ToLower(asset.SerialNumber), strings.ToLower(query.SerialNumber)) {
+		return false
+	}
+	if query.Hostname != "" && !strings.Contains(strings.ToLower(asset.Hostname), strings.ToLower(query.Hostname)) {
+		return false
+	}
+	if query.Manufacturer != "" {
+		manufacturer := ""
+		if asset.ModelContext != nil {
+			manufacturer = asset.ModelContext.Manufacturer
+		}
+		if !strings.Contains(strings.ToLower(manufacturer), strings.ToLower(query.Manufacturer)) {
+			return false
+		}
 	}
 	return query.DeploymentContext == "" || strings.Contains(strings.ToLower(strings.Join([]string{
 		asset.Hostname, asset.DeploymentNotes,

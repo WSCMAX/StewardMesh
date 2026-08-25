@@ -314,14 +314,24 @@ func (s *AtlasStore) ReactivateModel(ctx context.Context, organizationID, id str
 const atlasAssetFilterWhere = `
 		WHERE organization_id = $1
 		  AND ($2 = '' OR strpos(lower(name), $2) > 0 OR strpos(normalized_asset_tag, $2) > 0
-		       OR strpos(normalized_serial_number, $2) > 0 OR strpos(hostname, $2) > 0)
+		       OR strpos(normalized_serial_number, $2) > 0 OR strpos(hostname, $2) > 0
+		       OR strpos(lower(coalesce(model_context->>'manufacturer', '')), $2) > 0
+		       OR strpos(lower(coalesce(model_context->>'name', '')), $2) > 0
+		       OR strpos(lower(coalesce(model_context->>'modelNumber', '')), $2) > 0)
 		  AND ($3 = '' OR kind = $3)
 		  AND ($4 = '' OR status = $4)
 		  AND ($5 = '' OR model_id = $5)
 		  AND ($6 = '' OR site_id = $6)
 		  AND ($7 = '' OR department_id = $7)
 		  AND ($8 = '' OR user_id = $8)
-		  AND ($9 = '' OR strpos(lower(hostname), $9) > 0 OR strpos(lower(deployment_notes), $9) > 0)`
+		  AND ($9 = '' OR strpos(lower(hostname), $9) > 0 OR strpos(lower(deployment_notes), $9) > 0)
+		  AND ($10 = '' OR strpos(lower(name), $10) > 0)
+		  AND ($11 = '' OR strpos(normalized_asset_tag, $11) > 0)
+		  AND ($12 = '' OR strpos(normalized_serial_number, $12) > 0)
+		  AND ($13 = '' OR strpos(lower(hostname), $13) > 0)
+		  AND ($14 = '' OR strpos(lower(coalesce(model_context->>'manufacturer', '')), $14) > 0)
+		  AND ($15 = '' OR building_id = $15)
+		  AND ($16 = '' OR room_id = $16)`
 
 func (s *AtlasStore) GetModelInventory(ctx context.Context, organizationID, modelID string, query atlas.ModelInventoryQuery) (atlas.ModelInventory, error) {
 	tx, err := s.database.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
@@ -388,6 +398,14 @@ func (s *AtlasStore) ListAssets(ctx context.Context, organizationID string, quer
 	return listAtlasAssets(ctx, s.database, organizationID, query)
 }
 
+func (s *AtlasStore) CountAssets(ctx context.Context, organizationID string, query atlas.Query) (int, error) {
+	var count int
+	if err := s.database.QueryRowContext(ctx, `SELECT count(*) FROM atlas_assets `+atlasAssetFilterWhere, atlasAssetFilterArguments(organizationID, query)...).Scan(&count); err != nil {
+		return 0, fmt.Errorf("count Atlas assets: %w", err)
+	}
+	return count, nil
+}
+
 func (s *AtlasStore) ListAuthorizedAssets(ctx context.Context, organizationID string, filter atlas.AuthorizedAssetQuery) ([]domain.Asset, error) {
 	if organizationID == "" || filter.Limit < 1 || filter.Limit > 100 || !filter.Visibility.Valid() {
 		return nil, atlas.ErrInvalidInput
@@ -399,7 +417,10 @@ func (s *AtlasStore) ListAuthorizedAssets(ctx context.Context, organizationID st
 		arguments = append(arguments, strings.ToLower(filter.Search))
 		position := len(arguments)
 		query.WriteString(fmt.Sprintf(` AND (strpos(lower(name), $%d) > 0 OR strpos(normalized_asset_tag, $%d) > 0
-			OR strpos(normalized_serial_number, $%d) > 0 OR strpos(lower(hostname), $%d) > 0)`, position, position, position, position))
+			OR strpos(normalized_serial_number, $%d) > 0 OR strpos(lower(hostname), $%d) > 0
+			OR strpos(lower(coalesce(model_context->>'manufacturer', '')), $%d) > 0
+			OR strpos(lower(coalesce(model_context->>'name', '')), $%d) > 0
+			OR strpos(lower(coalesce(model_context->>'modelNumber', '')), $%d) > 0)`, position, position, position, position, position, position, position))
 	}
 	if filter.Cursor != "" {
 		arguments = append(arguments, filter.Cursor)
@@ -588,6 +609,9 @@ func atlasAssetFilterArguments(organizationID string, query atlas.Query) []any {
 	return []any{
 		organizationID, strings.ToLower(query.Search), query.Kind, query.Status, query.ModelID,
 		query.SiteID, query.DepartmentID, query.UserID, strings.ToLower(query.DeploymentContext),
+		strings.ToLower(query.Name), strings.ToLower(query.AssetTag), strings.ToLower(query.SerialNumber),
+		strings.ToLower(query.Hostname), strings.ToLower(query.Manufacturer),
+		query.BuildingID, query.RoomID,
 	}
 }
 

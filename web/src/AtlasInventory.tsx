@@ -3,19 +3,26 @@ import { calendarDateText, lifecyclePercent, modelPastLifecycle, usefulLifeMonth
 import { ApiRequestError, isRevision, requestJSON, type Revision } from './api'
 import AtlasIdentifiers from './AtlasIdentifiers'
 import AtlasLabelPrint from './AtlasLabelPrint'
+import AssetAssignments from './AssetAssignments'
 import AtlasScanner from './AtlasScanner'
 import AtlasSectionNav, { type AtlasSection } from './AtlasSectionNav'
+import CheckoutDesk from './CheckoutDesk'
 import DocumentViewer, { type ViewableDocument } from './DocumentViewer'
 import RecordSearchPicker, { type SearchableRecord } from './RecordSearchPicker'
 import RecordTags from './RecordTags'
+import ScanField from './ScanField'
+import { modelIdentifierFromScan, preferredModelIdentifier } from './scanIdentity'
+import BarcodeCameraCapture from './BarcodeCameraCapture'
 import type { AtlasAssetScope, WorkspaceRecordFocus } from './graphRecord'
+import { meshRecordHref } from './graphRecord'
 import { fiscalMonthInYear, fiscalYearForDate } from './horizonPlanning'
-import { ProductHeader, StatusBadge, buttonClass, dangerButtonClass, emptyStateClass, inputClass, labelClass, panelClass, plainButtonClass, secondaryButtonClass, subpanelClass } from './ui'
-import DataGrid, { type StagedDraft } from './grid/DataGrid'
+import { ProductHeader, StatusBadge, buttonClass, cx, dangerButtonClass, emptyStateClass, inputClass, labelClass, panelClass, plainButtonClass, secondaryButtonClass, subpanelClass } from './ui'
+import { assetListingWindow, listingFromGrid, remoteAssetFilterKeys, type TranslatedListing } from './assetListing'
+import DataGrid, { type StagedDraft, type GridQueryState } from './grid/DataGrid'
 import Drawer from './grid/Drawer'
 import QueryBuilder from './grid/QueryBuilder'
-import { emptyQuery, encodeQuery, isQueryEmpty, matchQuery, parseQuery, type QueryField, type QueryModel } from './grid/queryLanguage'
-import { applyCellPayload, calendarText, encodeLookupText, filterLookupOptions, lookupExportText, lookupLabel, parseLookupText, type GridColumn, type LookupConfig, type LookupCreateConfig, type LookupOption } from './grid/columns'
+import { emptyQuery, encodeQuery, isQueryEmpty, matchQuery, parseQuery, type QueryField, type QueryModel, type QueryValueOption } from './grid/queryLanguage'
+import { applyCellPayload, calendarText, encodeLookupText, filterLookupOptions, lookupExportText, lookupLabel, mergeLookupOptions, parseLookupText, type GridColumn, type LookupConfig, type LookupCreateConfig, type LookupOption } from './grid/columns'
 import type { CellEdit } from './grid/useCellEditing'
 import {
   buildLabelColumns,
@@ -54,6 +61,7 @@ export type Asset = {
   lifecycleStartDate?: string
   installedDate?: string
   replacementModelId?: string
+  replacementPlanId?: string
   criticalityScore?: number
   attributes?: Record<string, string>
   components?: AssetComponent[]
@@ -222,12 +230,15 @@ const templateFieldKinds = ['text', 'number', 'select']
 type AtlasInventoryProps = {
   assets: readonly Asset[]
   assetNextCursor?: string
+  assetFilteredCount?: number
+  assetQueryPartial?: boolean
   assetsLoading?: boolean
   assetScope?: AtlasAssetScope | null
   csrfToken: string
   permissions: readonly string[]
   onAssetsChange: (assets: Asset[]) => void
   onClearAssetScope?: () => void
+  onAssetQueryChange?: (listing: TranslatedListing) => void
   onLoadMoreAssets?: () => Promise<void>
   onLoadAllAssets?: () => Promise<Asset[]>
   onOpenHelp?: () => void
@@ -252,15 +263,30 @@ const modelInventoryQueryFields: QueryField[] = [
   { key: 'deploymentContext', header: 'Deployment context', kind: 'text' },
 ]
 
-function modelInventoryQueryValue(asset: Asset, field: string, references: ReferenceOptions) {
+function modelInventoryQueryValue(asset: Asset, field: string, references: ReferenceOptions): string | string[] {
   if (field === 'name') return asset.name
   if (field === 'status') return asset.status
   if (field === 'kind') return asset.kind
-  if (field === 'siteId') return `${asset.siteId ?? ''} ${modelInventoryGroupLabel('site', asset.siteId ?? '', references)}`.trim()
-  if (field === 'departmentId') return `${asset.departmentId ?? ''} ${modelInventoryGroupLabel('department', asset.departmentId ?? '', references)}`.trim()
-  if (field === 'userId') return `${asset.userId ?? ''} ${modelInventoryGroupLabel('user', asset.userId ?? '', references)}`.trim()
+  if (field === 'siteId') return modelInventoryReferenceCandidates('site', asset.siteId, references)
+  if (field === 'departmentId') return modelInventoryReferenceCandidates('department', asset.departmentId, references)
+  if (field === 'userId') return modelInventoryReferenceCandidates('user', asset.userId, references)
   if (field === 'deploymentContext') return [asset.hostname, asset.deploymentNotes].filter(Boolean).join(' ')
   return ''
+}
+
+/** Both the record id and its display label, so "is" matches either exactly. */
+function modelInventoryReferenceCandidates(kind: 'site' | 'department' | 'user', id: string | undefined, references: ReferenceOptions): string | string[] {
+  if (!id) return ''
+  return [id, modelInventoryGroupLabel(kind, id, references)]
+}
+
+function modelInventoryQueryOptions(field: QueryField, references: ReferenceOptions): QueryValueOption[] {
+  const list = field.key === 'siteId' ? references.sites
+    : field.key === 'departmentId' ? references.departments
+      : field.key === 'userId' ? references.identities
+        : null
+  if (list) return list.map((reference) => ({ value: reference.id, label: referenceLabel(reference) }))
+  return (field.options ?? []).map((option) => ({ value: option }))
 }
 
 function modelInventoryGroupKey(asset: Asset, groupBy: string) {
@@ -308,6 +334,7 @@ export const assetPageLimit = 100
 export type AssetPage = {
   items: Asset[]
   nextCursor: string
+  filteredCount?: number
 }
 
 export function parseAssetPage(value: unknown): AssetPage {
@@ -315,13 +342,17 @@ export function parseAssetPage(value: unknown): AssetPage {
   const body = value as Record<string, unknown>
   const nextCursor = body.nextCursor === undefined ? '' : body.nextCursor
   if (typeof nextCursor !== 'string') throw new Error('invalid asset page cursor')
-  return { items: readItems(body).filter(isAsset), nextCursor }
+  const filteredCount = body.filteredCount === undefined || body.filteredCount === null ? undefined : body.filteredCount
+  if (filteredCount !== undefined && (typeof filteredCount !== 'number' || !Number.isFinite(filteredCount) || filteredCount < 0)) {
+    throw new Error('invalid asset page count')
+  }
+  return { items: readItems(body).filter(isAsset), nextCursor, filteredCount }
 }
 
-export async function fetchAssetPage(params: URLSearchParams = new URLSearchParams()): Promise<AssetPage> {
+export async function fetchAssetPage(params: URLSearchParams = new URLSearchParams(), init?: RequestInit): Promise<AssetPage> {
   const query = new URLSearchParams(params)
   if (!query.has('limit')) query.set('limit', String(assetPageLimit))
-  return parseAssetPage(await requestJSON(`/api/v1/assets?${query.toString()}`))
+  return parseAssetPage(await requestJSON(`/api/v1/assets?${query.toString()}`, init))
 }
 
 export function mergeAssets(current: readonly Asset[], added: readonly Asset[]): Asset[] {
@@ -448,6 +479,38 @@ function modelContextLabel(context: AssetModelContext) {
   return `${context.manufacturer} ${context.name}${context.modelNumber ? ` ${context.modelNumber}` : ''}`.trim()
 }
 
+function manufacturerEquals(left: string, right: string) {
+  return left.trim().toLowerCase() === right.trim().toLowerCase()
+}
+
+function assetManufacturer(asset: Asset, models: readonly AssetModel[] = []) {
+  const fromContext = asset.modelContext?.manufacturer?.trim() ?? ''
+  if (fromContext) return fromContext
+  const model = models.find((item) => item.id === asset.modelId)
+  return model?.manufacturer.trim() ?? ''
+}
+
+function manufacturerOptions(models: readonly AssetModel[]): LookupOption[] {
+  const seen = new Set<string>()
+  const options: LookupOption[] = []
+  for (const model of models) {
+    const name = model.manufacturer.trim()
+    if (!name) continue
+    const key = name.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    const count = models.filter((item) => manufacturerEquals(item.manufacturer, name)).length
+    options.push({ id: name, label: name, detail: `${count} model${count === 1 ? '' : 's'}` })
+  }
+  return options.sort((left, right) => left.label.localeCompare(right.label, undefined, { sensitivity: 'base' }))
+}
+
+function modelsForManufacturer(models: readonly AssetModel[], manufacturer: string) {
+  const needle = manufacturer.trim()
+  if (!needle) return [...models]
+  return models.filter((model) => manufacturerEquals(model.manufacturer, needle))
+}
+
 function formatMoney(minor?: number, currency = 'USD') {
   if (!minor) return ''
   try { return new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(minor / 100) } catch { return `${currency} ${(minor / 100).toFixed(2)}` }
@@ -499,6 +562,7 @@ export function assetPayload(asset: Asset): Record<string, unknown> {
   if (asset.lifecycleStartDate) payload.lifecycleStartDate = asset.lifecycleStartDate
   if (asset.installedDate) payload.installedDate = asset.installedDate
   payload.replacementModelId = asset.replacementModelId ?? ''
+  payload.replacementPlanId = asset.replacementPlanId ?? ''
   return payload
 }
 
@@ -508,6 +572,22 @@ export function assetPayload(asset: Asset): Record<string, unknown> {
  * in the grid and carried into exports; raw IDs stay in optional columns that
  * are hidden until someone turns them on in the column chooser.
  */
+function replacementPlanOption(plan: ReplacementPlanOption): LookupOption {
+  return { id: plan.id, label: plan.name, detail: `${plan.grouping} · ${plan.assetCount} assets` }
+}
+
+function replacementPlanLabel(planId: string | undefined, plans: readonly ReplacementPlanOption[] | undefined) {
+  if (!planId) return ''
+  return plans?.find((plan) => plan.id === planId)?.name ?? planId
+}
+
+function isReplacementPlanOption(value: unknown): value is ReplacementPlanOption {
+  if (typeof value !== 'object' || value === null) return false
+  const item = value as Record<string, unknown>
+  return typeof item.id === 'string' && typeof item.name === 'string'
+    && typeof item.grouping === 'string' && typeof item.assetCount === 'number'
+}
+
 function usersText(asset: Asset) {
   const primary = asset.userId ? [{ id: asset.userId, primary: true }] : []
   const extra = (asset.additionalUserIds ?? []).filter((id) => id && id !== asset.userId).map((id) => ({ id, primary: false }))
@@ -552,7 +632,15 @@ type AssetColumnContext = {
   onReferenceCreated: (kind: keyof ReferenceOptions, record: ReferenceRecord) => void
   onModelCreated: (model: AssetModel) => void
   replacementDates?: ReadonlyMap<string, string>
+  replacementPlans?: readonly ReplacementPlanOption[]
   fiscalYearStartMonth?: number
+}
+
+type ReplacementPlanOption = {
+  id: string
+  name: string
+  grouping: string
+  assetCount: number
 }
 
 async function postDirectoryRecord(path: string, csrfToken: string, body: Record<string, unknown>): Promise<ReferenceRecord> {
@@ -729,7 +817,7 @@ function buildAssetColumns(
     : []
   return [
     { key: 'name', header: 'Asset name', kind: 'text', editable: assetEditable, required: true, maxLength: 200, width: 15, text: (asset) => asset.name },
-    { key: 'assetTag', header: 'Asset tag', kind: 'text', editable: assetEditable, maxLength: 128, width: 10, text: (asset) => asset.assetTag ?? '' },
+    { key: 'assetTag', header: 'Asset tag', kind: 'text', editable: assetEditable, maxLength: 128, width: 10, scannable: true, text: (asset) => asset.assetTag ?? '' },
     { key: 'serialNumber', header: 'Serial number', kind: 'text', editable: assetEditable, maxLength: 255, width: 12, scannable: true, text: (asset) => asset.serialNumber ?? '' },
     { key: 'kind', header: 'Kind', kind: 'enum', options: kinds, editable: assetEditable, required: true, width: 8, text: (asset) => asset.kind },
     {
@@ -822,11 +910,72 @@ function buildAssetColumns(
         return model ? modelLabel(model) : asset.replacementModelId ?? ''
       },
     },
+    {
+      key: 'replacementPlanId', header: 'Replacement plan', kind: 'lookup', editable: assetEditable, width: 14,
+      lookup: {
+        options: (context.replacementPlans ?? []).map(replacementPlanOption),
+        search: async (query) => filterLookupOptions((context.replacementPlans ?? []).map(replacementPlanOption), query),
+        browseLabel: 'Open plans',
+        browseHref: '#workspace-horizon',
+      },
+      text: (asset) => asset.replacementPlanId ?? '',
+      exportText: (asset) => replacementPlanLabel(asset.replacementPlanId, context.replacementPlans),
+      display: (asset) => replacementPlanLabel(asset.replacementPlanId, context.replacementPlans),
+    },
     { key: 'unitCostMinor', header: 'Unit cost', kind: 'money', editable: assetEditable, align: 'right' as const, width: 8, text: (asset) => dollarsFromMinor(asset.unitCostMinor) },
     { key: 'deploymentNotes', header: 'Deployment notes', kind: 'text', editable: assetEditable, maxLength: 2000, width: 16, text: (asset) => asset.deploymentNotes ?? '' },
     ...labelColumns,
     {
-      key: 'modelId', header: 'Model', kind: 'lookup', editable: assetEditable, width: 12,
+      key: 'manufacturer', header: 'Manufacturer', kind: 'lookup', editable: assetEditable, width: 11,
+      lookup: {
+        options: manufacturerOptions(models),
+        search: async (query) => {
+          const local = filterLookupOptions(manufacturerOptions(models), query)
+          const params = new URLSearchParams({ limit: '20', includeRetired: 'true' })
+          if (query.trim()) params.set('q', query.trim())
+          const response = await requestJSON(`/api/v1/asset-models?${params.toString()}`)
+          const remote = manufacturerOptions(readItems(response).filter(isAssetModel))
+          return mergeLookupOptions(local, filterLookupOptions(remote, query))
+        },
+        create: context.canWriteModels ? {
+          label: 'Add model',
+          fields: [
+            { key: 'manufacturer', label: 'Manufacturer', required: true },
+            { key: 'name', label: 'Model name', required: true },
+            { key: 'kind', label: 'Kind', required: true, options: kinds.map((kind) => ({ id: kind, label: kind })) },
+          ],
+          submit: async (values) => {
+            const saved = await requestJSON('/api/v1/asset-models', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': context.csrfToken },
+              body: JSON.stringify({ manufacturer: values.manufacturer, name: values.name, kind: values.kind || 'other', status: 'active', currency: 'USD' }),
+            })
+            if (!isAssetModel(saved)) throw new Error('invalid model response')
+            context.onModelCreated(saved)
+            return { id: saved.manufacturer, label: saved.manufacturer, detail: '1 model' }
+          },
+        } : undefined,
+        browseLabel: 'Open models',
+        onBrowse: context.onOpenModels,
+      },
+      text: (asset) => assetManufacturer(asset, models),
+      exportText: (asset) => assetManufacturer(asset, models),
+      display: (asset) => assetManufacturer(asset, models),
+      toPayload: (draft, text) => {
+        const manufacturer = (parseLookupText(text)[0]?.id ?? text).trim()
+        const currentId = String(draft.modelId ?? '')
+        const current = models.find((item) => item.id === currentId)
+        if (!manufacturer) {
+          if (currentId) draft.modelId = ''
+          return
+        }
+        if (current && manufacturerEquals(current.manufacturer, manufacturer)) return
+        const matches = modelsForManufacturer(models, manufacturer).filter((item) => item.status !== 'retired')
+        if (matches.length === 1) draft.modelId = matches[0].id
+      },
+    },
+    {
+      key: 'modelId', header: 'Model', kind: 'lookup', editable: assetEditable, width: 12, scannable: true,
       lookup: {
         options: models.map((model) => ({ id: model.id, label: modelLabel(model), detail: model.kind })),
         search: async (query) => {
@@ -856,6 +1005,49 @@ function buildAssetColumns(
         browseLabel: 'Open models',
         onBrowse: context.onOpenModels,
       },
+      resolveLookup: ({ row, values }) => {
+        const manufacturer = (parseLookupText(values.manufacturer ?? '')[0]?.id || values.manufacturer || (row ? assetManufacturer(row, models) : '')).trim()
+        const pool = modelsForManufacturer(models, manufacturer)
+        return {
+          options: pool.map((model) => ({ id: model.id, label: modelLabel(model), detail: model.kind })),
+          search: async (query) => {
+            const params = new URLSearchParams({ limit: '20' })
+            if (query.trim()) params.set('q', query.trim())
+            const response = await requestJSON(`/api/v1/asset-models?${params.toString()}`)
+            return readItems(response).flatMap((item) => {
+              if (!isAssetModel(item)) return []
+              if (manufacturer && !manufacturerEquals(item.manufacturer, manufacturer)) return []
+              return [{ id: item.id, label: modelLabel(item), detail: item.kind }]
+            })
+          },
+          create: context.canWriteModels ? {
+            label: 'Add model',
+            fields: [
+              { key: 'manufacturer', label: 'Manufacturer', required: manufacturer ? false : true },
+              { key: 'name', label: 'Model name', required: true },
+              { key: 'kind', label: 'Kind', required: true, options: kinds.map((kind) => ({ id: kind, label: kind })) },
+            ],
+            submit: async (values) => {
+              const saved = await requestJSON('/api/v1/asset-models', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': context.csrfToken },
+                body: JSON.stringify({
+                  manufacturer: values.manufacturer || manufacturer,
+                  name: values.name,
+                  kind: values.kind || 'other',
+                  status: 'active',
+                  currency: 'USD',
+                }),
+              })
+              if (!isAssetModel(saved)) throw new Error('invalid model response')
+              context.onModelCreated(saved)
+              return { id: saved.id, label: modelLabel(saved), detail: saved.kind }
+            },
+          } : undefined,
+          browseLabel: 'Open models',
+          onBrowse: context.onOpenModels,
+        }
+      },
       text: (asset) => asset.modelId ?? '',
       exportText: (asset) => {
         if (asset.modelContext) return modelContextLabel(asset.modelContext)
@@ -869,7 +1061,27 @@ function buildAssetColumns(
     referenceIdColumn('roomId', 'Room'),
     referenceIdColumn('departmentId', 'Department'),
     { key: 'modelId.recordId', header: 'Model ID', kind: 'text', width: 12, hiddenByDefault: true, text: (asset) => asset.modelId ?? '' },
-    { key: 'userId.recordId', header: 'Primary user ID', kind: 'text', width: 12, hiddenByDefault: true, text: (asset) => asset.userId ?? '' },
+    {
+      // A query-safe key: the filter builder can offer "Primary user is
+      // <person>" and the listing translates it to the server's userId filter.
+      key: 'userId', header: 'Primary user', kind: 'lookup', width: 12, hiddenByDefault: true,
+      lookup: {
+        options: references.identities.map(identityOption),
+        search: async (query) => {
+          const encoded = encodeURIComponent(query.trim())
+          const response = await requestJSON(`/api/v1/identities?q=${encoded}&kind=person&limit=20`)
+          return readItems(response).flatMap((item) => {
+            const identity = identityRecord(item)
+            return identity ? [identityOption(identity)] : []
+          })
+        },
+        browseHref: '#workspace-people',
+        browseLabel: 'Open directory',
+      },
+      text: (asset) => asset.userId ?? '',
+      exportText: (asset) => asset.userId ? lookupLabel(asset.userId, references.identities.map(identityOption)) : '',
+      display: (asset) => asset.userId ? lookupLabel(asset.userId, references.identities.map(identityOption)) : '',
+    },
     { key: 'revision', header: 'Revision', kind: 'number', align: 'right', width: 6, text: (asset) => String(asset.revision) },
     { key: 'updatedAt', header: 'Updated', kind: 'instant', width: 11, text: (asset) => asset.updatedAt, exportText: (asset) => formatTimestamp(asset.updatedAt), display: (asset) => formatTimestamp(asset.updatedAt) },
   ]
@@ -897,9 +1109,9 @@ function duplicateIdentityValues(assets: readonly Asset[], edits: readonly CellE
 }
 
 export default function AtlasInventory({
-  assets, assetNextCursor = '', assetsLoading = false, assetScope = null, csrfToken, permissions, onAssetsChange,
-  onClearAssetScope, onLoadMoreAssets = async () => undefined, onLoadAllAssets = async () => [...assets],
-  onOpenHelp, identity, focusRecord = null,
+  assets, assetNextCursor = '', assetFilteredCount, assetQueryPartial = false, assetsLoading = false, assetScope = null, csrfToken, permissions, onAssetsChange,
+  onClearAssetScope, onAssetQueryChange, onLoadMoreAssets = async () => undefined, onLoadAllAssets = async () => [...assets],
+  identity, focusRecord = null,
 }: AtlasInventoryProps) {
   const [editing, setEditing] = useState<Asset | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
@@ -918,11 +1130,15 @@ export default function AtlasInventory({
   const [modelSearch, setModelSearch] = useState('')
   const [modelKind, setModelKind] = useState('')
   const [modelIncludeRetired, setModelIncludeRetired] = useState(false)
+  const [modelNumberInput, setModelNumberInput] = useState('')
+  const [modelSearchCamera, setModelSearchCamera] = useState(false)
   const [modelReplacementId, setModelReplacementId] = useState('')
   const [modelSpecificationRows, setModelSpecificationRows] = useState<ModelSpecificationRow[]>([])
   const [templateFieldRows, setTemplateFieldRows] = useState<TemplateFieldRow[]>([])
   const [formModelId, setFormModelId] = useState('')
+  const [formManufacturer, setFormManufacturer] = useState('')
   const [assetReplacementId, setAssetReplacementId] = useState('')
+  const [assetReplacementPlanId, setAssetReplacementPlanId] = useState('')
   const [formBuildingId, setFormBuildingId] = useState('')
   const [bulkBuildingIds, setBulkBuildingIds] = useState<Record<number, string>>({})
   const [accessoryRows, setAccessoryRows] = useState<AccessoryRow[]>([])
@@ -941,11 +1157,14 @@ export default function AtlasInventory({
   const [identifierRefreshVersion, setIdentifierRefreshVersion] = useState(0)
   const [activeSection, setActiveSection] = useState<AtlasSection>('assets')
   const [replacementDates, setReplacementDates] = useState<Map<string, string>>(() => new Map())
+  const [replacementPlans, setReplacementPlans] = useState<ReplacementPlanOption[]>([])
   const [tagDefinitions, setTagDefinitions] = useState<LabelDefinition[]>([])
   const [tagAssignments, setTagAssignments] = useState<Map<string, Map<string, LabelAssignment>>>(() => new Map())
   const [tagColumnFormOpen, setTagColumnFormOpen] = useState(false)
   const [tagColumnBusy, setTagColumnBusy] = useState(false)
   const errorRef = useRef<HTMLDivElement>(null)
+  const listingTimer = useRef(0)
+  const [serverListing, setServerListing] = useState(() => listingFromGrid({ filters: { status: 'active' }, search: '', encodedQuery: '' }))
   const lifecycleNoteResolver = useRef<((note: string | null) => void) | null>(null)
   const assetWrites = useWriteQueue()
   const nextBulkRowKey = useRef(1)
@@ -959,7 +1178,17 @@ export default function AtlasInventory({
   const canWriteDirectory = permissions.includes('directory.write')
   const canReadLabels = permissions.includes('labels.read')
   const canWriteLabels = permissions.includes('labels.write')
+  const canAssignAssets = canWrite && canWriteDirectory
   const fiscalYearStartMonth = assetScope?.fiscalYearStartMonth ?? 1
+
+  const handleGridQueryChange = useCallback((state: GridQueryState) => {
+    window.clearTimeout(listingTimer.current)
+    listingTimer.current = window.setTimeout(() => {
+      const next = listingFromGrid(state)
+      setServerListing(next)
+      if (!assetScope) onAssetQueryChange?.(next)
+    }, 280)
+  }, [assetScope, onAssetQueryChange])
 
   const scopedAssets = useMemo(() => {
     if (!assetScope) return [...assets]
@@ -1022,6 +1251,23 @@ export default function AtlasInventory({
   }, [canReadPlanning])
 
   useEffect(() => {
+    if (!canReadPlanning) {
+      setReplacementPlans([])
+      return
+    }
+    let active = true
+    requestJSON('/api/v1/horizon/replacement-plans')
+      .then((value) => {
+        if (!active) return
+        setReplacementPlans(readItems(value).filter(isReplacementPlanOption))
+      })
+      .catch(() => {
+        if (active) setReplacementPlans([])
+      })
+    return () => { active = false }
+  }, [canReadPlanning])
+
+  useEffect(() => {
     if (!canReadLabels) {
       setTagDefinitions([])
       setTagAssignments(new Map())
@@ -1061,10 +1307,20 @@ export default function AtlasInventory({
   useEffect(() => {
     if (!assetScope) return
     setActiveSection('assets')
-    if (missingScopedAssetCount > 0 && (assetNextCursor || assetsLoading)) {
-      void onLoadAllAssets()
-    }
-  }, [assetScope?.nonce, assetNextCursor, assetsLoading, missingScopedAssetCount, onLoadAllAssets])
+    const loaded = new Set(assets.map((asset) => asset.id))
+    const missing = assetScope.assetIds.filter((id) => !loaded.has(id)).slice(0, 50)
+    if (missing.length === 0) return
+    let cancelled = false
+    Promise.all(missing.map(async (id) => {
+      const value = await requestJSON(`/api/v1/assets/${encodeURIComponent(id)}`)
+      return isAsset(value) ? value : null
+    })).then((found) => {
+      if (cancelled) return
+      const extra = found.filter((item): item is Asset => item !== null)
+      if (extra.length > 0) onAssetsChange(mergeAssets(assets, extra))
+    }).catch(() => undefined)
+    return () => { cancelled = true }
+  }, [assetScope?.nonce])
 
   useEffect(() => {
     if (inventoryModel) document.getElementById('model-inventory-heading')?.focus()
@@ -1078,8 +1334,9 @@ export default function AtlasInventory({
     if (formOpen) {
       setFormBuildingId(editing?.buildingId ?? '')
       setAssetReplacementId(editing?.replacementModelId ?? '')
+      setAssetReplacementPlanId(editing?.replacementPlanId ?? '')
     }
-  }, [formOpen, editing?.id, editing?.buildingId, editing?.replacementModelId])
+  }, [formOpen, editing?.id, editing?.buildingId, editing?.replacementModelId, editing?.replacementPlanId])
 
   useEffect(() => {
     if (bulkModel) setBulkBuildingIds({})
@@ -1110,8 +1367,9 @@ export default function AtlasInventory({
       setModels((current) => current.some((item) => item.id === model.id) ? current : [...current, model].sort((left, right) => modelLabel(left).localeCompare(modelLabel(right))))
     },
     replacementDates: canReadPlanning ? replacementDates : undefined,
+    replacementPlans: canReadPlanning ? replacementPlans : undefined,
     fiscalYearStartMonth,
-  }), [canReadPlanning, canWrite, canWriteDirectory, canWriteLabels, csrfToken, directoryReferences, fiscalYearStartMonth, handleTagDefinitionUpdated, models, replacementDates, tagAssignments, tagDefinitions])
+  }), [canReadPlanning, canWrite, canWriteDirectory, canWriteLabels, csrfToken, directoryReferences, fiscalYearStartMonth, handleTagDefinitionUpdated, models, replacementDates, replacementPlans, tagAssignments, tagDefinitions])
 
   const assetRowId = useCallback((asset: Asset) => asset.id, [])
   const assetColumns = useMemo(
@@ -1179,6 +1437,7 @@ export default function AtlasInventory({
     setPrefillModelID('')
     setPrefillKind('')
     setFormModelId('')
+    setFormManufacturer('')
     setAccessoryRows([])
     setFormOpen(true)
     setActiveSection('assets')
@@ -1191,6 +1450,7 @@ export default function AtlasInventory({
     setPrefillModelID(model.id)
     setPrefillKind(model.kind)
     setFormModelId(model.id)
+    setFormManufacturer(model.manufacturer)
     setAccessoryRows(defaultAccessoriesForKind(model.kind))
     setEditing(null)
     setFormOpen(true)
@@ -1226,6 +1486,7 @@ export default function AtlasInventory({
     setPrefillModelID('')
     setPrefillKind('')
     setFormModelId(asset.modelId ?? '')
+    setFormManufacturer(assetManufacturer(asset, models))
     setAccessoryRows((asset.components ?? []).map((component, key) => ({
       key, kind: component.kind, name: component.name, modelNumber: component.modelNumber ?? '', unitCost: dollarsFromMinor(component.unitCostMinor),
     })))
@@ -1238,9 +1499,10 @@ export default function AtlasInventory({
     void loadReferences()
   }
 
-  function openModelCreate() {
+  function openModelCreate(modelNumber = '') {
     setModelEditing(null)
     setModelReplacementId('')
+    setModelNumberInput(modelNumber)
     setModelSpecificationRows([])
     setTemplateFieldRows([])
     nextModelSpecificationKey.current = 0
@@ -1248,12 +1510,13 @@ export default function AtlasInventory({
     setModelFormOpen(true)
     setActiveSection('models')
     setError('')
-    setMessage('')
+    setMessage(modelNumber ? `Record scanned model number ${modelNumber} on a catalog model.` : '')
   }
 
   function openModelEdit(model: AssetModel) {
     setModelEditing(model)
     setModelReplacementId(model.replacementModelId ?? '')
+    setModelNumberInput(model.modelNumber ?? '')
     const rows = Object.entries(model.specifications ?? {})
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([name, value], key) => ({ key, name, value }))
@@ -1266,8 +1529,46 @@ export default function AtlasInventory({
     setTemplateFieldRows(fields)
     nextTemplateFieldKey.current = fields.length
     setModelFormOpen(true)
+    setActiveSection('models')
     setError('')
     setMessage('')
+  }
+
+  async function setupScannedModel(input: { modelNumber: string; modelId?: string }) {
+    const modelNumber = input.modelNumber.trim()
+    if (input.modelId) {
+      let model = models.find((item) => item.id === input.modelId)
+      if (!model) {
+        try {
+          const response = await requestJSON(`/api/v1/asset-models/${encodeURIComponent(input.modelId)}`)
+          if (isAssetModel(response)) model = response
+        } catch {
+          model = undefined
+        }
+      }
+      if (model) {
+        openModelEdit(model)
+        setModelNumberInput(modelNumber)
+        setMessage(`Scanned model number ${modelNumber}. Save the catalog model to record it.`)
+        return
+      }
+    }
+    openModelCreate(modelNumber)
+  }
+
+  async function linkAssetToModel(modelId: string) {
+    if (!selected) throw new Error('Select an asset before linking a model.')
+    const payload = assetPayload(selected)
+    payload.modelId = modelId
+    const saved = await requestJSON(`/api/v1/assets/${encodeURIComponent(selected.id)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+      body: JSON.stringify(payload),
+    })
+    if (!isAsset(saved)) throw new Error('invalid asset response')
+    onAssetsChange(assets.map((asset) => asset.id === saved.id ? saved : asset).sort((left, right) => left.name.localeCompare(right.name)))
+    setSelected(saved)
+    void loadModels({ search: modelSearch, kind: modelKind, includeRetired: modelIncludeRetired })
   }
 
   function addModelSpecification() {
@@ -1308,6 +1609,7 @@ export default function AtlasInventory({
     setModelSearch('')
     setModelKind('')
     setModelIncludeRetired(false)
+    setModelSearchCamera(false)
     void loadModels()
   }
 
@@ -1644,6 +1946,7 @@ export default function AtlasInventory({
     if (lifecycleStartDate) payload.lifecycleStartDate = `${lifecycleStartDate}T00:00:00Z`
     if (installedDate) payload.installedDate = `${installedDate}T00:00:00Z`
     payload.replacementModelId = assetReplacementId
+    if (canReadPlanning) payload.replacementPlanId = assetReplacementPlanId
     if (editing) {
       payload.revision = editing.revision
       if (status !== editing.status) {
@@ -1838,17 +2141,15 @@ export default function AtlasInventory({
   }
 
   return (
-    <section aria-label="Atlas inventory workflow" className={`${panelClass} space-y-5 p-4 sm:p-5`} data-feature="inventory.assets" data-requirement="REQ-ATLAS-001">
+    <section aria-label="Atlas inventory workflow" className={`${panelClass} space-y-3 p-3 sm:p-4`} data-feature="inventory.assets" data-requirement="REQ-ATLAS-001">
       <ProductHeader
         actions={<>
-          {onOpenHelp && <button className={secondaryButtonClass} onClick={onOpenHelp} type="button">Atlas help</button>}
           <a className={plainButtonClass} href="#workspace-mesh">Open Mesh graph</a>
           {canWrite && <button className={buttonClass} onClick={openCreate} type="button">Add asset</button>}
         </>}
-        description="Search and inspect organization-owned assets, then use Scan, Labels, or Models when you need codes or shared product defaults."
+        description="Search the full inventory with column filters. Scroll for more matching records. Double-click a row to inspect, check out, or assign it."
         headingId="assets-heading"
-        kicker="Organization asset registry"
-        title="Atlas — Asset inventory"
+        title="Asset inventory"
       />
 
       {error && <div className="rounded-lg border border-red-400/50 bg-red-950/50 p-3 text-sm" ref={errorRef} role="alert" tabIndex={-1}>{error}</div>}
@@ -1857,11 +2158,6 @@ export default function AtlasInventory({
       <AtlasSectionNav active={activeSection} canWrite={canWrite} onChange={setActiveSection} />
 
       <div aria-labelledby="atlas-tab-assets" hidden={activeSection !== 'assets'} id="atlas-panel-assets" role="tabpanel">
-      <p className="text-sm leading-6 text-steward-mist-muted">
-        {canWrite || canWriteLabels
-          ? `Edit cells directly: type to replace, Enter or Tab to commit, Escape to revert. Ctrl+C and Ctrl+V move a block to and from a spreadsheet, Ctrl+D fills down, and Ctrl+Z undoes.${canWrite ? ' Use the + on a row to insert a new asset below it.' : ''}${canReadLabels ? ' Tag columns use configured labels; add values from the cell picker when you have tag write access.' : ''}`
-          : 'Sort, filter, and copy asset records. Editing requires asset or tag write access.'}
-      </p>
       {assetScope && <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-steward-teal/35 bg-steward-teal/10 px-4 py-3">
         <p className="text-sm leading-6 text-steward-mist">Showing {scopedAssets.length} of {assetScope.assetIds.length} assets from Horizon: <strong>{assetScope.label}</strong>{missingScopedAssetCount > 0 && assetsLoading ? ' · loading remaining assets…' : missingScopedAssetCount > 0 ? ` · ${missingScopedAssetCount} assets not loaded yet` : ''}</p>
         {onClearAssetScope && <button className={secondaryButtonClass} onClick={onClearAssetScope} type="button">Show all assets</button>}
@@ -1876,40 +2172,50 @@ export default function AtlasInventory({
           identity={identity}
           viewDefaults={assetScope ? { filters: {} } : { filters: { status: 'active' } }}
           viewId={assetScope ? `atlas-assets-scope-${assetScope.nonce}` : 'atlas-assets'}
+          bulkActions={(selected) => selected[0] ? <a className={plainButtonClass + ' min-h-8 px-2 py-1 text-xs'} href={meshRecordHref('asset', selected[0].id)}>Show in Mesh</a> : null}
+          focusRowId={focusRecord?.kind === 'asset' ? focusRecord.recordId : undefined}
+          hasMore={!assetScope && Boolean(assetNextCursor) && assets.length < assetListingWindow}
+          loadingMore={assetsLoading}
           onCreateRows={canWrite && !assetScope ? createStagedAssets : undefined}
           onEditRow={canWrite ? openEdit : undefined}
           onOpenRow={openAssetDetail}
+          onQueryChange={assetScope ? undefined : handleGridQueryChange}
+          onReachEnd={!assetScope && assetNextCursor ? () => { void onLoadMoreAssets() } : undefined}
           onSaveEdits={canWrite || canWriteLabels ? saveAssetEdits : undefined}
+          queryOpenByDefault={!assetScope}
+          remoteFilterKeys={assetScope || !onAssetQueryChange ? undefined : remoteAssetFilterKeys}
+          remoteQuery={!assetScope && Boolean(onAssetQueryChange) && serverListing.remoteQuery}
+          remoteSearch={!assetScope && Boolean(onAssetQueryChange) && serverListing.remoteSearch}
+          remoteTotal={assetScope ? undefined : assetFilteredCount}
           rowId={(asset) => asset.id}
           rowLabel={(asset) => asset.name}
           rowMessage={(asset) => assetWrites.rowMessage(asset.id)}
           rowState={(asset) => assetWrites.rowState(asset.id)}
           rows={scopedAssets}
           selectable
-          toolbar={!assetScope && (canWrite || canWriteLabels) ? <div className="flex flex-wrap items-center gap-2">
-            {canWrite && <button className={plainButtonClass + ' min-h-8 px-2 py-1 text-xs'} onClick={openCreate} type="button">Full form</button>}
-            {canWriteLabels && <button className={plainButtonClass + ' min-h-8 px-2 py-1 text-xs'} onClick={() => setTagColumnFormOpen(true)} type="button">Add tag column</button>}
+          toolbar={!assetScope && canWriteLabels ? <div className="flex flex-wrap items-center gap-2">
+            <button className={plainButtonClass + ' min-h-8 px-2 py-1 text-xs'} onClick={() => setTagColumnFormOpen(true)} type="button">Add tag column</button>
             {canReadLabels && <a className={plainButtonClass + ' min-h-8 px-2 py-1 text-xs'} href="#workspace-threads">Manage tags</a>}
-          </div> : undefined}
+          </div> : !assetScope && canReadLabels ? <a className={plainButtonClass + ' min-h-8 px-2 py-1 text-xs'} href="#workspace-threads">Manage tags</a> : undefined}
         />
         {!assetScope && <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[0.025] px-4 py-3">
           <p className="text-sm text-steward-mist-muted" role="status">
             {assetsLoading
-              ? 'Loading assets…'
-              : assetNextCursor
-                ? `Showing ${assets.length} assets. More records are available in Atlas.`
-                : assets.length > 0
-                  ? `Showing all ${assets.length} loaded assets.`
-                  : 'No assets loaded yet.'}
+              ? 'Loading matching assets…'
+              : typeof assetFilteredCount === 'number' && assetFilteredCount > 0
+                ? assetNextCursor
+                  ? `Showing ${assets.length} of ${assetFilteredCount} matching assets. Scroll for more.`
+                  : `Showing all ${assetFilteredCount} matching assets.`
+                : assetNextCursor
+                  ? `Showing ${assets.length} matching assets. Scroll for more.`
+                  : assets.length > 0
+                    ? `Showing ${assets.length} matching assets.`
+                    : 'No assets match these filters.'}
+            {assetQueryPartial ? ' Advanced OR conditions still apply to the loaded page only — use column filters for organization-wide results.' : ''}
           </p>
-          {assetNextCursor && <div className="flex flex-wrap gap-2">
-            <button className={secondaryButtonClass} disabled={assetsLoading} onClick={() => void onLoadMoreAssets()} type="button">
-              {assetsLoading ? 'Loading…' : 'Load more'}
-            </button>
-            <button className={buttonClass} disabled={assetsLoading} onClick={() => void onLoadAllAssets()} type="button">
-              {assetsLoading ? 'Loading…' : 'Load all'}
-            </button>
-          </div>}
+          {assetNextCursor && assets.length >= assetListingWindow && <button className={secondaryButtonClass} disabled={assetsLoading} onClick={() => void onLoadMoreAssets()} type="button">
+            {assetsLoading ? 'Loading…' : 'Load next page'}
+          </button>}
         </div>}
       </div>
       </div>
@@ -1922,7 +2228,7 @@ export default function AtlasInventory({
         title={selected ? selected.name : 'Asset details'}
         wide
       >
-        <AssetDetailPanel busy={busy} canWrite={canWrite} csrfToken={csrfToken} emptyPrompt="Choose an asset to inspect its current record and lifecycle." identifierRefreshVersion={identifierRefreshVersion} identityLabel={identityLabel} lifecycle={lifecycle} models={models} onIdentifierChanged={() => setIdentifierRefreshVersion((current) => current + 1)} permissions={permissions} references={directoryReferences} selected={selected} />
+        <AssetDetailPanel busy={busy} canAssign={canAssignAssets} canWrite={canWrite} csrfToken={csrfToken} emptyPrompt="Choose an asset to inspect its current record and lifecycle." identifierRefreshVersion={identifierRefreshVersion} identityLabel={identityLabel} lifecycle={lifecycle} models={models} onIdentifierChanged={() => setIdentifierRefreshVersion((current) => current + 1)} permissions={permissions} references={directoryReferences} selected={selected} />
         {canWrite && selected && <button className={`${secondaryButtonClass} mt-4`} onClick={() => { setDetailOpen(false); openEdit(selected) }} type="button">Edit in full form</button>}
       </Drawer>
 
@@ -1980,12 +2286,41 @@ export default function AtlasInventory({
           {message && formOpen && <p className="mb-4 rounded-lg border border-steward-green/40 bg-steward-green/10 p-3 text-sm" role="status">{message}</p>}
           <div className="grid gap-4 md:grid-cols-2">
             <TextField defaultValue={assetValue(editing, 'name')} label="Asset name" name="name" required />
+            <ManufacturerSelect
+              canWrite={canWrite}
+              csrfToken={csrfToken}
+              manufacturer={formManufacturer}
+              models={models}
+              onChange={(value) => {
+                setFormManufacturer(value)
+                const current = models.find((item) => item.id === (formModelId || prefillModelID))
+                if (current && value && !manufacturerEquals(current.manufacturer, value)) setFormModelId('')
+                if (current && !value) setFormModelId('')
+              }}
+              onCreated={(model) => {
+                setModels((current) => current.some((item) => item.id === model.id) ? current : [...current, model])
+                setFormManufacturer(model.manufacturer)
+                if (!formModelId && !prefillModelID) setFormModelId(model.id)
+              }}
+              onOpenModels={() => { setFormOpen(false); setActiveSection('models') }}
+            />
             <ModelSelect
               canWrite={canWrite}
               csrfToken={csrfToken}
+              manufacturer={formManufacturer}
               models={models}
-              onChange={(value) => { setFormModelId(value); const model = models.find((item) => item.id === value); if (model && accessoryRows.length === 0) setAccessoryRows(defaultAccessoriesForKind(model.kind)) }}
-              onCreated={(model) => setModels((current) => current.some((item) => item.id === model.id) ? current : [...current, model])}
+              onChange={(value) => {
+                setFormModelId(value)
+                const model = models.find((item) => item.id === value)
+                if (model) {
+                  setFormManufacturer(model.manufacturer)
+                  if (accessoryRows.length === 0) setAccessoryRows(defaultAccessoriesForKind(model.kind))
+                }
+              }}
+              onCreated={(model) => {
+                setModels((current) => current.some((item) => item.id === model.id) ? current : [...current, model])
+                setFormManufacturer(model.manufacturer)
+              }}
               onOpenModels={() => { setFormOpen(false); setActiveSection('models') }}
               value={formModelId || prefillModelID}
             />
@@ -2009,6 +2344,19 @@ export default function AtlasInventory({
                 selected={assetReplacementId ? [{ id: assetReplacementId, label: models.find((item) => item.id === assetReplacementId) ? modelLabel(models.find((item) => item.id === assetReplacementId) as AssetModel) : assetReplacementId }] : []}
               />
             </div>
+            {canReadPlanning && (
+              <div className="md:col-span-2">
+                <RecordSearchPicker
+                  help="Named Horizon replacement plan that groups this asset with others on the Plans tab."
+                  kind="plan"
+                  label="Replacement plan"
+                  multiple={false}
+                  onChange={(records) => setAssetReplacementPlanId(records[0]?.id ?? '')}
+                  options={replacementPlans.map((plan) => ({ id: plan.id, label: plan.name, detail: `${plan.grouping} · ${plan.assetCount} assets` }))}
+                  selected={assetReplacementPlanId ? [{ id: assetReplacementPlanId, label: replacementPlanLabel(assetReplacementPlanId, replacementPlans) || assetReplacementPlanId }] : []}
+                />
+              </div>
+            )}
             <TextField defaultValue={dollarsFromMinor(editing?.unitCostMinor ?? selectedFormModel?.unitCostMinor)} help="Copied from the model when left empty on create." label="Unit cost" name="unitCost" />
             <FormReferencePicker browseLabel="Open sites" create={canWriteDirectory ? directoryCreate('site', formPickerContext) : undefined} defaultValue={assetValue(editing, 'siteId')} kind="site" label="Site" name="siteId" options={references.sites} />
             <FormReferencePicker browseLabel="Open buildings" create={canWriteDirectory ? directoryCreate('building', formPickerContext) : undefined} defaultValue={assetValue(editing, 'buildingId')} kind="building" label="Building" name="buildingId" onSelectedChange={(records) => setFormBuildingId(records[0]?.id ?? '')} options={references.buildings} />
@@ -2055,14 +2403,58 @@ export default function AtlasInventory({
         </form>
       </Drawer>
 
+      <div aria-labelledby="atlas-tab-checkouts" hidden={activeSection !== 'checkouts'} id="atlas-panel-checkouts" role="tabpanel">
+        <div className="mt-4">
+          {activeSection === 'checkouts' && (
+            <CheckoutDesk
+              assets={assets}
+              canWrite={canAssignAssets}
+              csrfToken={csrfToken}
+              identities={directoryReferences.identities.map((item) => ({
+                id: item.id,
+                displayName: item.displayName || item.name || item.email || item.id,
+                status: 'active',
+              }))}
+            />
+          )}
+        </div>
+      </div>
+
       <div aria-labelledby="atlas-tab-scan" hidden={activeSection !== 'scan'} id="atlas-panel-scan" role="tabpanel">
-        <div className="grid gap-6 lg:grid-cols-[minmax(0,1.15fr)_minmax(18rem,0.85fr)]">
+        {selected && (
+          <div className="mb-4 flex flex-wrap items-center gap-3 rounded-md border border-steward-teal/30 bg-steward-teal/[0.07] px-4 py-3">
+            <StatusBadge tone="success">Matched</StatusBadge>
+            <div className="min-w-0">
+              <p className="font-medium text-steward-mist">{selected.name}</p>
+              <p className="text-sm text-steward-mist-muted">{[selected.assetTag, selected.serialNumber].filter(Boolean).join(' · ') || 'Inspect the record beside the scanner.'}</p>
+            </div>
+          </div>
+        )}
+        <div className="grid gap-6 xl:grid-cols-[minmax(0,1.2fr)_minmax(20rem,0.8fr)]">
           <div>
-            <p className="mb-4 text-sm text-steward-mist-muted">{selected ? 'Scan another code to switch assets, or associate a code with the record shown here.' : 'Scan to find an asset. The matching record opens here so you can inspect it without leaving Scan.'}</p>
-            <AtlasScanner active={activeSection === 'scan'} canWrite={canWrite} csrfToken={csrfToken} onAssociated={() => setIdentifierRefreshVersion((current) => current + 1)} onResolveAsset={resolveScannedAsset} selectedAsset={selected ? { id: selected.id, name: selected.name } : null} />
+            <p className="mb-4 text-sm leading-6 text-steward-mist-muted">{selected ? `Working with ${selected.name}. Find another asset, or attach a code to this record.` : 'Find an asset, or search for one when attaching a code. The matching record opens here so you can inspect it without leaving Scan.'}</p>
+            <AtlasScanner
+              active={activeSection === 'scan'}
+              canWrite={canWrite}
+              csrfToken={csrfToken}
+              onAssociated={() => setIdentifierRefreshVersion((current) => current + 1)}
+              onClearAsset={() => setSelected(null)}
+              onLinkAssetModel={canWrite ? linkAssetToModel : undefined}
+              onResolveAsset={resolveScannedAsset}
+              onSetupScannedModel={canWrite ? (input) => { void setupScannedModel(input) } : undefined}
+              selectedAsset={selected ? {
+                id: selected.id,
+                name: selected.name,
+                assetTag: selected.assetTag,
+                serialNumber: selected.serialNumber,
+                modelId: selected.modelId,
+                modelNumber: selected.modelContext?.modelNumber,
+                modelLabel: selected.modelContext ? modelContextLabel(selected.modelContext) : undefined,
+              } : null}
+            />
           </div>
           {activeSection === 'scan' && (
-            <AssetDetailPanel busy={busy} canWrite={canWrite} csrfToken={csrfToken} emptyPrompt="Scan a code to open the matching asset here." identifierRefreshVersion={identifierRefreshVersion} identityLabel={identityLabel} lifecycle={lifecycle} models={models} onIdentifierChanged={() => setIdentifierRefreshVersion((current) => current + 1)} permissions={permissions} references={directoryReferences} selected={selected} />
+            <AssetDetailPanel busy={busy} canAssign={canAssignAssets} canWrite={canWrite} csrfToken={csrfToken} emptyPrompt="Scan a code to open the matching asset here." highlight={Boolean(selected)} identifierRefreshVersion={identifierRefreshVersion} identityLabel={identityLabel} lifecycle={lifecycle} models={models} onIdentifierChanged={() => setIdentifierRefreshVersion((current) => current + 1)} permissions={permissions} references={directoryReferences} selected={selected} />
           )}
         </div>
       </div>
@@ -2082,24 +2474,48 @@ export default function AtlasInventory({
             <div className="flex flex-wrap items-center gap-2"><h3 className="text-lg font-semibold" id="models-heading">Model catalog</h3><StatusBadge tone="info">{models.length} model{models.length === 1 ? '' : 's'} shown</StatusBadge></div>
             <p className="mt-1 text-sm text-steward-mist-muted">Shared manufacturer and model defaults for repeated assets.</p>
           </div>
-          {canWrite && <button className={secondaryButtonClass} onClick={openModelCreate} type="button">Add model</button>}
+          {canWrite && <button className={secondaryButtonClass} onClick={() => openModelCreate()} type="button">Add model</button>}
         </div>
         <form aria-label="Search models" className="mt-5 grid gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(10rem,0.45fr)_minmax(10rem,0.45fr)_auto]" onSubmit={handleModelSearch} role="search">
           <label className={labelClass}>Search models<input className={inputClass} maxLength={200} onChange={(event) => setModelSearch(event.target.value)} placeholder="Manufacturer, model, number, or vendor ID" type="search" value={modelSearch} /></label>
           <label className={labelClass}>Model kind<select className={inputClass} onChange={(event) => setModelKind(event.target.value)} value={modelKind}><option value="">All kinds</option>{kinds.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
           <label className={`${labelClass} flex items-end gap-2 pb-2`}><input checked={modelIncludeRetired} onChange={(event) => setModelIncludeRetired(event.target.checked)} type="checkbox" /><span>Include retired</span></label>
-          <div className="flex flex-wrap items-end gap-2"><button className={secondaryButtonClass} type="submit">Search</button><button className={plainButtonClass} onClick={clearModelSearch} type="button">Clear</button></div>
+          <div className="flex flex-wrap items-end gap-2">
+            <button className={secondaryButtonClass} type="submit">Search</button>
+            <button className={secondaryButtonClass} onClick={() => setModelSearchCamera((open) => !open)} type="button">{modelSearchCamera ? 'Hide camera' : 'Scan model identifier'}</button>
+            <button className={plainButtonClass} onClick={clearModelSearch} type="button">Clear</button>
+          </div>
         </form>
+        {modelSearchCamera && <div className={`${subpanelClass} mt-3 p-4`}>
+          <p className="text-sm text-steward-mist-muted">Scan the manufacturer model or MTM barcode, such as 20W5S51T00, to search the catalog. If several barcodes are in view, the model number is used.</p>
+          <div className="mt-3">
+            <BarcodeCameraCapture autoStart onCaptures={(codes) => {
+              const value = preferredModelIdentifier(codes.map((code) => code.value))
+              setModelSearch(value)
+              setModelSearchCamera(false)
+              void loadModels({ search: value, kind: modelKind, includeRetired: modelIncludeRetired || Boolean(value) })
+            }} />
+          </div>
+        </div>}
         {modelFormOpen && canWrite && (
           <form aria-label={modelEditing ? 'Edit model' : 'Add model'} className={`${subpanelClass} mt-5 border-steward-blue/35 bg-steward-ink-900/75 p-5`} key={modelEditing?.id ?? 'new-model'} onSubmit={handleModelSubmit}>
             <div className="flex flex-wrap items-center justify-between gap-3">
               <h4 className="font-semibold">{modelEditing ? `Edit ${modelLabel(modelEditing)}` : 'Register a model'}</h4>
-              <button className={plainButtonClass} onClick={() => { setModelFormOpen(false); setModelEditing(null); setModelSpecificationRows([]) }} type="button">Cancel</button>
+              <button className={plainButtonClass} onClick={() => { setModelFormOpen(false); setModelEditing(null); setModelNumberInput(''); setModelSpecificationRows([]); setTemplateFieldRows([]) }} type="button">Cancel</button>
             </div>
             <div className="mt-4 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
               <TextField defaultValue={modelEditing?.manufacturer ?? ''} label="Manufacturer" maxLength={120} name="manufacturer" required />
               <TextField defaultValue={modelEditing?.name ?? ''} label="Model name" maxLength={160} name="modelName" required />
-              <TextField defaultValue={modelEditing?.modelNumber ?? ''} label="Model number" maxLength={120} name="modelNumber" />
+              <ScanField
+                help="Scan the manufacturer model or MTM barcode printed on the device, such as 20W5S51T00. If several barcodes are captured, choose the model number."
+                label="Model number"
+                maxLength={120}
+                name="modelNumber"
+                onChange={setModelNumberInput}
+                parseValue={modelIdentifierFromScan}
+                placeholder="20W5S51T00"
+                value={modelNumberInput}
+              />
               <SelectField defaultValue={modelEditing?.kind ?? 'server'} label="Kind" name="modelKind" options={kinds} />
               <TextField defaultValue={modelEditing?.vendorIdentifier ?? ''} label="Vendor identifier" maxLength={160} name="vendorIdentifier" />
               <TextField defaultValue={modelEditing?.supportUrl ?? ''} label="Support URL" maxLength={500} name="supportUrl" />
@@ -2200,6 +2616,10 @@ export default function AtlasInventory({
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="min-w-0">
                   <p className="break-words font-semibold text-steward-mist">{modelLabel(model)}</p>
+                  <p className="mt-1 break-all text-sm text-steward-mist">
+                    <span className="text-steward-mist-muted">Scanned model number </span>
+                    {model.modelNumber || 'Not recorded'}
+                  </p>
                   <div className="mt-2 flex flex-wrap gap-2"><StatusBadge>{model.kind}</StatusBadge>{model.status === 'retired' && <StatusBadge tone="warning">retired</StatusBadge>}<StatusBadge tone={model.instanceCount > 0 ? 'success' : 'neutral'}>{model.instanceCount} asset{model.instanceCount === 1 ? '' : 's'}</StatusBadge>{Boolean(model.warrantyMonths) && <StatusBadge tone="info">{model.warrantyMonths} month warranty</StatusBadge>}{Boolean(model.usefulLifeMonths) && <StatusBadge tone="info">{model.usefulLifeMonths} month life</StatusBadge>}{Boolean(model.unitCostMinor) && <StatusBadge tone="info">{formatMoney(model.unitCostMinor, model.currency)}</StatusBadge>}</div>
                   {model.replacementModelId && <p className="mt-2 text-sm text-steward-mist-muted">Replacement lineage: {models.find((item) => item.id === model.replacementModelId) ? modelLabel(models.find((item) => item.id === model.replacementModelId) as AssetModel) : model.replacementModelId}</p>}
                 </div>
@@ -2252,6 +2672,7 @@ export default function AtlasInventory({
                   setModelInventoryQuery(model)
                   setModelInventoryQueryText(encodeQuery(model))
                 }}
+                optionsForField={(field) => modelInventoryQueryOptions(field, directoryReferences)}
               />
             </div>
             <div className="flex flex-wrap items-end gap-3 sm:col-span-2 lg:col-span-3">
@@ -2274,12 +2695,14 @@ export default function AtlasInventory({
 }
 
 function AssetDetailPanel({
-  busy, canWrite, csrfToken, emptyPrompt, identifierRefreshVersion, identityLabel, lifecycle, models, onIdentifierChanged, permissions, references, selected,
+  busy, canAssign = false, canWrite, csrfToken, emptyPrompt, highlight = false, identifierRefreshVersion, identityLabel, lifecycle, models, onIdentifierChanged, permissions, references, selected,
 }: {
   busy: string
+  canAssign?: boolean
   canWrite: boolean
   csrfToken: string
   emptyPrompt: string
+  highlight?: boolean
   identifierRefreshVersion: number
   identityLabel: (id?: string) => string | undefined
   lifecycle: readonly LifecycleEvent[]
@@ -2313,11 +2736,12 @@ function AssetDetailPanel({
   const currentModelPastLifecycle = linkedModel ? modelPastLifecycle(linkedModel) : false
 
   return (
-    <aside aria-labelledby="asset-detail-heading" className={`${subpanelClass} p-5`}>
+    <aside aria-labelledby="asset-detail-heading" className={cx(subpanelClass, 'p-5', highlight && 'ring-1 ring-inset ring-steward-teal/30')}>
       <h3 className="text-lg font-semibold outline-none focus-visible:ring-2 focus-visible:ring-steward-teal" id="asset-detail-heading" tabIndex={-1}>Asset details</h3>
       {!selected ? <p className="mt-3 text-sm text-steward-mist-muted">{emptyPrompt}</p> : <>
+        <p className="mt-3"><a className={plainButtonClass} href={meshRecordHref('asset', selected.id)}>Show in Mesh</a></p>
         <h4 className="mt-4 font-semibold">Instance-specific record</h4>
-        <dl className="mt-3 grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2 text-sm"><Detail label="Name" value={selected.name} /><Detail label="Model ID" value={selected.modelId} /><Detail label="Kind" value={selected.kind} /><Detail label="Status" value={selected.status} /><Detail label="Criticality" value={selected.criticalityScore ? `${selected.criticalityScore} / 5` : undefined} /><Detail label="Asset tag" value={selected.assetTag} /><Detail label="Serial" value={selected.serialNumber} /><Detail label="Hostname" value={selected.hostname} /><Detail label="Deployment notes" value={selected.deploymentNotes} /><Detail label="Unit cost" value={formatMoney(selected.unitCostMinor, selected.currency) || undefined} /><Detail label="Purchase date" value={calendarDateText(selected.purchaseDate) || undefined} /><Detail label="Installed date" value={calendarDateText(selected.installedDate) || undefined} /><Detail label="Lifecycle start" value={calendarDateText(selected.lifecycleStartDate) || undefined} /><Detail label="Replacement model" value={replacementModel ? `${modelLabel(replacementModel)}${replacementSource ? ` (${replacementSource})` : ''}` : effectiveReplacementId} /><Detail label="Site" value={referenceExportLabel(references.sites, selected.siteId ?? '') || selected.siteId} /><Detail label="Building" value={referenceExportLabel(references.buildings, selected.buildingId ?? '') || selected.buildingId} /><Detail label="Room" value={referenceExportLabel(references.rooms, selected.roomId ?? '') || selected.roomId} /><Detail label="Asset department" value={referenceExportLabel(references.departments, selected.departmentId ?? '') || selected.departmentId} /><Detail label="Primary user" value={identityLabel(selected.userId)} /><Detail label="Revision" value={String(selected.revision)} /></dl>
+        <dl className="mt-3 grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2 text-sm"><Detail label="Name" value={selected.name} /><Detail label="Manufacturer" value={selected.modelContext?.manufacturer || linkedModel?.manufacturer} /><Detail label="Model ID" value={selected.modelId} /><Detail label="Kind" value={selected.kind} /><Detail label="Status" value={selected.status} /><Detail label="Criticality" value={selected.criticalityScore ? `${selected.criticalityScore} / 5` : undefined} /><Detail label="Asset tag" value={selected.assetTag} /><Detail label="Serial" value={selected.serialNumber} /><Detail label="Hostname" value={selected.hostname} /><Detail label="Deployment notes" value={selected.deploymentNotes} /><Detail label="Unit cost" value={formatMoney(selected.unitCostMinor, selected.currency) || undefined} /><Detail label="Purchase date" value={calendarDateText(selected.purchaseDate) || undefined} /><Detail label="Installed date" value={calendarDateText(selected.installedDate) || undefined} /><Detail label="Lifecycle start" value={calendarDateText(selected.lifecycleStartDate) || undefined} /><Detail label="Replacement model" value={replacementModel ? `${modelLabel(replacementModel)}${replacementSource ? ` (${replacementSource})` : ''}` : effectiveReplacementId} /><Detail label="Site" value={referenceExportLabel(references.sites, selected.siteId ?? '') || selected.siteId} /><Detail label="Building" value={referenceExportLabel(references.buildings, selected.buildingId ?? '') || selected.buildingId} /><Detail label="Room" value={referenceExportLabel(references.rooms, selected.roomId ?? '') || selected.roomId} /><Detail label="Asset department" value={referenceExportLabel(references.departments, selected.departmentId ?? '') || selected.departmentId} /><Detail label="Primary user" value={identityLabel(selected.userId)} /><Detail label="Revision" value={String(selected.revision)} /></dl>
         {(percent !== null || currentModelPastLifecycle) && <section aria-labelledby="asset-lifecycle-progress-heading" className="mt-6 rounded-xl border border-steward-teal/30 bg-steward-teal/[0.06] p-4">
           <h4 className="font-semibold" id="asset-lifecycle-progress-heading">Lifecycle planning</h4>
           {percent !== null && <>
@@ -2336,6 +2760,7 @@ function AssetDetailPanel({
         {selected.modelContext && <ModelContextDetails context={selected.modelContext} instanceKind={selected.kind} />}
         <RelatedRecords onPreview={setPreview} related={related} />
         {preview && <div className="mt-4"><DocumentViewer csrfToken={csrfToken} document={preview} onClose={() => setPreview(null)} /></div>}
+        {permissions.includes('assets.read') && <AssetAssignments assetId={selected.id} assetName={selected.name} canWrite={canAssign} csrfToken={csrfToken} />}
         <RecordTags csrfToken={csrfToken} permissions={permissions} recordId={selected.id} recordName={selected.name} recordType="atlas.asset" />
         <h4 className="mt-6 font-semibold">Lifecycle history</h4>
         {busy === `history-${selected.id}` ? <p className="mt-2 text-sm text-steward-mist-muted" role="status">Loading lifecycle…</p> : lifecycle.length === 0 ? <p className="mt-2 text-sm text-steward-mist-muted">No lifecycle events loaded.</p> : <ol className="mt-3 space-y-3">{lifecycle.map((event) => <li className="border-l-2 border-steward-blue pl-3 text-sm" key={event.id}><p><strong>{event.fromStatus ? `${event.fromStatus} → ` : ''}{event.toStatus}</strong> · revision {event.revision}</p><p className="text-steward-mist-muted">{event.note || 'Status recorded'} · {new Date(event.occurredAt).toLocaleDateString()}</p></li>)}</ol>}
@@ -2442,7 +2867,7 @@ function ModelRecordDetails({ model, models }: { model: AssetModel; models: read
     <dl className="mt-3 grid grid-cols-[minmax(0,0.45fr)_minmax(0,1fr)] gap-x-4 gap-y-2 text-sm">
       <Detail label="Manufacturer" value={model.manufacturer} />
       <Detail label="Model name" value={model.name} />
-      <Detail label="Model number" value={model.modelNumber} />
+      <Detail label="Scanned model number" value={model.modelNumber || 'Not recorded'} />
       <Detail label="Kind" value={model.kind} />
       <Detail label="Status" value={model.status} />
       <Detail label="Vendor ID" value={model.vendorIdentifier} />
@@ -2482,16 +2907,17 @@ function NumberField({ defaultValue, label, max, name }: { defaultValue: number;
   return <label className={labelClass}>{label}<input className={inputClass} defaultValue={defaultValue} max={max} min={0} name={name} type="number" /></label>
 }
 
-function ModelSelect({ canWrite, csrfToken, models, onChange, onCreated, onOpenModels, value }: {
+function ManufacturerSelect({ canWrite, csrfToken, manufacturer, models, onChange, onCreated, onOpenModels }: {
   canWrite: boolean
   csrfToken: string
-  models: AssetModel[]
+  manufacturer: string
+  models: readonly AssetModel[]
   onChange: (value: string) => void
   onCreated: (model: AssetModel) => void
   onOpenModels: () => void
-  value: string
 }) {
-  const selected = value ? [{ id: value, label: models.find((model) => model.id === value) ? modelLabel(models.find((model) => model.id === value) as AssetModel) : value }] : []
+  const options = manufacturerOptions(models)
+  const selected = manufacturer ? [{ id: manufacturer, label: manufacturer, detail: options.find((item) => manufacturerEquals(item.id, manufacturer))?.detail }] : []
   return <RecordSearchPicker
     browseLabel="Open models"
     create={canWrite ? {
@@ -2509,16 +2935,60 @@ function ModelSelect({ canWrite, csrfToken, models, onChange, onCreated, onOpenM
         })
         if (!isAssetModel(saved)) throw new Error('invalid model response')
         onCreated(saved)
+        return { id: saved.manufacturer, label: saved.manufacturer }
+      },
+    } : undefined}
+    help="Catalog manufacturers from Atlas models. Choosing one narrows the model list."
+    kind="manufacturer"
+    label="Manufacturer"
+    multiple={false}
+    onBrowse={onOpenModels}
+    onChange={(records) => onChange(records[0]?.id ?? '')}
+    options={options}
+    selected={selected}
+  />
+}
+
+function ModelSelect({ canWrite, csrfToken, manufacturer = '', models, onChange, onCreated, onOpenModels, value }: {
+  canWrite: boolean
+  csrfToken: string
+  manufacturer?: string
+  models: readonly AssetModel[]
+  onChange: (value: string) => void
+  onCreated: (model: AssetModel) => void
+  onOpenModels: () => void
+  value: string
+}) {
+  const pool = modelsForManufacturer(models, manufacturer)
+  const selected = value ? [{ id: value, label: pool.find((model) => model.id === value) || models.find((model) => model.id === value) ? modelLabel((pool.find((model) => model.id === value) || models.find((model) => model.id === value)) as AssetModel) : value }] : []
+  return <RecordSearchPicker
+    browseLabel="Open models"
+    create={canWrite ? {
+      label: 'Add model',
+      fields: [
+        { key: 'manufacturer', label: 'Manufacturer', required: !manufacturer },
+        { key: 'name', label: 'Model name', required: true },
+        { key: 'kind', label: 'Kind', required: true, options: kinds.map((kind) => ({ id: kind, label: kind })) },
+      ],
+      submit: async (values) => {
+        const saved = await requestJSON('/api/v1/asset-models', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+          body: JSON.stringify({ manufacturer: values.manufacturer || manufacturer, name: values.name, kind: values.kind || 'other', status: 'active', currency: 'USD' }),
+        })
+        if (!isAssetModel(saved)) throw new Error('invalid model response')
+        onCreated(saved)
         return { id: saved.id, label: modelLabel(saved), detail: saved.kind }
       },
     } : undefined}
+    help={manufacturer ? `Showing catalog models from ${manufacturer}.` : 'Optionally choose a manufacturer first to narrow this list.'}
     kind="model"
     label="Model"
     multiple={false}
     name="modelId"
     onBrowse={onOpenModels}
     onChange={(records) => onChange(records[0]?.id ?? '')}
-    options={models.map((model) => ({ id: model.id, label: modelLabel(model), detail: model.kind }))}
+    options={pool.map((model) => ({ id: model.id, label: modelLabel(model), detail: model.kind }))}
     selected={selected}
   />
 }

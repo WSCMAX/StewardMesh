@@ -1141,7 +1141,12 @@ paths:
       x-requirement: REQ-ATLAS-001
       security: [{localCookieAuth: []}, {secureCookieAuth: []}]
       parameters:
-        - {in: query, name: q, schema: {type: string, maxLength: 200}}
+        - {in: query, name: q, schema: {type: string, maxLength: 200}, description: "Case-insensitive substring matched against name, asset tag, serial number, hostname, and the linked model's manufacturer, name, and model number."}
+        - {in: query, name: name, schema: {type: string, maxLength: 200}, description: "Case-insensitive substring matched against asset name only. Bound as a parameter; never interpolated into SQL."}
+        - {in: query, name: assetTag, schema: {type: string, maxLength: 200}, description: "Case-insensitive substring matched against asset tag."}
+        - {in: query, name: serialNumber, schema: {type: string, maxLength: 200}, description: "Case-insensitive substring matched against serial number."}
+        - {in: query, name: hostname, schema: {type: string, maxLength: 200}, description: "Case-insensitive substring matched against hostname."}
+        - {in: query, name: manufacturer, schema: {type: string, maxLength: 200}, description: "Case-insensitive substring matched against the linked model's manufacturer."}
         - {in: query, name: kind, schema: {$ref: '#/components/schemas/AssetKind'}}
         - {in: query, name: status, schema: {$ref: '#/components/schemas/AssetStatus'}}
         - {in: query, name: modelId, schema: {$ref: '#/components/schemas/AssetModelID'}}
@@ -1749,7 +1754,11 @@ paths:
         - name: search
           in: query
           schema: {type: string, maxLength: 200}
-          description: Case-insensitive record-label search. Matching records keep their direct connections within the response limit.
+          description: Case-insensitive record-label or node-id search. Matching records keep their direct connections within the response limit.
+        - name: node
+          in: query
+          schema: {type: string, maxLength: 320, pattern: '^[a-z][a-z0-9_-]{0,63}:[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$'}
+          description: Load the neighborhood of one typed record (`kind:id`). Direct connections are kept within the response limit. Organization `contains` edges are not treated as operational links.
         - name: kind
           in: query
           schema: {$ref: '#/components/schemas/MeshGraphNodeKind'}
@@ -2231,6 +2240,173 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+  /api/v1/people/assignments:
+    get:
+      summary: List asset assignments by identity or department
+      operationId: listPeopleAssignments
+      tags: [People]
+      x-requirement: REQ-PEOPLE-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - in: query
+          name: assigneeKind
+          required: true
+          schema: {type: string, enum: [identity, department, group]}
+        - in: query
+          name: assigneeId
+          schema: {type: string, pattern: '^[a-f0-9]{32}$'}
+        - in: query
+          name: assetId
+          schema: {type: string, minLength: 1, maxLength: 128}
+      responses:
+        '200':
+          description: Checkout, return-by, and returned history restricted by directory scope
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AssetAssignmentCollection'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /api/v1/people/checkout-groups:
+    get:
+      summary: List checkout groups
+      operationId: listCheckoutGroups
+      tags: [People]
+      x-requirement: REQ-PEOPLE-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200':
+          description: Named groups of people that can share an asset checkout
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: {type: array, items: {$ref: '#/components/schemas/CheckoutGroup'}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+    post:
+      summary: Create a checkout group
+      operationId: createCheckoutGroup
+      tags: [People]
+      x-requirement: REQ-PEOPLE-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [name, memberIds]
+              properties:
+                name: {type: string, minLength: 1, maxLength: 200}
+                description: {type: string, maxLength: 500}
+                memberIds: {type: array, items: {type: string, pattern: '^[a-f0-9]{32}$'}, minItems: 1}
+      responses:
+        '201':
+          description: Checkout group created
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CheckoutGroup'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /api/v1/people/checkout-availability:
+    post:
+      summary: Rank tagged assets for a checkout window
+      operationId: rankCheckoutAvailability
+      tags: [People]
+      x-requirement: REQ-PEOPLE-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [from, to]
+              properties:
+                definitionId: {type: string}
+                value: {type: string}
+                from: {type: string, format: date-time}
+                to: {type: string, format: date-time}
+                preferredModelIds: {type: array, items: {type: string}}
+                quantity: {type: integer}
+                assetIds: {type: array, items: {type: string}}
+      responses:
+        '200':
+          description: Ranked checkout candidates for the tagged pool
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: {type: array, items: {$ref: '#/components/schemas/CheckoutCandidate'}}
+                  quantity: {type: integer}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /api/v1/people/bulk-checkouts:
+    get:
+      summary: List bulk checkout assignments
+      operationId: listBulkCheckouts
+      tags: [People]
+      x-requirement: REQ-PEOPLE-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200':
+          description: Bulk checkout parent records
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: {type: array, items: {$ref: '#/components/schemas/BulkCheckout'}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+    post:
+      summary: Create a bulk checkout or reservation
+      operationId: createBulkCheckout
+      tags: [People]
+      x-requirement: REQ-PEOPLE-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [assigneeKind, assigneeId, assetIds]
+              properties:
+                assigneeKind: {type: string, enum: [identity, group]}
+                assigneeId: {type: string, pattern: '^[a-f0-9]{32}$'}
+                purpose: {type: string, enum: [checkout, reservation]}
+                effectiveFrom: {type: string, format: date-time}
+                dueAt: {type: string, format: date-time}
+                eventSummary: {type: string, maxLength: 500}
+                labelDefinitionId: {type: string}
+                labelValue: {type: string}
+                assetIds: {type: array, items: {type: string}, minItems: 1, maxItems: 200}
+                conflictPolicy: {type: string, enum: [replace, group, proceed]}
+      responses:
+        '201':
+          description: Bulk checkout created with per-asset assignments
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
   /api/v1/assets/{assetId}/assignments:
     parameters:
       - $ref: '#/components/parameters/AssetID'
@@ -3060,6 +3236,11 @@ paths:
         - $ref: '#/components/parameters/HorizonToYear'
         - $ref: '#/components/parameters/HorizonFiscalYearStartMonth'
         - $ref: '#/components/parameters/HorizonGroupBy'
+        - in: query
+          name: includeItems
+          required: false
+          schema: {type: boolean, default: false}
+          description: When true, include one forecast item per contributing plan with department, type, manufacturer, and building.
       responses:
         '200':
           description: Scenario-based replacement forecast
@@ -3107,6 +3288,45 @@ paths:
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/horizon/forecast/amounts:
+    get:
+      summary: List items that make up a forecast amount
+      operationId: getHorizonForecastAmountBreakdown
+      tags: [Horizon]
+      x-requirement: REQ-HORIZON-001
+      description: Returns the planned replacements or Ledger cost records that sum to one forecast total or group amount.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/HorizonScenarios'
+        - $ref: '#/components/parameters/HorizonAsOf'
+        - $ref: '#/components/parameters/HorizonFromYear'
+        - $ref: '#/components/parameters/HorizonToYear'
+        - $ref: '#/components/parameters/HorizonFiscalYearStartMonth'
+        - $ref: '#/components/parameters/HorizonGroupBy'
+        - name: amountKind
+          in: query
+          required: true
+          schema: {$ref: '#/components/schemas/HorizonAmountKind'}
+        - name: scenario
+          in: query
+          required: false
+          schema: {$ref: '#/components/schemas/HorizonScenario'}
+        - name: groupKey
+          in: query
+          required: false
+          schema: {type: string, minLength: 1}
+      responses:
+        '200':
+          description: Items contributing to the requested forecast amount
+          headers:
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/HorizonForecastAmountBreakdown'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
   /api/v1/horizon/export.csv:
     get:
       summary: Export replacement forecast as CSV
@@ -3136,6 +3356,123 @@ paths:
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/horizon/replacement-plans:
+    get:
+      summary: List named replacement plans
+      operationId: listHorizonReplacementPlans
+      tags: [Horizon]
+      x-requirement: REQ-HORIZON-001
+      description: Lists named replacement plans that group many assets, including the assigned asset count for each plan.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200':
+          description: Organization-scoped replacement plans
+          headers:
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/HorizonReplacementPlanCollection'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+    post:
+      summary: Create a named replacement plan
+      operationId: createHorizonReplacementPlan
+      tags: [Horizon]
+      x-requirement: REQ-HORIZON-001
+      description: Creates a named replacement plan with a grouping so many assets can share one plan.
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/HorizonReplacementPlanRequest'}
+      responses:
+        '201':
+          description: Replacement plan created
+          headers:
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/HorizonReplacementPlan'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/horizon/replacement-plans/{planId}:
+    parameters:
+      - $ref: '#/components/parameters/HorizonPlanID'
+    get:
+      summary: Get a named replacement plan
+      operationId: getHorizonReplacementPlan
+      tags: [Horizon]
+      x-requirement: REQ-HORIZON-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200':
+          description: Named replacement plan
+          headers:
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/HorizonReplacementPlan'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    put:
+      summary: Update a named replacement plan
+      operationId: updateHorizonReplacementPlan
+      tags: [Horizon]
+      x-requirement: REQ-HORIZON-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/HorizonReplacementPlanRequest'}
+      responses:
+        '200':
+          description: Replacement plan updated
+          headers:
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/HorizonReplacementPlan'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/horizon/replacement-plans/{planId}/assets:
+    parameters:
+      - $ref: '#/components/parameters/HorizonPlanID'
+    get:
+      summary: List assets assigned to a replacement plan
+      operationId: listHorizonReplacementPlanAssets
+      tags: [Horizon]
+      x-requirement: REQ-HORIZON-001
+      security: [{localCookieAuth: []}, {secureCookieAuth: []}]
+      responses:
+        '200':
+          description: Assets assigned to the replacement plan
+          headers:
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [items]
+                properties:
+                  items: {type: array, items: {$ref: '#/components/schemas/Asset'}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
   /api/v1/ledger:
     get:
       summary: List the organization Ledger snapshot
@@ -4395,7 +4732,7 @@ components:
       required: false
       schema:
         type: string
-        enum: [fiscal_year, department, site, tag, goal, asset_class]
+        enum: [fiscal_year, department, site, tag, goal, asset_class, manufacturer, building]
         default: fiscal_year
     ThreadTargetType:
       in: path
@@ -5095,6 +5432,7 @@ components:
           items: {$ref: '#/components/schemas/DirectoryReferenceID'}
         status: {$ref: '#/components/schemas/AssetStatus'}
         purchaseDate: {type: string, format: date-time}
+        replacementPlanId: {$ref: '#/components/schemas/HorizonID'}
         revision: {type: integer, format: int64, minimum: 1}
         createdAt: {type: string, format: date-time}
         updatedAt: {type: string, format: date-time}
@@ -5562,6 +5900,10 @@ components:
         nextCursor:
           type: string
           description: Asset ID cursor for the next page. Omitted or empty when no further pages exist.
+        filteredCount:
+          type: integer
+          minimum: 0
+          description: Exact number of assets matching the current filters. Present on the first page only.
     RecordStatus:
       type: string
       enum: [active, inactive]
@@ -6084,11 +6426,16 @@ components:
         id: {type: string, pattern: '^[a-f0-9]{32}$'}
         organizationId: {type: string, minLength: 1, maxLength: 128}
         assetId: {type: string, minLength: 1, maxLength: 128}
-        assigneeKind: {type: string, enum: [identity, department]}
+        assigneeKind: {type: string, enum: [identity, department, group]}
         assigneeId: {type: string, pattern: '^[a-f0-9]{32}$'}
         role: {type: string, enum: [primary, user, department]}
-        effectiveFrom: {type: string, format: date-time, description: Calendar-effective date represented at UTC midnight.}
-        effectiveTo: {type: string, format: date-time}
+        purpose: {type: string, enum: [checkout, reservation], description: Defaults to checkout. Reservations require dueAt and eventSummary.}
+        eventSummary: {type: string, maxLength: 500, description: Event or conference description shown on overlap warnings.}
+        groupId: {type: string, pattern: '^[a-f0-9]{32}$'}
+        bulkCheckoutId: {type: string, pattern: '^[a-f0-9]{32}$'}
+        effectiveFrom: {type: string, format: date-time, description: Checkout date represented at UTC midnight.}
+        dueAt: {type: string, format: date-time, description: Expected return-by date for a temporary assignment.}
+        effectiveTo: {type: string, format: date-time, description: Actual returned date. Omitted while the assignment is still out.}
         createdBy: {type: string, minLength: 1, maxLength: 128}
         createdAt: {type: string, format: date-time}
     CreateAssetAssignmentRequest:
@@ -6096,13 +6443,20 @@ components:
       additionalProperties: false
       required: [assigneeKind, assigneeId, role]
       properties:
-        assigneeKind: {type: string, enum: [identity, department]}
+        assigneeKind: {type: string, enum: [identity, department, group]}
         assigneeId: {type: string, pattern: '^[a-f0-9]{32}$'}
         role:
           type: string
           enum: [primary, user, department]
-          description: Identity assignees use primary or user; department assignees use department.
-        effectiveFrom: {type: string, format: date-time, description: Calendar-effective date represented at UTC midnight.}
+          description: Identity assignees use primary or user; department assignees use department; checkout groups use primary or user.
+        purpose: {type: string, enum: [checkout, reservation]}
+        eventSummary: {type: string, maxLength: 500}
+        effectiveFrom: {type: string, format: date-time, description: Checkout date. Defaults to now when omitted.}
+        dueAt: {type: string, format: date-time, description: Expected return-by date for a temporary loan.}
+        conflictPolicy:
+          type: string
+          enum: [replace, group, proceed]
+          description: Required when the requested dates overlap an existing checkout (replace or group) or reservation (proceed).
     EndAssetAssignmentRequest:
       type: object
       additionalProperties: false
@@ -6110,12 +6464,67 @@ components:
         effectiveTo:
           type: string
           format: date-time
-          description: Defaults to the server's current time when omitted.
+          description: Actual returned date. Defaults to the server's current time when omitted.
     AssetAssignmentCollection:
       type: object
       required: [items]
       properties:
         items: {type: array, items: {$ref: '#/components/schemas/AssetAssignment'}}
+    CheckoutGroup:
+      type: object
+      required: [id, organizationId, name, memberIds, status, revision, createdAt, updatedAt]
+      properties:
+        id: {type: string, pattern: '^[a-f0-9]{32}$'}
+        organizationId: {type: string}
+        name: {type: string}
+        description: {type: string}
+        memberIds: {type: array, items: {type: string, pattern: '^[a-f0-9]{32}$'}}
+        status: {type: string, enum: [active, inactive]}
+        revision: {type: integer, minimum: 1}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    CheckoutCandidate:
+      type: object
+      required: [assetId, name, kind, rating, overlaps]
+      properties:
+        assetId: {type: string}
+        name: {type: string}
+        kind: {type: string}
+        assetTag: {type: string}
+        modelId: {type: string}
+        modelName: {type: string}
+        rating: {type: integer}
+        overlaps: {type: array, items: {$ref: '#/components/schemas/AssignmentOverlap'}}
+    AssignmentOverlap:
+      type: object
+      required: [assetId, assignmentId, assigneeKind, assigneeId, assigneeLabel, role, purpose, effectiveFrom]
+      properties:
+        assetId: {type: string}
+        assignmentId: {type: string}
+        assigneeKind: {type: string}
+        assigneeId: {type: string}
+        assigneeLabel: {type: string}
+        role: {type: string}
+        purpose: {type: string, enum: [checkout, reservation]}
+        eventSummary: {type: string}
+        effectiveFrom: {type: string, format: date-time}
+        dueAt: {type: string, format: date-time}
+        effectiveTo: {type: string, format: date-time}
+    BulkCheckout:
+      type: object
+      required: [id, organizationId, assigneeKind, assigneeId, purpose, effectiveFrom, requestedCount, createdBy, createdAt]
+      properties:
+        id: {type: string, pattern: '^[a-f0-9]{32}$'}
+        organizationId: {type: string}
+        assigneeKind: {type: string, enum: [identity, group]}
+        assigneeId: {type: string, pattern: '^[a-f0-9]{32}$'}
+        purpose: {type: string, enum: [checkout, reservation]}
+        effectiveFrom: {type: string, format: date-time}
+        dueAt: {type: string, format: date-time}
+        eventSummary: {type: string}
+        requestedCount: {type: integer, minimum: 1}
+        createdBy: {type: string}
+        createdAt: {type: string, format: date-time}
     VaultBlob:
       type: object
       additionalProperties: false
@@ -6180,7 +6589,7 @@ components:
       enum: [planned, in_service, refresh_due, approved, retired]
     HorizonGroupBy:
       type: string
-      enum: [fiscal_year, department, site, tag, goal, asset_class]
+      enum: [fiscal_year, department, site, tag, goal, asset_class, manufacturer, building]
     HorizonPlan:
       type: object
       additionalProperties: false
@@ -6205,6 +6614,46 @@ components:
         revision: {type: integer, format: int64, minimum: 1}
         createdAt: {type: string, format: date-time}
         updatedAt: {type: string, format: date-time}
+    HorizonReplacementGrouping:
+      type: string
+      enum: [department, building, type, manufacturer, site, custom]
+    HorizonReplacementPlan:
+      type: object
+      additionalProperties: false
+      description: Named replacement plan that groups many assets.
+      required: [id, organizationId, name, grouping, scenario, assetCount, revision, createdAt, updatedAt]
+      properties:
+        id: {$ref: '#/components/schemas/HorizonID'}
+        organizationId: {type: string, minLength: 1, maxLength: 128}
+        name: {type: string, minLength: 1, maxLength: 200}
+        grouping: {$ref: '#/components/schemas/HorizonReplacementGrouping'}
+        groupKey: {type: string, maxLength: 128}
+        scenario: {$ref: '#/components/schemas/HorizonScenario'}
+        assetCount: {type: integer, minimum: 0}
+        revision: {type: integer, format: int64, minimum: 1}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    HorizonReplacementPlanCollection:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/HorizonReplacementPlan'}}
+    HorizonReplacementPlanRequest:
+      type: object
+      additionalProperties: false
+      required: [name, grouping]
+      properties:
+        id:
+          allOf: [{$ref: '#/components/schemas/HorizonID'}]
+          description: Optional caller-provided stable identifier.
+        name: {type: string, minLength: 1, maxLength: 200}
+        grouping: {$ref: '#/components/schemas/HorizonReplacementGrouping'}
+        groupKey: {type: string, maxLength: 128}
+        scenario:
+          allOf: [{$ref: '#/components/schemas/HorizonScenario'}]
+          default: baseline
+        revision: {type: integer, format: int64, minimum: 1}
     HorizonPlanCollection:
       type: object
       additionalProperties: false
@@ -6313,6 +6762,25 @@ components:
         assetCount: {type: integer, minimum: 0}
         totalsByKindMinor: {$ref: '#/components/schemas/HorizonMoneyByKind'}
         groups: {type: array, items: {$ref: '#/components/schemas/HorizonForecastGroup'}}
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/HorizonForecastItem'}
+    HorizonForecastItem:
+      type: object
+      additionalProperties: false
+      required: [planId, assetId, assetName, scenario, fiscalYear, replacementCostMinor, currency, department, kind, manufacturer, building]
+      properties:
+        planId: {type: string}
+        assetId: {type: string}
+        assetName: {type: string}
+        scenario: {$ref: '#/components/schemas/HorizonScenario'}
+        fiscalYear: {type: integer, minimum: 1970, maximum: 9999}
+        replacementCostMinor: {type: integer, format: int64, minimum: 0, maximum: 9007199254740991}
+        currency: {type: string, pattern: '^[A-Z]{3}$'}
+        department: {type: string}
+        kind: {type: string}
+        manufacturer: {type: string}
+        building: {type: string}
     HorizonForecastGroupAsset:
       type: object
       additionalProperties: false
@@ -6340,6 +6808,39 @@ components:
         groupBy: {$ref: '#/components/schemas/HorizonGroupBy'}
         currency: {type: string, pattern: '^(?:[A-Z]{3})?$'}
         items: {type: array, items: {$ref: '#/components/schemas/HorizonForecastGroupAsset'}}
+    HorizonAmountKind:
+      type: string
+      enum: [planned, actual, estimated, committed, normalized_real, tco]
+    HorizonForecastAmountItem:
+      type: object
+      additionalProperties: false
+      required: [assetId, assetName, description, fiscalYear, scenario, amountMinor, currency, kind]
+      properties:
+        assetId: {type: string}
+        assetName: {type: string}
+        planId: {type: string}
+        costId: {type: string}
+        description: {type: string}
+        fiscalYear: {type: integer, minimum: 1970, maximum: 9999}
+        fiscalPeriod: {type: string}
+        scenario: {$ref: '#/components/schemas/HorizonScenario'}
+        amountMinor: {type: integer, format: int64, minimum: 0, maximum: 9007199254740991}
+        currency: {type: string, pattern: '^[A-Z]{3}$'}
+        kind: {$ref: '#/components/schemas/HorizonAmountKind'}
+    HorizonForecastAmountBreakdown:
+      type: object
+      additionalProperties: false
+      required: [amountKind, label, groupBy, currency, totalMinor, itemCount, items]
+      properties:
+        amountKind: {$ref: '#/components/schemas/HorizonAmountKind'}
+        scenario: {$ref: '#/components/schemas/HorizonScenario'}
+        groupKey: {type: string}
+        label: {type: string}
+        groupBy: {$ref: '#/components/schemas/HorizonGroupBy'}
+        currency: {type: string, pattern: '^(?:[A-Z]{3})?$'}
+        totalMinor: {type: integer, format: int64, minimum: 0, maximum: 9007199254740991}
+        itemCount: {type: integer, minimum: 0}
+        items: {type: array, items: {$ref: '#/components/schemas/HorizonForecastAmountItem'}}
     LedgerID:
       type: string
       pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'

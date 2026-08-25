@@ -712,6 +712,25 @@ func (s *Service) CreateAssetAssignment(ctx context.Context, input CreateAssetAs
 	if !assetIDPattern.MatchString(assetID) || !recordIDPattern.MatchString(assigneeID) || !validAssignment(input.AssigneeKind, input.Role) {
 		return AssetAssignment{}, ErrInvalidInput
 	}
+	purpose, err := normalizeAssignmentPurpose(input.Purpose)
+	if err != nil {
+		return AssetAssignment{}, err
+	}
+	eventSummary, err := normalizeEventSummary(input.EventSummary)
+	if err != nil {
+		return AssetAssignment{}, err
+	}
+	if purpose == PurposeReservation && eventSummary == "" {
+		return AssetAssignment{}, ErrInvalidInput
+	}
+	policy, err := normalizeConflictPolicy(input.ConflictPolicy)
+	if err != nil {
+		return AssetAssignment{}, err
+	}
+	bulkCheckoutID := strings.TrimSpace(input.BulkCheckoutID)
+	if bulkCheckoutID != "" && !recordIDPattern.MatchString(bulkCheckoutID) {
+		return AssetAssignment{}, ErrInvalidInput
+	}
 	if _, err := s.assets.Get(ctx, assetID); err != nil {
 		return AssetAssignment{}, ErrReferenceMissing
 	}
@@ -738,12 +757,30 @@ func (s *Service) CreateAssetAssignment(ctx context.Context, input CreateAssetAs
 		if department.Status != StatusActive {
 			return AssetAssignment{}, ErrConflict
 		}
+	case AssigneeGroup:
+		group, err := s.store.GetCheckoutGroup(ctx, s.organizationID, assigneeID)
+		if err != nil {
+			if errors.Is(err, ErrNotFound) {
+				return AssetAssignment{}, ErrReferenceMissing
+			}
+			return AssetAssignment{}, err
+		}
+		if group.Status != StatusActive {
+			return AssetAssignment{}, ErrConflict
+		}
 	}
 	effectiveFrom := input.EffectiveFrom
 	if effectiveFrom.IsZero() {
 		effectiveFrom = s.now()
 	}
 	effectiveFrom = portabletime.Normalize(effectiveFrom)
+	dueAt, err := normalizeAssignmentDueAt(effectiveFrom, input.DueAt)
+	if err != nil {
+		return AssetAssignment{}, err
+	}
+	if purpose == PurposeReservation && dueAt == nil {
+		return AssetAssignment{}, ErrInvalidInput
+	}
 	id, err := foundation.NewCorrelationID()
 	if err != nil {
 		return AssetAssignment{}, fmt.Errorf("create assignment id: %w", err)
@@ -759,11 +796,54 @@ func (s *Service) CreateAssetAssignment(ctx context.Context, input CreateAssetAs
 		AssigneeKind:   input.AssigneeKind,
 		AssigneeID:     assigneeID,
 		Role:           input.Role,
+		Purpose:        purpose,
+		EventSummary:   eventSummary,
+		BulkCheckoutID: bulkCheckoutID,
 		EffectiveFrom:  effectiveFrom,
+		DueAt:          dueAt,
 		CreatedBy:      actorID,
 		CreatedAt:      s.now(),
 	}
-	replaceActiveRole := input.Role == AssignmentPrimary || input.Role == AssignmentDepartment
+	if input.AssigneeKind == AssigneeGroup {
+		assignment.GroupID = assigneeID
+	}
+	overlaps, err := s.overlappingAssignments(ctx, assignment)
+	if err != nil {
+		return AssetAssignment{}, err
+	}
+	checkoutOverlaps, reservationOverlaps := splitAssignmentOverlaps(overlaps)
+	if policy == ConflictGroup && input.AssigneeKind == AssigneeIdentity && len(checkoutOverlaps) > 0 {
+		return s.assignAsGroupCheckout(ctx, input, assignment, checkoutOverlaps)
+	}
+	if purpose == PurposeCheckout && len(checkoutOverlaps) > 0 {
+		autoReplace := input.Role == AssignmentPrimary || input.Role == AssignmentDepartment
+		switch {
+		case policy == ConflictReplace || (policy == "" && autoReplace):
+			if !autoReplace {
+				if err := s.replaceOverlappingCheckouts(ctx, assignment, checkoutOverlaps); err != nil {
+					return AssetAssignment{}, err
+				}
+			}
+		case policy == ConflictProceed && autoReplace:
+			// Primary replacement still closes the previous matching role in the store.
+		case policy == ConflictProceed:
+			// Additional users and reservations may coexist after an explicit acknowledgement.
+		default:
+			return AssetAssignment{}, s.overlapError(ctx, PurposeCheckout, checkoutOverlaps)
+		}
+	}
+	warningOverlaps := reservationOverlaps
+	warningKind := PurposeReservation
+	if purpose == PurposeReservation && len(overlaps) > 0 {
+		warningOverlaps = overlaps
+		if len(checkoutOverlaps) > 0 {
+			warningKind = PurposeCheckout
+		}
+	}
+	if len(warningOverlaps) > 0 && policy != ConflictProceed && policy != ConflictReplace && policy != ConflictGroup {
+		return AssetAssignment{}, s.overlapError(ctx, warningKind, warningOverlaps)
+	}
+	replaceActiveRole := purpose == PurposeCheckout && (input.Role == AssignmentPrimary || input.Role == AssignmentDepartment)
 	created, err := s.store.CreateAssetAssignment(ctx, assignment, replaceActiveRole)
 	if err != nil {
 		return AssetAssignment{}, err
@@ -771,6 +851,7 @@ func (s *Service) CreateAssetAssignment(ctx context.Context, input CreateAssetAs
 	if err := s.audit(ctx, "people.asset_assignment.created", "asset_assignment", created.ID, map[string]string{
 		"assigneeKind": string(created.AssigneeKind),
 		"role":         string(created.Role),
+		"purpose":      string(created.Purpose),
 	}); err != nil {
 		return AssetAssignment{}, fmt.Errorf("audit asset assignment: %w", err)
 	}
@@ -832,8 +913,38 @@ func (s *Service) ListAssetAssignments(ctx context.Context, assetID string, visi
 		return nil, ErrReferenceMissing
 	}
 	assignments, err := s.store.ListAssetAssignments(ctx, s.organizationID, assetID)
-	if err != nil || visibility.All {
-		return assignments, err
+	if err != nil {
+		return nil, err
+	}
+	return s.visibleAssignments(ctx, assignments, visibility)
+}
+
+func (s *Service) ListPeopleAssignments(ctx context.Context, query AssignmentQuery, visibility Visibility) ([]AssetAssignment, error) {
+	visibility = normalizeVisibility(visibility)
+	if visibility.Empty() {
+		return nil, ErrScopeRequired
+	}
+	assetID := strings.TrimSpace(query.AssetID)
+	assigneeID := strings.TrimSpace(query.AssigneeID)
+	if assetID != "" {
+		return s.ListAssetAssignments(ctx, assetID, visibility)
+	}
+	if query.AssigneeKind != AssigneeIdentity && query.AssigneeKind != AssigneeDepartment && query.AssigneeKind != AssigneeGroup {
+		return nil, ErrInvalidInput
+	}
+	if assigneeID != "" && !recordIDPattern.MatchString(assigneeID) {
+		return nil, ErrInvalidInput
+	}
+	assignments, err := s.store.ListAssetAssignmentsByAssignee(ctx, s.organizationID, query.AssigneeKind, assigneeID)
+	if err != nil {
+		return nil, err
+	}
+	return s.visibleAssignments(ctx, assignments, visibility)
+}
+
+func (s *Service) visibleAssignments(ctx context.Context, assignments []AssetAssignment, visibility Visibility) ([]AssetAssignment, error) {
+	if visibility.All {
+		return assignments, nil
 	}
 	departmentIDs := make(map[string]struct{}, len(visibility.DepartmentIDs))
 	for _, id := range visibility.DepartmentIDs {
@@ -869,6 +980,29 @@ func (s *Service) ListAssetAssignments(ctx context.Context, assetID string, visi
 			_, departmentAllowed := departmentIDs[department.ID]
 			_, siteAllowed := siteIDs[department.SiteID]
 			allowed = departmentAllowed || siteAllowed
+		case AssigneeGroup:
+			group, loadErr := s.store.GetCheckoutGroup(ctx, s.organizationID, assignment.AssigneeID)
+			if loadErr != nil {
+				if errors.Is(loadErr, ErrNotFound) {
+					continue
+				}
+				return nil, loadErr
+			}
+			for _, memberID := range group.MemberIDs {
+				identity, identityErr := s.store.GetIdentity(ctx, s.organizationID, memberID)
+				if identityErr != nil {
+					if errors.Is(identityErr, ErrNotFound) {
+						continue
+					}
+					return nil, identityErr
+				}
+				_, departmentAllowed := departmentIDs[identity.DepartmentID]
+				_, siteAllowed := siteIDs[identity.SiteID]
+				if departmentAllowed || siteAllowed {
+					allowed = true
+					break
+				}
+			}
 		}
 		if allowed {
 			visible = append(visible, assignment)
@@ -1066,9 +1200,22 @@ func validAssignment(kind AssigneeKind, role AssignmentRole) bool {
 		return role == AssignmentPrimary || role == AssignmentUser
 	case AssigneeDepartment:
 		return role == AssignmentDepartment
+	case AssigneeGroup:
+		return role == AssignmentPrimary || role == AssignmentUser
 	default:
 		return false
 	}
+}
+
+func normalizeAssignmentDueAt(effectiveFrom time.Time, dueAt *time.Time) (*time.Time, error) {
+	if dueAt == nil || dueAt.IsZero() {
+		return nil, nil
+	}
+	normalized := portabletime.Normalize(*dueAt)
+	if normalized.Before(effectiveFrom) {
+		return nil, ErrInvalidInput
+	}
+	return &normalized, nil
 }
 
 func normalizeVisibility(visibility Visibility) Visibility {

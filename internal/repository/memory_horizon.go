@@ -5,22 +5,27 @@ package repository
 import (
 	"context"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/maxlemke/stewardmesh/internal/horizon"
 )
 
 type MemoryHorizonStore struct {
-	mu           sync.RWMutex
-	plans        map[string]horizon.Plan
-	versions     map[string][]horizon.PlanVersion
-	kindDefaults map[string]horizon.KindDefault
+	mu                sync.RWMutex
+	plans             map[string]horizon.Plan
+	versions          map[string][]horizon.PlanVersion
+	kindDefaults      map[string]horizon.KindDefault
+	replacementPlans  map[string]horizon.ReplacementPlan
+	replacementAssets map[string]string
 }
 
 func NewMemoryHorizonStore() *MemoryHorizonStore {
 	return &MemoryHorizonStore{
 		plans: make(map[string]horizon.Plan), versions: make(map[string][]horizon.PlanVersion),
-		kindDefaults: make(map[string]horizon.KindDefault),
+		kindDefaults:      make(map[string]horizon.KindDefault),
+		replacementPlans:  make(map[string]horizon.ReplacementPlan),
+		replacementAssets: make(map[string]string),
 	}
 }
 
@@ -145,6 +150,120 @@ func (s *MemoryHorizonStore) UpsertKindDefault(_ context.Context, item horizon.K
 	}
 	s.kindDefaults[key] = item
 	return item, nil
+}
+
+func (s *MemoryHorizonStore) ListReplacementPlans(_ context.Context, organizationID string) ([]horizon.ReplacementPlan, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	items := make([]horizon.ReplacementPlan, 0)
+	for _, item := range s.replacementPlans {
+		if item.OrganizationID == organizationID {
+			items = append(items, s.cloneReplacementPlanLocked(item))
+		}
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].Name == items[j].Name {
+			return items[i].ID < items[j].ID
+		}
+		return items[i].Name < items[j].Name
+	})
+	return items, nil
+}
+
+func (s *MemoryHorizonStore) GetReplacementPlan(_ context.Context, organizationID, id string) (horizon.ReplacementPlan, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	item, exists := s.replacementPlans[horizonKey(organizationID, id)]
+	if !exists {
+		return horizon.ReplacementPlan{}, horizon.ErrNotFound
+	}
+	return s.cloneReplacementPlanLocked(item), nil
+}
+
+func (s *MemoryHorizonStore) CreateReplacementPlan(_ context.Context, item horizon.ReplacementPlan) (horizon.ReplacementPlan, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := horizonKey(item.OrganizationID, item.ID)
+	if _, exists := s.replacementPlans[key]; exists {
+		return horizon.ReplacementPlan{}, horizon.ErrConflict
+	}
+	item.AssetCount = 0
+	s.replacementPlans[key] = item
+	return item, nil
+}
+
+func (s *MemoryHorizonStore) UpdateReplacementPlan(_ context.Context, item horizon.ReplacementPlan, expectedRevision int64) (horizon.ReplacementPlan, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := horizonKey(item.OrganizationID, item.ID)
+	existing, exists := s.replacementPlans[key]
+	if !exists {
+		return horizon.ReplacementPlan{}, horizon.ErrNotFound
+	}
+	if existing.Revision != expectedRevision {
+		return horizon.ReplacementPlan{}, horizon.ErrConflict
+	}
+	item.AssetCount = s.replacementPlanCountLocked(item.OrganizationID, item.ID)
+	s.replacementPlans[key] = item
+	return item, nil
+}
+
+func (s *MemoryHorizonStore) AssetReplacementPlanIDs(_ context.Context, organizationID string) (map[string]string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	assigned := make(map[string]string)
+	prefix := organizationID + "\x00"
+	for key, planID := range s.replacementAssets {
+		if strings.HasPrefix(key, prefix) {
+			assigned[strings.TrimPrefix(key, prefix)] = planID
+		}
+	}
+	return assigned, nil
+}
+
+func (s *MemoryHorizonStore) ListReplacementPlanAssetIDs(_ context.Context, organizationID, planID string) ([]string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	prefix := organizationID + "\x00"
+	ids := make([]string, 0)
+	for key, assigned := range s.replacementAssets {
+		if assigned == planID && strings.HasPrefix(key, prefix) {
+			ids = append(ids, strings.TrimPrefix(key, prefix))
+		}
+	}
+	sort.Strings(ids)
+	return ids, nil
+}
+
+func (s *MemoryHorizonStore) SetAssetReplacementPlan(_ context.Context, organizationID, assetID, planID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := horizonKey(organizationID, assetID)
+	if planID == "" {
+		delete(s.replacementAssets, key)
+		return nil
+	}
+	if _, exists := s.replacementPlans[horizonKey(organizationID, planID)]; !exists {
+		return horizon.ErrNotFound
+	}
+	s.replacementAssets[key] = planID
+	return nil
+}
+
+func (s *MemoryHorizonStore) cloneReplacementPlanLocked(item horizon.ReplacementPlan) horizon.ReplacementPlan {
+	item.AssetCount = s.replacementPlanCountLocked(item.OrganizationID, item.ID)
+	return item
+}
+
+func (s *MemoryHorizonStore) replacementPlanCountLocked(organizationID, planID string) int {
+	prefix := organizationID + "\x00"
+	count := 0
+	for key, assigned := range s.replacementAssets {
+		if assigned == planID && strings.HasPrefix(key, prefix) {
+			count++
+		}
+	}
+	return count
 }
 
 func cloneHorizonPlan(item horizon.Plan) horizon.Plan {

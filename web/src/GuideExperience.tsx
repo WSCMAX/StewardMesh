@@ -4,6 +4,8 @@ import {
   buildIssueReportUrl,
   collectIssueContext,
   guideTopics,
+  walkthroughTopicIDs,
+  type GuideTopic,
   type GuideTopicID,
   type GuideView,
   type ResolvedBranding,
@@ -58,11 +60,16 @@ export default function GuideExperience({ branding, destination, issuesUrl, onCl
   const guidePanelRef = useRef<HTMLDivElement>(null)
   const openerRef = useRef<HTMLElement | null>(null)
   const wasOpen = useRef(false)
-  const availableTopics = useMemo(() => guideTopics.filter((topic) => {
-    if (topic.permissions?.length) return topic.permissions.some((permission) => permissions.includes(permission))
-    return !topic.permission || permissions.includes(topic.permission)
-  }), [permissions])
-  const walkthrough = useMemo(() => availableTopics.length > 0 ? availableTopics : guideTopics.filter((topic) => topic.id === 'workspace' || topic.id === 'guide'), [availableTopics])
+  const walkthrough = useMemo(() => {
+    const ordered = walkthroughTopicIDs
+      .map((id) => guideTopics.find((topic) => topic.id === id))
+      .filter((topic): topic is GuideTopic => Boolean(topic))
+      .filter((topic) => {
+        if (topic.permissions?.length) return topic.permissions.some((permission) => permissions.includes(permission))
+        return !topic.permission || permissions.includes(topic.permission)
+      })
+    return ordered.length > 0 ? ordered : guideTopics.filter((topic) => topic.id === 'workspace' || topic.id === 'guide')
+  }, [permissions])
 
   const closeGuide = useCallback(() => {
     onClose()

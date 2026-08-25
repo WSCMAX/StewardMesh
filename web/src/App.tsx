@@ -1,6 +1,7 @@
 import { type CSSProperties, type FormEvent, type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import { ApiRequestError, authenticationRequiredEventName, requestJSON } from './api'
-import AtlasInventory, { assetPageLimit, fetchAssetPage, mergeAssets, type Asset } from './AtlasInventory'
+import AtlasInventory, { fetchAssetPage, mergeAssets, type Asset } from './AtlasInventory'
+import { defaultAssetListQuery, ListingCache, sameAssetListQuery, toAssetSearchParams, type AssetListQuery, type TranslatedListing } from './assetListing'
 import BridgeManager from './BridgeManager'
 import { documentationHref } from './documentation'
 import ExchangeManager from './ExchangeManager'
@@ -16,7 +17,7 @@ import ReachManager from './ReachManager'
 import SignalsManager from './SignalsManager'
 import StackManager from './StackManager'
 import ThreadsManager from './ThreadsManager'
-import { AreaIcon, ChevronRightIcon, StatusBadge, buttonClass, cx, inputClass, panelClass, plainButtonClass, secondaryButtonClass, type AreaIconName } from './ui'
+import { AreaIcon, ChevronRightIcon, StatusBadge, buttonClass, cx, emptyStateClass, inputClass, panelClass, plainButtonClass, secondaryButtonClass, type AreaIconName } from './ui'
 import VaultManager from './VaultManager'
 import { brandingStyle, readWalkthroughStatus, resolveBranding, type WalkthroughStatus, writeWalkthroughStatus } from './guide'
 import WorkspaceShell, { workspaceAreaFromHash, workspaceHash, type WorkspaceArea, type WorkspaceAreaID } from './WorkspaceShell'
@@ -72,19 +73,19 @@ const defaultIssuesUrl = 'https://github.com/WSCMAX/StewardMesh/issues'
 const guardHelpUrl = documentationHref('guard')
 
 const workspaceModules: readonly WorkspaceModule[] = [
-  { id: 'atlas', name: 'Atlas', descriptor: 'Asset inventory', summary: 'Register, locate, and maintain the assets your organization stewards.', permission: 'assets.read', writePermission: 'assets.write' },
-  { id: 'horizon', name: 'Horizon', descriptor: 'Lifecycle planning', summary: 'Plan useful life, replacement timing, scenarios, and forecasts.', permission: 'planning.read', writePermission: 'planning.write' },
-  { id: 'ledger', name: 'Ledger', descriptor: 'Procurement and budgets', summary: 'Work with vendors, purchases, contracts, commitments, costs, and budgets.', permission: 'finance.read', writePermission: 'finance.write' },
-  { id: 'stack', name: 'Stack', descriptor: 'Software and licenses', summary: 'Connect installed software, purchased entitlements, assignments, usage, and compliance.', permission: 'software.read', writePermission: 'software.write' },
-  { id: 'signals', name: 'Signals', descriptor: 'Alerts and action queue', summary: 'Evaluate operational and financial conditions, acknowledge alerts, assign ownership, and configure delivery subscriptions.', permission: 'signals.read', writePermission: 'signals.write' },
-  { id: 'reach', name: 'Reach', descriptor: 'Message delivery', summary: 'Configure approved provider adapters, subscriber groups, plain-text templates, confirmed sends, retries, and sanitized history.', permission: 'messaging.read', writePermission: 'messaging.write' },
-  { id: 'threads', name: 'Tags', descriptor: 'Configurable connections', summary: 'Define tags with typed values, connect them to any record, and link strategic goals where needed.', permission: 'goals.read', writePermission: 'goals.write' },
-  { id: 'vault', name: 'Vault', descriptor: 'Private files and evidence', summary: 'Store checksummed evidence and authorize private downloads.', permission: 'storage.read', writePermission: 'storage.write' },
-  { id: 'exchange', name: 'Exchange', descriptor: 'Migration packages', summary: 'Move selected records through bounded, checksummed, dependency-aware packages.', permission: 'integrations.read', writePermission: 'integrations.write' },
+  { id: 'atlas', name: 'Inventory', descriptor: 'Atlas · assets and equipment', summary: 'Register, locate, and maintain the assets your organization stewards.', permission: 'assets.read', writePermission: 'assets.write' },
+  { id: 'horizon', name: 'Planning', descriptor: 'Horizon · lifecycle and replacement', summary: 'Plan useful life, replacement timing, scenarios, and forecasts.', permission: 'planning.read', writePermission: 'planning.write' },
+  { id: 'ledger', name: 'Purchasing', descriptor: 'Ledger · vendors and budgets', summary: 'Work with vendors, purchase orders, contracts, commitments, costs, and budgets.', permission: 'finance.read', writePermission: 'finance.write' },
+  { id: 'stack', name: 'Software', descriptor: 'Stack · licenses and compliance', summary: 'Connect installed software, purchased entitlements, assignments, usage, and compliance.', permission: 'software.read', writePermission: 'software.write' },
+  { id: 'signals', name: 'Alerts', descriptor: 'Signals · rules and action queue', summary: 'Evaluate operational and financial conditions, acknowledge alerts, assign ownership, and configure delivery subscriptions.', permission: 'signals.read', writePermission: 'signals.write' },
+  { id: 'reach', name: 'Messaging', descriptor: 'Reach · delivery and templates', summary: 'Configure approved provider adapters, subscriber groups, plain-text templates, confirmed sends, retries, and sanitized history.', permission: 'messaging.read', writePermission: 'messaging.write' },
+  { id: 'threads', name: 'Tags', descriptor: 'Tags · configurable connections', summary: 'Define tags with typed values, connect them to any record, and link strategic goals where needed.', permission: 'goals.read', writePermission: 'goals.write' },
+  { id: 'vault', name: 'Files', descriptor: 'Vault · private evidence', summary: 'Store checksummed evidence and authorize private downloads.', permission: 'storage.read', writePermission: 'storage.write' },
+  { id: 'exchange', name: 'Import/Export', descriptor: 'Exchange · migration packages', summary: 'Move selected records through bounded, checksummed, dependency-aware packages.', permission: 'integrations.read', writePermission: 'integrations.write' },
   { id: 'people', name: 'People', descriptor: 'Users and departments', summary: 'Organize locations, departments, identities, and asset assignments.', permission: 'directory.read', writePermission: 'directory.write' },
-  { id: 'mesh', name: 'Mesh', descriptor: 'Cross-product graph', summary: 'See how people, assets, purchase orders, tags, licenses, goals, and files connect, then inspect the same records as a table.', permission: 'directory.read', anyPermissions: meshReadPermissions, allowScoped: true },
-  { id: 'bridge', name: 'Bridge', descriptor: 'MCP and OAuth clients', summary: 'Connect approved MCP clients through narrow scopes, explicit consent, and revocable access.', permission: 'integrations.read', writePermission: 'integrations.write' },
-  { id: 'guard', name: 'Guard', descriptor: 'Authentication and authorization', summary: 'Manage roles, scoped assignments, ownership, and access policy.', permission: 'guard.manage' },
+  { id: 'mesh', name: 'Graph', descriptor: 'Mesh · cross-product connections', summary: 'See how people, assets, purchase orders, tags, licenses, goals, and files connect, then inspect the same records as a table.', permission: 'directory.read', anyPermissions: meshReadPermissions, allowScoped: true },
+  { id: 'bridge', name: 'Integrations', descriptor: 'Bridge · MCP and OAuth clients', summary: 'Connect approved MCP clients through narrow scopes, explicit consent, and revocable access.', permission: 'integrations.read', writePermission: 'integrations.write' },
+  { id: 'guard', name: 'Access', descriptor: 'Guard · roles and permissions', summary: 'Manage roles, scoped assignments, ownership, and access policy.', permission: 'guard.manage' },
 ]
 
 export function resolvePublicUrl(value: string | undefined, fallback = defaultIssuesUrl) {
@@ -163,7 +164,12 @@ export default function App() {
   const [health, setHealth] = useState<ServiceHealth>('checking')
   const [assets, setAssets] = useState<Asset[]>([])
   const [assetNextCursor, setAssetNextCursor] = useState('')
+  const [assetFilteredCount, setAssetFilteredCount] = useState<number | undefined>(undefined)
+  const [assetQueryPartial, setAssetQueryPartial] = useState(false)
+  const [assetListQuery, setAssetListQuery] = useState<AssetListQuery>(defaultAssetListQuery)
   const [assetsLoading, setAssetsLoading] = useState(false)
+  const assetListingCache = useRef(new ListingCache<Asset>())
+  const assetListingRequest = useRef(0)
   const [organizationName, setOrganizationName] = useState('Your organization')
   const [authPhase, setAuthPhase] = useState<AuthPhase>('loading')
   const [principal, setPrincipal] = useState<Principal | null>(null)
@@ -291,6 +297,9 @@ export default function App() {
       setGrants([])
       setAssets([])
       setAssetNextCursor('')
+      setAssetFilteredCount(undefined)
+      setAssetListQuery(defaultAssetListQuery())
+      assetListingCache.current.clear()
       setAuthError('Your session expired. Sign in again to continue; unsaved work was not submitted.')
       setAuthPhase('login')
       queueMicrotask(() => errorRef.current?.focus())
@@ -325,29 +334,44 @@ export default function App() {
         })
         .catch(() => { if (active) setOrganizationName('Your organization') })
     }
-    if (permissions.includes('assets.read')) {
-      setAssetsLoading(true)
-      fetchAssetPage()
-        .then((page) => {
-          if (active) {
-            setAssets(page.items)
-            setAssetNextCursor(page.nextCursor)
-          }
-        })
-        .catch(() => {
-          if (active) {
-            setAssets([])
-            setAssetNextCursor('')
-          }
-        })
-        .finally(() => {
-          if (active) setAssetsLoading(false)
-        })
-    }
     return () => {
       active = false
     }
   }, [authPhase, permissions])
+
+  useEffect(() => {
+    if (authPhase !== 'authenticated' || !permissions.includes('assets.read')) return
+    const cached = assetListingCache.current.get(assetListQuery)
+    if (cached) {
+      setAssets([...cached.items])
+      setAssetNextCursor(cached.nextCursor)
+      setAssetFilteredCount(cached.filteredCount)
+    }
+    const requestId = assetListingRequest.current + 1
+    assetListingRequest.current = requestId
+    const controller = new AbortController()
+    setAssetsLoading(true)
+    fetchAssetPage(toAssetSearchParams(assetListQuery), { signal: controller.signal })
+      .then((page) => {
+        if (requestId !== assetListingRequest.current) return
+        const filteredCount = page.filteredCount ?? page.items.length
+        setAssets(page.items)
+        setAssetNextCursor(page.nextCursor)
+        setAssetFilteredCount(filteredCount)
+        assetListingCache.current.set(assetListQuery, { items: page.items, nextCursor: page.nextCursor, filteredCount })
+      })
+      .catch((error: unknown) => {
+        if (requestId !== assetListingRequest.current) return
+        if (error instanceof DOMException && error.name === 'AbortError') return
+        setAssets([])
+        setAssetNextCursor('')
+        setAssetFilteredCount(undefined)
+      })
+      .finally(() => {
+        if (requestId === assetListingRequest.current) setAssetsLoading(false)
+      })
+    return () => controller.abort()
+  }, [assetListQuery, authPhase, permissions])
 
   function acceptSession(session: SessionResponse) {
     setPrincipal(session.principal)
@@ -439,6 +463,9 @@ export default function App() {
       setGrants([])
       setAssets([])
       setAssetNextCursor('')
+      setAssetFilteredCount(undefined)
+      setAssetListQuery(defaultAssetListQuery())
+      assetListingCache.current.clear()
       setActiveWorkspaceArea('overview')
       setVisitedWorkspaceAreas(new Set(['overview']))
       setAuthPhase('login')
@@ -449,46 +476,49 @@ export default function App() {
     }
   }
 
+  const handleAssetQueryChange = useCallback((listing: TranslatedListing) => {
+    setAssetQueryPartial(listing.queryPartial)
+    setAssetListQuery((current) => sameAssetListQuery(current, listing.query) ? current : listing.query)
+  }, [])
+
   const loadMoreAssets = useCallback(async () => {
     if (!assetNextCursor || assetsLoading) return
     setAssetsLoading(true)
     try {
-      const page = await fetchAssetPage(new URLSearchParams({ limit: String(assetPageLimit), cursor: assetNextCursor }))
+      const page = await fetchAssetPage(toAssetSearchParams(assetListQuery, assetNextCursor))
       setAssets((current) => mergeAssets(current, page.items))
       setAssetNextCursor(page.nextCursor)
     } finally {
       setAssetsLoading(false)
     }
-  }, [assetNextCursor, assetsLoading])
+  }, [assetListQuery, assetNextCursor, assetsLoading])
 
   const loadAllAssets = useCallback(async () => {
     if (assetsLoading) return assets
     setAssetsLoading(true)
     try {
-      let cursor = assetNextCursor
-      let next = assets
-      while (cursor) {
-        const page = await fetchAssetPage(new URLSearchParams({ limit: String(assetPageLimit), cursor }))
+      let cursor = ''
+      let next: Asset[] = []
+      do {
+        const page = await fetchAssetPage(toAssetSearchParams(assetListQuery, cursor))
         next = mergeAssets(next, page.items)
         cursor = page.nextCursor
-      }
-      setAssets(next)
-      setAssetNextCursor('')
+      } while (cursor)
       return next
     } finally {
       setAssetsLoading(false)
     }
-  }, [assetNextCursor, assets, assetsLoading])
+  }, [assetListQuery, assets, assetsLoading])
 
   const serviceLabel = health === 'connected' ? 'Connected' : health === 'unavailable' ? 'Unavailable' : 'Checking connection'
   const workspaceContent: Record<Exclude<WorkspaceAreaID, 'overview'>, ReactNode> = {
-    atlas: <AtlasInventory assets={assets} assetNextCursor={assetNextCursor} assetScope={atlasAssetScope} assetsLoading={assetsLoading} csrfToken={csrfToken} focusRecord={recordFocus?.area === 'atlas' ? recordFocus : null} identity={principal ? { subject: principal.subject, organizationId: principal.organizationId } : null} onAssetsChange={setAssets} onClearAssetScope={() => setAtlasAssetScope(null)} onLoadAllAssets={loadAllAssets} onLoadMoreAssets={loadMoreAssets} onOpenHelp={() => openGuide({ view: 'help', topic: 'atlas' })} permissions={permissions} />,
-    horizon: <HorizonPlanner assets={assets} csrfToken={csrfToken} onOpenAtlasInventory={openAtlasAssetScope} onOpenHelp={() => openGuide({ view: 'help', topic: 'horizon' })} permissions={permissions} />,
-    ledger: <LedgerManager csrfToken={csrfToken} onOpenHelp={() => openGuide({ view: 'help', topic: 'ledger' })} permissions={permissions} />,
-    stack: <StackManager assets={assets} csrfToken={csrfToken} identity={principal ? { subject: principal.subject, organizationId: principal.organizationId } : null} onOpenHelp={() => openGuide({ view: 'help', topic: 'stack' })} permissions={permissions} />,
+    atlas: <AtlasInventory assets={assets} assetFilteredCount={assetFilteredCount} assetNextCursor={assetNextCursor} assetQueryPartial={assetQueryPartial} assetScope={atlasAssetScope} assetsLoading={assetsLoading} csrfToken={csrfToken} focusRecord={recordFocus?.area === 'atlas' ? recordFocus : null} identity={principal ? { subject: principal.subject, organizationId: principal.organizationId } : null} onAssetQueryChange={handleAssetQueryChange} onAssetsChange={setAssets} onClearAssetScope={() => setAtlasAssetScope(null)} onLoadAllAssets={loadAllAssets} onLoadMoreAssets={loadMoreAssets} onOpenHelp={() => openGuide({ view: 'help', topic: 'atlas' })} permissions={permissions} />,
+    horizon: <HorizonPlanner assets={assets} csrfToken={csrfToken} identity={principal ? { subject: principal.subject, organizationId: principal.organizationId } : null} onOpenAtlasInventory={openAtlasAssetScope} onOpenHelp={() => openGuide({ view: 'help', topic: 'horizon' })} permissions={permissions} />,
+    ledger: <LedgerManager csrfToken={csrfToken} focusRecord={recordFocus?.area === 'ledger' ? recordFocus : null} onOpenHelp={() => openGuide({ view: 'help', topic: 'ledger' })} permissions={permissions} />,
+    stack: <StackManager assets={assets} csrfToken={csrfToken} focusRecord={recordFocus?.area === 'stack' ? recordFocus : null} identity={principal ? { subject: principal.subject, organizationId: principal.organizationId } : null} onOpenHelp={() => openGuide({ view: 'help', topic: 'stack' })} permissions={permissions} />,
     signals: <SignalsManager csrfToken={csrfToken} onOpenHelp={() => openGuide({ view: 'help', topic: 'signals' })} permissions={permissions} />,
     reach: <ReachManager csrfToken={csrfToken} onOpenHelp={() => openGuide({ view: 'help', topic: 'reach' })} permissions={permissions} />,
-    threads: <ThreadsManager assets={assets} csrfToken={csrfToken} onOpenHelp={() => openGuide({ view: 'help', topic: 'threads' })} permissions={permissions} roles={principal?.roles ?? []} />,
+    threads: <ThreadsManager assets={assets} csrfToken={csrfToken} focusRecord={recordFocus?.area === 'threads' ? recordFocus : null} onOpenHelp={() => openGuide({ view: 'help', topic: 'threads' })} permissions={permissions} roles={principal?.roles ?? []} />,
     vault: <VaultManager csrfToken={csrfToken} onOpenHelp={() => openGuide({ view: 'help', topic: 'vault' })} permissions={permissions} />,
     exchange: <ExchangeManager csrfToken={csrfToken} onOpenHelp={() => openGuide({ view: 'help', topic: 'exchange' })} permissions={permissions} />,
     people: <PeopleDirectory assets={assets} csrfToken={csrfToken} focusRecord={recordFocus?.area === 'people' ? recordFocus : null} identity={principal ? { subject: principal.subject, organizationId: principal.organizationId } : null} issuesUrl={issuesUrl} onOpenHelp={() => openGuide({ view: 'help', topic: 'people' })} onReportIssue={() => openGuide({ view: 'report', topic: 'people' })} permissions={permissions} />,
@@ -498,9 +528,9 @@ export default function App() {
   }
   const workspaceAreas: WorkspaceArea[] = [
     {
-      id: 'overview', name: 'Overview', descriptor: 'Work queue and product areas',
-      summary: 'Choose a focused area, see what is available, and return here without losing work already in progress.',
-      content: <WorkspaceOverview assetNextCursor={assetNextCursor} assets={assets} grants={grants} guideOpen={guideOpen} health={health} modules={workspaceModules} onNavigate={navigateWorkspace} onOpenGuide={openGuide} onWalkthroughStatus={updateWalkthroughStatus} principal={principal} walkthroughStatus={walkthroughStatus} />,
+      id: 'overview', name: 'Overview', descriptor: 'Work queue',
+      summary: 'See what needs attention, then open a focused area without losing work already in progress.',
+      content: <WorkspaceOverview assetNextCursor={assetNextCursor} assets={assets} grants={grants} guideOpen={guideOpen} health={health} modules={workspaceModules} onNavigate={navigateWorkspace} onOpenGuide={openGuide} onWalkthroughStatus={updateWalkthroughStatus} permissions={permissions} principal={principal} walkthroughStatus={walkthroughStatus} />,
     },
     ...workspaceModules.map((module): WorkspaceArea => {
       const readAccess = module.anyPermissions ? anyPermissionAccess(grants, module.anyPermissions) : permissionAccess(grants, module.permission)
@@ -521,7 +551,7 @@ export default function App() {
     <div className="min-h-screen text-steward-mist" data-feature="authorization.security experience.help" data-requirement="SEC-GUARD-001 A11Y-001 DOC-001 DOC-002" style={brandingStyle(branding.appliedTheme) as CSSProperties}>
       <a className="sr-only rounded-xl bg-steward-teal px-3 py-2 font-semibold text-steward-ink-950 focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[70]" href="#main-content">Skip to main content</a>
       <header className="sticky top-0 z-30 border-b border-white/[0.08] bg-steward-ink-950/95">
-        <div className="mx-auto flex max-w-[100rem] flex-wrap items-center justify-between gap-3 px-4 py-2.5 sm:px-6">
+        <div className="flex flex-wrap items-center justify-between gap-3 px-3 py-2 sm:px-4">
           <div className="flex min-w-0 items-center gap-3">
             <span className="grid size-9 shrink-0 place-items-center"><img alt="" aria-hidden="true" className="h-8 w-auto" height="370" src="/brand/stewardmesh-s-mark.svg" width="294" /></span>
             <div className="min-w-0">
@@ -541,7 +571,7 @@ export default function App() {
         </div>
       </header>
 
-      <main id="main-content" className={cx('mx-auto max-w-[100rem] space-y-6 px-4 py-4 sm:px-6 lg:py-5', authPhase !== 'authenticated' && 'grid min-h-[calc(100svh-4.5rem)] place-items-center')} tabIndex={-1}>
+      <main id="main-content" className={cx(authPhase === 'authenticated' ? 'px-0 py-0' : 'grid min-h-[calc(100svh-3.5rem)] place-items-center px-4 py-6')} tabIndex={-1}>
         {authError && <div ref={errorRef} className="rounded-xl border border-steward-danger/50 bg-steward-danger/15 p-4 text-[#ffccd1]" role="alert" tabIndex={-1}>{authError}</div>}
 
         {authPhase === 'loading' && <section aria-labelledby="auth-loading-heading" className={`${panelClass} w-full max-w-xl p-6`}><span aria-hidden="true" className="mb-4 block h-1 w-20 overflow-hidden rounded-full bg-steward-ink-800"><span className="steward-pulse block h-full w-1/2 rounded-full bg-steward-teal" /></span><h2 id="auth-loading-heading" className="text-xl font-semibold">Guard — Checking access</h2><p className="mt-2 text-steward-mist-muted" role="status">Checking administrator setup and your secure session.</p></section>}
@@ -594,7 +624,15 @@ export default function App() {
   )
 }
 
-function WorkspaceOverview({ assetNextCursor, assets, grants, guideOpen, health, modules, onNavigate, onOpenGuide, onWalkthroughStatus, principal, walkthroughStatus }: {
+type WorkQueueItem = {
+  id: string
+  area: WorkspaceAreaID
+  label: string
+  detail: string
+  tone: 'warning' | 'info'
+}
+
+function WorkspaceOverview({ assetNextCursor, assets, grants, guideOpen, health, modules, onNavigate, onOpenGuide, onWalkthroughStatus, permissions, principal, walkthroughStatus }: {
   assetNextCursor: string
   assets: readonly Asset[]
   grants: readonly SessionGrant[]
@@ -604,6 +642,7 @@ function WorkspaceOverview({ assetNextCursor, assets, grants, guideOpen, health,
   onNavigate: (area: WorkspaceAreaID) => void
   onOpenGuide: (destination: GuideDestination) => void
   onWalkthroughStatus: (status: WalkthroughStatus) => void
+  permissions: readonly string[]
   principal: Principal | null
   walkthroughStatus: WalkthroughStatus
 }) {
@@ -611,13 +650,71 @@ function WorkspaceOverview({ assetNextCursor, assets, grants, guideOpen, health,
     const access = module.anyPermissions ? anyPermissionAccess(grants, module.anyPermissions) : permissionAccess(grants, module.permission)
     return access.level !== 'none'
   }).length
-  return <div className="space-y-4">
-    <section aria-labelledby="workspace-overview-heading" className={`${panelClass} p-5`}>
-      <p className="text-[13px] text-steward-slate">Overview</p>
-      <h3 className="mt-1 max-w-4xl text-xl font-semibold text-white" id="workspace-overview-heading">A clear starting point for inventory, people, evidence, goals, planning, and finance.</h3>
-      <p className="mt-2 max-w-4xl text-sm leading-6 text-steward-mist-muted">Open one product area at a time. Filters, selected records, and unfinished forms stay in place while you move around.</p>
+  const [queueItems, setQueueItems] = useState<WorkQueueItem[]>([])
+  const [queueLoading, setQueueLoading] = useState(true)
+  const [queueError, setQueueError] = useState('')
+
+  const refreshQueue = useCallback(async (signal?: AbortSignal) => {
+    const items: WorkQueueItem[] = []
+    try {
+      if (permissions.includes('signals.read')) {
+        const alertValue = await requestJSON('/api/v1/signals/alerts?status=active&limit=10', { signal })
+        if (typeof alertValue === 'object' && alertValue !== null && Array.isArray((alertValue as { items?: unknown }).items)) {
+          for (const alert of (alertValue as { items: Array<{ id?: string; title?: string; summary?: string }> }).items.slice(0, 5)) {
+            if (typeof alert.id !== 'string' || typeof alert.title !== 'string') continue
+            items.push({
+              id: `alert-${alert.id}`,
+              area: 'signals',
+              label: alert.title,
+              detail: typeof alert.summary === 'string' && alert.summary.length > 0 ? alert.summary : 'Active alert waiting in Signals.',
+              tone: 'warning',
+            })
+          }
+        }
+      }
+      if (permissions.includes('integrations.read')) {
+        const importValue = await requestJSON('/api/v1/directory-imports', { signal })
+        if (typeof importValue === 'object' && importValue !== null && Array.isArray((importValue as { items?: unknown }).items)) {
+          for (const batch of (importValue as { items: Array<{ id?: string; status?: string; provider?: string; counts?: { failed?: number } }> }).items) {
+            if (typeof batch.id !== 'string') continue
+            if (batch.status !== 'failed' && batch.status !== 'partially_applied') continue
+            const failedCount = batch.counts?.failed ?? 0
+            items.push({
+              id: `import-${batch.id}`,
+              area: 'people',
+              label: `Directory import ${batch.status?.replaceAll('_', ' ') ?? 'needs review'}`,
+              detail: failedCount > 0
+                ? `${failedCount} record${failedCount === 1 ? '' : 's'} failed in ${batch.provider ?? 'directory import'}. Review the import in People.`
+                : `Review the ${batch.provider ?? 'directory'} import batch in People.`,
+              tone: 'warning',
+            })
+          }
+        }
+      }
+      setQueueItems(items)
+      setQueueError('')
+    } catch (cause) {
+      if (cause instanceof DOMException && cause.name === 'AbortError') return
+      setQueueError(cause instanceof ApiRequestError ? cause.message : 'Work queue could not be refreshed.')
+    } finally {
+      setQueueLoading(false)
+    }
+  }, [permissions])
+
+  useEffect(() => {
+    if (!principal) return
+    const controller = new AbortController()
+    setQueueLoading(true)
+    void refreshQueue(controller.signal)
+    return () => controller.abort()
+  }, [principal, refreshQueue])
+
+  return <div className="space-y-8">
+    <section aria-labelledby="workspace-overview-heading">
+      <h3 className="text-xl font-semibold text-white" id="workspace-overview-heading">What needs your attention</h3>
+      <p className="mt-1 max-w-3xl text-sm leading-6 text-steward-mist-muted">Open a queue item to jump to the right area. Filters and unfinished forms stay in place while you move around.</p>
       <dl className="mt-5 grid gap-3 sm:grid-cols-3">
-        <OverviewMetric label="Assets tracked" value={assetNextCursor ? `${assets.length}+` : String(assets.length)} detail={assetNextCursor ? 'More Atlas records are available' : 'Current Atlas records'} />
+        <OverviewMetric label="Assets tracked" value={assetNextCursor ? `${assets.length}+` : String(assets.length)} detail={assetNextCursor ? 'More records available' : 'Current inventory records'} />
         <OverviewMetric label="Work areas available" value={`${availableCount} of ${modules.length}`} detail="Based on your current grants" />
         <OverviewMetric label="Service state" value={health === 'connected' ? 'Connected' : health === 'unavailable' ? 'Unavailable' : 'Checking'} detail={health === 'unavailable' ? 'Protected work is temporarily unavailable' : 'Live application status'} />
       </dl>
@@ -625,9 +722,36 @@ function WorkspaceOverview({ assetNextCursor, assets, grants, guideOpen, health,
 
     {!guideOpen && <GuideInvitation onNavigate={onOpenGuide} onWalkthroughStatus={onWalkthroughStatus} roles={principal?.roles ?? []} status={walkthroughStatus} />}
 
-    <section aria-labelledby="workspace-areas-heading" className={`${panelClass} p-5`}>
+    <section aria-labelledby="workspace-queue-heading">
       <div className="flex flex-wrap items-end justify-between gap-3">
-        <div><h3 className="text-lg font-semibold" id="workspace-areas-heading">Product areas</h3><p className="mt-1 text-sm text-steward-mist-muted">Choose where to work</p></div>
+        <div>
+          <h3 className="text-lg font-semibold" id="workspace-queue-heading">Work queue</h3>
+          <p className="mt-1 text-sm text-steward-mist-muted">Alerts and failed imports that need a decision</p>
+        </div>
+        <button className={secondaryButtonClass} disabled={queueLoading} onClick={() => { setQueueLoading(true); void refreshQueue() }} type="button">{queueLoading ? 'Refreshing…' : 'Refresh queue'}</button>
+      </div>
+      {queueError && <p className="mt-4 rounded-lg border border-steward-danger/50 bg-steward-danger/15 p-3 text-sm text-[#ffccd1]" role="alert">{queueError}</p>}
+      {queueLoading && queueItems.length === 0
+        ? <p className="mt-4 text-sm text-steward-mist-muted" role="status">Loading work queue…</p>
+        : queueItems.length === 0
+          ? <p className={`${emptyStateClass} mt-4`}>Nothing urgent right now. Open an area below when you are ready to work.</p>
+          : <ul className="mt-4 space-y-2">{queueItems.map((item) => (
+            <li className="rounded-md border border-white/[0.08] bg-steward-ink-950/40 p-4" key={item.id}>
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="font-medium text-white">{item.label}</p>
+                  <p className="mt-1 text-sm leading-6 text-steward-mist-muted">{item.detail}</p>
+                </div>
+                <StatusBadge tone={item.tone === 'warning' ? 'warning' : 'info'}>{item.tone === 'warning' ? 'Needs attention' : 'Follow up'}</StatusBadge>
+              </div>
+              <button className={`${plainButtonClass} mt-3 px-0`} onClick={() => onNavigate(item.area)} type="button">Open {modules.find((module) => module.id === item.area)?.name ?? item.area}<ChevronRightIcon /></button>
+            </li>
+          ))}</ul>}
+    </section>
+
+    <section aria-labelledby="workspace-areas-heading">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div><h3 className="text-lg font-semibold" id="workspace-areas-heading">All areas</h3><p className="mt-1 text-sm text-steward-mist-muted">Jump to any module you can access</p></div>
         <button className={plainButtonClass} onClick={() => onOpenGuide({ view: 'help', topic: 'workspace' })} type="button">How Workspace works</button>
       </div>
       <ul className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
@@ -638,7 +762,7 @@ function WorkspaceOverview({ assetNextCursor, assets, grants, guideOpen, health,
           const accessLabel = readAccess.level === 'none' ? 'Limited' : readAccess.level === 'scoped' ? 'Scoped' : writeAccess.level === 'organization' ? 'Read and change' : 'Read only'
           return <li className="rounded-md border border-white/[0.08] bg-steward-ink-950/40 p-4" key={module.id}>
             <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0"><span aria-hidden="true" className="mb-3 grid size-8 place-items-center text-steward-teal"><AreaIcon area={module.id as AreaIconName} /></span><h4 className="font-medium text-white">{module.name} — {module.descriptor}</h4><p className="mt-1.5 text-sm leading-6 text-steward-mist-muted">{module.summary}</p></div>
+              <div className="min-w-0"><span aria-hidden="true" className="mb-3 grid size-8 place-items-center text-steward-teal"><AreaIcon area={module.id as AreaIconName} /></span><h4 className="font-medium text-white">{module.name}</h4><p className="mt-0.5 text-xs text-steward-slate">{module.descriptor}</p><p className="mt-1.5 text-sm leading-6 text-steward-mist-muted">{module.summary}</p></div>
               <StatusBadge tone={available ? 'success' : 'warning'}>{accessLabel}</StatusBadge>
             </div>
             <button className={`${plainButtonClass} mt-3 px-0`} onClick={() => onNavigate(module.id)} type="button">Open {module.name}<ChevronRightIcon /></button>

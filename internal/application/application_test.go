@@ -29,6 +29,21 @@ import (
 	"github.com/maxlemke/stewardmesh/internal/horizon"
 )
 
+func TestNewRejectsCampusSeedWhenDemoPackageIsExcluded(t *testing.T) {
+	if CampusDemoIncluded {
+		t.Skip("campus demo is compiled into this test binary")
+	}
+	cfg := memoryConfiguration(t)
+	cfg.OrganizationID = "demo-campus"
+	cfg.OrganizationName = "[Campus Demo] Application"
+	cfg.ExchangeSourceSystemID = cfg.OrganizationID
+	cfg.SeedCampus = true
+	_, err := New(context.Background(), cfg, Options{})
+	if err == nil || !strings.Contains(err.Error(), "campus demo package") {
+		t.Fatalf("expected production runtime to reject campus seed without the demo package, got %v", err)
+	}
+}
+
 func TestNewBuildsReusableMemoryApplication(t *testing.T) {
 	cfg := memoryConfiguration(t)
 	app, err := New(context.Background(), cfg, Options{})

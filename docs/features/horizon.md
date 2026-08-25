@@ -48,8 +48,14 @@ Supported `groupBy` values are:
 - `tag`
 - `goal`
 - `asset_class`
+- `manufacturer`
+- `building`
 
-Atlas supplies the asset kind used as `asset_class`, plus the current department and site dimensions. Threads supplies direct goal links and effective tags; suppressed tags are excluded. Tag and goal relationships can be multi-valued, so their rows are explicitly non-additive: totals across tag or goal rows must not be summed as an organization total. Horizon returns an ungrouped total alongside grouped results when an additive overall total is required.
+Atlas supplies the asset kind used as `asset_class`, the current department and site dimensions, People building, and the linked Atlas Model manufacturer. Missing manufacturer or building values group as `Other`. Threads supplies direct goal links and effective tags; suppressed tags are excluded. Tag and goal relationships can be multi-valued, so their rows are explicitly non-additive: totals across tag or goal rows must not be summed as an organization total. Horizon returns an ungrouped total alongside grouped results when an additive overall total is required.
+
+Kind defaults (`GET|PUT /api/v1/horizon/kind-defaults`) store organization-scoped useful-life and optional replacement-model assumptions per asset kind and scenario. They seed new per-asset plans without rewriting existing plan history.
+
+Named replacement plans group many assets for a coordinated refresh. Each plan has a name, scenario, grouping (`department`, `building`, `type`, `manufacturer`, `site`, or `custom`), optional group key, and an exclusive asset membership: an asset belongs to at most one named plan. Operators can open the assigned inventory from Horizon and assign or clear membership from Atlas.
 
 Every forecast row exposes replacement need and explicit amounts by the Ledger kinds relevant to planning: `actual`, `estimated`, `committed`, `normalized_real`, and `tco`. Money remains integer minor units with an explicit currency throughout service, repository, REST, gRPC, CSV, and browser boundaries. Values and aggregates are capped at the JavaScript-safe integer boundary `9,007,199,254,740,991`, so JSON browser clients preserve every minor unit exactly. A request whose matching plans or Ledger facts contain multiple currencies fails with a conflict; Horizon does not perform implicit exchange-rate conversion.
 
@@ -63,13 +69,19 @@ REST endpoints:
 - `PUT /api/v1/horizon/plans/{planID}`
 - `GET /api/v1/horizon/plans/{planID}/history`
 - `GET /api/v1/horizon/forecast`
+- `GET /api/v1/horizon/forecast/assets`
+- `GET /api/v1/horizon/forecast/amounts`
 - `GET /api/v1/horizon/export.csv`
+- `GET|PUT /api/v1/horizon/kind-defaults`
+- `GET|POST /api/v1/horizon/replacement-plans`
+- `GET|PUT /api/v1/horizon/replacement-plans/{planID}`
+- `GET /api/v1/horizon/replacement-plans/{planID}/assets`
 
-Plan-list filters include `assetId` and `scenario`. Forecast and export parameters include comma-separated `scenarios`, `asOf`, inclusive `fromYear` and `toYear`, `fiscalYearStartMonth`, and `groupBy`. JSON is the interactive analytics contract. CSV carries the same dimensions and integer values and prefixes cells beginning with spreadsheet formula sigils; consumers must still treat exported files as untrusted data and must not enable spreadsheet macros.
+Plan-list filters include `assetId` and `scenario`. Forecast and export parameters include comma-separated `scenarios`, `asOf`, inclusive `fromYear` and `toYear`, `fiscalYearStartMonth`, and `groupBy`. Forecast asset and amount drill-downs require the same window plus a group key (and amount kind for amount rows). JSON is the interactive analytics contract. CSV carries the same dimensions and integer values and prefixes cells beginning with spreadsheet formula sigils; consumers must still treat exported files as untrusted data and must not enable spreadsheet macros.
 
-OpenAPI and protobuf definitions carry the same planning versions, forecast parameters, grouping semantics, and money boundaries. `horizon.Store` is the provider-neutral persistence contract implemented by deterministic memory and PostgreSQL adapters. Atlas, Ledger, and Threads remain authoritative behind narrow reader interfaces; Horizon never writes their records or reads provider tables directly.
+OpenAPI and protobuf definitions carry the same planning versions, forecast parameters, grouping semantics, and money boundaries. Named replacement plans and kind defaults are REST and OpenAPI contracts in this delivery; the protobuf descriptor still exposes the original per-asset plan and forecast RPCs. `horizon.Store` is the provider-neutral persistence contract implemented by deterministic memory and PostgreSQL adapters. Atlas, Ledger, and Threads remain authoritative behind narrow reader interfaces; Horizon never writes their records or reads provider tables directly.
 
-Migration `0018_horizon_lifecycle_planning.sql` creates organization-scoped plans and immutable effective-dated versions. Migration `0019_horizon_administrator_permissions.sql` grants `planning.read` and `planning.write` to existing built-in Administrator bundles without modifying custom roles.
+Migration `0018_horizon_lifecycle_planning.sql` creates organization-scoped plans and immutable effective-dated versions. Migration `0019_horizon_administrator_permissions.sql` grants `planning.read` and `planning.write` to existing built-in Administrator bundles without modifying custom roles. Migration `0046_asset_lifecycle_planning.sql` adds kind defaults. Migration `0052_horizon_replacement_plans.sql` adds named replacement plans and exclusive asset membership.
 
 ## Audit events
 
@@ -77,19 +89,25 @@ Horizon emits:
 
 - `horizon.plan.created`
 - `horizon.plan.updated`
+- `horizon.kind_default.saved`
+- `horizon.replacement_plan.created`
+- `horizon.replacement_plan.updated`
+- `horizon.replacement_plan.assigned`
 
 Audit metadata includes `REQ-HORIZON-001`, plan and asset IDs, scenario, lifecycle stage, effective date, revision, and currency. It excludes asset names and identifiers intended for people, planning notes, monetary amounts, private Ledger details, cookies, CSRF material, and identity-provider data.
 
 ## Accessible workflow and walkthrough
 
 1. Open **Horizon — Lifecycle planning and forecasting** with `planning.read`.
-2. Filter existing plans by asset or scenario, then inspect the effective assumptions and version history.
-3. With `planning.write`, create or revise a plan using an Atlas asset, lifecycle stage, useful life, replacement timing, cost, currency, and effective timestamp.
-4. Select scenarios, an as-of timestamp, year range, fiscal-year start month, and grouping dimension.
-5. Compare replacement needs and the named Ledger cost kinds in the authoritative table.
-6. Export the same report parameters as formula-safe CSV when needed.
+2. Start on **Due now** for refresh-due assets and catalog models past their last effective date.
+3. Open **Forecast** and switch Year, department, type, manufacturer, or building views. Department + type stacks replacement by year. Missing values appear as Other.
+4. Open a fiscal year or group to inspect assigned assets, shift a lab or office together, or drill into Ledger amount kinds.
+5. With `planning.write`, maintain named replacement plans and assign assets from Horizon or Atlas.
+6. Filter per-asset plans by asset or scenario, then inspect the effective assumptions and version history.
+7. Create or revise a per-asset plan using an Atlas asset, lifecycle stage, useful life, replacement timing, cost, currency, and effective timestamp.
+8. Export the same report parameters as formula-safe CSV when needed.
 
-The forecast table is the authoritative accessible representation. Compact bars are supplemental and repeat their value in text; they never encode category or state by color alone. The surface uses semantic headings, labeled native controls, visible focus, minimum-height actions, live status messages, keyboard-operable history, responsive reflow, and contained horizontal scrolling for wide tables. At 320 pixels the page does not gain horizontal overflow outside a labeled table region. Reduced-motion settings are respected, and no animation is required to understand the report.
+The forecast table is the authoritative accessible representation. Compact bars and charts are supplemental and repeat their value in text; they never encode category or state by color alone. The surface uses semantic headings, labeled native controls, visible focus, minimum-height actions, live status messages, keyboard-operable history, responsive reflow, and contained horizontal scrolling for wide tables. At 320 pixels the page does not gain horizontal overflow outside a labeled table region. Reduced-motion settings are respected, and no animation is required to understand the report.
 
 Guide provides contextual Horizon help, a permission-aware walkthrough, and an example that can be dismissed, skipped, and replayed without gating normal work.
 
@@ -104,7 +122,7 @@ Do not include asset names, serial numbers, hostnames, private strategy text, fi
 - Useful-life bounds, manual and `AddDate`-derived replacement dates, missing-date behavior, lifecycle stages, normalization, version history, effective-time selection, stale revisions, audits, and organization isolation.
 - Deterministic fiscal-year boundaries, as-of behavior, inclusive year windows, scenario comparisons, all six grouping dimensions, multi-valued non-additive tag/goal rows, suppressed-tag exclusion, and direct-goal selection.
 - Explicit actual, estimated, committed, normalized-real, and TCO aggregation; exact integer arithmetic; overflow and mixed-currency rejection.
-- Shared memory/PostgreSQL provider conformance and migration structure, constraints, administrator-permission upgrade, and optional real-database integration tests.
+- Shared memory/PostgreSQL provider conformance and migration structure, constraints, administrator-permission upgrade, kind defaults, named replacement plans, exclusive asset membership, and optional real-database integration tests.
 - REST authentication, permissions, CSRF, origin, plan filters, history, validation, conflicts, forecast parameters, safe errors, and formula-safe CSV export.
 - OpenAPI and protobuf parity, React response validation, accessible editing and comparison workflows, keyboard behavior, table/bar equivalence, axe checks, narrow-table containment, and Guide integration.
 - Repository-wide race tests, vet, vulnerability checks, traceability, API lint, protobuf validation, frontend typecheck/tests/build, container build, and authenticated desktop and 320-pixel browser validation.

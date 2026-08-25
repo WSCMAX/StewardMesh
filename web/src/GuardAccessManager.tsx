@@ -1,6 +1,8 @@
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ApiRequestError, requestJSON } from './api'
-import { ProductHeader, buttonClass, dangerButtonClass, inputClass, labelClass, panelClass, secondaryButtonClass, subpanelClass, tableWrapClass } from './ui'
+import DataGrid from './grid/DataGrid'
+import type { GridColumn } from './grid/columns'
+import { ProductHeader, buttonClass, dangerButtonClass, inputClass, labelClass, panelClass, secondaryButtonClass, subpanelClass } from './ui'
 
 // Requirements: REQ-HORIZON-001, REQ-EXCHANGE-001, SEC-GUARD-001, SEC-HTTP-001, A11Y-001.
 // Features: lifecycle.planning, migration.packages, authorization.security.
@@ -192,6 +194,45 @@ export default function GuardAccessManager({ csrfToken, onOpenHelp }: GuardAcces
   const errorRef = useRef<HTMLDivElement>(null)
   const accountNames = useMemo(() => new Map(directory.accounts.map((account) => [account.id, account.displayName])), [directory.accounts])
   const roleNames = useMemo(() => new Map(directory.roles.map((role) => [role.id, role.name])), [directory.roles])
+  const assignmentColumns = useMemo((): GridColumn<RoleAssignment>[] => [
+    { key: 'account', header: 'Account', kind: 'text', width: 14, text: (assignment) => accountNames.get(assignment.accountId) ?? 'Unknown account' },
+    { key: 'role', header: 'Role', kind: 'text', width: 12, text: (assignment) => roleNames.get(assignment.roleId) ?? 'Unknown role' },
+    { key: 'scope', header: 'Scope', kind: 'text', width: 14, text: (assignment) => formatScope(assignment) },
+    { key: 'managed', header: 'Managed by', kind: 'text', width: 12, text: (assignment) => assignment.managed ? 'Identity provider' : 'StewardMesh' },
+    {
+      key: 'actions', header: 'Actions', kind: 'text', width: 12, wrap: true,
+      text: (assignment) => assignment.managed ? 'Read only' : 'Remove',
+      display: (assignment) => assignment.managed
+        ? <span className="text-xs text-steward-mist-muted">Read only</span>
+        : <button aria-label={`Remove ${roleNames.get(assignment.roleId) ?? 'role'} assignment for ${accountNames.get(assignment.accountId) ?? 'account'}`} className={dangerButtonClass} disabled={busy !== ''} onClick={() => handleRevoke(assignment)} type="button">{busy === assignment.id ? 'Removing…' : 'Remove'}</button>,
+    },
+  ], [accountNames, busy, roleNames])
+  const ownershipColumns = useMemo((): GridColumn<ResourceOwnership>[] => [
+    {
+      key: 'resource', header: 'Resource', kind: 'text', width: 16,
+      text: (record) => `${record.resourceType} ${record.resourceId}`,
+      display: (record) => <><span className="block font-semibold">{record.resourceType}</span><span className="mt-1 block break-all font-mono text-xs font-normal text-steward-mist-muted">{record.resourceId}</span></>,
+    },
+    {
+      key: 'source', header: 'Earliest source', kind: 'text', width: 16,
+      text: (record) => `${record.sourceSystemId} ${record.sourceRecordId}`,
+      display: (record) => <><span className="block break-all">{record.sourceSystemId}</span><span className="mt-1 block break-all font-mono text-xs text-steward-mist-muted">{record.sourceRecordId}</span></>,
+    },
+    {
+      key: 'state', header: 'State', kind: 'text', width: 12,
+      text: (record) => record.writeLocked ? 'Write locked' : `Claimed ${record.claimedAt ? new Date(record.claimedAt).toLocaleString() : ''}`,
+    },
+    {
+      key: 'actions', header: 'Actions', kind: 'text', width: 14, wrap: true,
+      text: (record) => record.writeLocked ? 'Claim local ownership' : 'Locally managed',
+      display: (record) => {
+        const claimKey = `claim:${record.resourceType}:${record.resourceId}`
+        return record.writeLocked
+          ? <button className={buttonClass} disabled={busy !== ''} onClick={() => handleClaim(record)} type="button">{busy === claimKey ? 'Claiming…' : 'Claim local ownership'}</button>
+          : <span className="text-xs text-steward-mist-muted">Locally managed</span>
+      },
+    },
+  ], [busy])
   const bundleNames = useMemo(() => new Map(directory.policyBundles.map((bundle) => [bundle.id, bundle.name])), [directory.policyBundles])
 
   useEffect(() => {
@@ -453,42 +494,33 @@ export default function GuardAccessManager({ csrfToken, onOpenHelp }: GuardAcces
           <div className="mt-6">
             <h3 className="text-lg font-semibold">Current role assignments</h3>
             <p className="mt-1 text-sm text-steward-mist-muted">Guard prevents removal of the final active organization administrator.</p>
-            {directory.assignments.length === 0 ? <p className="mt-4 rounded-xl border border-dashed border-steward-ink-800 p-5 text-sm text-steward-mist-muted">No role assignments are available.</p> : (
-              <div className={`${tableWrapClass} mt-4`}>
-                <table className="w-full border-collapse text-left text-sm">
-                  <thead className="hidden bg-steward-ink-800/60 text-steward-mist-muted md:table-header-group"><tr><th className="px-4 py-3 font-semibold" scope="col">Account</th><th className="px-4 py-3 font-semibold" scope="col">Role</th><th className="px-4 py-3 font-semibold" scope="col">Scope</th><th className="px-4 py-3 font-semibold" scope="col">Managed by</th><th className="px-4 py-3 font-semibold" scope="col"><span className="sr-only">Actions</span></th></tr></thead>
-                  <tbody className="block divide-y divide-steward-ink-800 md:table-row-group">
-                    {directory.assignments.map((assignment) => (
-                      <tr className="grid grid-cols-2 gap-4 p-4 md:table-row md:p-0" key={assignment.id}>
-                        <td className="font-medium md:px-4 md:py-3"><MobileLabel>Account</MobileLabel>{accountNames.get(assignment.accountId) ?? 'Unknown account'}</td>
-                        <td className="md:px-4 md:py-3"><MobileLabel>Role</MobileLabel>{roleNames.get(assignment.roleId) ?? 'Unknown role'}</td>
-                        <td className="text-steward-mist-muted md:px-4 md:py-3"><MobileLabel>Scope</MobileLabel>{formatScope(assignment)}</td>
-                        <td className="text-steward-mist-muted md:px-4 md:py-3"><MobileLabel>Managed by</MobileLabel>{assignment.managed ? 'Identity provider' : 'StewardMesh'}</td>
-                        <td className="col-span-2 md:table-cell md:px-4 md:py-3 md:text-right">{assignment.managed ? <span className="text-xs text-steward-mist-muted">Read only</span> : <button aria-label={`Remove ${roleNames.get(assignment.roleId) ?? 'role'} assignment for ${accountNames.get(assignment.accountId) ?? 'account'}`} className={dangerButtonClass} disabled={busy !== ''} onClick={() => handleRevoke(assignment)} type="button">{busy === assignment.id ? 'Removing…' : 'Remove'}</button>}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
+            <div className="mt-4">
+              <DataGrid
+                columns={assignmentColumns}
+                emptyMessage="No role assignments are available."
+                label="Current role assignments"
+                rowId={(assignment) => assignment.id}
+                rowLabel={(assignment) => `${roleNames.get(assignment.roleId) ?? 'role'} assignment for ${accountNames.get(assignment.accountId) ?? 'account'}`}
+                rows={directory.assignments}
+                viewId="guard-assignments"
+              />
+            </div>
           </div>
 
           <div className="mt-6 min-w-0 max-w-full">
             <h3 className="text-lg font-semibold">Imported resource ownership</h3>
             <p className="mt-1 max-w-3xl text-sm leading-6 text-steward-mist-muted">Imported records stay readable while Guard blocks local changes. Claim only after confirming that this organization will manage the resource locally; an exact package replay will not restore the lock.</p>
-            {ownership.length === 0 ? <p className="mt-4 rounded-xl border border-dashed border-steward-ink-800 p-5 text-sm text-steward-mist-muted">No imported resource ownership records are available.</p> : (
-              <div aria-label="Imported resource ownership records" className={`${tableWrapClass} mt-4`} role="region" tabIndex={0}>
-                <table className="w-full min-w-[48rem] border-collapse text-left text-sm">
-                  <thead className="bg-steward-ink-800/60 text-steward-mist-muted"><tr><th className="px-4 py-3 font-semibold" scope="col">Resource</th><th className="px-4 py-3 font-semibold" scope="col">Earliest source</th><th className="px-4 py-3 font-semibold" scope="col">State</th><th className="px-4 py-3 font-semibold" scope="col"><span className="sr-only">Actions</span></th></tr></thead>
-                  <tbody className="divide-y divide-steward-ink-800">
-                    {ownership.map((record) => {
-                      const claimKey = `claim:${record.resourceType}:${record.resourceId}`
-                      return <tr key={`${record.resourceType}:${record.resourceId}`}><th className="px-4 py-3 align-top" scope="row"><span className="block font-semibold">{record.resourceType}</span><span className="mt-1 block break-all font-mono text-xs font-normal text-steward-mist-muted">{record.resourceId}</span></th><td className="px-4 py-3 align-top"><span className="block break-all">{record.sourceSystemId}</span><span className="mt-1 block break-all font-mono text-xs text-steward-mist-muted">{record.sourceRecordId}</span></td><td className="px-4 py-3 align-top">{record.writeLocked ? 'Write locked' : `Claimed ${record.claimedAt ? new Date(record.claimedAt).toLocaleString() : ''}`}</td><td className="px-4 py-3 text-right align-top">{record.writeLocked ? <button className={buttonClass} disabled={busy !== ''} onClick={() => handleClaim(record)} type="button">{busy === claimKey ? 'Claiming…' : 'Claim local ownership'}</button> : <span className="text-xs text-steward-mist-muted">Locally managed</span>}</td></tr>
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
+            <div className="mt-4">
+              <DataGrid
+                columns={ownershipColumns}
+                emptyMessage="No imported resource ownership records are available."
+                label="Imported resource ownership records"
+                rowId={(record) => `${record.resourceType}:${record.resourceId}`}
+                rowLabel={(record) => `${record.resourceType} ${record.resourceId}`}
+                rows={ownership}
+                viewId="guard-ownership"
+              />
+            </div>
           </div>
         </>
       )}
@@ -498,8 +530,4 @@ export default function GuardAccessManager({ csrfToken, onOpenHelp }: GuardAcces
 
 function Summary({ label, value }: { label: string; value: number }) {
   return <div className={`${subpanelClass} p-4`}><p className="text-2xl font-semibold">{value}</p><p className="mt-1 text-sm text-steward-mist-muted">{label}</p></div>
-}
-
-function MobileLabel({ children }: { children: string }) {
-  return <span className="mb-1 block text-xs font-semibold text-steward-mist-muted md:hidden">{children}</span>
 }

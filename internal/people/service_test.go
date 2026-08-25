@@ -121,7 +121,29 @@ func TestPeopleServiceBuildsTypedDirectoryAndAssignmentHistory(t *testing.T) {
 		t.Fatalf("expected active assignment to end: %#v, %v", ended, err)
 	}
 
-	if len(auditor.events) != 7 {
+	due := now.Add(48 * time.Hour)
+	loan, err := service.CreateAssetAssignment(ctx, CreateAssetAssignmentInput{
+		AssetID: "asset-1", AssigneeKind: AssigneeIdentity, AssigneeID: person.ID, Role: AssignmentUser,
+		EffectiveFrom: now, DueAt: &due,
+	})
+	if err != nil || loan.DueAt == nil || !loan.DueAt.Equal(due) {
+		t.Fatalf("expected temporary assignment with return-by date: %#v, %v", loan, err)
+	}
+	personLoans, err := service.ListPeopleAssignments(ctx, AssignmentQuery{AssigneeKind: AssigneeIdentity, AssigneeID: person.ID}, Visibility{All: true})
+	if err != nil || len(personLoans) < 2 {
+		t.Fatalf("expected identity assignment history, got %#v, %v", personLoans, err)
+	}
+	var loanFound bool
+	for _, item := range personLoans {
+		if item.ID == loan.ID && item.DueAt != nil && item.EffectiveTo == nil {
+			loanFound = true
+		}
+	}
+	if !loanFound {
+		t.Fatalf("identity assignment list omitted the temporary loan: %#v", personLoans)
+	}
+
+	if len(auditor.events) != 8 {
 		t.Fatalf("expected seven write audit events, got %#v", auditor.events)
 	}
 	for _, event := range auditor.events {

@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest'
-import { newWorkspaceRecordFocus, openRecordLabel, recordIDFromNode, workspaceRecordHref, workspaceRecordTarget } from './graphRecord'
+import { meshNodeFromHash, meshRecordHref, newWorkspaceRecordFocus, openRecordLabel, recordIDFromNode, workspaceRecordHref, workspaceRecordTarget } from './graphRecord'
 
 // Requirement: REQ-DIRECTORY-EXPANSION-008. Feature: threads.relationships.
 
@@ -13,4 +13,7 @@ test('maps graph nodes to the product area that edits them', () => {
     area: 'atlas', kind: 'asset', recordId: 'lab-server', nonce: 7,
   })
   expect(workspaceRecordTarget('organization')).toBeNull()
+  expect(meshRecordHref('asset', 'lab-server')).toBe('#workspace-mesh?node=asset%3Alab-server')
+  expect(meshNodeFromHash('#workspace-mesh?node=asset%3Alab-server')).toBe('asset:lab-server')
+  expect(meshNodeFromHash('#workspace-mesh')).toBe('')
 })

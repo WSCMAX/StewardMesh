@@ -99,6 +99,24 @@ func (s *PeopleStore) ExchangeSnapshot(ctx context.Context, organizationID strin
 		return people.ExchangeSnapshot{}, people.ErrTooLarge
 	}
 	remaining -= len(result.Identities)
+	result.CheckoutGroups, err = queryPeopleExchangeRows(ctx, transaction, `
+		SELECT id, organization_id, name, description, status, revision, created_at, updated_at
+		FROM people_checkout_groups WHERE organization_id = $1 ORDER BY id LIMIT $2
+	`, organizationID, remaining+1, scanCheckoutGroup)
+	if err != nil {
+		return people.ExchangeSnapshot{}, fmt.Errorf("list People Exchange checkout groups: %w", err)
+	}
+	if len(result.CheckoutGroups) > remaining {
+		return people.ExchangeSnapshot{}, people.ErrTooLarge
+	}
+	remaining -= len(result.CheckoutGroups)
+	for index := range result.CheckoutGroups {
+		members, memberErr := listCheckoutGroupMembersTx(ctx, transaction, organizationID, result.CheckoutGroups[index].ID)
+		if memberErr != nil {
+			return people.ExchangeSnapshot{}, memberErr
+		}
+		result.CheckoutGroups[index].MemberIDs = members
+	}
 	result.Assignments, err = queryPeopleExchangeRows(ctx, transaction, `
 		SELECT id, organization_id, asset_id, assignee_kind, COALESCE(identity_id, department_id, group_id),
 		       role, effective_from, due_at, effective_to, created_by, created_at, purpose, COALESCE(event_summary, ''), COALESCE(group_id, ''), COALESCE(bulk_checkout_id, '')

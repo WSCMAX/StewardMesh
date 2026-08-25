@@ -7,6 +7,8 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -160,11 +162,52 @@ func (i *exchangeImporter) ImportIdentity(ctx context.Context, operation Exchang
 		map[string]string{"kind": string(candidate.Kind), "revision": strconv.FormatUint(candidate.Revision, 10)})
 }
 
+func (i *exchangeImporter) ImportCheckoutGroup(ctx context.Context, operation ExchangeImportOperation, candidate CheckoutGroup) (ExchangeImportResult, error) {
+	operation, err := normalizeExchangeImportOperation(operation)
+	name := strings.TrimSpace(candidate.Name)
+	description := strings.TrimSpace(candidate.Description)
+	memberIDs := uniqueNonEmpty(candidate.MemberIDs)
+	sortedMembers := append([]string{}, memberIDs...)
+	sort.Strings(sortedMembers)
+	if err != nil || !validExchangeCandidateOrganization(candidate.OrganizationID) || !validExchangeState(candidate.ID, candidate.Revision, candidate.CreatedAt, candidate.UpdatedAt) ||
+		name == "" || name != candidate.Name || description != candidate.Description || !validBoundedText(name, 200) || !validBoundedText(description, maximumEventSummary) ||
+		len(memberIDs) == 0 || !slices.Equal(candidate.MemberIDs, sortedMembers) || !validStatus(candidate.Status) {
+		return ExchangeImportResult{}, ErrInvalidInput
+	}
+	for _, memberID := range memberIDs {
+		if !recordIDPattern.MatchString(memberID) {
+			return ExchangeImportResult{}, ErrInvalidInput
+		}
+		if _, memberErr := i.service.store.GetIdentity(ctx, i.service.organizationID, memberID); memberErr != nil {
+			return ExchangeImportResult{}, mapExchangeReferenceError(memberErr)
+		}
+	}
+	candidate.OrganizationID = i.service.organizationID
+	candidate.MemberIDs = sortedMembers
+	return importPeopleRecord(ctx, i.service, operation, "people.checkout-group.created", "checkout_group", candidate.ID, candidate,
+		func(ctx context.Context) (CheckoutGroup, error) {
+			return i.service.store.GetCheckoutGroup(ctx, i.service.organizationID, candidate.ID)
+		},
+		func(ctx context.Context) (CheckoutGroup, error) {
+			return i.service.store.CreateCheckoutGroup(ctx, candidate)
+		},
+		func(left, right CheckoutGroup) bool { return sameCheckoutGroup(left, right) },
+		map[string]string{"revision": strconv.FormatUint(candidate.Revision, 10)})
+}
+
 func (i *exchangeImporter) ImportAssetAssignment(ctx context.Context, operation ExchangeImportOperation, candidate AssetAssignment) (ExchangeImportResult, error) {
 	operation, err := normalizeExchangeImportOperation(operation)
-	if err != nil || !validExchangeCandidateOrganization(candidate.OrganizationID) || !recordIDPattern.MatchString(candidate.ID) || !assetIDPattern.MatchString(candidate.AssetID) ||
-		!recordIDPattern.MatchString(candidate.AssigneeID) || !validAssignment(candidate.AssigneeKind, candidate.Role) ||
+	if candidate.Purpose == "" {
+		candidate.Purpose = PurposeCheckout
+	}
+	purpose, purposeErr := normalizeAssignmentPurpose(candidate.Purpose)
+	eventSummary, summaryErr := normalizeEventSummary(candidate.EventSummary)
+	if err != nil || purposeErr != nil || summaryErr != nil || !validExchangeCandidateOrganization(candidate.OrganizationID) || !recordIDPattern.MatchString(candidate.ID) || !assetIDPattern.MatchString(candidate.AssetID) ||
+		!recordIDPattern.MatchString(candidate.AssigneeID) || !validAssignment(candidate.AssigneeKind, candidate.Role) || purpose != candidate.Purpose || eventSummary != candidate.EventSummary ||
+		candidate.GroupID != "" && !recordIDPattern.MatchString(candidate.GroupID) || candidate.BulkCheckoutID != "" && !recordIDPattern.MatchString(candidate.BulkCheckoutID) ||
+		candidate.AssigneeKind == AssigneeGroup && candidate.GroupID != "" && candidate.GroupID != candidate.AssigneeID ||
 		candidate.EffectiveFrom.IsZero() || !portabletime.IsCanonical(candidate.EffectiveFrom) ||
+		candidate.DueAt != nil && (!portabletime.IsCanonical(*candidate.DueAt) || candidate.DueAt.Before(candidate.EffectiveFrom) || candidate.DueAt.Year() > 9999) ||
 		candidate.EffectiveTo != nil && (!portabletime.IsCanonical(*candidate.EffectiveTo) || !candidate.EffectiveTo.After(candidate.EffectiveFrom) || candidate.EffectiveTo.Year() > 9999) ||
 		candidate.CreatedAt.IsZero() || !portabletime.IsCanonical(candidate.CreatedAt) || candidate.CreatedAt.Year() < 2000 || candidate.CreatedAt.Year() > 9999 ||
 		candidate.CreatedBy != exchangeActorID {
@@ -179,11 +222,20 @@ func (i *exchangeImporter) ImportAssetAssignment(ctx context.Context, operation 
 		_, referenceErr = i.service.store.GetIdentity(ctx, i.service.organizationID, candidate.AssigneeID)
 	case AssigneeDepartment:
 		_, referenceErr = i.service.store.GetDepartment(ctx, i.service.organizationID, candidate.AssigneeID)
+	case AssigneeGroup:
+		_, referenceErr = i.service.store.GetCheckoutGroup(ctx, i.service.organizationID, candidate.AssigneeID)
 	}
 	if referenceErr != nil {
 		return ExchangeImportResult{}, mapExchangeReferenceError(referenceErr)
 	}
+	if candidate.BulkCheckoutID != "" {
+		if _, bulkErr := i.service.store.GetBulkCheckout(ctx, i.service.organizationID, candidate.BulkCheckoutID); bulkErr != nil {
+			return ExchangeImportResult{}, mapExchangeReferenceError(bulkErr)
+		}
+	}
 	candidate.OrganizationID = i.service.organizationID
+	candidate.Purpose = purpose
+	candidate.EventSummary = eventSummary
 	return importPeopleRecord(ctx, i.service, operation, "people.asset_assignment.created", "asset_assignment", candidate.ID, candidate,
 		func(ctx context.Context) (AssetAssignment, error) {
 			return i.service.store.GetAssetAssignment(ctx, i.service.organizationID, candidate.ID)
@@ -192,7 +244,7 @@ func (i *exchangeImporter) ImportAssetAssignment(ctx context.Context, operation 
 			return i.service.store.ImportAssetAssignment(ctx, candidate)
 		},
 		func(left, right AssetAssignment) bool { return sameAssetAssignment(left, right) },
-		map[string]string{"assigneeKind": string(candidate.AssigneeKind), "role": string(candidate.Role)})
+		map[string]string{"assigneeKind": string(candidate.AssigneeKind), "role": string(candidate.Role), "purpose": string(candidate.Purpose)})
 }
 
 func importPeopleRecord[T any](ctx context.Context, service *Service, operation ExchangeImportOperation, action, resourceType, resourceID string, candidate T,
@@ -275,9 +327,25 @@ func sameIdentity(left, right Identity) bool {
 		left.ProviderSubject == right.ProviderSubject && left.Revision == right.Revision && left.CreatedAt.Equal(right.CreatedAt) && left.UpdatedAt.Equal(right.UpdatedAt)
 }
 
+func sameCheckoutGroup(left, right CheckoutGroup) bool {
+	if left.ID != right.ID || left.OrganizationID != right.OrganizationID || left.Name != right.Name || left.Description != right.Description ||
+		left.Status != right.Status || left.Revision != right.Revision || !left.CreatedAt.Equal(right.CreatedAt) || !left.UpdatedAt.Equal(right.UpdatedAt) ||
+		len(left.MemberIDs) != len(right.MemberIDs) {
+		return false
+	}
+	for index := range left.MemberIDs {
+		if left.MemberIDs[index] != right.MemberIDs[index] {
+			return false
+		}
+	}
+	return true
+}
+
 func sameAssetAssignment(left, right AssetAssignment) bool {
 	return left.ID == right.ID && left.OrganizationID == right.OrganizationID && left.AssetID == right.AssetID && left.AssigneeKind == right.AssigneeKind &&
-		left.AssigneeID == right.AssigneeID && left.Role == right.Role && left.EffectiveFrom.Equal(right.EffectiveFrom) && equalPeopleOptionalTime(left.EffectiveTo, right.EffectiveTo) &&
+		left.AssigneeID == right.AssigneeID && left.Role == right.Role && left.Purpose == right.Purpose && left.EventSummary == right.EventSummary &&
+		left.GroupID == right.GroupID && left.BulkCheckoutID == right.BulkCheckoutID &&
+		left.EffectiveFrom.Equal(right.EffectiveFrom) && equalPeopleOptionalTime(left.DueAt, right.DueAt) && equalPeopleOptionalTime(left.EffectiveTo, right.EffectiveTo) &&
 		left.CreatedBy == right.CreatedBy && left.CreatedAt.Equal(right.CreatedAt)
 }
 

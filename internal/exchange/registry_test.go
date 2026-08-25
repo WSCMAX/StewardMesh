@@ -13,13 +13,13 @@ func TestPhaseOneRecordTypesHaveOneExchangeDisposition(t *testing.T) {
 	if err := exchange.ValidateRecordTypeBoundary(); err != nil {
 		t.Fatal(err)
 	}
-	if got, want := len(exchange.PortableRecordTypes()), 41; got != want {
+	if got, want := len(exchange.PortableRecordTypes()), 42; got != want {
 		t.Fatalf("portable record type count = %d, want %d", got, want)
 	}
 	if got, want := len(exchange.ExplicitlyExcludedRecordTypes()), 12; got != want {
 		t.Fatalf("excluded record type count = %d, want %d", got, want)
 	}
-	if got, want := len(patterns.CoreRecordTypes()), 53; got != want {
+	if got, want := len(patterns.CoreRecordTypes()), 54; got != want {
 		t.Fatalf("Patterns core record type count = %d, want %d", got, want)
 	}
 	for _, exclusion := range exchange.ExplicitlyExcludedRecordTypes() {

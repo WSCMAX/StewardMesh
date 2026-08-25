@@ -29,6 +29,7 @@ func TestPortableTimestampClassificationCoversRegistry(t *testing.T) {
 		"people.room":                 {"createdAt", "updatedAt"},
 		"people.department":           {"createdAt", "updatedAt"},
 		"people.identity":             {"createdAt", "updatedAt"},
+		"people.checkout-group":       {"createdAt", "updatedAt"},
 		"people.assignment":           {"effectiveFrom", "dueAt", "effectiveTo", "createdAt"},
 		"threads.tag":                 {},
 		"threads.goal":                {},

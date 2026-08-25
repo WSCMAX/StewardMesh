@@ -1309,6 +1309,8 @@ func (v labelsRecordValidator) ValidateRecord(ctx context.Context, organizationI
 		_, err = v.people.GetDepartment(ctx, organizationID, recordID)
 	case "people.identity":
 		_, err = v.people.GetIdentity(ctx, organizationID, recordID)
+	case "people.checkout-group":
+		_, err = v.people.GetCheckoutGroup(ctx, organizationID, recordID)
 	case "people.assignment":
 		_, err = v.people.GetAssetAssignment(ctx, organizationID, recordID)
 	case "atlas.asset":

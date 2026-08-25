@@ -256,10 +256,11 @@ type CheckoutCandidate struct {
 }
 
 type RankCheckoutInput struct {
-	AssetIDs           []string
-	From               time.Time
-	To                 time.Time
-	PreferredModelIDs  []string
+	AssetIDs          []string
+	From              time.Time
+	To                time.Time
+	PreferredModelIDs []string
+	Visibility        Visibility
 }
 
 type CreateBulkCheckoutInput struct {
@@ -617,12 +618,13 @@ type EndAssetAssignmentInput struct {
 // portable People record. Repository adapters own the consistency boundary so
 // Exchange never stitches together independently changing list results.
 type ExchangeSnapshot struct {
-	Sites       []Site
-	Buildings   []Building
-	Rooms       []Room
-	Departments []Department
-	Identities  []Identity
-	Assignments []AssetAssignment
+	Sites          []Site
+	Buildings      []Building
+	Rooms          []Room
+	Departments    []Department
+	Identities     []Identity
+	CheckoutGroups []CheckoutGroup
+	Assignments    []AssetAssignment
 }
 
 // ExchangeImportOperation is the durable mutation identity reserved by
@@ -646,6 +648,7 @@ type ExchangeImporter interface {
 	ImportRoom(context.Context, ExchangeImportOperation, Room) (ExchangeImportResult, error)
 	ImportDepartment(context.Context, ExchangeImportOperation, Department) (ExchangeImportResult, error)
 	ImportIdentity(context.Context, ExchangeImportOperation, Identity) (ExchangeImportResult, error)
+	ImportCheckoutGroup(context.Context, ExchangeImportOperation, CheckoutGroup) (ExchangeImportResult, error)
 	ImportAssetAssignment(context.Context, ExchangeImportOperation, AssetAssignment) (ExchangeImportResult, error)
 }
 
@@ -723,4 +726,5 @@ type Store interface {
 	CreateBulkCheckout(ctx context.Context, item BulkCheckout) (BulkCheckout, error)
 	GetBulkCheckout(ctx context.Context, organizationID, id string) (BulkCheckout, error)
 	ListBulkCheckouts(ctx context.Context, organizationID string) ([]BulkCheckout, error)
+	DeleteBulkCheckout(ctx context.Context, organizationID, id string) error
 }

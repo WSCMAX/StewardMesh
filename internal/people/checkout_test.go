@@ -20,6 +20,7 @@ func TestPeopleCheckoutResolvesConflictsAndRanksTaggedPools(t *testing.T) {
 		"laptop-a": {ID: "laptop-a", Name: "Dell 14", Kind: "computer", ModelID: "model-dell"},
 		"laptop-b": {ID: "laptop-b", Name: "Lenovo 14", Kind: "computer", ModelID: "model-lenovo"},
 		"laptop-c": {ID: "laptop-c", Name: "Dell 16", Kind: "computer", ModelID: "model-dell"},
+		"laptop-d": {ID: "laptop-d", Name: "HP 14", Kind: "computer", ModelID: "model-hp"},
 	}}
 	service, err := NewService(repository.NewMemoryPeopleStore(), assets, foundation.NopAuditor{}, ServiceConfig{
 		OrganizationID: "example-org",
@@ -136,6 +137,7 @@ func TestPeopleCheckoutResolvesConflictsAndRanksTaggedPools(t *testing.T) {
 		From:              now,
 		To:                now.Add(2 * 24 * time.Hour),
 		PreferredModelIDs: []string{"model-dell"},
+		Visibility:        Visibility{All: true},
 	})
 	if err != nil || len(candidates) != 3 {
 		t.Fatalf("unexpected candidates %#v, %v", candidates, err)
@@ -159,6 +161,27 @@ func TestPeopleCheckoutResolvesConflictsAndRanksTaggedPools(t *testing.T) {
 	}
 	if created[0].BulkCheckoutID != bulk.ID || created[1].BulkCheckoutID != bulk.ID {
 		t.Fatalf("bulk assignments missing parent id: %#v", created)
+	}
+
+	overdueEnd := now.Add(-24 * time.Hour)
+	overdue, err := service.CreateAssetAssignment(ctx, CreateAssetAssignmentInput{
+		AssetID: "laptop-d", AssigneeKind: AssigneeIdentity, AssigneeID: alex.ID, Role: AssignmentUser,
+		EffectiveFrom: now.Add(-48 * time.Hour), DueAt: &overdueEnd,
+	})
+	if err != nil {
+		t.Fatalf("overdue checkout: %v", err)
+	}
+	futureStart := now.Add(24 * time.Hour)
+	futureEnd := futureStart.Add(24 * time.Hour)
+	_, err = service.CreateAssetAssignment(ctx, CreateAssetAssignmentInput{
+		AssetID: "laptop-d", AssigneeKind: AssigneeIdentity, AssigneeID: jordan.ID, Role: AssignmentUser,
+		EffectiveFrom: futureStart, DueAt: &futureEnd,
+	})
+	if !errors.As(err, &overlap) || overlap.ConflictKind != string(PurposeCheckout) {
+		t.Fatalf("expected overdue checkout to remain active, got %#v, %v", overlap, err)
+	}
+	if overdue.EffectiveTo != nil {
+		t.Fatalf("overdue checkout was closed by due date: %#v", overdue)
 	}
 }
 

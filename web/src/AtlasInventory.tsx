@@ -1307,18 +1307,26 @@ export default function AtlasInventory({
   useEffect(() => {
     if (!assetScope) return
     setActiveSection('assets')
-    const loaded = new Set(assets.map((asset) => asset.id))
-    const missing = assetScope.assetIds.filter((id) => !loaded.has(id)).slice(0, 50)
-    if (missing.length === 0) return
     let cancelled = false
-    Promise.all(missing.map(async (id) => {
-      const value = await requestJSON(`/api/v1/assets/${encodeURIComponent(id)}`)
-      return isAsset(value) ? value : null
-    })).then((found) => {
-      if (cancelled) return
-      const extra = found.filter((item): item is Asset => item !== null)
-      if (extra.length > 0) onAssetsChange(mergeAssets(assets, extra))
-    }).catch(() => undefined)
+    const loaded = new Set(assets.map((asset) => asset.id))
+    let current = assets
+    async function loadMissing() {
+      while (!cancelled) {
+        const missing = assetScope.assetIds.filter((id) => !loaded.has(id)).slice(0, 50)
+        if (missing.length === 0) return
+        const found = await Promise.all(missing.map(async (id) => {
+          const value = await requestJSON(`/api/v1/assets/${encodeURIComponent(id)}`)
+          return isAsset(value) ? value : null
+        }))
+        if (cancelled) return
+        missing.forEach((id) => loaded.add(id))
+        const extra = found.filter((item): item is Asset => item !== null)
+        if (extra.length === 0) return
+        current = mergeAssets(current, extra)
+        onAssetsChange(current)
+      }
+    }
+    void loadMissing().catch(() => undefined)
     return () => { cancelled = true }
   }, [assetScope?.nonce])
 
@@ -2183,7 +2191,7 @@ export default function AtlasInventory({
           onReachEnd={!assetScope && assetNextCursor ? () => { void onLoadMoreAssets() } : undefined}
           onSaveEdits={canWrite || canWriteLabels ? saveAssetEdits : undefined}
           queryOpenByDefault={!assetScope}
-          remoteFilterKeys={assetScope || !onAssetQueryChange ? undefined : remoteAssetFilterKeys}
+          remoteFilterKeys={assetScope || !onAssetQueryChange ? undefined : serverListing.remoteKeys}
           remoteQuery={!assetScope && Boolean(onAssetQueryChange) && serverListing.remoteQuery}
           remoteSearch={!assetScope && Boolean(onAssetQueryChange) && serverListing.remoteSearch}
           remoteTotal={assetScope ? undefined : assetFilteredCount}

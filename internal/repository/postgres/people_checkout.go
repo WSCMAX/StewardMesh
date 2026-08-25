@@ -110,7 +110,13 @@ func (s *PeopleStore) AddCheckoutGroupMember(ctx context.Context, organizationID
 }
 
 func (s *PeopleStore) listCheckoutGroupMembers(ctx context.Context, organizationID, groupID string) ([]string, error) {
-	rows, err := s.database.QueryContext(ctx, `
+	return listCheckoutGroupMembersTx(ctx, s.database, organizationID, groupID)
+}
+
+func listCheckoutGroupMembersTx(ctx context.Context, queryer interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}, organizationID, groupID string) ([]string, error) {
+	rows, err := queryer.QueryContext(ctx, `
 		SELECT identity_id FROM people_checkout_group_members
 		WHERE organization_id = $1 AND group_id = $2
 		ORDER BY identity_id
@@ -149,6 +155,39 @@ func (s *PeopleStore) CreateBulkCheckout(ctx context.Context, item people.BulkCh
 		return people.BulkCheckout{}, mapPeopleStoreError("create bulk checkout", err)
 	}
 	return created, nil
+}
+
+func (s *PeopleStore) DeleteBulkCheckout(ctx context.Context, organizationID, id string) error {
+	if organizationID == "" || id == "" {
+		return people.ErrInvalidInput
+	}
+	transaction, err := s.database.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin delete bulk checkout: %w", err)
+	}
+	defer transaction.Rollback()
+	if _, err := transaction.ExecContext(ctx, `
+		DELETE FROM people_asset_assignments WHERE organization_id = $1 AND bulk_checkout_id = $2
+	`, organizationID, id); err != nil {
+		return fmt.Errorf("delete bulk checkout assignments: %w", err)
+	}
+	result, err := transaction.ExecContext(ctx, `
+		DELETE FROM people_bulk_checkouts WHERE organization_id = $1 AND id = $2
+	`, organizationID, id)
+	if err != nil {
+		return fmt.Errorf("delete bulk checkout: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("bulk checkout delete count: %w", err)
+	}
+	if affected == 0 {
+		return people.ErrNotFound
+	}
+	if err := transaction.Commit(); err != nil {
+		return fmt.Errorf("commit delete bulk checkout: %w", err)
+	}
+	return nil
 }
 
 func (s *PeopleStore) GetBulkCheckout(ctx context.Context, organizationID, id string) (people.BulkCheckout, error) {

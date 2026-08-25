@@ -25,7 +25,7 @@ func assignmentWindow(assignment AssetAssignment) (time.Time, time.Time) {
 	until := maximumPortableInstant
 	if assignment.EffectiveTo != nil {
 		until = *assignment.EffectiveTo
-	} else if assignment.DueAt != nil {
+	} else if assignment.Purpose == PurposeReservation && assignment.DueAt != nil {
 		until = *assignment.DueAt
 	}
 	return from, until
@@ -202,7 +202,7 @@ func (s *Service) CreateCheckoutGroup(ctx context.Context, input CreateCheckoutG
 	if err != nil {
 		return CheckoutGroup{}, fmt.Errorf("create checkout group id: %w", err)
 	}
-	if err := s.checkWrite(ctx, "people.checkout_group", id); err != nil {
+	if err := s.checkWrite(ctx, "people.checkout-group", id); err != nil {
 		return CheckoutGroup{}, err
 	}
 	now := s.now()
@@ -220,7 +220,7 @@ func (s *Service) CreateCheckoutGroup(ctx context.Context, input CreateCheckoutG
 	if err != nil {
 		return CheckoutGroup{}, err
 	}
-	if err := s.audit(ctx, "people.checkout_group.created", "checkout_group", created.ID, map[string]string{
+	if err := s.audit(ctx, "people.checkout-group.created", "checkout_group", created.ID, map[string]string{
 		"memberCount": fmt.Sprintf("%d", len(created.MemberIDs)),
 	}); err != nil {
 		return CheckoutGroup{}, fmt.Errorf("audit checkout group: %w", err)
@@ -228,8 +228,37 @@ func (s *Service) CreateCheckoutGroup(ctx context.Context, input CreateCheckoutG
 	return created, nil
 }
 
-func (s *Service) ListCheckoutGroups(ctx context.Context) ([]CheckoutGroup, error) {
-	return s.store.ListCheckoutGroups(ctx, s.organizationID)
+func (s *Service) ListCheckoutGroups(ctx context.Context, visibility Visibility) ([]CheckoutGroup, error) {
+	visibility = normalizeVisibility(visibility)
+	if visibility.Empty() {
+		return nil, ErrScopeRequired
+	}
+	groups, err := s.store.ListCheckoutGroups(ctx, s.organizationID)
+	if err != nil {
+		return nil, err
+	}
+	if visibility.All {
+		return groups, nil
+	}
+	visible := make([]CheckoutGroup, 0, len(groups))
+	for _, group := range groups {
+		members := make([]string, 0, len(group.MemberIDs))
+		for _, memberID := range group.MemberIDs {
+			allowed, visibleErr := s.identityInVisibility(ctx, memberID, visibility)
+			if visibleErr != nil {
+				return nil, visibleErr
+			}
+			if allowed {
+				members = append(members, memberID)
+			}
+		}
+		if len(members) == 0 {
+			continue
+		}
+		group.MemberIDs = members
+		visible = append(visible, group)
+	}
+	return visible, nil
 }
 
 func (s *Service) GetCheckoutGroup(ctx context.Context, id string) (CheckoutGroup, error) {
@@ -252,21 +281,42 @@ func (s *Service) AddCheckoutGroupMember(ctx context.Context, groupID, identityI
 		}
 		return CheckoutGroup{}, err
 	}
-	if err := s.checkWrite(ctx, "people.checkout_group", groupID); err != nil {
+	if err := s.checkWrite(ctx, "people.checkout-group", groupID); err != nil {
 		return CheckoutGroup{}, err
 	}
 	updated, err := s.store.AddCheckoutGroupMember(ctx, s.organizationID, groupID, identityID)
 	if err != nil {
 		return CheckoutGroup{}, err
 	}
-	if err := s.audit(ctx, "people.checkout_group.member_added", "checkout_group", updated.ID, map[string]string{}); err != nil {
+	if err := s.audit(ctx, "people.checkout-group.member_added", "checkout_group", updated.ID, map[string]string{}); err != nil {
 		return CheckoutGroup{}, fmt.Errorf("audit checkout group member: %w", err)
 	}
 	return updated, nil
 }
 
-func (s *Service) ListBulkCheckouts(ctx context.Context) ([]BulkCheckout, error) {
-	return s.store.ListBulkCheckouts(ctx, s.organizationID)
+func (s *Service) ListBulkCheckouts(ctx context.Context, visibility Visibility) ([]BulkCheckout, error) {
+	visibility = normalizeVisibility(visibility)
+	if visibility.Empty() {
+		return nil, ErrScopeRequired
+	}
+	items, err := s.store.ListBulkCheckouts(ctx, s.organizationID)
+	if err != nil {
+		return nil, err
+	}
+	if visibility.All {
+		return items, nil
+	}
+	visible := make([]BulkCheckout, 0, len(items))
+	for _, item := range items {
+		allowed, visibleErr := s.assigneeInVisibility(ctx, item.AssigneeKind, item.AssigneeID, visibility)
+		if visibleErr != nil {
+			return nil, visibleErr
+		}
+		if allowed {
+			visible = append(visible, item)
+		}
+	}
+	return visible, nil
 }
 
 func (s *Service) RankCheckoutCandidates(ctx context.Context, input RankCheckoutInput) ([]CheckoutCandidate, error) {
@@ -278,6 +328,10 @@ func (s *Service) RankCheckoutCandidates(ctx context.Context, input RankCheckout
 	to := portabletime.Normalize(input.To)
 	if from.IsZero() || to.IsZero() || to.Before(from) {
 		return nil, ErrInvalidInput
+	}
+	visibility := normalizeVisibility(input.Visibility)
+	if visibility.Empty() {
+		return nil, ErrScopeRequired
 	}
 	assignments, err := s.store.ListAssetAssignmentsForAssets(ctx, s.organizationID, assetIDs)
 	if err != nil {
@@ -294,7 +348,8 @@ func (s *Service) RankCheckoutCandidates(ctx context.Context, input RankCheckout
 			preferred[modelID] = struct{}{}
 		}
 	}
-	window := AssetAssignment{EffectiveFrom: from, DueAt: &to}
+	until := to
+	window := AssetAssignment{EffectiveFrom: from, EffectiveTo: &until}
 	now := s.now()
 	candidates := make([]CheckoutCandidate, 0, len(assetIDs))
 	for _, assetID := range assetIDs {
@@ -308,7 +363,11 @@ func (s *Service) RankCheckoutCandidates(ctx context.Context, input RankCheckout
 				overlaps = append(overlaps, assignment)
 			}
 		}
-		details, err := s.overlapDetails(ctx, overlaps)
+		visibleOverlaps, err := s.visibleAssignments(ctx, overlaps, visibility)
+		if err != nil {
+			return nil, err
+		}
+		details, err := s.overlapDetails(ctx, visibleOverlaps)
 		if err != nil {
 			return nil, err
 		}
@@ -449,6 +508,9 @@ func (s *Service) CreateBulkCheckout(ctx context.Context, input CreateBulkChecko
 			ConflictPolicy: input.ConflictPolicy,
 		})
 		if createErr != nil {
+			if rollbackErr := s.store.DeleteBulkCheckout(ctx, s.organizationID, created.ID); rollbackErr != nil {
+				return BulkCheckout{}, nil, fmt.Errorf("%w (also failed to roll back bulk checkout: %v)", createErr, rollbackErr)
+			}
 			return BulkCheckout{}, nil, createErr
 		}
 		assignments = append(assignments, assignment)

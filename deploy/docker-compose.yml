@@ -69,9 +69,12 @@ services:
     volumes:
       - ${STEWARDMESH_CONFIG_FILE:-./config.example.yaml}:/etc/stewardmesh/config.yaml:ro
       - ./reach-endpoints.example.json:/etc/stewardmesh/reach-endpoints.json:ro
+      - stewardmesh-blobs:/var/lib/stewardmesh
     ports:
       - "127.0.0.1:8080:8080"
     depends_on:
+      blob-init:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       campus-seed:
@@ -80,7 +83,6 @@ services:
     read_only: true
     tmpfs:
       - /tmp:size=128m,mode=1777
-      - /var/lib/stewardmesh:size=256m,mode=1777,uid=65532,gid=65532
 
   # Explicit one-shot initializer for the clearly labeled synthetic dataset.
   # It is absent from the default profile and never needs the Grouper fixture.
@@ -113,6 +115,14 @@ services:
       - /tmp:size=64m,mode=1777
     restart: "no"
 
+  blob-init:
+    image: busybox:1.37
+    user: "0"
+    command: ["sh", "-c", "mkdir -p /data/blobs && chown -R 65532:65532 /data"]
+    volumes:
+      - stewardmesh-blobs:/data
+    restart: "no"
+
   campus-seed:
     profiles: ["campus-demo"]
     build:
@@ -126,7 +136,10 @@ services:
     volumes:
       - ${STEWARDMESH_CONFIG_FILE:-./config.campus-demo.yaml}:/etc/stewardmesh/config.yaml:ro
       - ./reach-endpoints.example.json:/etc/stewardmesh/reach-endpoints.json:ro
+      - stewardmesh-blobs:/var/lib/stewardmesh
     depends_on:
+      blob-init:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
     read_only: true
@@ -136,3 +149,4 @@ services:
 
 volumes:
   stewardmesh-postgres:
+  stewardmesh-blobs:

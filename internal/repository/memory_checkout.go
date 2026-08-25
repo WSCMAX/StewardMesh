@@ -129,8 +129,28 @@ func (s *MemoryPeopleStore) ListBulkCheckouts(_ context.Context, organizationID 
 	return result, nil
 }
 
+func (s *MemoryPeopleStore) DeleteBulkCheckout(_ context.Context, organizationID, id string) error {
+	if organizationID == "" || id == "" {
+		return people.ErrInvalidInput
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	item, exists := s.bulkCheckouts[id]
+	if !exists || item.OrganizationID != organizationID {
+		return people.ErrNotFound
+	}
+	for assignmentID, assignment := range s.assignments {
+		if assignment.OrganizationID == organizationID && assignment.BulkCheckoutID == id {
+			delete(s.assignments, assignmentID)
+		}
+	}
+	delete(s.bulkCheckouts, id)
+	return nil
+}
+
 func cloneCheckoutGroup(group people.CheckoutGroup) people.CheckoutGroup {
 	group.MemberIDs = append([]string{}, group.MemberIDs...)
+	sort.Strings(group.MemberIDs)
 	return group
 }
 

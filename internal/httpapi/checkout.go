@@ -16,10 +16,11 @@ func (s *Server) listCheckoutGroups(w http.ResponseWriter, r *http.Request, auth
 		writeError(w, r, http.StatusServiceUnavailable, "repository_unavailable", "people directory unavailable")
 		return
 	}
-	if _, ok := s.directoryVisibility(w, r, authentication); !ok {
+	visibility, ok := s.directoryVisibility(w, r, authentication)
+	if !ok {
 		return
 	}
-	items, err := s.people.ListCheckoutGroups(r.Context())
+	items, err := s.people.ListCheckoutGroups(r.Context(), visibility)
 	if err != nil {
 		writePeopleError(w, r, err)
 		return
@@ -70,10 +71,11 @@ func (s *Server) listBulkCheckouts(w http.ResponseWriter, r *http.Request, authe
 		writeError(w, r, http.StatusServiceUnavailable, "repository_unavailable", "people directory unavailable")
 		return
 	}
-	if _, ok := s.directoryVisibility(w, r, authentication); !ok {
+	visibility, ok := s.directoryVisibility(w, r, authentication)
+	if !ok {
 		return
 	}
-	items, err := s.people.ListBulkCheckouts(r.Context())
+	items, err := s.people.ListBulkCheckouts(r.Context(), visibility)
 	if err != nil {
 		writePeopleError(w, r, err)
 		return
@@ -93,7 +95,8 @@ func (s *Server) rankCheckoutAvailability(w http.ResponseWriter, r *http.Request
 	if !s.requireOrganizationPermission(w, r, authentication, guard.PermissionAssetsRead) {
 		return
 	}
-	if _, ok := s.directoryVisibility(w, r, authentication); !ok {
+	visibility, ok := s.directoryVisibility(w, r, authentication)
+	if !ok {
 		return
 	}
 	var input struct {
@@ -133,6 +136,7 @@ func (s *Server) rankCheckoutAvailability(w http.ResponseWriter, r *http.Request
 		From:              input.From,
 		To:                input.To,
 		PreferredModelIDs: input.PreferredModelIDs,
+		Visibility:        visibility,
 	})
 	if err != nil {
 		writePeopleError(w, r, err)

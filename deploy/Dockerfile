@@ -8,12 +8,18 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/stewardmesh ./cmd/
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/stewardmesh-grpc ./cmd/stewardmesh-grpc
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/grouper-fixture ./cmd/grouper-fixture
 RUN CGO_ENABLED=0 go build -tags campusdemo -trimpath -ldflags="-s -w" -o /out/campus-seed ./cmd/campus-seed
+RUN GOOS=js GOARCH=wasm go build -trimpath -ldflags="-s -w" -o /out/xlsx.wasm ./cmd/xlsxwasm
+RUN wasm_exec="$(go env GOROOT)/lib/wasm/wasm_exec.js"; \
+    if [ ! -f "$wasm_exec" ]; then wasm_exec="$(go env GOROOT)/misc/wasm/wasm_exec.js"; fi; \
+    cp "$wasm_exec" /out/wasm_exec.js
 
 FROM node:24-bookworm-slim AS web
 WORKDIR /web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci
 COPY web/ ./
+COPY --from=build /out/xlsx.wasm /web/public/xlsx.wasm
+COPY --from=build /out/wasm_exec.js /web/public/wasm_exec.js
 RUN npx tsc -b && npx vite build
 
 FROM gcr.io/distroless/static-debian12:nonroot AS grouper-fixture

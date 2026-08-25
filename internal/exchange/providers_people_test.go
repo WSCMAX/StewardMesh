@@ -49,7 +49,7 @@ func TestPeopleProviderRoundTripPreservesFieldsHistoryAndDependencies(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := sourceProvider.Types(); !slices.Equal(got, []string{"people.site", "people.building", "people.room", "people.department", "people.identity", "people.assignment"}) {
+	if got := sourceProvider.Types(); !slices.Equal(got, []string{"people.site", "people.building", "people.room", "people.department", "people.identity", "people.checkout-group", "people.assignment"}) {
 		t.Fatalf("unexpected People provider types %#v", got)
 	}
 	site, err := sourceService.CreateSite(ctx, people.CreateSiteInput{Name: "Main Campus", Address: people.Address{Line1: "100 College Avenue", Line2: "Suite 2", City: "Madison", Region: "WI", PostalCode: "53703", Country: "US"}, Status: people.StatusInactive})

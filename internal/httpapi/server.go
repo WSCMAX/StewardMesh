@@ -1455,7 +1455,7 @@ func (s *Server) getHorizonForecastGroupAssets(w http.ResponseWriter, r *http.Re
 	writeJSON(w, http.StatusOK, report)
 }
 
-func (s *Server) getHorizonForecastAmountBreakdown(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+func (s *Server) getHorizonForecastAmountBreakdown(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
 	if s.horizon == nil {
 		writeError(w, r, http.StatusServiceUnavailable, "horizon_unavailable", "Horizon planning is unavailable")
 		return
@@ -1463,6 +1463,9 @@ func (s *Server) getHorizonForecastAmountBreakdown(w http.ResponseWriter, r *htt
 	query, err := horizonForecastAmountQuery(r)
 	if err != nil {
 		writeHorizonError(w, r, err)
+		return
+	}
+	if query.AmountKind != "planned" && !s.requireOrganizationPermission(w, r, authentication, guard.PermissionFinanceRead) {
 		return
 	}
 	report, err := s.horizon.ForecastAmountBreakdown(r.Context(), query)
@@ -1596,9 +1599,12 @@ func (s *Server) updateHorizonReplacementPlan(w http.ResponseWriter, r *http.Req
 	writeJSON(w, http.StatusOK, updated)
 }
 
-func (s *Server) listHorizonReplacementPlanAssets(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+func (s *Server) listHorizonReplacementPlanAssets(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
 	if s.horizon == nil {
 		writeError(w, r, http.StatusServiceUnavailable, "horizon_unavailable", "Horizon planning is unavailable")
+		return
+	}
+	if !s.requireOrganizationPermission(w, r, authentication, guard.PermissionAssetsRead) {
 		return
 	}
 	items, err := s.horizon.ListReplacementPlanAssets(r.Context(), r.PathValue("planID"))
@@ -1606,8 +1612,14 @@ func (s *Server) listHorizonReplacementPlanAssets(w http.ResponseWriter, r *http
 		writeHorizonError(w, r, err)
 		return
 	}
+	visible := make([]domain.Asset, 0, len(items))
+	for _, asset := range items {
+		if s.hasAssetGrant(authentication, guard.PermissionAssetsRead, asset) {
+			visible = append(visible, asset)
+		}
+	}
 	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	writeJSON(w, http.StatusOK, map[string]any{"items": visible})
 }
 
 func horizonForecastQuery(r *http.Request) (horizon.ForecastQuery, error) {
@@ -3767,6 +3779,16 @@ func (s *Server) createAsset(w http.ResponseWriter, r *http.Request, _ guard.Aut
 	if err := decodeJSON(w, r, 64<<10, &input); err != nil {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid asset payload")
 		return
+	}
+	if planID := strings.TrimSpace(input.ReplacementPlanID); planID != "" {
+		if s.horizon == nil {
+			writeHorizonError(w, r, horizon.ErrInvalidInput)
+			return
+		}
+		if _, err := s.horizon.GetReplacementPlan(r.Context(), planID); err != nil {
+			writeHorizonError(w, r, err)
+			return
+		}
 	}
 	created, err := s.atlas.CreateAsset(r.Context(), input)
 	if err != nil {

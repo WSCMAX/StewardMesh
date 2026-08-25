@@ -942,6 +942,16 @@ func (s *Service) ListPeopleAssignments(ctx context.Context, query AssignmentQue
 	return s.visibleAssignments(ctx, assignments, visibility)
 }
 
+func (s *Service) identityInVisibility(ctx context.Context, identityID string, visibility Visibility) (bool, error) {
+	items, err := s.visibleAssignments(ctx, []AssetAssignment{{AssigneeKind: AssigneeIdentity, AssigneeID: identityID}}, visibility)
+	return err == nil && len(items) == 1, err
+}
+
+func (s *Service) assigneeInVisibility(ctx context.Context, kind AssigneeKind, id string, visibility Visibility) (bool, error) {
+	items, err := s.visibleAssignments(ctx, []AssetAssignment{{AssigneeKind: kind, AssigneeID: id}}, visibility)
+	return err == nil && len(items) == 1, err
+}
+
 func (s *Service) visibleAssignments(ctx context.Context, assignments []AssetAssignment, visibility Visibility) ([]AssetAssignment, error) {
 	if visibility.All {
 		return assignments, nil

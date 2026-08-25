@@ -66,7 +66,7 @@ func (s *MemoryPeopleStore) ExchangeSnapshot(_ context.Context, organizationID s
 	defer s.mu.RUnlock()
 	result := people.ExchangeSnapshot{
 		Sites: []people.Site{}, Buildings: []people.Building{}, Rooms: []people.Room{},
-		Departments: []people.Department{}, Identities: []people.Identity{}, Assignments: []people.AssetAssignment{},
+		Departments: []people.Department{}, Identities: []people.Identity{}, CheckoutGroups: []people.CheckoutGroup{}, Assignments: []people.AssetAssignment{},
 	}
 	for _, item := range s.sites {
 		if item.OrganizationID == organizationID {
@@ -93,12 +93,17 @@ func (s *MemoryPeopleStore) ExchangeSnapshot(_ context.Context, organizationID s
 			result.Identities = append(result.Identities, item)
 		}
 	}
+	for _, item := range s.checkoutGroups {
+		if item.OrganizationID == organizationID {
+			result.CheckoutGroups = append(result.CheckoutGroups, cloneCheckoutGroup(item))
+		}
+	}
 	for _, item := range s.assignments {
 		if item.OrganizationID == organizationID {
 			result.Assignments = append(result.Assignments, clonePeopleAssignment(item))
 		}
 	}
-	if len(result.Sites)+len(result.Buildings)+len(result.Rooms)+len(result.Departments)+len(result.Identities)+len(result.Assignments) > maximum {
+	if len(result.Sites)+len(result.Buildings)+len(result.Rooms)+len(result.Departments)+len(result.Identities)+len(result.CheckoutGroups)+len(result.Assignments) > maximum {
 		return people.ExchangeSnapshot{}, people.ErrTooLarge
 	}
 	sort.Slice(result.Sites, func(i, j int) bool { return result.Sites[i].ID < result.Sites[j].ID })
@@ -106,6 +111,7 @@ func (s *MemoryPeopleStore) ExchangeSnapshot(_ context.Context, organizationID s
 	sort.Slice(result.Rooms, func(i, j int) bool { return result.Rooms[i].ID < result.Rooms[j].ID })
 	sort.Slice(result.Departments, func(i, j int) bool { return result.Departments[i].ID < result.Departments[j].ID })
 	sort.Slice(result.Identities, func(i, j int) bool { return result.Identities[i].ID < result.Identities[j].ID })
+	sort.Slice(result.CheckoutGroups, func(i, j int) bool { return result.CheckoutGroups[i].ID < result.CheckoutGroups[j].ID })
 	sort.Slice(result.Assignments, func(i, j int) bool { return result.Assignments[i].ID < result.Assignments[j].ID })
 	return result, nil
 }
@@ -900,25 +906,34 @@ func (s *MemoryPeopleStore) CreateAssetAssignment(_ context.Context, assignment 
 	if !s.assigneeExists(assignment) {
 		return people.AssetAssignment{}, people.ErrReferenceMissing
 	}
-	for id, existing := range s.assignments {
-		if existing.OrganizationID != assignment.OrganizationID || existing.AssetID != assignment.AssetID || existing.EffectiveTo != nil {
-			continue
-		}
-		if replaceActiveRole && existing.Role == assignment.Role {
-			if !assignment.EffectiveFrom.After(existing.EffectiveFrom) {
-				return people.AssetAssignment{}, people.ErrConflict
-			}
-			endedAt := assignment.EffectiveFrom
-			existing.EffectiveTo = &endedAt
-			s.assignments[id] = existing
-			continue
-		}
-		if !replaceActiveRole && existing.Role == assignment.Role && existing.AssigneeKind == assignment.AssigneeKind && existing.AssigneeID == assignment.AssigneeID {
-			return people.AssetAssignment{}, people.ErrConflict
-		}
-	}
 	if assignment.Purpose == "" {
 		assignment.Purpose = people.PurposeCheckout
+	}
+	if assignment.Purpose == people.PurposeCheckout {
+		for id, existing := range s.assignments {
+			if existing.OrganizationID != assignment.OrganizationID || existing.AssetID != assignment.AssetID || existing.EffectiveTo != nil {
+				continue
+			}
+			existingPurpose := existing.Purpose
+			if existingPurpose == "" {
+				existingPurpose = people.PurposeCheckout
+			}
+			if existingPurpose != people.PurposeCheckout {
+				continue
+			}
+			if replaceActiveRole && existing.Role == assignment.Role {
+				if !assignment.EffectiveFrom.After(existing.EffectiveFrom) {
+					return people.AssetAssignment{}, people.ErrConflict
+				}
+				endedAt := assignment.EffectiveFrom
+				existing.EffectiveTo = &endedAt
+				s.assignments[id] = existing
+				continue
+			}
+			if !replaceActiveRole && existing.Role == assignment.Role && existing.AssigneeKind == assignment.AssigneeKind && existing.AssigneeID == assignment.AssigneeID {
+				return people.AssetAssignment{}, people.ErrConflict
+			}
+		}
 	}
 	s.assignments[assignment.ID] = clonePeopleAssignment(assignment)
 	return clonePeopleAssignment(assignment), nil
@@ -936,13 +951,26 @@ func (s *MemoryPeopleStore) ImportAssetAssignment(_ context.Context, assignment 
 	if !s.assigneeExists(assignment) {
 		return people.AssetAssignment{}, people.ErrReferenceMissing
 	}
-	if assignment.EffectiveTo == nil {
-		for _, existing := range s.assignments {
-			if existing.OrganizationID != assignment.OrganizationID || existing.AssetID != assignment.AssetID || existing.EffectiveTo != nil || existing.Role != assignment.Role {
-				continue
-			}
-			if assignment.Role != people.AssignmentUser || existing.AssigneeKind == assignment.AssigneeKind && existing.AssigneeID == assignment.AssigneeID {
-				return people.AssetAssignment{}, people.ErrConflict
+	if assignment.EffectiveTo == nil && assignment.Purpose != people.PurposeReservation {
+		purpose := assignment.Purpose
+		if purpose == "" {
+			purpose = people.PurposeCheckout
+		}
+		if purpose == people.PurposeCheckout {
+			for _, existing := range s.assignments {
+				if existing.OrganizationID != assignment.OrganizationID || existing.AssetID != assignment.AssetID || existing.EffectiveTo != nil || existing.Role != assignment.Role {
+					continue
+				}
+				existingPurpose := existing.Purpose
+				if existingPurpose == "" {
+					existingPurpose = people.PurposeCheckout
+				}
+				if existingPurpose != people.PurposeCheckout {
+					continue
+				}
+				if assignment.Role != people.AssignmentUser || existing.AssigneeKind == assignment.AssigneeKind && existing.AssigneeID == assignment.AssigneeID {
+					return people.AssetAssignment{}, people.ErrConflict
+				}
 			}
 		}
 	}

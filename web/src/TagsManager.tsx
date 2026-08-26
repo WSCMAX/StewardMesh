@@ -2,6 +2,8 @@ import { type FormEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { ApiRequestError, isRevision, requestJSON, type Revision } from './api'
 import type { Asset } from './AtlasInventory'
 import { ProductHeader, buttonClass, inputClass, labelClass, panelClass, secondaryButtonClass, subpanelClass } from './ui'
+import { meshRecordHref } from './graphRecord'
+import type { WorkspaceRecordFocus } from './graphRecord'
 
 // Requirements: REQ-LABELS-001, REQ-THREADS-001. Features: identity.labels, goals.tags.
 
@@ -78,6 +80,7 @@ type TagsManagerProps = {
   permissions: readonly string[]
   roles?: readonly string[]
   onOpenHelp?: () => void
+  focusRecord?: WorkspaceRecordFocus | null
 }
 
 const valueKinds: ValueKind[] = ['flag', 'text', 'select', 'multiselect']
@@ -189,7 +192,7 @@ function assignmentDisplay(assignment: TagAssignment, definition?: TagDefinition
   return value ? `${name}: ${value}` : name
 }
 
-export default function TagsManager({ assets, csrfToken, permissions, roles = [], onOpenHelp }: TagsManagerProps) {
+export default function TagsManager({ assets, csrfToken, permissions, roles = [], onOpenHelp, focusRecord = null }: TagsManagerProps) {
   const [definitions, setDefinitions] = useState<TagDefinition[]>([])
   const [goals, setGoals] = useState<Goal[]>([])
   const [selectedDefinitionID, setSelectedDefinitionID] = useState('')
@@ -247,6 +250,11 @@ export default function TagsManager({ assets, csrfToken, permissions, roles = []
     }
     return deletePreview.orphanChildrenOption
   }, [deleteMode, deletePreview])
+
+  useEffect(() => {
+    if (focusRecord?.kind !== 'label' && focusRecord?.kind !== 'goal') return
+    document.getElementById(`threads-row-${focusRecord.recordId}`)?.scrollIntoView?.({ block: 'nearest' })
+  }, [focusRecord])
 
   useEffect(() => {
     if (!canReadTags) return
@@ -608,7 +616,10 @@ export default function TagsManager({ assets, csrfToken, permissions, roles = []
   return (
     <section aria-labelledby="tags-heading" className={`${panelClass} p-5 sm:p-6`} data-feature="identity.labels goals.tags" data-requirement="REQ-LABELS-001 REQ-THREADS-001">
       <ProductHeader
-        actions={onOpenHelp ? <button className={secondaryButtonClass} onClick={onOpenHelp} type="button">Tags help</button> : undefined}
+        actions={<>
+          {onOpenHelp ? <button className={secondaryButtonClass} onClick={onOpenHelp} type="button">Tags help</button> : null}
+          <a className={secondaryButtonClass} href="#workspace-mesh">Open Mesh graph</a>
+        </>}
         description="Define configurable tags once, then connect them to people, assets, licenses, and anything else in scope. Each tag can be a simple flag, free text, a single choice, or a multi-select from options you configure. Strategic goals remain available for longer-lived asset and purchase relationships."
         headingId="tags-heading"
         kicker="Connect and classify records"
@@ -633,14 +644,15 @@ export default function TagsManager({ assets, csrfToken, permissions, roles = []
               const parent = definition.parentId ? definitions.find((item) => item.id === definition.parentId) : undefined
               const goal = definition.goalId ? goalByID.get(definition.goalId) : undefined
               return (
-              <li key={definition.id} style={{ marginLeft: `${depth * 1.25}rem` }}>
-                <button className={`${secondaryButtonClass} w-full justify-start text-left`} onClick={() => loadDefinitionIntoDraft(definition)} type="button">
+              <li id={`threads-row-${definition.id}`} key={definition.id} style={{ marginLeft: `${depth * 1.25}rem` }}>
+                <button className={`${secondaryButtonClass} w-full justify-start text-left${focusRecord?.kind === 'label' && focusRecord.recordId === definition.id ? ' ring-2 ring-steward-teal' : ''}`} onClick={() => loadDefinitionIntoDraft(definition)} type="button">
                   <span className="font-medium">{definition.name}</span>
                   <span className="ml-2 text-steward-mist-muted">({definition.valueKind})</span>
                   {parent && <span className="mt-1 block text-xs text-steward-mist-muted">Under {parent.name}</span>}
                   {goal && <span className="mt-1 block text-xs text-steward-mist-muted">Goal: {goal.name}</span>}
                   <span className="mt-1 block text-xs text-steward-mist-muted">{definition.applicableRecordTypes.join(', ')}</span>
                 </button>
+                <a className="mt-1 inline-flex text-xs text-steward-teal underline-offset-2 hover:underline" href={meshRecordHref('label', definition.id)}>Show in Mesh</a>
               </li>
             )})}</ul>
           )}

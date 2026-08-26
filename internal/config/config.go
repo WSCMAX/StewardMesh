@@ -99,6 +99,8 @@ type Config struct {
 	SessionTTL                  time.Duration
 	SeedSynthetic               bool
 	SeedCampus                  bool
+	WebDir                      string
+	InsecureBind                bool
 	GrouperURL                  string
 	GrouperSourceSystemID       string
 	GrouperUsername             string
@@ -128,7 +130,12 @@ type Config struct {
 }
 
 func Load() (Config, error) {
+	file, err := loadOptionalFile()
+	if err != nil {
+		return Config{}, err
+	}
 	configuration := FromEnv()
+	configuration = overlayFile(configuration, file)
 	if err := configuration.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -150,6 +157,7 @@ func FromEnv() Config {
 	oidcRequireVerifiedEmail, oidcVerifiedEmailErr := envBool("STEWARDMESH_OIDC_REQUIRE_VERIFIED_EMAIL", true)
 	seedSynthetic, seedSyntheticErr := envBool("STEWARDMESH_SEED_SYNTHETIC", false)
 	seedCampus, seedCampusErr := envBool("STEWARDMESH_SEED_CAMPUS", false)
+	insecureBind, insecureBindErr := envBool("STEWARDMESH_INSECURE_BIND", false)
 	grouperAllowPrivate, grouperPrivateErr := envBool("STEWARDMESH_GROUPER_ALLOW_PRIVATE_NETWORK", false)
 	grouperTimeout, grouperTimeoutErr := envDuration("STEWARDMESH_GROUPER_TIMEOUT", directoryexpansion.DefaultGrouperTimeout)
 	grouperPageSize, grouperPageErr := envInt("STEWARDMESH_GROUPER_PAGE_SIZE", directoryexpansion.DefaultGrouperPageSize)
@@ -230,6 +238,8 @@ func FromEnv() Config {
 		SessionTTL:                  sessionTTL,
 		SeedSynthetic:               seedSynthetic,
 		SeedCampus:                  seedCampus,
+		WebDir:                      os.Getenv("STEWARDMESH_WEB_DIR"),
+		InsecureBind:                insecureBind,
 		GrouperURL:                  grouperURL,
 		GrouperSourceSystemID:       grouperSourceSystemID,
 		GrouperUsername:             os.Getenv("STEWARDMESH_GROUPER_USERNAME"),
@@ -256,7 +266,7 @@ func FromEnv() Config {
 		PeopleSoftTimeout:           peopleSoftTimeout,
 		PeopleSoftAllowPrivate:      peopleSoftAllowPrivate,
 		validationError: errors.Join(secureErr, ttlErr, blobTTLErr, blobSizeErr, s3PathStyleErr, oidcVerifiedEmailErr,
-			seedSyntheticErr, seedCampusErr, grouperPrivateErr, grouperTimeoutErr, grouperPageErr, grouperResponseErr,
+			seedSyntheticErr, seedCampusErr, insecureBindErr, grouperPrivateErr, grouperTimeoutErr, grouperPageErr, grouperResponseErr,
 			peopleSoftPrivateErr, peopleSoftTimeoutErr, peopleSoftRowsErr, peopleSoftResponseErr),
 	}
 }
@@ -381,6 +391,18 @@ func (c Config) Validate() error {
 	if c.BootstrapToken != "" && len(c.BootstrapToken) < 32 {
 		return errors.New("STEWARDMESH_BOOTSTRAP_TOKEN must contain at least 32 bytes")
 	}
+	if err := c.validateWebDir(); err != nil {
+		return err
+	}
+	if c.InsecureBind {
+		if !isLoopbackHost(host) && !isUnspecifiedHost(host) {
+			return errors.New("STEWARDMESH_INSECURE_BIND requires a loopback or unspecified STEWARDMESH_ADDR")
+		}
+		if origin == nil || origin.Scheme != "http" || !isLoopbackHost(origin.Hostname()) {
+			return errors.New("STEWARDMESH_INSECURE_BIND requires a loopback HTTP STEWARDMESH_ALLOWED_ORIGIN")
+		}
+		return nil
+	}
 	if !isLoopbackHost(host) {
 		if c.AllowedOrigin == "" || origin == nil || origin.Scheme != "https" {
 			return errors.New("a shared listener requires an HTTPS STEWARDMESH_ALLOWED_ORIGIN")
@@ -391,6 +413,16 @@ func (c Config) Validate() error {
 		if len(c.BootstrapToken) < 32 {
 			return errors.New("a shared listener requires a 32-byte STEWARDMESH_BOOTSTRAP_TOKEN")
 		}
+	}
+	return nil
+}
+
+func (c Config) validateWebDir() error {
+	if strings.TrimSpace(c.WebDir) == "" {
+		return nil
+	}
+	if len(c.WebDir) > 1024 || strings.ContainsRune(c.WebDir, '\x00') {
+		return errors.New("STEWARDMESH_WEB_DIR is invalid")
 	}
 	return nil
 }
@@ -731,4 +763,9 @@ func isLoopbackHost(host string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+func isUnspecifiedHost(host string) bool {
+	ip := net.ParseIP(host)
+	return host == "" || (ip != nil && ip.IsUnspecified())
 }

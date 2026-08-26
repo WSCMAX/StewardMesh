@@ -74,7 +74,7 @@ export function StatusBadge({ children, tone = 'neutral' }: { children: ReactNod
     info: 'border-steward-blue/35 bg-steward-blue/12 text-[#a9c7ff]',
     neutral: 'border-white/10 bg-white/[0.04] text-steward-mist-muted',
   }
-  return <span className={cx('inline-flex items-center gap-1.5 rounded-sm border px-1.5 py-0.5 text-xs font-medium', tones[tone])}>{children}</span>
+  return <span className={cx('inline-flex max-w-full min-w-0 items-center gap-1.5 rounded-sm border px-1.5 py-0.5 text-xs font-medium', tones[tone])}>{children}</span>
 }
 
 export function ProductHeader({

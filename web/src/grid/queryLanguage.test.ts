@@ -100,3 +100,32 @@ test('binds parsed queries to the known columns', () => {
   expect(parsed.ok).toBe(true)
   expect(parseQuery('status=active^owner=root', fields).ok).toBe(false)
 })
+
+test('matches any candidate text exactly and negates across every candidate', () => {
+  const lookupFields: QueryField[] = [
+    { key: 'name', header: 'Name', kind: 'text' },
+    { key: 'users', header: 'Users', kind: 'lookup' },
+  ]
+  const carts = [
+    { name: 'Cart A', users: ['a1b2', 'Alex Rivera'] },
+    { name: 'Cart B', users: ['c3d4', 'Blake Chen'] },
+    { name: 'Cart C', users: [] as string[] },
+  ]
+  const textOfCandidates = (row: (typeof carts)[number], field: string) =>
+    field === 'users' ? row.users : row.name
+  const matching = (source: string) => {
+    const parsed = parseQuery(source, lookupFields)
+    expect(parsed.ok).toBe(true)
+    if (!parsed.ok) return []
+    return carts.filter((row) => matchQuery(row, lookupFields, parsed.model, textOfCandidates)).map((row) => row.name)
+  }
+  // "is" matches the id or the label of any selected record, not the joined text.
+  expect(matching('users=a1b2')).toEqual(['Cart A'])
+  expect(matching('users="Alex Rivera"')).toEqual(['Cart A'])
+  expect(matching('users!="Alex Rivera"')).toEqual(['Cart B', 'Cart C'])
+  expect(matching('usersIN"Alex Rivera, c3d4"')).toEqual(['Cart A', 'Cart B'])
+  expect(matching('usersNOTINa1b2')).toEqual(['Cart B', 'Cart C'])
+  expect(matching('usersISEMPTY')).toEqual(['Cart C'])
+  expect(matching('usersISNOTEMPTY')).toEqual(['Cart A', 'Cart B'])
+  expect(matching('usersLIKEriver')).toEqual(['Cart A'])
+})

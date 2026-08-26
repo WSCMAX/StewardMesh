@@ -14,9 +14,11 @@ The local bootstrap process runs as the trusted `system:bootstrap` actor. Organi
 
 ## Configuration and clean install
 
-Set `STEWARDMESH_ORGANIZATION_ID`, `STEWARDMESH_ORGANIZATION_NAME`, `STEWARDMESH_REPOSITORY_DRIVER`, and the selected provider settings. The default `postgres` driver connects, verifies embedded migrations, bootstraps the organization idempotently, and records an audit event before serving requests. The `memory` driver is explicit and non-durable.
+Set `STEWARDMESH_ORGANIZATION_ID`, `STEWARDMESH_ORGANIZATION_NAME`, `STEWARDMESH_REPOSITORY_DRIVER`, and the selected provider settings, or point `STEWARDMESH_CONFIG` at a YAML file such as `deploy/config.example.yaml`. Environment variables override file values so secrets can stay in the deployment secret manager. The default `postgres` driver connects, verifies embedded migrations, bootstraps the organization idempotently, and records an audit event before serving requests. The `memory` driver is explicit and non-durable.
 
-The default listener binds to loopback. A shared or container deployment must opt into a non-loopback address and provide deployment-specific authentication, TLS termination, and non-development database credentials.
+The default listener binds to loopback. A shared or container deployment must opt into a non-loopback address and provide deployment-specific authentication, TLS termination, and non-development database credentials. Local Compose uses `STEWARDMESH_INSECURE_BIND` with a loopback HTTP origin so the process can listen on `0.0.0.0` inside the container; production omits that flag.
+
+The production image serves the built workspace from `STEWARDMESH_WEB_DIR` (default `/web` in the container) on the same origin as the API. See [Runtime container](../deployment/runtime.md).
 
 `internal/application.New` is the reusable construction boundary for the HTTP
 application. It validates configuration, initializes shared dependencies once,

@@ -120,16 +120,16 @@ export const documentationPages: readonly DocumentationPage[] = [
     summary: 'Register organization-owned assets, reuse model defaults, maintain identity and location details, and preserve lifecycle history.',
     appHref: '#workspace-atlas',
     appLabel: 'Open Atlas',
-    searchTerms: ['asset', 'inventory', 'model', 'barcode', 'qr', 'serial', 'hostname', 'lifecycle', 'filter', 'query', 'group', 'AND', 'OR'],
+    searchTerms: ['asset', 'inventory', 'model', 'barcode', 'qr', 'serial', 'asset tag', 'hostname', 'lifecycle', 'filter', 'query', 'group', 'AND', 'OR'],
     sections: [
       {
         id: 'assets',
         title: 'Work with individual assets',
         steps: [
-          { title: 'Find or add the asset', body: 'Use the Assets tab to search by name, tag, serial number, or hostname, or create a new organization-owned record.' },
-          { title: 'Describe the item', body: 'Record its kind, model, status, purchase date, site, building, room, department, and users. One user can be marked primary; others are additional current users. The Users column is a lookup of People, not a free-text field.' },
-          { title: 'Work in the grid', body: 'Edit cells directly, right-click for row actions, scan a serial number with the camera from that cell, and export the current view as Excel, CSV, or JSON. Grouping, filters, highlights, and column widths are remembered for your signed-in session in this browser.' },
-          { title: 'Filter and report', body: 'Open Filter to build AND/OR groups, or type an encoded query such as status=active^nameLIKElab^ORkind=server. Group by any column to get counts per value. Column filters still narrow by contains, and the same query language is available on other product grids and on Atlas model inventory.' },
+          { title: 'Find or add the asset', body: 'Use the Assets tab to search by name, manufacturer, model, tag, serial number, or hostname, or create a new organization-owned record.' },
+          { title: 'Describe the item', body: 'Record its kind, manufacturer, model, status, purchase date, site, building, room, department, and users. Manufacturer comes from the model catalog and narrows the model lookup. One user can be marked primary; others are additional current users. The Users column is a lookup of People, not a free-text field.' },
+          { title: 'Work in the grid', body: 'Edit cells directly, right-click for row actions, and scan the manufacturer serial, internal asset tag, or model barcode from those cells. Expanding a cell opens an opaque editor with the same camera capture. Export the current view as Excel, CSV, or JSON. Grouping, filters, highlights, and column widths are remembered for your signed-in session in this browser.' },
+          { title: 'Filter the full inventory', body: 'Column filters and the toolbar search query the server immediately. You do not need to load every record first. Scroll the grid to stream the next page of matching assets. Filters are sent as bound API parameters, not raw SQL. Keep the default Status=active filter or clear it to see every status. Advanced OR queries still apply to the loaded page; use AND column filters for organization-wide results.' },
           { title: 'Preserve lifecycle context', body: 'Status changes use optimistic revisions and retain an immutable lifecycle note and timestamp history.' },
         ],
       },
@@ -137,13 +137,13 @@ export const documentationPages: readonly DocumentationPage[] = [
         id: 'models',
         title: 'Reuse product models',
         paragraphs: ['The Models tab describes a purchased product once and lets many assets reference it. Manufacturer, model identity, kind, vendor identifier, support URL, warranty, and useful-life defaults stay separate from per-item tags, serials, assignments, and lifecycle state.'],
-        bullets: ['Choose Use on a model to prefill a new asset.', 'Edit shared model details without silently overwriting instance-specific asset fields.', 'Retire a model to prevent new assignments while preserving historical references.', 'With Tags access, connect configured tags on a selected asset or model without leaving Atlas.'],
+        bullets: ['Scan a manufacturer model or MTM barcode into Search or the model-number field when adding or editing a catalog record. If several barcodes are captured, choose the model number.', 'Each catalog card shows the scanned model number so later discovery can match the printed identifier.', 'Choose Use on a model to prefill a new asset.', 'Edit shared model details without silently overwriting instance-specific asset fields.', 'Retire a model to prevent new assignments while preserving historical references.', 'With Tags access, connect configured tags on a selected asset or model without leaving Atlas.'],
       },
       {
         id: 'identifiers',
         title: 'Associate barcodes and QR codes',
-        paragraphs: ['The Scan and Labels tabs keep identifier values unique within the organization and attached to a specific asset. Replacement and deactivation preserve history rather than silently reusing an old code. On an asset’s Identifiers panel, Associate identifier can scan with the camera to fill the encoded value from the printed code.'],
-        callout: { title: 'Scan safely', body: 'Open the Scan tab, then treat a scan as a lookup or association request. Confirm the resolved asset before changing assignments or lifecycle state.', tone: 'warning' },
+        paragraphs: ['The Scan tab can look up an Atlas Code, capture the manufacturer serial, internal asset tag, and model number, or search for an asset on that tab and attach a Code 128 or QR to it. When several barcodes are captured, map each value to serial, asset tag, or model. Existing serials, tags, and catalog model numbers are highlighted. If the scanned model number is missing or does not match the item, confirm you have the right asset, enter the number on the item, or record it on the model setup. Labels stays limited to organization-scoped Code 128 and QR associations. Replacement and deactivation preserve history rather than silently reusing an old code. On an asset’s Identifiers panel, Associate identifier can scan with the camera to fill the encoded value from the printed code.'],
+        callout: { title: 'Scan safely', body: 'Open Scan, then treat a scan as a lookup or association request. To attach a code, search for the asset on the Scan tab first. Confirm the resolved asset before changing assignments or lifecycle state. Serial, asset tag, and model values can also be scanned into those cells on the Assets grid.', tone: 'warning' },
       },
     ],
     related: ['people', 'horizon', 'vault', 'mesh'],
@@ -156,15 +156,32 @@ export const documentationPages: readonly DocumentationPage[] = [
     summary: 'Set effective-dated replacement assumptions, compare scenarios, and forecast lifecycle needs using connected StewardMesh records.',
     appHref: '#workspace-horizon',
     appLabel: 'Open Horizon',
-    searchTerms: ['forecast', 'replacement', 'scenario', 'useful life', 'fiscal year', 'planning'],
+        searchTerms: ['forecast', 'replacement', 'replacement plan', 'scenario', 'useful life', 'fiscal year', 'planning', 'due now', 'manufacturer', 'building'],
     sections: [
       {
+        id: 'queue',
+        title: 'Work what is due now',
+        steps: [
+          { title: 'Open Due now', body: 'Start with assets that need replacement or retirement, plus catalog models that are past their last effective date.' },
+          { title: 'Act by criticality', body: 'The queue is sorted so the most critical refresh-due assets come first. Use successor and cost columns to decide replace, retire, or keep running.' },
+        ],
+      },
+      {
+        id: 'forecast',
+        title: 'Forecast replacement spend',
+        steps: [
+          { title: 'Set the window', body: 'Choose scenarios, as-of time, year range, fiscal start month, and grouping.' },
+          { title: 'Switch the view', body: 'Year, department, type, manufacturer, and building each regroup the same forecast. Department + type stacks replacement by year and shows a pie per department. Missing values are Other.' },
+          { title: 'Read the table, not just the bars', body: 'Authoritative values stay in the forecast table. Open a fiscal year or group to shift a lab or office together.' },
+          { title: 'Keep named replacement plans', body: 'Create a named replacement plan grouped by department, building, type, manufacturer, site, or a custom set. An asset belongs to at most one named plan. Open the assigned inventory from Horizon or assign membership from Atlas.' },
+        ],
+      },
+      {
         id: 'plans',
-        title: 'Create a lifecycle plan',
+        title: 'Maintain lifecycle plans',
         steps: [
           { title: 'Choose an Atlas asset', body: 'Plans remain connected to the inventory item they describe.' },
           { title: 'Set an effective assumption', body: 'Record useful life, replacement date, stage, scenario, and cost without rewriting older effective versions.' },
-          { title: 'Compare outcomes', body: 'Forecast by fiscal year and group needs by site, department, effective tag, direct goal, or Atlas asset class.' },
         ],
       },
       {
@@ -434,7 +451,7 @@ export const documentationPages: readonly DocumentationPage[] = [
     summary: 'Organize places, departments, identities, and effective-dated asset assignments without mixing directory ownership into Atlas.',
     appHref: '#workspace-people',
     appLabel: 'Open People',
-    searchTerms: ['person', 'identity', 'site', 'building', 'room', 'department', 'assignment', 'location', 'office', 'dormitory', 'classroom', 'instructor', 'location reference', 'occupancy', 'grouper', 'nested group', 'peoplesoft', 'campus solutions', 'query access service', 'directory import', 'spreadsheet', 'excel', 'tag column', 'floor', 'nested sheet', 'relationship graph', 'connected records', 'cycles', 'synthetic demo', 'demo seed'],
+    searchTerms: ['person', 'identity', 'site', 'building', 'room', 'department', 'assignment', 'checkout', 'reservation', 'bulk checkout', 'return-by', 'location', 'office', 'dormitory', 'classroom', 'instructor', 'location reference', 'occupancy', 'grouper', 'nested group', 'peoplesoft', 'campus solutions', 'query access service', 'directory import', 'spreadsheet', 'excel', 'tag column', 'floor', 'nested sheet', 'relationship graph', 'connected records', 'cycles', 'synthetic demo', 'campus demo', 'riverside', 'demo seed'],
     sections: [
       {
         id: 'directory',
@@ -453,7 +470,12 @@ export const documentationPages: readonly DocumentationPage[] = [
       {
         id: 'assignments',
         title: 'Preserve assignment history',
-        paragraphs: ['Asset assignments are effective-dated and support primary user, additional user, and responsible department roles. Ending an assignment preserves the prior stewardship record.'],
+        paragraphs: ['Asset assignments are effective-dated and support primary user, additional user, and responsible department roles. Checkout records the loan start, optional return-by date, and actual returned date. Ending an assignment preserves the prior stewardship record.'],
+        bullets: [
+          'If the asset is already checked out, choose replace the current user or convert the loan into a group checkout.',
+          'Reservations are future-dated assignments with an event description. Overlapping dates return a warning that includes that event.',
+          'The Checkouts tab ranks tagged assets by preferred model and availability so operators can reserve or loan a quantity in one bulk action.',
+        ],
       },
       {
         id: 'spreadsheet',
@@ -497,6 +519,18 @@ export const documentationPages: readonly DocumentationPage[] = [
         callout: { title: 'Never enable in production', body: 'The application rejects synthetic seeding for any organization ID that does not begin with demo-. Keep the flag false in normal deployments.', tone: 'warning' },
       },
       {
+        id: 'campus-demo',
+        title: 'Run the Riverside Community College campus demo',
+        paragraphs: ['The campus demo loads a large, cross-linked Riverside Community College dataset across every StewardMesh product area. It is disabled by default and requires a demo-prefixed organization ID plus an explicit seed flag or one-shot initializer.'],
+        bullets: [
+          'Set STEWARDMESH_ORGANIZATION_ID=demo-campus, then run ./scripts/reset-campus-demo.sh or go run -tags campusdemo ./cmd/campus-seed with STEWARDMESH_SEED_CAMPUS=true. Compose can load the separate campus-demo package with docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.campus-demo.yml --profile campus-demo up -d --wait.',
+          'Credentials for campus-admin, it-director, lab-manager-arts, and other scoped roles are written to tmp/campus-test-users.env after seeding.',
+          'Sign in as it-director and walk People occupancy, Atlas scan identifiers, Ledger contracts and budgets, Stack license compliance, Horizon forecasts, Tags and Labels, Vault receipts, Signals and Reach subscriptions, Mesh neighborhoods, Exchange holding packages, Bridge MCP scopes, and Guard role assignments.',
+          'Open Mesh from a seeded record with Show in Mesh or deep link to #workspace-mesh?node=room:<studio-arts-mac-room-id> after loading the graph once from the UI.',
+        ],
+        callout: { title: 'Never enable in production', body: 'Campus seeding is rejected unless the organization ID begins with demo-. The reset script deletes all demo-organization rows before reloading.', tone: 'warning' },
+      },
+      {
         id: 'peoplesoft-sync',
         title: 'Review optional PeopleSoft Campus Solutions synchronization',
         paragraphs: ['Administrators can preview a configured, read-only PeopleSoft source that maps institution-owned organization, location, building, and department queries into the shared directory graph.'],
@@ -514,13 +548,13 @@ export const documentationPages: readonly DocumentationPage[] = [
     summary: 'Explore how people, assets, purchase orders, tags, licenses, goals, documents, and plans connect, then inspect the same records in a table.',
     appHref: '#workspace-mesh',
     appLabel: 'Open Mesh',
-    searchTerms: ['mesh graph', 'cross-product graph', 'relationship graph', 'purchase order', 'tags', 'licenses', 'gravity', 'zoom', 'spacing', 'grouping', 'fullscreen', 'query editor', 'product hub', 'data grid', 'teaches_in', 'resides_in', 'room usage'],
+    searchTerms: ['mesh graph', 'cross-product graph', 'relationship graph', 'purchase order', 'tags', 'licenses', 'gravity', 'zoom', 'spacing', 'grouping', 'fullscreen', 'query editor', 'product hub', 'data grid', 'teaches_in', 'resides_in', 'room usage', 'unlinked', 'show in mesh', 'neighborhood', 'campus view', 'occupancy', 'user type'],
     sections: [
       {
         id: 'graph',
         title: 'Explore the cross-product graph',
         paragraphs: ['Mesh loads records your grants already allow from People, Atlas, Ledger, Stack, Tags, Goals, Vault, and Horizon. It does not become a second source of truth; each product still owns its records.'],
-        bullets: ['Search, relationship, and record-limit filters stay on a compact toolbar so the graph stays on screen. Hide a type from the legend, or restore it from the hidden list.', 'Person occupancy appears as located_at plus uses_office, teaches_in, attends_class, resides_in, and uses_lab so room usage is visible from a classroom or residence hall.', 'Bring product hubs into the chart, and group records as extra nodes from Type, Product, Status, or the Data tab Group by control.', 'The Data tab uses the Atlas spreadsheet: query editor, group-by dropdown, column chooser, and Excel export. Visible rows and groupings feed the graph.', 'Color nodes by record type, product, or status, and use zoom, spacing, gravity, and fullscreen to read dense graphs.'],
+        bullets: ['The Campus view pill hides inactive people and retired assets, colors people by occupancy and assets by model, and adds user-type nodes for instructors, students, residents, office, and lab users.', 'People with more than one occupancy role, such as instructor and student, render as a two-color gradient. Identity-type nodes optionally cluster person, shared, public, and lab accounts.', 'Search, relationship, record-limit, and node-neighborhood filters stay on a compact toolbar so the graph stays on screen. Hide a type from the legend, or restore it from the hidden list.', 'Open a record from Atlas, People, Ledger, Stack, Tags, Horizon, or Vault with Show in Mesh. The graph loads that record and its direct operational connections. Deep links use `#workspace-mesh?node=kind:id`.', 'Organization membership is shown with product hubs, not as a contains edge, so isolated records are records with no operational relationships.', 'Records with no relationships stay hidden until you turn on Show unlinked records. Isolated records only on the Data tab lists those rows.', 'Person occupancy appears as located_at plus uses_office, teaches_in, attends_class, resides_in, and uses_lab so room usage is visible from a classroom or residence hall.', 'Bring product hubs into the chart, and group records as extra nodes from Type, Product, Status, or the Data tab Group by control.', 'The Data tab uses the Atlas spreadsheet: query editor, group-by dropdown, column chooser, and Excel export. Visible rows and groupings feed the graph.', 'Color nodes by campus, occupancy, model, record type, product, or status, and use zoom, spacing, gravity, and fullscreen to read dense graphs.'],
         callout: { title: 'Scope stays server-owned', body: 'Mesh requests do not accept an organization or visibility scope. Guard derives the included products from your signed-in grants. A finance-only operator sees purchase orders and vendors without People records.', tone: 'info' },
       },
       {

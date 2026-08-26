@@ -63,14 +63,14 @@ async page => {
   assert(await menu.evaluate(element => element === document.activeElement), 'mobile navigation did not restore focus')
 
   await menu.click()
-  await page.getByRole('dialog', { name: 'Workspace navigation' }).getByRole('link', { name: /^Atlas —/ }).click()
+	await page.getByRole('dialog', { name: 'Workspace navigation' }).getByRole('link', { name: /^Inventory — Atlas/ }).click()
   await page.locator('#assets-heading').waitFor()
   assert(await page.getByRole('button', { name: 'Add asset' }).count() === 0, 'reader can add an asset')
   assert(await page.getByRole('button', { name: 'Print labels' }).count() === 0, 'reader can open label printing')
   await page.locator('#atlas-tab-scan').click()
   await page.locator('#atlas-panel-scan:not([hidden])').waitFor()
   const scannerPanel = page.locator('#atlas-panel-scan')
-  const scannerForm = scannerPanel.locator('form')
+  const scannerForm = scannerPanel.getByRole('form', { name: 'Scan an Atlas Code' })
   const openScanner = scannerPanel.getByRole('button', { name: 'Open scanner', exact: true })
   try {
     await scannerForm.waitFor({ timeout: 2000 })
@@ -106,10 +106,24 @@ async page => {
   assert(deniedResponses.missingBody.error.message === 'the requested asset identifier was not found', 'unknown code response was not generic')
 
   await page.addScriptTag({ path: 'web/node_modules/axe-core/axe.min.js' })
-  const violations = await page.evaluate(async () => (await globalThis.axe.run(document)).violations.map(violation => `${violation.id}:${violation.nodes.length}`))
+  const violations = await page.evaluate(async () => {
+    const result = await globalThis.axe.run(document)
+    return result.violations.map(violation => {
+      const nodes = violation.nodes.map(node => `${node.target.join(' ')}: ${(node.any[0] && node.any[0].message) || node.failureSummary || ''}`)
+      return `${violation.id}[${nodes.join(' | ')}]`
+    })
+  })
   assert(violations.length === 0, `reader mobile axe violations: ${violations.join(', ')}`)
-  const width = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }))
-  assert(width.scroll <= width.client, `reader mobile overflowed: ${width.scroll} > ${width.client}`)
+  const width = await page.evaluate(() => ({
+    htmlScroll: document.documentElement.scrollWidth,
+    htmlClient: document.documentElement.clientWidth,
+    bodyScroll: document.body.scrollWidth,
+    inner: window.innerWidth,
+  }))
+  // Compare the body box to the layout viewport. html.scrollWidth can exceed
+  // clientWidth by the overlay scrollbar width when the page is tall, without
+  // any descendant being wider than the viewport.
+  assert(width.bodyScroll <= width.inner, `reader mobile overflowed: body ${width.bodyScroll} > ${width.inner} (html ${width.htmlScroll}/${width.htmlClient})`)
   assert(consumedConsoleErrors.asset403 === 1 && expectedConsoleErrors.asset403 === 0, 'controlled reader 403 console budget was not consumed exactly once')
   assert(consumedConsoleErrors.identifier404 === 1 && expectedConsoleErrors.identifier404 === 0, 'controlled identifier 404 console budget was not consumed exactly once')
   assert(browserProblems.length === 0, `browser diagnostics: ${browserProblems.join(' | ')}`)

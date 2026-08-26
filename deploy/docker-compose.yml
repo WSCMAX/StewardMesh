@@ -15,6 +15,7 @@ services:
       retries: 10
     volumes:
       - stewardmesh-postgres:/var/lib/postgresql
+
   valkey:
     profiles: ["cache", "demo"]
     image: valkey/valkey:9.1.1-alpine
@@ -39,6 +40,7 @@ services:
       retries: 10
       start_period: 5s
     stop_grace_period: 10s
+
   grouper:
     profiles: ["integrations", "demo"]
     build:
@@ -56,6 +58,32 @@ services:
       timeout: 5s
       retries: 10
 
+  stewardmesh:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      target: stewardmesh
+    image: stewardmesh:local
+    environment:
+      STEWARDMESH_CONFIG: /etc/stewardmesh/config.yaml
+    volumes:
+      - ${STEWARDMESH_CONFIG_FILE:-./config.example.yaml}:/etc/stewardmesh/config.yaml:ro
+      - ./reach-endpoints.example.json:/etc/stewardmesh/reach-endpoints.json:ro
+      - stewardmesh-blobs:/var/lib/stewardmesh
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      blob-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      campus-seed:
+        condition: service_completed_successfully
+        required: false
+    read_only: true
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+
   # Explicit one-shot initializer for the clearly labeled synthetic dataset.
   # It is absent from the default profile and never needs the Grouper fixture.
   demo-seed:
@@ -67,6 +95,7 @@ services:
     image: stewardmesh:local
     command: ["seed-demo"]
     environment:
+      STEWARDMESH_CONFIG: /etc/stewardmesh/config.yaml
       STEWARDMESH_ADDR: 127.0.0.1:8080
       STEWARDMESH_ALLOWED_ORIGIN: http://localhost:5173
       STEWARDMESH_SESSION_COOKIE_SECURE: "false"
@@ -86,5 +115,38 @@ services:
       - /tmp:size=64m,mode=1777
     restart: "no"
 
+  blob-init:
+    image: busybox:1.37
+    user: "0"
+    command: ["sh", "-c", "mkdir -p /data/blobs && chown -R 65532:65532 /data"]
+    volumes:
+      - stewardmesh-blobs:/data
+    restart: "no"
+
+  campus-seed:
+    profiles: ["campus-demo"]
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      target: campus-demo
+    image: stewardmesh-campus-demo:local
+    environment:
+      STEWARDMESH_CONFIG: /etc/stewardmesh/config.yaml
+      STEWARDMESH_SEED_CAMPUS: "true"
+    volumes:
+      - ${STEWARDMESH_CONFIG_FILE:-./config.campus-demo.yaml}:/etc/stewardmesh/config.yaml:ro
+      - ./reach-endpoints.example.json:/etc/stewardmesh/reach-endpoints.json:ro
+      - stewardmesh-blobs:/var/lib/stewardmesh
+    depends_on:
+      blob-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+    restart: "no"
+
 volumes:
   stewardmesh-postgres:
+  stewardmesh-blobs:

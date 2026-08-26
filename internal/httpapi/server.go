@@ -85,6 +85,7 @@ type Dependencies struct {
 	SAML                *identity.SAMLFlow
 	Graph               directoryexpansion.GraphStore
 	SessionCookieSecure bool
+	WebDir              string
 }
 
 type Server struct {
@@ -113,6 +114,7 @@ type Server struct {
 	allowedOrigin       string
 	organization        bootstrap.Organization
 	sessionCookieSecure bool
+	webDir              string
 }
 
 type authenticatedHandler func(http.ResponseWriter, *http.Request, guard.Authentication)
@@ -207,6 +209,7 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 		allowedOrigin:       allowedOrigin,
 		organization:        organization,
 		sessionCookieSecure: deps.SessionCookieSecure,
+		webDir:              strings.TrimSpace(deps.WebDir),
 	}
 	if meshService, err := mesh.NewService(mesh.Dependencies{
 		Directory: deps.Graph, Atlas: deps.Atlas, Ledger: deps.Ledger, Stack: deps.Stack,
@@ -319,6 +322,13 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 	mux.Handle("POST /api/v1/location-references", server.protected(guard.PermissionDirectoryWrite, true, server.createLocationReference))
 	mux.Handle("PUT /api/v1/location-references/{referenceID}", server.protected(guard.PermissionDirectoryWrite, true, server.updateLocationReference))
 	mux.Handle("GET /api/v1/users", server.protected("", false, server.listUsers))
+	mux.Handle("GET /api/v1/people/assignments", server.protected(guard.PermissionAssetsRead, false, server.listPeopleAssignments))
+	mux.Handle("GET /api/v1/people/checkout-groups", server.protected("", false, server.listCheckoutGroups))
+	mux.Handle("POST /api/v1/people/checkout-groups", server.protected(guard.PermissionDirectoryWrite, true, server.createCheckoutGroup))
+	mux.Handle("POST /api/v1/people/checkout-groups/{groupID}/members", server.protected(guard.PermissionDirectoryWrite, true, server.addCheckoutGroupMember))
+	mux.Handle("POST /api/v1/people/checkout-availability", server.protected(guard.PermissionAssetsRead, true, server.rankCheckoutAvailability))
+	mux.Handle("GET /api/v1/people/bulk-checkouts", server.protected(guard.PermissionAssetsRead, false, server.listBulkCheckouts))
+	mux.Handle("POST /api/v1/people/bulk-checkouts", server.protected(guard.PermissionDirectoryWrite, true, server.createBulkCheckout))
 	mux.Handle("GET /api/v1/assets/{assetID}/assignments", server.protected(guard.PermissionAssetsRead, false, server.listAssetAssignments))
 	mux.Handle("POST /api/v1/assets/{assetID}/assignments", server.protected(guard.PermissionDirectoryWrite, true, server.createAssetAssignment))
 	mux.Handle("PATCH /api/v1/assets/{assetID}/assignments/{assignmentID}", server.protected(guard.PermissionDirectoryWrite, true, server.endAssetAssignment))
@@ -384,9 +394,15 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 	mux.Handle("GET /api/v1/horizon/plans/{planID}/history", server.protected(guard.PermissionPlanningRead, false, server.listHorizonPlanHistory))
 	mux.Handle("GET /api/v1/horizon/forecast", server.protected(guard.PermissionPlanningRead, false, server.getHorizonForecast))
 	mux.Handle("GET /api/v1/horizon/forecast/assets", server.protected(guard.PermissionPlanningRead, false, server.getHorizonForecastGroupAssets))
+	mux.Handle("GET /api/v1/horizon/forecast/amounts", server.protected(guard.PermissionPlanningRead, false, server.getHorizonForecastAmountBreakdown))
 	mux.Handle("GET /api/v1/horizon/export.csv", server.protected(guard.PermissionPlanningRead, false, server.exportHorizonCSV))
 	mux.Handle("GET /api/v1/horizon/kind-defaults", server.protected(guard.PermissionPlanningRead, false, server.listHorizonKindDefaults))
 	mux.Handle("PUT /api/v1/horizon/kind-defaults", server.protected(guard.PermissionPlanningWrite, true, server.upsertHorizonKindDefault))
+	mux.Handle("GET /api/v1/horizon/replacement-plans", server.protected(guard.PermissionPlanningRead, false, server.listHorizonReplacementPlans))
+	mux.Handle("POST /api/v1/horizon/replacement-plans", server.protected(guard.PermissionPlanningWrite, true, server.createHorizonReplacementPlan))
+	mux.Handle("GET /api/v1/horizon/replacement-plans/{planID}", server.protected(guard.PermissionPlanningRead, false, server.getHorizonReplacementPlan))
+	mux.Handle("PUT /api/v1/horizon/replacement-plans/{planID}", server.protected(guard.PermissionPlanningWrite, true, server.updateHorizonReplacementPlan))
+	mux.Handle("GET /api/v1/horizon/replacement-plans/{planID}/assets", server.protected(guard.PermissionPlanningRead, false, server.listHorizonReplacementPlanAssets))
 	mux.Handle("GET /api/v1/signals/rules", server.protected(guard.PermissionSignalsRead, false, server.listSignalRules))
 	mux.Handle("POST /api/v1/signals/rules", server.protected(guard.PermissionSignalsWrite, true, server.createSignalRule))
 	mux.Handle("PUT /api/v1/signals/rules/{ruleID}", server.protected(guard.PermissionSignalsWrite, true, server.updateSignalRule))
@@ -422,7 +438,7 @@ func NewServer(deps Dependencies, allowedOrigin string, organizations ...bootstr
 	mux.Handle("POST /api/v1/reach/signals/process", server.protected(guard.PermissionMessagingWrite, true, server.processReachSignals))
 	mux.Handle("GET /api/v1/graph", server.protected("", false, server.graphView))
 	mux.Handle("GET /api/v1/mesh/graph", server.protected("", false, server.meshGraphView))
-	return server.correlation(server.securityHeaders(server.cors(mux)))
+	return server.correlation(server.securityHeaders(server.cors(server.withWorkspace(mux))))
 }
 
 func (s *Server) listDirectoryImportSources(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
@@ -1439,6 +1455,28 @@ func (s *Server) getHorizonForecastGroupAssets(w http.ResponseWriter, r *http.Re
 	writeJSON(w, http.StatusOK, report)
 }
 
+func (s *Server) getHorizonForecastAmountBreakdown(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
+	if s.horizon == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "horizon_unavailable", "Horizon planning is unavailable")
+		return
+	}
+	query, err := horizonForecastAmountQuery(r)
+	if err != nil {
+		writeHorizonError(w, r, err)
+		return
+	}
+	if query.AmountKind != "planned" && !s.requireOrganizationPermission(w, r, authentication, guard.PermissionFinanceRead) {
+		return
+	}
+	report, err := s.horizon.ForecastAmountBreakdown(r.Context(), query)
+	if err != nil {
+		writeHorizonError(w, r, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, report)
+}
+
 func (s *Server) exportHorizonCSV(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
 	if s.horizon == nil {
 		writeError(w, r, http.StatusServiceUnavailable, "horizon_unavailable", "Horizon planning is unavailable")
@@ -1494,6 +1532,96 @@ func (s *Server) upsertHorizonKindDefault(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, saved)
 }
 
+func (s *Server) listHorizonReplacementPlans(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.horizon == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "horizon_unavailable", "Horizon planning is unavailable")
+		return
+	}
+	items, err := s.horizon.ListReplacementPlans(r.Context())
+	if err != nil {
+		writeHorizonError(w, r, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) createHorizonReplacementPlan(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.horizon == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "horizon_unavailable", "Horizon planning is unavailable")
+		return
+	}
+	var input horizon.ReplacementPlanInput
+	if err := decodeJSON(w, r, 16<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid replacement plan payload")
+		return
+	}
+	created, err := s.horizon.CreateReplacementPlan(r.Context(), input)
+	if err != nil {
+		writeHorizonError(w, r, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusCreated, created)
+}
+
+func (s *Server) getHorizonReplacementPlan(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.horizon == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "horizon_unavailable", "Horizon planning is unavailable")
+		return
+	}
+	item, err := s.horizon.GetReplacementPlan(r.Context(), r.PathValue("planID"))
+	if err != nil {
+		writeHorizonError(w, r, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) updateHorizonReplacementPlan(w http.ResponseWriter, r *http.Request, _ guard.Authentication) {
+	if s.horizon == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "horizon_unavailable", "Horizon planning is unavailable")
+		return
+	}
+	var input horizon.ReplacementPlanInput
+	if err := decodeJSON(w, r, 16<<10, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid replacement plan payload")
+		return
+	}
+	input.ID = r.PathValue("planID")
+	updated, err := s.horizon.UpdateReplacementPlan(r.Context(), input)
+	if err != nil {
+		writeHorizonError(w, r, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, updated)
+}
+
+func (s *Server) listHorizonReplacementPlanAssets(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
+	if s.horizon == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "horizon_unavailable", "Horizon planning is unavailable")
+		return
+	}
+	if !s.requireOrganizationPermission(w, r, authentication, guard.PermissionAssetsRead) {
+		return
+	}
+	items, err := s.horizon.ListReplacementPlanAssets(r.Context(), r.PathValue("planID"))
+	if err != nil {
+		writeHorizonError(w, r, err)
+		return
+	}
+	visible := make([]domain.Asset, 0, len(items))
+	for _, asset := range items {
+		if s.hasAssetGrant(authentication, guard.PermissionAssetsRead, asset) {
+			visible = append(visible, asset)
+		}
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, map[string]any{"items": visible})
+}
+
 func horizonForecastQuery(r *http.Request) (horizon.ForecastQuery, error) {
 	values := r.URL.Query()
 	query := horizon.ForecastQuery{GroupBy: values.Get("groupBy")}
@@ -1521,6 +1649,8 @@ func horizonForecastQuery(r *http.Request) (horizon.ForecastQuery, error) {
 	if query.FiscalYearStartMonth, err = optionalQueryInt(values.Get("fiscalYearStartMonth")); err != nil {
 		return horizon.ForecastQuery{}, horizon.ErrInvalidInput
 	}
+	includeItems := strings.TrimSpace(values.Get("includeItems"))
+	query.IncludeItems = includeItems == "1" || strings.EqualFold(includeItems, "true")
 	return query, nil
 }
 
@@ -1535,6 +1665,20 @@ func horizonForecastGroupAssetsQuery(r *http.Request) (horizon.ForecastGroupAsse
 		return horizon.ForecastGroupAssetsQuery{}, horizon.ErrInvalidInput
 	}
 	return horizon.ForecastGroupAssetsQuery{ForecastQuery: forecast, Scenario: scenario, GroupKey: groupKey}, nil
+}
+
+func horizonForecastAmountQuery(r *http.Request) (horizon.ForecastAmountQuery, error) {
+	forecast, err := horizonForecastQuery(r)
+	if err != nil {
+		return horizon.ForecastAmountQuery{}, err
+	}
+	amountKind := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("amountKind")))
+	scenario := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("scenario")))
+	groupKey := strings.TrimSpace(r.URL.Query().Get("groupKey"))
+	if amountKind == "" {
+		return horizon.ForecastAmountQuery{}, horizon.ErrInvalidInput
+	}
+	return horizon.ForecastAmountQuery{ForecastQuery: forecast, AmountKind: amountKind, Scenario: scenario, GroupKey: groupKey}, nil
 }
 
 func optionalQueryInt(value string) (int, error) {
@@ -1777,6 +1921,7 @@ func (s *Server) meshGraphView(w http.ResponseWriter, r *http.Request, authentic
 	}
 	query := mesh.Query{
 		Search:        r.URL.Query().Get("search"),
+		Node:          r.URL.Query().Get("node"),
 		Kinds:         parseMeshKinds(r.URL.Query()),
 		Relationships: parseMeshRelationships(r.URL.Query()),
 		Scope: mesh.Scope{
@@ -2403,7 +2548,8 @@ func (s *Server) listAssets(w http.ResponseWriter, r *http.Request, _ guard.Auth
 		writeAtlasError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": assets.Items, "nextCursor": assets.NextCursor})
+	s.attachReplacementPlanIDs(r.Context(), assets.Items)
+	writeJSON(w, http.StatusOK, map[string]any{"items": assets.Items, "nextCursor": assets.NextCursor, "filteredCount": assets.FilteredCount})
 }
 
 func (s *Server) getAsset(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
@@ -2422,6 +2568,7 @@ func (s *Server) getAsset(w http.ResponseWriter, r *http.Request, authentication
 		writeError(w, r, http.StatusNotFound, "not_found", "the requested asset was not found")
 		return
 	}
+	asset.ReplacementPlanID = s.replacementPlanIDFor(r.Context(), asset.ID)
 	writeJSON(w, http.StatusOK, asset)
 }
 
@@ -3138,6 +3285,28 @@ func (s *Server) listAssetAssignments(w http.ResponseWriter, r *http.Request, au
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
+func (s *Server) listPeopleAssignments(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
+	if s.people == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "repository_unavailable", "people directory unavailable")
+		return
+	}
+	visibility, ok := s.directoryVisibility(w, r, authentication)
+	if !ok {
+		return
+	}
+	query := people.AssignmentQuery{
+		AssetID:      strings.TrimSpace(r.URL.Query().Get("assetId")),
+		AssigneeKind: people.AssigneeKind(strings.TrimSpace(r.URL.Query().Get("assigneeKind"))),
+		AssigneeID:   strings.TrimSpace(r.URL.Query().Get("assigneeId")),
+	}
+	items, err := s.people.ListPeopleAssignments(r.Context(), query, visibility)
+	if err != nil {
+		writePeopleError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
 func (s *Server) createAssetAssignment(w http.ResponseWriter, r *http.Request, authentication guard.Authentication) {
 	if s.people == nil {
 		writeError(w, r, http.StatusServiceUnavailable, "repository_unavailable", "people directory unavailable")
@@ -3150,10 +3319,14 @@ func (s *Server) createAssetAssignment(w http.ResponseWriter, r *http.Request, a
 		return
 	}
 	var input struct {
-		AssigneeKind  people.AssigneeKind   `json:"assigneeKind"`
-		AssigneeID    string                `json:"assigneeId"`
-		Role          people.AssignmentRole `json:"role"`
-		EffectiveFrom *time.Time            `json:"effectiveFrom"`
+		AssigneeKind   people.AssigneeKind      `json:"assigneeKind"`
+		AssigneeID     string                   `json:"assigneeId"`
+		Role           people.AssignmentRole    `json:"role"`
+		Purpose        people.AssignmentPurpose `json:"purpose"`
+		EventSummary   string                   `json:"eventSummary"`
+		EffectiveFrom  *time.Time               `json:"effectiveFrom"`
+		DueAt          *time.Time               `json:"dueAt"`
+		ConflictPolicy people.ConflictPolicy    `json:"conflictPolicy"`
 	}
 	if err := decodeJSON(w, r, 32<<10, &input); err != nil {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid asset assignment payload")
@@ -3163,9 +3336,15 @@ func (s *Server) createAssetAssignment(w http.ResponseWriter, r *http.Request, a
 	if input.EffectiveFrom != nil {
 		effectiveFrom = input.EffectiveFrom.UTC()
 	}
+	var dueAt *time.Time
+	if input.DueAt != nil {
+		normalized := input.DueAt.UTC()
+		dueAt = &normalized
+	}
 	created, err := s.people.CreateAssetAssignment(r.Context(), people.CreateAssetAssignmentInput{
 		AssetID: r.PathValue("assetID"), AssigneeKind: input.AssigneeKind,
-		AssigneeID: input.AssigneeID, Role: input.Role, EffectiveFrom: effectiveFrom,
+		AssigneeID: input.AssigneeID, Role: input.Role, Purpose: input.Purpose, EventSummary: input.EventSummary,
+		EffectiveFrom: effectiveFrom, DueAt: dueAt, ConflictPolicy: input.ConflictPolicy,
 	})
 	if err != nil {
 		writePeopleError(w, r, err)
@@ -3601,12 +3780,27 @@ func (s *Server) createAsset(w http.ResponseWriter, r *http.Request, _ guard.Aut
 		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid asset payload")
 		return
 	}
+	if planID := strings.TrimSpace(input.ReplacementPlanID); planID != "" {
+		if s.horizon == nil {
+			writeHorizonError(w, r, horizon.ErrInvalidInput)
+			return
+		}
+		if _, err := s.horizon.GetReplacementPlan(r.Context(), planID); err != nil {
+			writeHorizonError(w, r, err)
+			return
+		}
+	}
 	created, err := s.atlas.CreateAsset(r.Context(), input)
 	if err != nil {
 		writeAtlasError(w, r, err)
 		return
 	}
 	s.syncHorizonBaselinePlan(r, created.ID)
+	if err := s.applyAssetReplacementPlan(r.Context(), created.ID, input.ReplacementPlanID); err != nil {
+		writeHorizonError(w, r, err)
+		return
+	}
+	created.ReplacementPlanID = s.replacementPlanIDFor(r.Context(), created.ID)
 	writeJSON(w, http.StatusCreated, created)
 }
 
@@ -3668,6 +3862,13 @@ func (s *Server) updateAsset(w http.ResponseWriter, r *http.Request, authenticat
 		return
 	}
 	s.syncHorizonBaselinePlan(r, updated.ID)
+	if input.ReplacementPlanID != nil {
+		if err := s.applyAssetReplacementPlan(r.Context(), updated.ID, *input.ReplacementPlanID); err != nil {
+			writeHorizonError(w, r, err)
+			return
+		}
+	}
+	updated.ReplacementPlanID = s.replacementPlanIDFor(r.Context(), updated.ID)
 	writeJSON(w, http.StatusOK, updated)
 }
 
@@ -4102,8 +4303,11 @@ func assetQueryFromRequest(r *http.Request) (atlas.Query, error) {
 		limit = parsed
 	}
 	return atlas.Query{
-		Search: values.Get("q"), Kind: values.Get("kind"), Status: values.Get("status"),
-		ModelID: values.Get("modelId"), SiteID: values.Get("siteId"), DepartmentID: values.Get("departmentId"), UserID: values.Get("userId"),
+		Search: values.Get("q"), Name: values.Get("name"), AssetTag: values.Get("assetTag"),
+		SerialNumber: values.Get("serialNumber"), Hostname: values.Get("hostname"), Manufacturer: values.Get("manufacturer"),
+		Kind: values.Get("kind"), Status: values.Get("status"),
+		ModelID: values.Get("modelId"), SiteID: values.Get("siteId"), BuildingID: values.Get("buildingId"), RoomID: values.Get("roomId"),
+		DepartmentID: values.Get("departmentId"), UserID: values.Get("userId"),
 		DeploymentContext: values.Get("deploymentContext"), Cursor: values.Get("cursor"), Limit: limit,
 	}, nil
 }
@@ -4154,6 +4358,40 @@ func (s *Server) syncHorizonBaselinePlan(r *http.Request, assetID string) {
 		return
 	}
 	_ = s.horizon.EnsureBaselinePlanFromAsset(r.Context(), assetID)
+}
+
+func (s *Server) applyAssetReplacementPlan(ctx context.Context, assetID, planID string) error {
+	if s.horizon == nil {
+		if strings.TrimSpace(planID) != "" {
+			return horizon.ErrInvalidInput
+		}
+		return nil
+	}
+	return s.horizon.SetAssetReplacementPlan(ctx, assetID, planID)
+}
+
+func (s *Server) attachReplacementPlanIDs(ctx context.Context, assets []domain.Asset) {
+	if s.horizon == nil || len(assets) == 0 {
+		return
+	}
+	assigned, err := s.horizon.AssetReplacementPlanIDs(ctx)
+	if err != nil {
+		return
+	}
+	for index := range assets {
+		assets[index].ReplacementPlanID = assigned[assets[index].ID]
+	}
+}
+
+func (s *Server) replacementPlanIDFor(ctx context.Context, assetID string) string {
+	if s.horizon == nil || strings.TrimSpace(assetID) == "" {
+		return ""
+	}
+	assigned, err := s.horizon.AssetReplacementPlanIDs(ctx)
+	if err != nil {
+		return ""
+	}
+	return assigned[assetID]
 }
 
 func writeAtlasError(w http.ResponseWriter, r *http.Request, err error) {
@@ -4499,11 +4737,11 @@ func (s *Server) correlation(next http.Handler) http.Handler {
 
 func (s *Server) securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self' 'wasm-unsafe-eval'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "no-referrer")
-		w.Header().Set("Permissions-Policy", "camera=(), geolocation=(), microphone=()")
+		w.Header().Set("Permissions-Policy", "camera=(self), geolocation=(), microphone=()")
 		next.ServeHTTP(w, r)
 	})
 }
@@ -4604,6 +4842,11 @@ func writeError(w http.ResponseWriter, r *http.Request, status int, code, messag
 }
 
 func writePeopleError(w http.ResponseWriter, r *http.Request, err error) {
+	var overlap *people.OverlapError
+	if errors.As(err, &overlap) {
+		writePeopleOverlap(w, r, overlap)
+		return
+	}
 	switch {
 	case errors.Is(err, guard.ErrResourceWriteLocked):
 		writeError(w, r, http.StatusLocked, "ownership_locked", "claim local ownership before changing this imported directory record")

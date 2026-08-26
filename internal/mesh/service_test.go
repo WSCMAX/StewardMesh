@@ -226,15 +226,18 @@ func TestGraphKeepsSharedModelDepartmentAndOrganizationLinksWithinLimit(t *testi
 		t.Fatal(err)
 	}
 	ids := nodeIDs(graph)
-	if !ids["organization:example-org"] || !ids["department:dept-1"] || !ids["model:model-shared"] {
+	if !ids["department:dept-1"] || !ids["model:model-shared"] {
 		t.Fatalf("expected shared hubs in the limited graph: %#v", ids)
 	}
 	edges := edgeKinds(graph)
 	if !edges["asset:asset-0|modeled_as|model:model-shared"] || !edges["asset:asset-1|modeled_as|model:model-shared"] {
 		t.Fatalf("expected shared model-number links: %#v", edges)
 	}
-	if !edges["asset:asset-0|belongs_to|department:dept-1"] || !edges["organization:example-org|contains|asset:asset-0"] {
-		t.Fatalf("expected department and organization links: %#v", edges)
+	if !edges["asset:asset-0|belongs_to|department:dept-1"] {
+		t.Fatalf("expected department links: %#v", edges)
+	}
+	if edges["organization:example-org|contains|asset:asset-0"] {
+		t.Fatalf("organization containment should not be an operational edge: %#v", edges)
 	}
 	if !edges["asset:asset-0|located_at|site:site-1"] {
 		t.Fatalf("expected site location link: %#v", edges)
@@ -292,6 +295,27 @@ func TestGraphSearchKeepsDirectConnections(t *testing.T) {
 	ids := nodeIDs(graph)
 	if !ids["purchase_order:po-1"] || !ids["vendor:vendor-1"] {
 		t.Fatalf("search should retain the matching PO and its vendor: %#v", ids)
+	}
+}
+
+func TestGraphNodeFilterKeepsDirectConnections(t *testing.T) {
+	t.Parallel()
+	service := testService(t, Dependencies{
+		Ledger: fakeLedger{snapshot: ledger.Snapshot{
+			Vendors:        []ledger.Vendor{{ID: "vendor-1", Name: "Campus Store", Status: "active"}},
+			PurchaseOrders: []ledger.PurchaseOrder{{ID: "po-1", Number: "PO-2026-001", VendorID: "vendor-1", Status: "ordered"}},
+		}},
+	})
+	graph, err := service.Graph(context.Background(), Query{Node: "purchase_order:po-1", Limit: 50, Scope: Scope{Finance: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := nodeIDs(graph)
+	if !ids["purchase_order:po-1"] || !ids["vendor:vendor-1"] {
+		t.Fatalf("node filter should retain the PO and its vendor: %#v", ids)
+	}
+	if _, err := service.Graph(context.Background(), Query{Node: "not-a-node", Limit: 50, Scope: Scope{Finance: true}}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected invalid node id, got %v", err)
 	}
 }
 

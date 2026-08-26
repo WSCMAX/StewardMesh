@@ -1,17 +1,29 @@
 FROM golang:1.26-alpine AS build
+# Requirement: REQ-DIRECTORY-EXPANSION-007. Feature: platform.foundation.
 WORKDIR /src
-COPY go.mod ./
+COPY go.mod go.sum ./
+RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -o /out/stewardmesh ./cmd/stewardmesh
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/stewardmesh ./cmd/stewardmesh
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/stewardmesh-grpc ./cmd/stewardmesh-grpc
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/grouper-fixture ./cmd/grouper-fixture
+RUN CGO_ENABLED=0 go build -tags campusdemo -trimpath -ldflags="-s -w" -o /out/campus-seed ./cmd/campus-seed
+RUN GOOS=js GOARCH=wasm go build -trimpath -ldflags="-s -w" -o /out/xlsx.wasm ./cmd/xlsxwasm
+RUN wasm_exec="$(go env GOROOT)/lib/wasm/wasm_exec.js"; \
+    if [ ! -f "$wasm_exec" ]; then wasm_exec="$(go env GOROOT)/misc/wasm/wasm_exec.js"; fi; \
+    cp "$wasm_exec" /out/wasm_exec.js
 
-FROM build AS grouper-fixture-build
-RUN CGO_ENABLED=0 go build -o /out/grouper-fixture ./cmd/grouper-fixture
-
-FROM build AS grpc-build
-RUN CGO_ENABLED=0 go build -o /out/stewardmesh-grpc ./cmd/stewardmesh-grpc
+FROM node:24-bookworm-slim AS web
+WORKDIR /web
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
+COPY web/ ./
+COPY --from=build /out/xlsx.wasm /web/public/xlsx.wasm
+COPY --from=build /out/wasm_exec.js /web/public/wasm_exec.js
+RUN npx tsc -b && npx vite build
 
 FROM gcr.io/distroless/static-debian12:nonroot AS grouper-fixture
-COPY --from=grouper-fixture-build /out/grouper-fixture /grouper-fixture
+COPY --from=build /out/grouper-fixture /grouper-fixture
 USER nonroot:nonroot
 EXPOSE 8080
 ENTRYPOINT ["/grouper-fixture"]
@@ -19,15 +31,26 @@ ENTRYPOINT ["/grouper-fixture"]
 # All-domain gRPC runtime. Requirements: REQ-API-001, SEC-MCP-001.
 # Feature: integrations.protocols.
 FROM gcr.io/distroless/static-debian12:nonroot AS stewardmesh-grpc
-COPY --from=grpc-build /out/stewardmesh-grpc /stewardmesh-grpc
+COPY --from=build /out/stewardmesh-grpc /stewardmesh-grpc
 USER nonroot:nonroot
 EXPOSE 9090 9091
 ENTRYPOINT ["/stewardmesh-grpc"]
 
-# Keep the application image as the final stage so the existing default
-# `docker build` path continues to produce StewardMesh.
+# Optional Riverside Community College demo package. Keep it out of the
+# production runtime image so operators can load it only when needed.
+FROM gcr.io/distroless/static-debian12:nonroot AS campus-demo
+COPY --from=build /out/campus-seed /campus-seed
+USER nonroot:nonroot
+ENTRYPOINT ["/campus-seed"]
+
+# Production HTTP runtime with the built workspace. Campus demo data is not
+# compiled into this image.
 FROM gcr.io/distroless/static-debian12:nonroot AS stewardmesh
 COPY --from=build /out/stewardmesh /stewardmesh
+COPY --from=web /web/dist /web
+COPY deploy/config.example.yaml /etc/stewardmesh/config.yaml
+COPY deploy/reach-endpoints.example.json /etc/stewardmesh/reach-endpoints.json
 USER nonroot:nonroot
+ENV STEWARDMESH_CONFIG=/etc/stewardmesh/config.yaml
 EXPOSE 8080
 ENTRYPOINT ["/stewardmesh"]

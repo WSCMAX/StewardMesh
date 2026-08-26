@@ -1,6 +1,7 @@
 package main
 
 // Command campus-seed initializes the Riverside Community College demo dataset.
+// Requirement: REQ-DIRECTORY-EXPANSION-007. Feature: platform.foundation.
 
 import (
 	"context"
@@ -15,6 +16,10 @@ import (
 
 func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	if !application.CampusDemoIncluded {
+		logger.Error("campus demo package is not included in this build", "hint", "go run -tags campusdemo ./cmd/campus-seed")
+		os.Exit(1)
+	}
 	if strings.TrimSpace(os.Getenv("STEWARDMESH_SEED_CAMPUS")) == "" {
 		_ = os.Setenv("STEWARDMESH_SEED_CAMPUS", "true")
 	}

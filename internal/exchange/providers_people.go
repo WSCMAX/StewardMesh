@@ -16,7 +16,7 @@ import (
 	"github.com/maxlemke/stewardmesh/internal/people"
 )
 
-var peopleRecordTypes = []string{"people.site", "people.building", "people.room", "people.department", "people.identity", "people.assignment"}
+var peopleRecordTypes = []string{"people.site", "people.building", "people.room", "people.department", "people.identity", "people.checkout-group", "people.assignment"}
 
 type PeopleProvider struct {
 	service  *people.Service
@@ -75,14 +75,28 @@ type peopleIdentityPayload struct {
 	UpdatedAt       string `json:"updatedAt"`
 }
 
+type peopleCheckoutGroupPayload struct {
+	Name        string   `json:"name"`
+	Description string   `json:"description,omitempty"`
+	MemberIDs   []string `json:"memberIds"`
+	Status      string   `json:"status"`
+	CreatedAt   string   `json:"createdAt"`
+	UpdatedAt   string   `json:"updatedAt"`
+}
+
 type peopleAssignmentPayload struct {
-	AssetID       string `json:"assetId"`
-	AssigneeKind  string `json:"assigneeKind"`
-	AssigneeID    string `json:"assigneeId"`
-	Role          string `json:"role"`
-	EffectiveFrom string `json:"effectiveFrom"`
-	EffectiveTo   string `json:"effectiveTo,omitempty"`
-	CreatedAt     string `json:"createdAt"`
+	AssetID        string `json:"assetId"`
+	AssigneeKind   string `json:"assigneeKind"`
+	AssigneeID     string `json:"assigneeId"`
+	Role           string `json:"role"`
+	Purpose        string `json:"purpose"`
+	EventSummary   string `json:"eventSummary,omitempty"`
+	GroupID        string `json:"groupId,omitempty"`
+	BulkCheckoutID string `json:"bulkCheckoutId,omitempty"`
+	EffectiveFrom  string `json:"effectiveFrom"`
+	DueAt          string `json:"dueAt,omitempty"`
+	EffectiveTo    string `json:"effectiveTo,omitempty"`
+	CreatedAt      string `json:"createdAt"`
 }
 
 func NewPeopleProvider(service *people.Service, importer people.ExchangeImporter) (*PeopleProvider, error) {
@@ -102,7 +116,7 @@ func (p *PeopleProvider) ListRecords(ctx context.Context) ([]Record, error) {
 	if err != nil {
 		return nil, err
 	}
-	result := make([]Record, 0, len(snapshot.Sites)+len(snapshot.Buildings)+len(snapshot.Rooms)+len(snapshot.Departments)+len(snapshot.Identities)+len(snapshot.Assignments))
+	result := make([]Record, 0, len(snapshot.Sites)+len(snapshot.Buildings)+len(snapshot.Rooms)+len(snapshot.Departments)+len(snapshot.Identities)+len(snapshot.CheckoutGroups)+len(snapshot.Assignments))
 	appendRecord := func(recordType, id string, revision uint64, dependencies []Reference, payload any) error {
 		encoded, err := json.Marshal(payload)
 		if err != nil || len(encoded) == 0 || len(encoded) > MaximumPayloadBytes {
@@ -162,8 +176,25 @@ func (p *PeopleProvider) ListRecords(ctx context.Context) ([]Record, error) {
 			return nil, err
 		}
 	}
+	for _, item := range snapshot.CheckoutGroups {
+		if err := validatePortableInstants(2000, item.CreatedAt, item.UpdatedAt); err != nil {
+			return nil, err
+		}
+		memberIDs := append([]string{}, item.MemberIDs...)
+		sort.Strings(memberIDs)
+		dependencies := make([]Reference, 0, len(memberIDs))
+		for _, memberID := range memberIDs {
+			dependencies = append(dependencies, Reference{Type: "people.identity", ID: memberID})
+		}
+		if err := appendRecord("people.checkout-group", item.ID, item.Revision, dependencies, peopleCheckoutGroupPayload{Name: item.Name, Description: item.Description, MemberIDs: memberIDs, Status: string(item.Status), CreatedAt: peopleInstant(item.CreatedAt), UpdatedAt: peopleInstant(item.UpdatedAt)}); err != nil {
+			return nil, err
+		}
+	}
 	for _, item := range snapshot.Assignments {
 		if err := validatePortableInstants(2000, item.EffectiveFrom, item.CreatedAt); err != nil {
+			return nil, err
+		}
+		if err := validateOptionalPortableInstant(2000, item.DueAt); err != nil {
 			return nil, err
 		}
 		if err := validateOptionalPortableInstant(2000, item.EffectiveTo); err != nil {
@@ -173,8 +204,19 @@ func (p *PeopleProvider) ListRecords(ctx context.Context) ([]Record, error) {
 		if item.AssigneeKind == people.AssigneeDepartment {
 			assigneeType = "people.department"
 		}
+		if item.AssigneeKind == people.AssigneeGroup {
+			assigneeType = "people.checkout-group"
+		}
+		purpose := string(item.Purpose)
+		if purpose == "" {
+			purpose = string(people.PurposeCheckout)
+		}
 		dependencies := []Reference{{Type: "atlas.asset", ID: item.AssetID}, {Type: assigneeType, ID: item.AssigneeID}}
-		if err := appendRecord("people.assignment", item.ID, 1, dependencies, peopleAssignmentPayload{AssetID: item.AssetID, AssigneeKind: string(item.AssigneeKind), AssigneeID: item.AssigneeID, Role: string(item.Role), EffectiveFrom: peopleInstant(item.EffectiveFrom), EffectiveTo: peopleOptionalInstant(item.EffectiveTo), CreatedAt: peopleInstant(item.CreatedAt)}); err != nil {
+		if err := appendRecord("people.assignment", item.ID, 1, dependencies, peopleAssignmentPayload{
+			AssetID: item.AssetID, AssigneeKind: string(item.AssigneeKind), AssigneeID: item.AssigneeID, Role: string(item.Role),
+			Purpose: purpose, EventSummary: item.EventSummary, GroupID: item.GroupID,
+			EffectiveFrom: peopleInstant(item.EffectiveFrom), DueAt: peopleOptionalInstant(item.DueAt), EffectiveTo: peopleOptionalInstant(item.EffectiveTo), CreatedAt: peopleInstant(item.CreatedAt),
+		}); err != nil {
 			return nil, err
 		}
 	}
@@ -197,6 +239,8 @@ func (p *PeopleProvider) Exists(ctx context.Context, reference Reference) (bool,
 		_, err = p.service.GetDepartment(ctx, reference.ID)
 	case "people.identity":
 		_, err = p.service.GetIdentity(ctx, reference.ID)
+	case "people.checkout-group":
+		_, err = p.service.GetCheckoutGroup(ctx, reference.ID)
 	case "people.assignment":
 		_, err = p.service.GetAssetAssignment(ctx, reference.ID)
 	default:
@@ -229,6 +273,9 @@ func (p *PeopleProvider) ImportRecordExists(ctx context.Context, record Record, 
 	case people.Identity:
 		current, err := p.service.GetIdentity(ctx, item.ID)
 		return exactPeopleRecord(current, item, err, samePeopleIdentity)
+	case people.CheckoutGroup:
+		current, err := p.service.GetCheckoutGroup(ctx, item.ID)
+		return exactPeopleRecord(current, item, err, samePeopleCheckoutGroup)
 	case people.AssetAssignment:
 		current, err := p.service.GetAssetAssignment(ctx, item.ID)
 		return exactPeopleRecord(current, item, err, samePeopleAssignment)
@@ -265,6 +312,8 @@ func (p *PeopleProvider) ImportRecord(ctx context.Context, operation ProviderImp
 		result, err = p.importer.ImportDepartment(ctx, domainOperation, item)
 	case people.Identity:
 		result, err = p.importer.ImportIdentity(ctx, domainOperation, item)
+	case people.CheckoutGroup:
+		result, err = p.importer.ImportCheckoutGroup(ctx, domainOperation, item)
 	case people.AssetAssignment:
 		result, err = p.importer.ImportAssetAssignment(ctx, domainOperation, item)
 	default:
@@ -339,22 +388,51 @@ func decodePeopleRecord(record Record) (any, []Reference, error) {
 			dependencies = append(dependencies, Reference{Type: "people.site", ID: item.SiteID})
 		}
 		return item, normalizeReferences(dependencies), nil
+	case "people.checkout-group":
+		payload, err := decodePeoplePayload[peopleCheckoutGroupPayload](record.Payload)
+		createdAt, updatedAt, parseErr := parsePeopleStateTimes(payload.CreatedAt, payload.UpdatedAt)
+		if err != nil || parseErr != nil || !canonicalPeopleCheckoutGroupPayload(payload) || !validPeopleRecordID(record.ID) {
+			return nil, nil, ErrInvalidInput
+		}
+		for _, memberID := range payload.MemberIDs {
+			if !validPeopleRecordID(memberID) {
+				return nil, nil, ErrInvalidInput
+			}
+		}
+		item := people.CheckoutGroup{ID: record.ID, Name: payload.Name, Description: payload.Description, MemberIDs: append([]string{}, payload.MemberIDs...), Status: people.RecordStatus(payload.Status), Revision: uint64(record.Revision), CreatedAt: createdAt, UpdatedAt: updatedAt}
+		dependencies := make([]Reference, 0, len(item.MemberIDs))
+		for _, memberID := range item.MemberIDs {
+			dependencies = append(dependencies, Reference{Type: "people.identity", ID: memberID})
+		}
+		return item, normalizeReferences(dependencies), nil
 	case "people.assignment":
 		if record.Revision != 1 {
 			return nil, nil, ErrInvalidInput
 		}
 		payload, err := decodePeoplePayload[peopleAssignmentPayload](record.Payload)
 		effectiveFrom, parseFromErr := parsePeopleInstant(payload.EffectiveFrom)
+		dueAt, parseDueErr := parsePeopleOptionalInstant(payload.DueAt)
 		effectiveTo, parseToErr := parsePeopleOptionalInstant(payload.EffectiveTo)
 		createdAt, parseCreatedErr := parsePeopleInstant(payload.CreatedAt)
-		if err != nil || parseFromErr != nil || parseToErr != nil || parseCreatedErr != nil || !canonicalPeopleAssignmentPayload(payload) ||
-			!validPeopleRecordID(record.ID) || !validPeopleStableID(payload.AssetID) || !validPeopleRecordID(payload.AssigneeID) || effectiveTo != nil && !effectiveTo.After(effectiveFrom) {
+		if err != nil || parseFromErr != nil || parseDueErr != nil || parseToErr != nil || parseCreatedErr != nil || !canonicalPeopleAssignmentPayload(payload) ||
+			!validPeopleRecordID(record.ID) || !validPeopleStableID(payload.AssetID) || !validPeopleRecordID(payload.AssigneeID) ||
+			payload.GroupID != "" && !validPeopleRecordID(payload.GroupID) || payload.BulkCheckoutID != "" && !validPeopleRecordID(payload.BulkCheckoutID) ||
+			effectiveTo != nil && !effectiveTo.After(effectiveFrom) ||
+			dueAt != nil && dueAt.Before(effectiveFrom) {
 			return nil, nil, ErrInvalidInput
 		}
-		item := people.AssetAssignment{ID: record.ID, AssetID: payload.AssetID, AssigneeKind: people.AssigneeKind(payload.AssigneeKind), AssigneeID: payload.AssigneeID, Role: people.AssignmentRole(payload.Role), EffectiveFrom: effectiveFrom, EffectiveTo: effectiveTo, CreatedBy: "system:exchange", CreatedAt: createdAt}
+		item := people.AssetAssignment{
+			ID: record.ID, AssetID: payload.AssetID, AssigneeKind: people.AssigneeKind(payload.AssigneeKind), AssigneeID: payload.AssigneeID,
+			Role: people.AssignmentRole(payload.Role), Purpose: people.AssignmentPurpose(payload.Purpose), EventSummary: payload.EventSummary,
+			GroupID: payload.GroupID, BulkCheckoutID: payload.BulkCheckoutID, EffectiveFrom: effectiveFrom, DueAt: dueAt, EffectiveTo: effectiveTo,
+			CreatedBy: "system:exchange", CreatedAt: createdAt,
+		}
 		assigneeType := "people.identity"
 		if item.AssigneeKind == people.AssigneeDepartment {
 			assigneeType = "people.department"
+		}
+		if item.AssigneeKind == people.AssigneeGroup {
+			assigneeType = "people.checkout-group"
 		}
 		return item, normalizeReferences([]Reference{{Type: "atlas.asset", ID: item.AssetID}, {Type: assigneeType, ID: item.AssigneeID}}), nil
 	default:
@@ -429,11 +507,32 @@ func canonicalPeopleIdentityPayload(value peopleIdentityPayload) bool {
 		canonicalPeopleText(value.DepartmentID) && canonicalPeopleText(value.SiteID) && canonicalPeopleStatus(value.Status) &&
 		value.Provider == strings.ToLower(strings.TrimSpace(value.Provider)) && canonicalPeopleText(value.ProviderSubject) && (value.Provider == "") == (value.ProviderSubject == "")
 }
+func canonicalPeopleCheckoutGroupPayload(value peopleCheckoutGroupPayload) bool {
+	if !canonicalPeopleText(value.Name) || value.Name == "" || !canonicalPeopleText(value.Description) || !canonicalPeopleStatus(value.Status) || len(value.MemberIDs) == 0 {
+		return false
+	}
+	seen := make(map[string]struct{}, len(value.MemberIDs))
+	for index, memberID := range value.MemberIDs {
+		if !canonicalPeopleText(memberID) || memberID == "" || index > 0 && memberID <= value.MemberIDs[index-1] {
+			return false
+		}
+		if _, exists := seen[memberID]; exists {
+			return false
+		}
+		seen[memberID] = struct{}{}
+	}
+	return true
+}
+
 func canonicalPeopleAssignmentPayload(value peopleAssignmentPayload) bool {
 	validRole := value.AssigneeKind == "identity" && (value.Role == "primary" || value.Role == "user") ||
-		value.AssigneeKind == "department" && value.Role == "department"
-	return canonicalPeopleText(value.AssetID) && value.AssetID != "" && (value.AssigneeKind == "identity" || value.AssigneeKind == "department") &&
-		canonicalPeopleText(value.AssigneeID) && value.AssigneeID != "" && validRole
+		value.AssigneeKind == "department" && value.Role == "department" ||
+		value.AssigneeKind == "group" && (value.Role == "primary" || value.Role == "user")
+	validPurpose := value.Purpose == "checkout" || value.Purpose == "reservation"
+	return canonicalPeopleText(value.AssetID) && value.AssetID != "" && (value.AssigneeKind == "identity" || value.AssigneeKind == "department" || value.AssigneeKind == "group") &&
+		canonicalPeopleText(value.AssigneeID) && value.AssigneeID != "" && validRole && validPurpose &&
+		canonicalPeopleText(value.EventSummary) && canonicalPeopleText(value.GroupID) && canonicalPeopleText(value.BulkCheckoutID) &&
+		(value.GroupID == "" || value.AssigneeKind == "group" && value.GroupID == value.AssigneeID)
 }
 
 func peopleInstant(value time.Time) string { return value.Format(time.RFC3339Nano) }
@@ -494,10 +593,27 @@ func samePeopleIdentity(left, right people.Identity) bool {
 	right.OrganizationID = left.OrganizationID
 	return left == right
 }
+func samePeopleCheckoutGroup(left, right people.CheckoutGroup) bool {
+	right.OrganizationID = left.OrganizationID
+	if left.ID != right.ID || left.OrganizationID != right.OrganizationID || left.Name != right.Name || left.Description != right.Description ||
+		left.Status != right.Status || left.Revision != right.Revision || !left.CreatedAt.Equal(right.CreatedAt) || !left.UpdatedAt.Equal(right.UpdatedAt) ||
+		len(left.MemberIDs) != len(right.MemberIDs) {
+		return false
+	}
+	for index := range left.MemberIDs {
+		if left.MemberIDs[index] != right.MemberIDs[index] {
+			return false
+		}
+	}
+	return true
+}
 func samePeopleAssignment(left, right people.AssetAssignment) bool {
 	right.OrganizationID = left.OrganizationID
 	return left.ID == right.ID && left.OrganizationID == right.OrganizationID && left.AssetID == right.AssetID && left.AssigneeKind == right.AssigneeKind &&
-		left.AssigneeID == right.AssigneeID && left.Role == right.Role && left.EffectiveFrom.Equal(right.EffectiveFrom) &&
+		left.AssigneeID == right.AssigneeID && left.Role == right.Role && left.Purpose == right.Purpose && left.EventSummary == right.EventSummary &&
+		left.GroupID == right.GroupID && left.BulkCheckoutID == right.BulkCheckoutID &&
+		left.EffectiveFrom.Equal(right.EffectiveFrom) &&
+		(left.DueAt == nil && right.DueAt == nil || left.DueAt != nil && right.DueAt != nil && left.DueAt.Equal(*right.DueAt)) &&
 		(left.EffectiveTo == nil && right.EffectiveTo == nil || left.EffectiveTo != nil && right.EffectiveTo != nil && left.EffectiveTo.Equal(*right.EffectiveTo)) &&
 		left.CreatedAt.Equal(right.CreatedAt)
 }

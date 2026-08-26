@@ -235,7 +235,11 @@ func (s *LabelsStore) GetAssignment(ctx context.Context, organizationID, definit
 }
 
 func (s *LabelsStore) PutAssignment(ctx context.Context, assignment labels.Assignment, expectedRevision int64) (labels.Assignment, error) {
-	values, err := json.Marshal(assignment.Values)
+	assignmentValues := assignment.Values
+	if assignmentValues == nil {
+		assignmentValues = []string{}
+	}
+	values, err := json.Marshal(assignmentValues)
 	if err != nil {
 		return labels.Assignment{}, err
 	}

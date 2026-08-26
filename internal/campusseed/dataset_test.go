@@ -114,6 +114,40 @@ func TestStableIDDeterministic(t *testing.T) {
 	}
 }
 
+func TestCampusLegacyThinkPadT15Gen2Model(t *testing.T) {
+	found := false
+	for _, model := range campusModels {
+		if model.Slug != "lenovo-thinkpad-t15-gen2" {
+			continue
+		}
+		found = true
+		if model.ModelNumber != "20W5S51T00" {
+			t.Fatalf("expected scanned MTM 20W5S51T00, got %q", model.ModelNumber)
+		}
+		if model.Name != "ThinkPad T15 Gen 2" || model.Manufacturer != "Lenovo" {
+			t.Fatalf("unexpected model identity: %#v", model)
+		}
+		if model.Specifications["machineTypes"] != "20W4, 20W5" {
+			t.Fatalf("expected machine types 20W4/20W5, got %#v", model.Specifications)
+		}
+	}
+	if !found {
+		t.Fatal("expected legacy ThinkPad T15 Gen 2 model in campus catalog")
+	}
+	workforceCount := 0
+	for _, entry := range campusWorkforceLaptops {
+		if entry.ModelSlug == "lenovo-thinkpad-t15-gen2" {
+			workforceCount = entry.Count
+		}
+	}
+	if workforceCount < 1 {
+		t.Fatal("expected T15 Gen 2 units in the workforce laptop mix")
+	}
+	if got := workforceAssetProfile("lenovo-thinkpad-t15-gen2", 1); got != "legacy-active" {
+		t.Fatalf("expected legacy-active profile, got %q", got)
+	}
+}
+
 func TestEmployeeReceivesLaptop(t *testing.T) {
 	if employeeReceivesLaptop(seededEmployee{DepartmentSlug: "custodial"}, 9) {
 		t.Fatal("regular custodial staff should not receive laptops")

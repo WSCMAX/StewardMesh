@@ -21,8 +21,8 @@ type SectionNavProps<ID extends string> = {
 export default function SectionNav<ID extends string>({ active, ariaLabel, canWrite = true, idPrefix, onChange, tabs }: SectionNavProps<ID>) {
   const visible = tabs.filter((tab) => !tab.write || canWrite)
   return (
-    <nav aria-label={ariaLabel} className="border-b border-white/10">
-      <div className="flex gap-1 overflow-x-auto steward-scrollbar" role="tablist">
+    <nav aria-label={ariaLabel} className="min-w-0 max-w-full border-b border-white/10">
+      <div className="flex min-w-0 max-w-full flex-wrap gap-1" role="tablist">
         {visible.map((tab) => {
           const selected = active === tab.id
           return (
@@ -30,7 +30,7 @@ export default function SectionNav<ID extends string>({ active, ariaLabel, canWr
               aria-controls={`${idPrefix}-panel-${tab.id}`}
               aria-selected={selected}
               className={cx(
-                'relative shrink-0 px-3 py-2.5 text-sm font-medium transition',
+                'relative min-w-0 px-3 py-2.5 text-sm font-medium transition focus:outline-none',
                 selected ? 'text-steward-mist' : `${secondaryButtonClass} min-h-0 rounded-none border-transparent bg-transparent px-3 py-2.5 text-steward-mist-muted`,
               )}
               id={`${idPrefix}-tab-${tab.id}`}

@@ -287,6 +287,36 @@ test('row checkboxes drive bulk actions and the header checkbox covers the visib
   expect(screen.queryByRole('button', { name: /^Print/ })).not.toBeInTheDocument()
 })
 
+test('controlled selection reports ids and renders the parent selection', () => {
+  const onSelectedRowIdsChange = vi.fn()
+  const { rerender } = render(
+    <DataGrid columns={columns} label="Licenses" onSelectedRowIdsChange={onSelectedRowIdsChange} rowId={(row) => row.id} rowLabel={(row) => row.name} rows={rows} selectable selectedRowIds={['row-2']} />,
+  )
+  expect(screen.getByLabelText('Select Reader')).toBeChecked()
+  expect(screen.getByLabelText('Select Writer')).not.toBeChecked()
+  fireEvent.click(screen.getByLabelText('Select Writer'))
+  expect(onSelectedRowIdsChange).toHaveBeenCalledWith(['row-2', 'row-1'])
+  rerender(
+    <DataGrid columns={columns} label="Licenses" onSelectedRowIdsChange={onSelectedRowIdsChange} rowId={(row) => row.id} rowLabel={(row) => row.name} rows={rows} selectable selectedRowIds={['row-1', 'row-2']} />,
+  )
+  expect(screen.getByLabelText('Select Writer')).toBeChecked()
+})
+
+test('a controlled header checkbox toggles only the rows in this grid', () => {
+  const onSelectedRowIdsChange = vi.fn()
+  const props = {
+    columns, label: 'Licenses', onSelectedRowIdsChange, rowId: (row: (typeof rows)[number]) => row.id,
+    rowLabel: (row: (typeof rows)[number]) => row.name, rows, selectable: true,
+  }
+  const { rerender } = render(<DataGrid {...props} selectedRowIds={['outside-row', 'row-2']} />)
+  fireEvent.click(screen.getByLabelText('Select all visible licenses'))
+  expect(onSelectedRowIdsChange).toHaveBeenCalledWith(['outside-row', 'row-2', 'row-1'])
+  rerender(<DataGrid {...props} selectedRowIds={['outside-row', 'row-2', 'row-1']} />)
+  onSelectedRowIdsChange.mockClear()
+  fireEvent.click(screen.getByLabelText('Select all visible licenses'))
+  expect(onSelectedRowIdsChange).toHaveBeenCalledWith(['outside-row'])
+})
+
 test('search narrows the rows and discarding restores every pending cell', () => {
   const { table } = renderGrid()
   fireEvent.keyDown(table, { key: 'Enter' })
@@ -414,11 +444,57 @@ test('typing in a column filter updates the filter instead of the active cell', 
   fireEvent.keyDown(table, { key: 'ArrowRight' })
   expect(activeCell()).toHaveTextContent('active')
   const filter = screen.getByLabelText('Filter Name')
+  fireEvent.pointerDown(filter)
   fireEvent.focus(filter)
+  fireEvent.keyDown(filter, { key: 'W' })
   fireEvent.change(filter, { target: { value: 'Writ' } })
   expect(filter).toHaveValue('Writ')
   expect(screen.queryByLabelText('Name for Writer')).not.toBeInTheDocument()
   expect(screen.getByText('1 of 2 rows')).toBeInTheDocument()
+})
+
+test('leaving a cell editor for a column filter keeps typing in the filter', () => {
+  const { table } = renderGrid()
+  fireEvent.keyDown(table, { key: 'Enter' })
+  const editing = screen.getByLabelText('Name for Writer')
+  const filter = screen.getByLabelText('Filter Status')
+  fireEvent.pointerDown(filter)
+  fireEvent.focus(filter)
+  fireEvent.blur(editing)
+  fireEvent.keyDown(filter, { key: 'r' })
+  fireEvent.change(filter, { target: { value: 'retired' } })
+  expect(filter).toHaveValue('retired')
+  expect(screen.queryByLabelText('Name for Writer')).not.toBeInTheDocument()
+  expect(screen.getByRole('gridcell', { name: 'Reader' })).toBeInTheDocument()
+  expect(screen.queryByRole('gridcell', { name: 'Writer' })).not.toBeInTheDocument()
+})
+
+test('pasting into a column filter does not paste into the active cell', () => {
+  renderGrid()
+  const filter = screen.getByLabelText('Filter Name')
+  fireEvent.focus(filter)
+  fireEvent.paste(filter, clipboard('Writ'))
+  fireEvent.change(filter, { target: { value: 'Writ' } })
+  expect(filter).toHaveValue('Writ')
+  expect(screen.queryByText(/cell changed/)).not.toBeInTheDocument()
+  expect(screen.getByRole('gridcell', { name: 'Writer' })).toBeInTheDocument()
+})
+
+test('column filters and search match lookup labels, not only record ids', () => {
+  const lookupColumns: GridColumn<Row>[] = [
+    { key: 'name', header: 'Name', kind: 'text', text: (row) => row.name },
+    {
+      key: 'departmentId',
+      header: 'Department',
+      kind: 'lookup',
+      lookup: { options: [{ id: 'dept-1', label: 'Studio Arts' }], search: async () => [] },
+      text: (row) => row.id === 'row-1' ? 'dept-1' : '',
+      exportText: (row) => row.id === 'row-1' ? 'Studio Arts' : '',
+    },
+  ]
+  expect(filterRows(rows, lookupColumns, { departmentId: 'studio' }, '').map((row) => row.id)).toEqual(['row-1'])
+  expect(filterRows(rows, lookupColumns, {}, 'studio arts').map((row) => row.id)).toEqual(['row-1'])
+  expect(filterRows(rows, lookupColumns, {}, 'dept-1').map((row) => row.id)).toEqual(['row-1'])
 })
 
 test('the row actions button keeps its menu open', async () => {
@@ -475,6 +551,7 @@ test('full screen opens a dedicated editor and returns to the page grid', () => 
   const dialog = screen.getByRole('dialog', { name: 'Licenses full screen editor' })
   expect(dialog).toBeInTheDocument()
   expect(dialog.className).toContain('bg-steward-ink-950')
+  expect(dialog.className).toContain('z-50')
   expect(dialog.className).not.toContain('/55')
   fireEvent.click(screen.getByRole('button', { name: 'Exit full screen' }))
   expect(screen.queryByRole('dialog', { name: 'Licenses full screen editor' })).not.toBeInTheDocument()
@@ -525,12 +602,54 @@ test('unknown query fields are rejected instead of matching every row', () => {
   expect(screen.getByRole('gridcell', { name: 'Reader' })).toBeInTheDocument()
 })
 
+test('value suggestions list unique visible values and narrow to rows the other conditions match', () => {
+  renderGrid()
+  fireEvent.click(screen.getByRole('button', { name: 'Filter' }))
+  fireEvent.change(screen.getByLabelText('Field'), { target: { value: 'status' } })
+  const statusBox = screen.getByRole('combobox', { name: 'Value for Status' })
+  fireEvent.focus(statusBox)
+  expect(screen.getByRole('option', { name: /^active/ })).toBeInTheDocument()
+  expect(screen.getByRole('option', { name: /^retired/ })).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('option', { name: /^active/ }))
+  expect(screen.queryByRole('gridcell', { name: 'Reader' })).not.toBeInTheDocument()
+
+  // The second condition only offers values from rows that are still active.
+  fireEvent.click(screen.getByRole('button', { name: 'Add condition' }))
+  fireEvent.change(screen.getAllByLabelText('Field')[1], { target: { value: 'name' } })
+  fireEvent.focus(screen.getByRole('combobox', { name: 'Value for Name' }))
+  expect(screen.getByRole('option', { name: /Writer/ })).toBeInTheDocument()
+  expect(screen.queryByRole('option', { name: /Reader/ })).toBeNull()
+})
+
 test('a text cell can be edited in a full screen editor', () => {
   const { table } = renderGrid()
   fireEvent.keyDown(table, { key: 'Enter' })
   fireEvent.click(screen.getByRole('button', { name: 'Edit Name in full screen' }))
   const editor = screen.getByRole('dialog', { name: 'Name for Writer' })
+  expect(editor.className).toContain('bg-steward-ink-900')
+  expect(editor.className).not.toContain('/55')
+  expect(editor.parentElement?.className).toContain('bg-steward-ink-950')
+  expect(editor.parentElement?.className).not.toContain('/80')
   fireEvent.change(within(editor).getByRole('textbox'), { target: { value: 'Composer' } })
   fireEvent.click(screen.getByRole('button', { name: 'Done' }))
   expect(screen.getByRole('gridcell', { name: 'Composer' })).toBeInTheDocument()
+})
+
+test('a scannable cell offers camera capture in the editor and expanded work area', () => {
+  const serialColumns: GridColumn<Row>[] = [
+    { key: 'name', header: 'Serial number', kind: 'text', editable: true, scannable: true, text: (row) => row.name },
+    { key: 'status', header: 'Status', kind: 'enum', options: ['active', 'retired'], editable: true, text: (row) => row.status },
+  ]
+  render(<DataGrid columns={serialColumns} editable label="Assets" rowId={(row) => row.id} rowLabel={(row) => row.name} rows={rows} />)
+  fireEvent.keyDown(screen.getByRole('grid'), { key: 'Enter' })
+  expect(screen.getByRole('button', { name: 'Scan Serial number with camera' })).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Scan Serial number with camera' }))
+  const camera = screen.getByRole('dialog', { name: 'Scan a barcode into this cell' })
+  expect(camera).toBeInTheDocument()
+  expect(camera.className).toContain('overflow-y-auto')
+  fireEvent.click(screen.getByRole('button', { name: 'Edit Serial number in full screen' }))
+  const editor = screen.getByRole('dialog', { name: 'Serial number for Writer' })
+  expect(editor.className).not.toContain('/55')
+  expect(editor.className).toContain('overflow-hidden')
+  expect(within(editor).getByRole('button', { name: 'Scan with camera' })).toBeInTheDocument()
 })

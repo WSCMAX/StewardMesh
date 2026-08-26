@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/maxlemke/stewardmesh/internal/atlas"
+	"github.com/maxlemke/stewardmesh/internal/atlascodes"
 	"github.com/maxlemke/stewardmesh/internal/foundation"
 	"github.com/maxlemke/stewardmesh/internal/guard"
 	"github.com/maxlemke/stewardmesh/internal/ledger"
@@ -24,6 +25,7 @@ type Dependencies struct {
 	OrganizationID  string
 	People          *people.Service
 	Atlas           *atlas.Service
+	AtlasCodes      *atlascodes.Service
 	Stack           *stack.Service
 	Ledger          *ledger.Service
 	Vault           *storage.Service
@@ -46,6 +48,10 @@ type Result struct {
 	AssetCount         int
 	LicenseCount       int
 	AssignmentCount    int
+	ContractCount      int
+	BudgetCount        int
+	CommitmentCount    int
+	IdentifierCount    int
 	GuardUserCount     int
 	CredentialsPath    string
 	AlreadySeeded      bool
@@ -55,6 +61,7 @@ type Seeder struct {
 	organizationID  string
 	people          *people.Service
 	atlas           *atlas.Service
+	atlasCodes      *atlascodes.Service
 	stack           *stack.Service
 	ledger          *ledger.Service
 	vault           *storage.Service
@@ -93,6 +100,10 @@ type Seeder struct {
 	employeeAssetIDs       map[string]string
 	blobIDs                map[string]string
 	vendorIDs              map[string]string
+	contractIDs            map[string]string
+	budgetIDs              map[string]string
+	commitmentIDs          map[string]string
+	identifierIDs          map[string]string
 }
 
 func Seed(ctx context.Context, dependencies Dependencies) (Result, error) {
@@ -100,6 +111,7 @@ func Seed(ctx context.Context, dependencies Dependencies) (Result, error) {
 		organizationID:         strings.TrimSpace(dependencies.OrganizationID),
 		people:                 dependencies.People,
 		atlas:                  dependencies.Atlas,
+		atlasCodes:             dependencies.AtlasCodes,
 		stack:                  dependencies.Stack,
 		ledger:                 dependencies.Ledger,
 		vault:                  dependencies.Vault,
@@ -124,6 +136,10 @@ func Seed(ctx context.Context, dependencies Dependencies) (Result, error) {
 		officeAssetsByBuilding: make(map[string][]string),
 		laptopAssetsByVendor:   make(map[string][]string),
 		employeeAssetIDs:       make(map[string]string),
+		contractIDs:            make(map[string]string),
+		budgetIDs:              make(map[string]string),
+		commitmentIDs:          make(map[string]string),
+		identifierIDs:          make(map[string]string),
 	}
 	if seeder.credentialsPath == "" {
 		seeder.credentialsPath = CredentialsFile
@@ -220,6 +236,21 @@ func (s *Seeder) run(ctx context.Context) (Result, error) {
 	if err := s.seedProcurement(ctx); err != nil {
 		return Result{}, err
 	}
+	if err := s.seedContracts(ctx); err != nil {
+		return Result{}, err
+	}
+	result.ContractCount = 4
+	if err := s.seedBudgets(ctx); err != nil {
+		return Result{}, err
+	}
+	result.BudgetCount = 2
+	if err := s.seedCommitments(ctx); err != nil {
+		return Result{}, err
+	}
+	result.CommitmentCount = 3
+	if err := s.seedReconciliationDemoCost(ctx); err != nil {
+		return Result{}, err
+	}
 	if err := s.seedSoftwareCatalog(ctx); err != nil {
 		return Result{}, err
 	}
@@ -232,6 +263,13 @@ func (s *Seeder) run(ctx context.Context) (Result, error) {
 		return Result{}, err
 	}
 	result.AssignmentCount = assignmentCount
+	if err := s.seedPeopleAssetAssignments(ctx); err != nil {
+		return Result{}, err
+	}
+	if err := s.seedIdentifiers(ctx); err != nil {
+		return Result{}, err
+	}
+	result.IdentifierCount = len(s.identifierIDs)
 	guardCount, err := s.seedGuardUsers(ctx)
 	if err != nil {
 		return Result{}, err
@@ -298,6 +336,20 @@ func (s *Seeder) alreadySeeded(ctx context.Context) (bool, error) {
 			return false, nil
 		}
 		return false, fmt.Errorf("lookup campus demo guard account: %w", err)
+	}
+	snapshot, err := s.ledger.Snapshot(ctx)
+	if err != nil {
+		return false, fmt.Errorf("snapshot campus demo ledger: %w", err)
+	}
+	hasContracts := false
+	for _, contract := range snapshot.Contracts {
+		if contract.ID == "contract-m365-campus" {
+			hasContracts = true
+			break
+		}
+	}
+	if !hasContracts {
+		return false, nil
 	}
 	return true, nil
 }
@@ -444,7 +496,8 @@ func (s *Seeder) seedModels(ctx context.Context) error {
 		created, err := s.atlas.CreateModel(ctx, atlas.CreateModelInput{
 			ID: definition.Slug, Manufacturer: definition.Manufacturer, Name: definition.Name,
 			ModelNumber: definition.ModelNumber, Kind: definition.Kind,
-			Specifications: definition.Specifications, TemplateFields: computerTemplateFields(definition.Kind),
+			VendorIdentifier: definition.VendorIdentifier, Specifications: definition.Specifications,
+			TemplateFields: computerTemplateFields(definition.Kind), SupportURL: definition.SupportURL,
 			UnitCostMinor: definition.UnitCostMinor, Currency: "USD",
 			WarrantyMonths: 36, UsefulLifeMonths: 60, CriticalityScore: defaultModelCriticality(definition),
 			SourceSystemID: SourceSystemID, SourceRecordID: definition.Slug,
@@ -493,12 +546,10 @@ func (s *Seeder) seedEmployees(ctx context.Context) (int, error) {
 		department := assignments[index]
 		departmentID := s.departmentIDs[department.Slug]
 		office := officeByDepartment(department.Slug)
-		firstName := employeeFirstNames[index%len(employeeFirstNames)]
-		lastName := employeeLastNames[(index*7)%len(employeeLastNames)]
-		displayName := fmt.Sprintf("%s %s", firstName, lastName)
-		emailLocal := fmt.Sprintf("%s.%s%04d", strings.ToLower(firstName), strings.ToLower(lastName), index+1)
+		person := campusEmployeeName(index)
+		emailLocal := person.emailLocal(index+1, 4)
 		identity, err := s.people.CreateIdentity(ctx, people.CreateIdentityInput{
-			Kind: people.IdentityPerson, DisplayName: displayName,
+			Kind: people.IdentityPerson, DisplayName: person.Display,
 			Email:        emailLocal + "@riverside-demo.invalid",
 			DepartmentID: departmentID, SiteID: s.siteID,
 			BuildingID: s.buildingIDs[department.BuildingSlug], RoomID: s.roomIDs[office.Slug],
@@ -509,7 +560,7 @@ func (s *Seeder) seedEmployees(ctx context.Context) (int, error) {
 			if errors.Is(err, people.ErrConflict) {
 				continue
 			}
-			return created, fmt.Errorf("create employee %q: %w", displayName, err)
+			return created, fmt.Errorf("create employee %q: %w", person.Display, err)
 		}
 		s.employees = append(s.employees, seededEmployee{
 			ID: identity.ID, DepartmentSlug: department.Slug,
@@ -793,6 +844,10 @@ func (s *Seeder) auditComplete(ctx context.Context, result Result) error {
 			"labs":           fmt.Sprintf("%d", result.LabCount),
 			"licenses":       fmt.Sprintf("%d", result.LicenseCount),
 			"assignments":    fmt.Sprintf("%d", result.AssignmentCount),
+			"contracts":      fmt.Sprintf("%d", result.ContractCount),
+			"budgets":        fmt.Sprintf("%d", result.BudgetCount),
+			"commitments":    fmt.Sprintf("%d", result.CommitmentCount),
+			"identifiers":    fmt.Sprintf("%d", result.IdentifierCount),
 		},
 	}
 	return s.auditor.Record(ctx, event)

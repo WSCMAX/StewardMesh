@@ -1,37 +1,27 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import BarcodeCameraCapture from '../BarcodeCameraCapture'
-import { cx, subpanelClass } from '../ui'
+import { cx, menuSurfaceClass } from '../ui'
+import { useAnchoredPanelStyle, type AnchoredBox } from './anchoredPanel'
 
 // Requirements: REQ-ATLAS-CODES-001, A11Y-001. Feature: experience.grid.
 
-// A camera preview anchored to the cell being edited so a serial number can be
-// scanned without leaving the grid or covering the surrounding rows.
+// A camera preview anchored to the cell being edited so a serial number, asset
+// tag, or model barcode can be scanned without leaving the grid. The panel is
+// opaque so the spreadsheet does not show through. Placement stays inside the
+// viewport, including last rows whose camera would otherwise open below the
+// scrollport.
 
 export default function CellCamera({ anchor, onCapture, onClose }: {
-  anchor: DOMRect
+  anchor: AnchoredBox | HTMLElement | null
   onCapture: (value: string) => void
   onClose: () => void
 }) {
-  const panelRef = useRef<HTMLDivElement | null>(null)
-  const [position, setPosition] = useState({ x: anchor.left, y: anchor.bottom + 4 })
-
-  useLayoutEffect(() => {
-    const element = panelRef.current
-    if (!element) return
-    const { width, height } = element.getBoundingClientRect()
-    const margin = 8
-    setPosition({
-      x: Math.max(margin, Math.min(anchor.left, window.innerWidth - width - margin)),
-      y: anchor.bottom + 4 + height > window.innerHeight - margin
-        ? Math.max(margin, anchor.top - height - 4)
-        : anchor.bottom + 4,
-    })
-  }, [anchor.left, anchor.top, anchor.bottom])
+  const { ref, style } = useAnchoredPanelStyle(anchor)
 
   useEffect(() => {
     function handlePointerDown(event: PointerEvent) {
-      if (!panelRef.current?.contains(event.target as Node)) onClose()
+      if (!ref.current?.contains(event.target as Node)) onClose()
     }
     function handleKey(event: KeyboardEvent) {
       if (event.key === 'Escape') {
@@ -46,19 +36,19 @@ export default function CellCamera({ anchor, onCapture, onClose }: {
       document.removeEventListener('pointerdown', handlePointerDown, true)
       window.removeEventListener('keydown', handleKey, true)
     }
-  }, [onClose])
+  }, [onClose, ref])
 
   return createPortal(
     <div
-      className={cx(subpanelClass, 'fixed z-50 w-80 bg-steward-ink-900 p-3 shadow-2xl')}
-      ref={panelRef}
+      className={cx(menuSurfaceClass, 'fixed z-50 w-80 overflow-y-auto p-3 shadow-2xl steward-scrollbar')}
+      ref={ref}
       role="dialog"
       aria-label="Scan a barcode into this cell"
-      style={{ left: position.x, top: position.y }}
+      style={style}
     >
       <p className="text-xs font-semibold text-steward-mist">Scan into this cell</p>
-      <p className="mt-1 text-xs text-steward-mist-muted">The preview stays next to the serial number. Frames stay in this browser.</p>
-      <div className="mt-2">
+      <p className="mt-1 text-xs leading-5 text-steward-mist-muted">Point at the printed serial, asset tag, or model barcode. Frames stay in this browser.</p>
+      <div className="mt-3 border-t border-white/10 pt-3">
         <BarcodeCameraCapture autoStart onCapture={(code) => onCapture(code.value)} />
       </div>
     </div>,

@@ -1,7 +1,9 @@
-import { type FormEvent, useEffect, useRef, useState } from 'react'
+import { type FormEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { ApiRequestError, requestJSON } from './api'
 import DocumentViewer, { type ViewableDocument } from './DocumentViewer'
-import { ProductHeader, buttonClass, inputClass, labelClass, panelClass, secondaryButtonClass, subpanelClass, tableWrapClass } from './ui'
+import DataGrid from './grid/DataGrid'
+import type { GridColumn } from './grid/columns'
+import { ProductHeader, buttonClass, inputClass, labelClass, panelClass, secondaryButtonClass, subpanelClass } from './ui'
 
 export type VaultBlob = {
   id: string
@@ -131,6 +133,41 @@ export default function VaultManager({ csrfToken, permissions, onOpenHelp }: Vau
     }
   }
 
+  const columns = useMemo((): GridColumn<VaultBlob>[] => [
+    {
+      key: 'name', header: 'File', kind: 'text', width: 16,
+      text: (blob) => blob.name,
+      display: (blob) => <><strong className="block text-steward-mist">{blob.name}</strong><span className="mt-1 block text-xs text-steward-mist-muted">{new Date(blob.createdAt).toLocaleString()} via {blob.provider}</span></>,
+    },
+    {
+      key: 'size', header: 'Size and type', kind: 'text', width: 12,
+      text: (blob) => `${formatBytes(blob.sizeBytes)} ${blob.mediaType}`,
+      display: (blob) => <>{formatBytes(blob.sizeBytes)}<span className="mt-1 block break-all text-xs text-steward-mist-muted">{blob.mediaType}</span></>,
+    },
+    {
+      key: 'provenance', header: 'Provenance', kind: 'text', width: 14,
+      text: (blob) => blob.sourceSystemId ? `${blob.sourceSystemId} / ${blob.sourceRecordId}` : 'Direct upload',
+      display: (blob) => <>{blob.sourceSystemId ? `${blob.sourceSystemId} / ${blob.sourceRecordId}` : 'Direct upload'}{blob.resourceType && <span className="mt-1 block text-xs">{blob.resourceType}: {blob.resourceId}</span>}</>,
+    },
+    {
+      key: 'sha256', header: 'Integrity', kind: 'text', width: 14,
+      text: (blob) => blob.sha256,
+      display: (blob) => <code className="block max-w-52 break-all text-xs text-steward-mist-muted">SHA-256 {blob.sha256}</code>,
+    },
+    {
+      key: 'actions', header: 'View or download', kind: 'text', width: 16, wrap: true,
+      text: () => '',
+      display: (blob) => (
+        <div className="flex flex-wrap gap-2">
+          <button className={secondaryButtonClass} disabled={busy} onClick={() => setPreview({ id: blob.id, name: blob.name, mediaType: blob.mediaType })} type="button">View in browser</button>
+          {download?.id === blob.id
+            ? <a className={secondaryButtonClass} href={`${download.authorization.url}${download.authorization.url.includes('?') ? '&' : '?'}download=1`}>Download ready</a>
+            : <button className={secondaryButtonClass} disabled={busy} onClick={() => prepareDownload(blob.id)} type="button">Prepare download</button>}
+        </div>
+      ),
+    },
+  ], [busy, download])
+
   if (!canRead) {
     return <section aria-labelledby="vault-heading" className={`${panelClass} p-5 sm:p-6`} data-feature="storage.blobs" data-requirement="REQ-STORAGE-001"><div className="flex flex-wrap items-start justify-between gap-4"><div><h2 id="vault-heading" className="text-2xl font-semibold">Vault — File storage</h2><p className="mt-2 text-steward-mist-muted">Your role does not include permission to view stored files.</p></div>{onOpenHelp && <button className={secondaryButtonClass} onClick={onOpenHelp} type="button">Vault help</button>}</div></section>
   }
@@ -138,7 +175,10 @@ export default function VaultManager({ csrfToken, permissions, onOpenHelp }: Vau
   return (
     <section aria-labelledby="vault-heading" className={`${panelClass} p-5 sm:p-6`} data-feature="storage.blobs" data-requirement="REQ-STORAGE-001">
       <ProductHeader
-        actions={onOpenHelp ? <button className={secondaryButtonClass} onClick={onOpenHelp} type="button">Vault help</button> : undefined}
+        actions={<>
+          {onOpenHelp ? <button className={secondaryButtonClass} onClick={onOpenHelp} type="button">Vault help</button> : null}
+          <a className={secondaryButtonClass} href="#workspace-mesh">Open Mesh graph</a>
+        </>}
         description="Keep checksummed evidence and attachments with their ownership and provenance. Downloads are authorized only when requested and expire shortly afterward."
         headingId="vault-heading"
         kicker="Vault"
@@ -161,30 +201,16 @@ export default function VaultManager({ csrfToken, permissions, onOpenHelp }: Vau
         </form>
       )}
 
-      <div className={`${tableWrapClass} mt-6`}>
-        <table className="w-full min-w-[720px] border-collapse text-left text-sm">
-          <caption className="sr-only">Files stored in Vault</caption>
-          <thead><tr className="border-b border-steward-ink-800 text-steward-mist-muted"><th className="px-3 py-3 font-semibold" scope="col">File</th><th className="px-3 py-3 font-semibold" scope="col">Size and type</th><th className="px-3 py-3 font-semibold" scope="col">Provenance</th><th className="px-3 py-3 font-semibold" scope="col">Integrity</th><th className="px-3 py-3 font-semibold" scope="col">View or download</th></tr></thead>
-          <tbody>
-            {blobs.map((blob) => (
-              <tr className="border-b border-steward-ink-800/70 align-top" key={blob.id}>
-                <td className="px-3 py-4"><strong className="block text-steward-mist">{blob.name}</strong><span className="mt-1 block text-xs text-steward-mist-muted">{new Date(blob.createdAt).toLocaleString()} via {blob.provider}</span></td>
-                <td className="px-3 py-4 text-steward-mist-muted">{formatBytes(blob.sizeBytes)}<span className="mt-1 block break-all text-xs">{blob.mediaType}</span></td>
-                <td className="px-3 py-4 text-steward-mist-muted">{blob.sourceSystemId ? `${blob.sourceSystemId} / ${blob.sourceRecordId}` : 'Direct upload'}{blob.resourceType && <span className="mt-1 block text-xs">{blob.resourceType}: {blob.resourceId}</span>}</td>
-                <td className="px-3 py-4"><code className="block max-w-52 break-all text-xs text-steward-mist-muted">SHA-256 {blob.sha256}</code></td>
-                <td className="px-3 py-4">
-                  <div className="flex flex-wrap gap-2">
-                    <button className={secondaryButtonClass} disabled={busy} onClick={() => setPreview({ id: blob.id, name: blob.name, mediaType: blob.mediaType })} type="button">View in browser</button>
-                    {download?.id === blob.id
-                      ? <a className={secondaryButtonClass} href={`${download.authorization.url}${download.authorization.url.includes('?') ? '&' : '?'}download=1`}>Download ready</a>
-                      : <button className={secondaryButtonClass} disabled={busy} onClick={() => prepareDownload(blob.id)} type="button">Prepare download</button>}
-                  </div>
-                </td>
-              </tr>
-            ))}
-            {blobs.length === 0 && <tr><td className="px-3 py-6 text-steward-mist-muted" colSpan={5}>No files have been stored yet.</td></tr>}
-          </tbody>
-        </table>
+      <div className="mt-6">
+        <DataGrid
+          columns={columns}
+          emptyMessage="No files have been stored yet."
+          label="Files stored in Vault"
+          rowId={(blob) => blob.id}
+          rowLabel={(blob) => blob.name}
+          rows={blobs}
+          viewId="vault-files"
+        />
       </div>
       {preview && <div className="mt-6"><DocumentViewer csrfToken={csrfToken} document={preview} onClose={() => setPreview(null)} /></div>}
     </section>

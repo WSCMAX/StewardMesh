@@ -119,6 +119,7 @@ type ForecastQuery struct {
 	ToYear               int
 	FiscalYearStartMonth int
 	GroupBy              string
+	IncludeItems         bool
 }
 
 type ForecastGroup struct {
@@ -130,6 +131,20 @@ type ForecastGroup struct {
 	AmountsByKindMinor      map[string]int64 `json:"amountsByKindMinor"`
 }
 
+type ForecastItem struct {
+	PlanID               string `json:"planId"`
+	AssetID              string `json:"assetId"`
+	AssetName            string `json:"assetName"`
+	Scenario             string `json:"scenario"`
+	FiscalYear           int    `json:"fiscalYear"`
+	ReplacementCostMinor int64  `json:"replacementCostMinor"`
+	Currency             string `json:"currency"`
+	Department           string `json:"department"`
+	Kind                 string `json:"kind"`
+	Manufacturer         string `json:"manufacturer"`
+	Building             string `json:"building"`
+}
+
 type Forecast struct {
 	AsOf                    time.Time        `json:"asOf"`
 	GroupBy                 string           `json:"groupBy"`
@@ -139,6 +154,7 @@ type Forecast struct {
 	AssetCount              int              `json:"assetCount"`
 	TotalsByKindMinor       map[string]int64 `json:"totalsByKindMinor"`
 	Groups                  []ForecastGroup  `json:"groups"`
+	Items                   []ForecastItem   `json:"items,omitempty"`
 }
 
 type ForecastGroupAssetsQuery struct {
@@ -170,15 +186,48 @@ type ForecastGroupAssets struct {
 	Items    []ForecastGroupAsset `json:"items"`
 }
 
+type ForecastAmountQuery struct {
+	ForecastQuery
+	AmountKind string
+	Scenario   string
+	GroupKey   string
+}
+
+type ForecastAmountItem struct {
+	AssetID      string `json:"assetId"`
+	AssetName    string `json:"assetName"`
+	PlanID       string `json:"planId,omitempty"`
+	CostID       string `json:"costId,omitempty"`
+	Description  string `json:"description"`
+	FiscalYear   int    `json:"fiscalYear"`
+	FiscalPeriod string `json:"fiscalPeriod,omitempty"`
+	Scenario     string `json:"scenario"`
+	AmountMinor  int64  `json:"amountMinor"`
+	Currency     string `json:"currency"`
+	Kind         string `json:"kind"`
+}
+
+type ForecastAmountBreakdown struct {
+	AmountKind string               `json:"amountKind"`
+	Scenario   string               `json:"scenario,omitempty"`
+	GroupKey   string               `json:"groupKey,omitempty"`
+	Label      string               `json:"label"`
+	GroupBy    string               `json:"groupBy"`
+	Currency   string               `json:"currency"`
+	TotalMinor int64                `json:"totalMinor"`
+	ItemCount  int                  `json:"itemCount"`
+	Items      []ForecastAmountItem `json:"items"`
+}
+
 type KindDefault struct {
-	OrganizationID           string     `json:"organizationId"`
-	AssetKind                string     `json:"assetKind"`
-	Scenario                 string     `json:"scenario"`
-	ExpectedUsefulLifeMonths int        `json:"expectedUsefulLifeMonths"`
-	ReplacementModelID       string     `json:"replacementModelId,omitempty"`
-	Revision                 int64      `json:"revision"`
-	CreatedAt                time.Time  `json:"createdAt"`
-	UpdatedAt                time.Time  `json:"updatedAt"`
+	OrganizationID           string    `json:"organizationId"`
+	AssetKind                string    `json:"assetKind"`
+	Scenario                 string    `json:"scenario"`
+	ExpectedUsefulLifeMonths int       `json:"expectedUsefulLifeMonths"`
+	ReplacementModelID       string    `json:"replacementModelId,omitempty"`
+	Revision                 int64     `json:"revision"`
+	CreatedAt                time.Time `json:"createdAt"`
+	UpdatedAt                time.Time `json:"updatedAt"`
 }
 
 type UpsertKindDefaultInput struct {
@@ -189,6 +238,28 @@ type UpsertKindDefaultInput struct {
 	Revision                 int64  `json:"revision,omitempty"`
 }
 
+type ReplacementPlan struct {
+	ID             string    `json:"id"`
+	OrganizationID string    `json:"organizationId"`
+	Name           string    `json:"name"`
+	Grouping       string    `json:"grouping"`
+	GroupKey       string    `json:"groupKey,omitempty"`
+	Scenario       string    `json:"scenario"`
+	AssetCount     int       `json:"assetCount"`
+	Revision       int64     `json:"revision"`
+	CreatedAt      time.Time `json:"createdAt"`
+	UpdatedAt      time.Time `json:"updatedAt"`
+}
+
+type ReplacementPlanInput struct {
+	ID       string `json:"id,omitempty"`
+	Name     string `json:"name"`
+	Grouping string `json:"grouping"`
+	GroupKey string `json:"groupKey,omitempty"`
+	Scenario string `json:"scenario"`
+	Revision int64  `json:"revision,omitempty"`
+}
+
 type Store interface {
 	ListPlans(ctx context.Context, organizationID string, query ListPlansQuery) ([]Plan, error)
 	GetPlan(ctx context.Context, organizationID, id string) (Plan, error)
@@ -197,6 +268,13 @@ type Store interface {
 	ListPlanVersions(ctx context.Context, organizationID, planID string) ([]PlanVersion, error)
 	ListKindDefaults(ctx context.Context, organizationID, scenario string) ([]KindDefault, error)
 	UpsertKindDefault(ctx context.Context, item KindDefault) (KindDefault, error)
+	ListReplacementPlans(ctx context.Context, organizationID string) ([]ReplacementPlan, error)
+	GetReplacementPlan(ctx context.Context, organizationID, id string) (ReplacementPlan, error)
+	CreateReplacementPlan(ctx context.Context, plan ReplacementPlan) (ReplacementPlan, error)
+	UpdateReplacementPlan(ctx context.Context, plan ReplacementPlan, expectedRevision int64) (ReplacementPlan, error)
+	AssetReplacementPlanIDs(ctx context.Context, organizationID string) (map[string]string, error)
+	ListReplacementPlanAssetIDs(ctx context.Context, organizationID, planID string) ([]string, error)
+	SetAssetReplacementPlan(ctx context.Context, organizationID, assetID, planID string) error
 }
 
 type AssetReader interface {

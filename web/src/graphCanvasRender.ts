@@ -21,6 +21,7 @@ function paintNode(
   const colors = colorsForNode(node.kind, node.attributes, colorMode, kindColorOverrides)
   return {
     fill: colors.stroke,
+    fills: colors.fills,
     stroke: node.id === selectedNodeID ? '#ffffff' : node.degree === 0 ? '#f0b429' : '#071018',
     width: node.id === selectedNodeID ? 2.4 : 1.15,
     dash: node.degree === 0,
@@ -125,7 +126,15 @@ export function drawGraphCanvas(
     ctx.beginPath()
     ctx.arc(x, y, radius, 0, Math.PI * 2)
     ctx.globalAlpha = isEmphasized ? 1 : 0.12
-    ctx.fillStyle = paint.fill
+    if (paint.fills && paint.fills.length >= 2) {
+      const gradient = ctx.createLinearGradient(x - radius, y - radius, x + radius, y + radius)
+      paint.fills.forEach((color, index, fills) => {
+        gradient.addColorStop(index / Math.max(fills.length - 1, 1), color)
+      })
+      ctx.fillStyle = gradient
+    } else {
+      ctx.fillStyle = paint.fill
+    }
     ctx.fill()
     ctx.strokeStyle = selectedOrKind ? '#ffffff' : paint.stroke
     ctx.lineWidth = selectedOrKind ? 2.4 : isEmphasized && (active || kind) ? 1.8 : paint.width

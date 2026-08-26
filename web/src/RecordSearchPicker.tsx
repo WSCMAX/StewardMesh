@@ -5,7 +5,7 @@ import { compactInputClass, cx, inputClass, labelClass, menuSurfaceClass, plainB
 
 export type SearchableRecord = { id: string; label: string; detail?: string }
 
-export type RecordSearchKind = 'asset' | 'document' | 'room' | 'identity' | 'site' | 'building' | 'department' | 'model' | 'purchase-order' | 'vendor'
+export type RecordSearchKind = 'asset' | 'document' | 'room' | 'identity' | 'site' | 'building' | 'department' | 'model' | 'manufacturer' | 'purchase-order' | 'vendor' | 'plan'
 
 type RecordSearchPickerProps = {
   label: string
@@ -59,6 +59,11 @@ function recordFromUnknown(value: unknown, kind: RecordSearchKind): SearchableRe
     if (status === 'retired') detailParts.push('retired')
     return { id: item.id, label: `${manufacturer} ${name}${modelNumber ? ` ${modelNumber}` : ''}`.trim(), detail: detailParts.join(' · ') }
   }
+  if (kind === 'manufacturer') {
+    const manufacturer = typeof item.manufacturer === 'string' ? item.manufacturer.trim() : ''
+    if (!manufacturer) return null
+    return { id: manufacturer, label: manufacturer }
+  }
   if (kind === 'purchase-order') {
     const number = typeof item.number === 'string' ? item.number : item.id
     const status = typeof item.status === 'string' ? item.status : ''
@@ -67,6 +72,12 @@ function recordFromUnknown(value: unknown, kind: RecordSearchKind): SearchableRe
   if (kind === 'vendor') {
     const name = typeof item.name === 'string' ? item.name : item.id
     return { id: item.id, label: name, detail: typeof item.status === 'string' ? item.status : undefined }
+  }
+  if (kind === 'plan') {
+    const name = typeof item.name === 'string' ? item.name : item.id
+    const grouping = typeof item.grouping === 'string' ? item.grouping : ''
+    const assetCount = typeof item.assetCount === 'number' ? `${item.assetCount} assets` : ''
+    return { id: item.id, label: name, detail: [grouping, assetCount].filter(Boolean).join(' · ') }
   }
   const name = typeof item.name === 'string' && item.name ? item.name : typeof item.number === 'string' ? item.number : item.id
   const number = typeof item.number === 'string' ? item.number : ''
@@ -97,11 +108,29 @@ async function searchRecords(kind: RecordSearchKind, query: string): Promise<Sea
     const response = await requestJSON(`/api/v1/identities?q=${encoded}&kind=person&limit=20`)
     return items(response).map((item) => recordFromUnknown(item, kind)).filter((item): item is SearchableRecord => item !== null)
   }
-  if (kind === 'model') {
+  if (kind === 'model' || kind === 'manufacturer') {
     const params = new URLSearchParams({ limit: '20', includeRetired: 'true' })
     if (needle) params.set('q', query.trim())
     const response = await requestJSON(`/api/v1/asset-models?${params.toString()}`)
-    return items(response).map((item) => recordFromUnknown(item, kind)).filter((item): item is SearchableRecord => item !== null)
+    const records = items(response).map((item) => recordFromUnknown(item, kind)).filter((item): item is SearchableRecord => item !== null)
+    if (kind === 'model') return records
+    const seen = new Set<string>()
+    const unique: SearchableRecord[] = []
+    for (const record of records) {
+      const key = record.id.toLowerCase()
+      if (seen.has(key)) continue
+      seen.add(key)
+      unique.push(record)
+    }
+    return unique
+  }
+  if (kind === 'plan') {
+    const response = await requestJSON('/api/v1/horizon/replacement-plans')
+    return items(response)
+      .map((item) => recordFromUnknown(item, kind))
+      .filter((item): item is SearchableRecord => item !== null)
+      .filter((item) => !needle || item.label.toLowerCase().includes(needle) || item.id.toLowerCase().includes(needle) || (item.detail ?? '').toLowerCase().includes(needle))
+      .slice(0, 20)
   }
   if (kind === 'purchase-order' || kind === 'vendor') {
     const response = await requestJSON('/api/v1/ledger')

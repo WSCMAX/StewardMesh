@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/maxlemke/stewardmesh/internal/people"
 )
@@ -22,9 +21,8 @@ func (s *Seeder) seedStudents(ctx context.Context) (int, error) {
 				displayTag = GraphicDesignStudentTag
 			}
 		}
-		firstName := employeeFirstNames[(index*3)%len(employeeFirstNames)]
-		lastName := employeeLastNames[(index*11)%len(employeeLastNames)]
-		displayName := fmt.Sprintf("%s %s", firstName, lastName)
+		person := campusStudentName(index)
+		displayName := person.Display
 		if displayTag != "" {
 			displayName = fmt.Sprintf("%s · %s", displayName, displayTag)
 		} else if !active {
@@ -51,7 +49,7 @@ func (s *Seeder) seedStudents(ctx context.Context) (int, error) {
 				subjectPrefix = "graphic-design-student"
 			}
 		}
-		emailLocal := fmt.Sprintf("%s.%s%05d", strings.ToLower(firstName), strings.ToLower(lastName), index+1)
+		emailLocal := person.emailLocal(index+1, 5)
 		buildingID := s.buildingIDs[department.BuildingSlug]
 		var roomID string
 		if active && len(s.dormRoomIDs) > 0 && index < DormResidentCount {

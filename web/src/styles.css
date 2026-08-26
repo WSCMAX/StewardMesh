@@ -48,6 +48,16 @@ select {
   cursor: pointer;
 }
 
+/* Native selects size to their longest option and can expand the page even
+   inside visually hidden labels. Keep those controls at a 1px clip box. */
+.sr-only select {
+  min-width: 0;
+  width: 1px;
+  max-width: 1px;
+  height: 1px;
+  overflow: hidden;
+}
+
 button:disabled,
 select:disabled {
   cursor: not-allowed;
@@ -69,9 +79,13 @@ option {
   color: var(--color-steward-ink-950);
 }
 
+*:focus {
+  outline: none;
+}
+
 *:focus-visible {
-  outline: 2px solid var(--color-steward-teal);
-  outline-offset: 2px;
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--color-steward-teal);
 }
 
 @keyframes steward-pulse {
@@ -81,6 +95,74 @@ option {
 
 .steward-pulse {
   animation: steward-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes steward-scanline {
+  0% { transform: translateY(-10%); opacity: 0; }
+  12% { opacity: 0.85; }
+  88% { opacity: 0.85; }
+  100% { transform: translateY(320%); opacity: 0; }
+}
+
+.steward-scan-viewfinder {
+  position: relative;
+  overflow: hidden;
+  border-radius: 0.375rem;
+  background: #000;
+}
+
+.steward-scan-viewfinder video {
+  display: block;
+  width: 100%;
+  max-height: 18rem;
+  object-fit: contain;
+  background: #000;
+}
+
+.steward-scan-viewfinder-compact video {
+  max-height: 11rem;
+}
+
+.steward-scan-overlay {
+  pointer-events: none;
+  position: absolute;
+  inset: 12%;
+  border: 1px solid rgb(22 191 167 / 0.45);
+  box-shadow: 0 0 0 999px rgb(0 0 0 / 0.38);
+}
+
+.steward-scan-overlay::before,
+.steward-scan-overlay::after {
+  content: "";
+  position: absolute;
+  width: 1.15rem;
+  height: 1.15rem;
+  border-color: #16bfa7;
+  border-style: solid;
+}
+
+.steward-scan-overlay::before {
+  top: -1px;
+  left: -1px;
+  border-width: 2px 0 0 2px;
+}
+
+.steward-scan-overlay::after {
+  right: -1px;
+  bottom: -1px;
+  border-width: 0 2px 2px 0;
+}
+
+.steward-scan-line {
+  pointer-events: none;
+  position: absolute;
+  left: 18%;
+  right: 18%;
+  top: 18%;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, rgb(22 191 167 / 0.95), transparent);
+  box-shadow: 0 0 12px rgb(22 191 167 / 0.55);
+  animation: steward-scanline 2.4s ease-in-out infinite;
 }
 
 .steward-grid-scroll {

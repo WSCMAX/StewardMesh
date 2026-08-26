@@ -1,0 +1,41 @@
+# Riverside Community College campus demo. Use with the campus-demo Compose
+# profile so the optional campus-demo image loads the dataset without compiling
+# it into the production runtime image.
+#
+#   docker compose -f deploy/docker-compose.yml --profile campus-demo up -d --wait
+#
+# Requirement: REQ-DIRECTORY-EXPANSION-007. Feature: platform.foundation.
+
+listen:
+  addr: "0.0.0.0:8080"
+  allowed_origin: "http://127.0.0.1:8080"
+  insecure_bind: true
+
+organization:
+  id: demo-campus
+  name: "[Campus Demo] Riverside Community College"
+
+repository:
+  driver: postgres
+  url: "postgres://stewardmesh:stewardmesh@postgres:5432/stewardmesh?sslmode=disable"
+
+storage:
+  driver: local
+  blob_dir: /var/lib/stewardmesh/blobs
+
+cache:
+  driver: none
+
+web:
+  dir: /web
+
+session:
+  cookie_secure: false
+  ttl: 12h
+
+seed:
+  synthetic: false
+  campus: false
+
+reach:
+  endpoints_file: /etc/stewardmesh/reach-endpoints.json

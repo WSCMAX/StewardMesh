@@ -20,11 +20,17 @@ is `GET /api/v1/mesh/graph`. It layers Ledger, Stack, Labels, Goals, Vault, and
 Horizon records onto the same typed node/edge model, using only Guard grants
 the caller already has. Visibility never appears in a client request.
 
-`GET /api/v1/mesh/graph` accepts bounded search, one or more node types
+`GET /api/v1/mesh/graph` accepts bounded search, an optional typed `node`
+neighborhood (`kind:id`), one or more node types
 (`kind` / `kinds`), one or more relationship types (`relationship` /
 `relationships`), and a record limit. Selecting kinds drops every other record
-type and any edge that would have pointed at it. Search keeps matching records
-and their direct connections within the limit.
+type and any edge that would have pointed at it. Search and node filters keep
+matching records and their direct connections within the limit. Organization
+`contains` edges are not projected for product records; use Mesh product hubs
+for campus membership. The Mesh Campus view hides inactive people and retired
+assets, colors people by occupancy role (gradients when a person both teaches
+and attends) and assets by model, and can overlay instructor/student/resident
+user-type nodes.
 
 Node IDs are typed (`site:<id>`, `person:<id>`, or `asset:<id>`), labels are
 bounded, and attributes contain only minimal status, origin, and asset-kind

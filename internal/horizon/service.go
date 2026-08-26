@@ -23,12 +23,14 @@ import (
 )
 
 var (
-	stableIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
-	scenarioPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
-	currencyPattern = regexp.MustCompile(`^[A-Z]{3}$`)
-	validStages     = stringSet("planned", "in_service", "refresh_due", "approved", "retired")
-	validGroups     = stringSet("fiscal_year", "department", "site", "tag", "goal", "asset_class")
-	validAssetKinds = stringSet("server", "computer", "desktop", "laptop", "tablet", "phone", "network", "peripheral", "virtual", "other")
+	stableIDPattern  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
+	scenarioPattern  = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
+	currencyPattern  = regexp.MustCompile(`^[A-Z]{3}$`)
+	validStages      = stringSet("planned", "in_service", "refresh_due", "approved", "retired")
+	validGroups      = stringSet("fiscal_year", "department", "site", "tag", "goal", "asset_class", "manufacturer", "building")
+	validAmountKinds = stringSet("planned", "actual", "estimated", "committed", "normalized_real", "tco")
+	otherDimension   = "Other"
+	validAssetKinds  = stringSet("server", "computer", "desktop", "laptop", "tablet", "phone", "network", "peripheral", "virtual", "other")
 )
 
 type ServiceConfig struct {
@@ -266,6 +268,161 @@ func (s *Service) UpdatePlan(ctx context.Context, input UpdatePlanInput) (Plan, 
 	return deriveReplacementDate(updated, asset), nil
 }
 
+var validReplacementGroupings = stringSet("department", "building", "type", "manufacturer", "site", "custom")
+
+func (s *Service) ListReplacementPlans(ctx context.Context) ([]ReplacementPlan, error) {
+	return s.store.ListReplacementPlans(ctx, s.organizationID)
+}
+
+func (s *Service) GetReplacementPlan(ctx context.Context, id string) (ReplacementPlan, error) {
+	id = strings.TrimSpace(id)
+	if !stableIDPattern.MatchString(id) {
+		return ReplacementPlan{}, ErrInvalidInput
+	}
+	return s.store.GetReplacementPlan(ctx, s.organizationID, id)
+}
+
+func (s *Service) CreateReplacementPlan(ctx context.Context, input ReplacementPlanInput) (ReplacementPlan, error) {
+	normalized, err := normalizeReplacementPlanInput(input)
+	if err != nil {
+		return ReplacementPlan{}, err
+	}
+	id := strings.TrimSpace(normalized.ID)
+	if id == "" {
+		id, err = foundation.NewCorrelationID()
+		if err != nil {
+			return ReplacementPlan{}, fmt.Errorf("create replacement plan id: %w", err)
+		}
+	} else if !stableIDPattern.MatchString(id) {
+		return ReplacementPlan{}, ErrInvalidInput
+	}
+	now, revision := s.creationState(ctx)
+	created, err := s.store.CreateReplacementPlan(ctx, ReplacementPlan{
+		ID: id, OrganizationID: s.organizationID, Name: normalized.Name, Grouping: normalized.Grouping,
+		GroupKey: normalized.GroupKey, Scenario: normalized.Scenario, Revision: revision, CreatedAt: now, UpdatedAt: now,
+	})
+	if err != nil {
+		return ReplacementPlan{}, err
+	}
+	if err := s.audit(ctx, "horizon.replacement_plan.created", created.ID, replacementPlanAuditMetadata(created)); err != nil {
+		return ReplacementPlan{}, fmt.Errorf("audit replacement plan creation: %w", err)
+	}
+	return created, nil
+}
+
+func (s *Service) UpdateReplacementPlan(ctx context.Context, input ReplacementPlanInput) (ReplacementPlan, error) {
+	input.ID = strings.TrimSpace(input.ID)
+	if !stableIDPattern.MatchString(input.ID) || input.Revision < 1 {
+		return ReplacementPlan{}, ErrInvalidInput
+	}
+	normalized, err := normalizeReplacementPlanInput(input)
+	if err != nil {
+		return ReplacementPlan{}, err
+	}
+	if err := s.checkWrite(ctx, input.ID); err != nil {
+		return ReplacementPlan{}, err
+	}
+	existing, err := s.store.GetReplacementPlan(ctx, s.organizationID, input.ID)
+	if err != nil {
+		return ReplacementPlan{}, err
+	}
+	if existing.Revision != input.Revision {
+		return ReplacementPlan{}, ErrConflict
+	}
+	now := s.now().UTC()
+	updated := existing
+	updated.Name = normalized.Name
+	updated.Grouping = normalized.Grouping
+	updated.GroupKey = normalized.GroupKey
+	updated.Scenario = normalized.Scenario
+	updated.Revision++
+	updated.UpdatedAt = now
+	updated, err = s.store.UpdateReplacementPlan(ctx, updated, existing.Revision)
+	if err != nil {
+		return ReplacementPlan{}, err
+	}
+	if err := s.audit(ctx, "horizon.replacement_plan.updated", updated.ID, replacementPlanAuditMetadata(updated)); err != nil {
+		return ReplacementPlan{}, fmt.Errorf("audit replacement plan update: %w", err)
+	}
+	return updated, nil
+}
+
+func (s *Service) AssetReplacementPlanIDs(ctx context.Context) (map[string]string, error) {
+	return s.store.AssetReplacementPlanIDs(ctx, s.organizationID)
+}
+
+func (s *Service) ListReplacementPlanAssets(ctx context.Context, planID string) ([]domain.Asset, error) {
+	planID = strings.TrimSpace(planID)
+	if !stableIDPattern.MatchString(planID) {
+		return nil, ErrInvalidInput
+	}
+	if _, err := s.store.GetReplacementPlan(ctx, s.organizationID, planID); err != nil {
+		return nil, err
+	}
+	ids, err := s.store.ListReplacementPlanAssetIDs(ctx, s.organizationID, planID)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]domain.Asset, 0, len(ids))
+	for _, id := range ids {
+		asset, err := s.assets.GetAsset(ctx, id)
+		if err != nil {
+			if errors.Is(err, atlas.ErrNotFound) {
+				continue
+			}
+			return nil, mapAssetError(err)
+		}
+		asset.ReplacementPlanID = planID
+		items = append(items, asset)
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].Name < items[j].Name })
+	return items, nil
+}
+
+func (s *Service) SetAssetReplacementPlan(ctx context.Context, assetID, planID string) error {
+	assetID = strings.TrimSpace(assetID)
+	planID = strings.TrimSpace(planID)
+	if !stableIDPattern.MatchString(assetID) {
+		return ErrInvalidInput
+	}
+	if _, err := s.assets.GetAsset(ctx, assetID); err != nil {
+		return mapAssetError(err)
+	}
+	if planID != "" {
+		if !stableIDPattern.MatchString(planID) {
+			return ErrInvalidInput
+		}
+		if _, err := s.store.GetReplacementPlan(ctx, s.organizationID, planID); err != nil {
+			return err
+		}
+	}
+	if err := s.store.SetAssetReplacementPlan(ctx, s.organizationID, assetID, planID); err != nil {
+		return err
+	}
+	return s.audit(ctx, "horizon.replacement_plan.assigned", assetID, map[string]string{"planId": planID})
+}
+
+func normalizeReplacementPlanInput(input ReplacementPlanInput) (ReplacementPlanInput, error) {
+	input.Name = strings.TrimSpace(input.Name)
+	input.Grouping = strings.ToLower(strings.TrimSpace(input.Grouping))
+	input.GroupKey = strings.TrimSpace(input.GroupKey)
+	input.Scenario = strings.ToLower(strings.TrimSpace(input.Scenario))
+	if input.Scenario == "" {
+		input.Scenario = "baseline"
+	}
+	if input.Name == "" || len(input.Name) > 200 || !validReplacementGroupings[input.Grouping] || len(input.GroupKey) > 128 || !scenarioPattern.MatchString(input.Scenario) {
+		return ReplacementPlanInput{}, ErrInvalidInput
+	}
+	return input, nil
+}
+
+func replacementPlanAuditMetadata(plan ReplacementPlan) map[string]string {
+	return map[string]string{
+		"name": plan.Name, "grouping": plan.Grouping, "groupKey": plan.GroupKey,
+		"scenario": plan.Scenario, "revision": strconv.FormatInt(plan.Revision, 10),
+	}
+}
+
 // EnsureBaselinePlanFromAsset creates or refreshes the baseline Horizon plan from Atlas asset and model defaults.
 func (s *Service) EnsureBaselinePlanFromAsset(ctx context.Context, assetID string) error {
 	assetID = strings.TrimSpace(assetID)
@@ -365,6 +522,9 @@ func (s *Service) Forecast(ctx context.Context, query ForecastQuery) (Forecast, 
 		AsOf: query.AsOf, GroupBy: query.GroupBy, Scenarios: append([]string(nil), query.Scenarios...),
 		TotalsByKindMinor: make(map[string]int64), Groups: []ForecastGroup{},
 	}
+	if query.IncludeItems {
+		report.Items = []ForecastItem{}
+	}
 	type groupAccumulator struct {
 		ForecastGroup
 		assets map[string]struct{}
@@ -395,6 +555,17 @@ func (s *Service) Forecast(ctx context.Context, query ForecastQuery) (Forecast, 
 			if !added {
 				return Forecast{}, ErrConflict
 			}
+		}
+		if query.IncludeItems {
+			department, kind, manufacturer, building, classifyErr := s.classifyAsset(ctx, asset, forecastCtx.manufacturerByModel)
+			if classifyErr != nil {
+				return Forecast{}, classifyErr
+			}
+			report.Items = append(report.Items, ForecastItem{
+				PlanID: plan.ID, AssetID: asset.ID, AssetName: asset.Name, Scenario: plan.Scenario,
+				FiscalYear: fiscalYear, ReplacementCostMinor: plan.ReplacementCostMinor, Currency: plan.Currency,
+				Department: department, Kind: kind, Manufacturer: manufacturer, Building: building,
+			})
 		}
 		for _, dimension := range row.dimensions {
 			mapKey := plan.Scenario + "\x00" + dimension.key
@@ -429,6 +600,15 @@ func (s *Service) Forecast(ctx context.Context, query ForecastQuery) (Forecast, 
 		group.AssetCount = len(group.assets)
 		report.Groups = append(report.Groups, group.ForecastGroup)
 	}
+	sort.Slice(report.Items, func(i, j int) bool {
+		if report.Items[i].AssetName == report.Items[j].AssetName {
+			if report.Items[i].FiscalYear == report.Items[j].FiscalYear {
+				return report.Items[i].AssetID < report.Items[j].AssetID
+			}
+			return report.Items[i].FiscalYear < report.Items[j].FiscalYear
+		}
+		return report.Items[i].AssetName < report.Items[j].AssetName
+	})
 	sort.Slice(report.Groups, func(i, j int) bool {
 		if report.Groups[i].Scenario == report.Groups[j].Scenario {
 			if report.Groups[i].Label == report.Groups[j].Label {
@@ -503,11 +683,123 @@ func (s *Service) ForecastGroupAssets(ctx context.Context, query ForecastGroupAs
 	return result, nil
 }
 
+func (s *Service) ForecastAmountBreakdown(ctx context.Context, query ForecastAmountQuery) (ForecastAmountBreakdown, error) {
+	query.AmountKind = strings.ToLower(strings.TrimSpace(query.AmountKind))
+	query.Scenario = strings.ToLower(strings.TrimSpace(query.Scenario))
+	query.GroupKey = strings.TrimSpace(query.GroupKey)
+	if !validAmountKinds[query.AmountKind] || (query.GroupKey == "") != (query.Scenario == "") {
+		return ForecastAmountBreakdown{}, ErrInvalidInput
+	}
+	if query.Scenario != "" && !scenarioPattern.MatchString(query.Scenario) {
+		return ForecastAmountBreakdown{}, ErrInvalidInput
+	}
+	if query.Scenario != "" {
+		query.ForecastQuery.Scenarios = []string{query.Scenario}
+	}
+	normalized, err := normalizeForecastQuery(query.ForecastQuery, s.now())
+	if err != nil {
+		return ForecastAmountBreakdown{}, err
+	}
+	forecastCtx, err := s.loadForecastContext(ctx, normalized)
+	if err != nil {
+		return ForecastAmountBreakdown{}, err
+	}
+	rows, err := s.forecastPlanRows(ctx, forecastCtx)
+	if err != nil {
+		return ForecastAmountBreakdown{}, err
+	}
+	result := ForecastAmountBreakdown{
+		AmountKind: query.AmountKind, Scenario: query.Scenario, GroupKey: query.GroupKey,
+		Label: amountBreakdownLabel(query), GroupBy: normalized.GroupBy, Items: []ForecastAmountItem{},
+	}
+	currencies := make(map[string]struct{})
+	for _, row := range rows {
+		if query.Scenario != "" && row.plan.Scenario != query.Scenario {
+			continue
+		}
+		if query.GroupKey != "" {
+			matched := false
+			for _, dimension := range row.dimensions {
+				if dimension.key == query.GroupKey {
+					result.Label = dimension.label
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				continue
+			}
+		}
+		items := amountItemsForRow(forecastCtx.finance.Costs, row, query.AmountKind)
+		for _, item := range items {
+			var ok bool
+			result.TotalMinor, ok = addMinor(result.TotalMinor, item.AmountMinor)
+			if !ok {
+				return ForecastAmountBreakdown{}, ErrConflict
+			}
+			currencies[item.Currency] = struct{}{}
+			result.Items = append(result.Items, item)
+		}
+	}
+	if len(currencies) > 1 {
+		return ForecastAmountBreakdown{}, ErrMixedCurrency
+	}
+	for currency := range currencies {
+		result.Currency = currency
+	}
+	sort.Slice(result.Items, func(i, j int) bool {
+		if result.Items[i].AssetName == result.Items[j].AssetName {
+			if result.Items[i].AmountMinor == result.Items[j].AmountMinor {
+				return result.Items[i].AssetID < result.Items[j].AssetID
+			}
+			return result.Items[i].AmountMinor > result.Items[j].AmountMinor
+		}
+		return result.Items[i].AssetName < result.Items[j].AssetName
+	})
+	result.ItemCount = len(result.Items)
+	return result, nil
+}
+
+func amountBreakdownLabel(query ForecastAmountQuery) string {
+	if query.GroupKey != "" {
+		return query.GroupKey
+	}
+	return "All forecast groups"
+}
+
+func amountItemsForRow(costs []ledger.CostRecord, row forecastPlanRow, amountKind string) []ForecastAmountItem {
+	if amountKind == "planned" {
+		return []ForecastAmountItem{{
+			AssetID: row.asset.ID, AssetName: row.asset.Name, PlanID: row.plan.ID,
+			Description: "Planned replacement", FiscalYear: row.fiscalYear, Scenario: row.plan.Scenario,
+			AmountMinor: row.plan.ReplacementCostMinor, Currency: row.plan.Currency, Kind: "planned",
+		}}
+	}
+	period := fmt.Sprintf("FY%d", row.fiscalYear)
+	items := make([]ForecastAmountItem, 0)
+	for _, cost := range costs {
+		if cost.AssetID != row.plan.AssetID || cost.Scenario != row.plan.Scenario || cost.FiscalPeriod != period || cost.Kind != amountKind {
+			continue
+		}
+		description := strings.TrimSpace(cost.Description)
+		if description == "" {
+			description = amountKind
+		}
+		items = append(items, ForecastAmountItem{
+			AssetID: row.asset.ID, AssetName: row.asset.Name, PlanID: row.plan.ID, CostID: cost.ID,
+			Description: description, FiscalYear: row.fiscalYear, FiscalPeriod: cost.FiscalPeriod,
+			Scenario: row.plan.Scenario, AmountMinor: cost.AmountMinor, Currency: cost.Currency, Kind: cost.Kind,
+		})
+	}
+	return items
+}
+
 type forecastContext struct {
-	query      ForecastQuery
-	finance    ledger.Snapshot
-	goalNames  map[string]string
-	assetsByID map[string]domain.Asset
+	query               ForecastQuery
+	finance             ledger.Snapshot
+	goalNames           map[string]string
+	assetsByID          map[string]domain.Asset
+	manufacturerByModel map[string]string
 }
 
 type forecastPlanRow struct {
@@ -538,7 +830,7 @@ func (s *Service) loadForecastContext(ctx context.Context, query ForecastQuery) 
 	for _, goal := range goals {
 		goalNames[goal.ID] = goal.Name
 	}
-	return forecastContext{query: query, finance: finance, goalNames: goalNames, assetsByID: assetsByID}, nil
+	return forecastContext{query: query, finance: finance, goalNames: goalNames, assetsByID: assetsByID, manufacturerByModel: make(map[string]string)}, nil
 }
 
 func (s *Service) forecastPlanRows(ctx context.Context, forecastCtx forecastContext) ([]forecastPlanRow, error) {
@@ -575,7 +867,7 @@ func (s *Service) forecastPlanRows(ctx context.Context, forecastCtx forecastCont
 		if fiscalYear < forecastCtx.query.FromYear || fiscalYear > forecastCtx.query.ToYear {
 			continue
 		}
-		dimensions, err := s.dimensions(ctx, forecastCtx.query.GroupBy, asset, fiscalYear, forecastCtx.goalNames)
+		dimensions, err := s.dimensions(ctx, forecastCtx, asset, fiscalYear)
 		if err != nil {
 			return nil, err
 		}
@@ -610,17 +902,25 @@ func (s *Service) ExportCSV(ctx context.Context, query ForecastQuery) ([]byte, e
 
 type dimension struct{ key, label string }
 
-func (s *Service) dimensions(ctx context.Context, groupBy string, asset domain.Asset, fiscalYear int, goalNames map[string]string) ([]dimension, error) {
-	switch groupBy {
+func (s *Service) dimensions(ctx context.Context, forecastCtx forecastContext, asset domain.Asset, fiscalYear int) ([]dimension, error) {
+	switch forecastCtx.query.GroupBy {
 	case "fiscal_year":
 		label := fmt.Sprintf("FY%d", fiscalYear)
 		return []dimension{{key: label, label: label}}, nil
 	case "department":
-		return []dimension{namedDimension(asset.DepartmentID, "No department")}, nil
+		return []dimension{namedDimension(asset.DepartmentID, otherDimension)}, nil
 	case "site":
-		return []dimension{namedDimension(asset.SiteID, "No site")}, nil
+		return []dimension{namedDimension(asset.SiteID, otherDimension)}, nil
 	case "asset_class":
-		return []dimension{namedDimension(asset.Kind, "No asset class")}, nil
+		return []dimension{namedDimension(asset.Kind, otherDimension)}, nil
+	case "manufacturer":
+		manufacturer, err := s.assetManufacturer(ctx, asset, forecastCtx.manufacturerByModel)
+		if err != nil {
+			return nil, err
+		}
+		return []dimension{namedDimension(manufacturer, otherDimension)}, nil
+	case "building":
+		return []dimension{namedDimension(asset.BuildingID, otherDimension)}, nil
 	case "tag":
 		tags, err := s.relationships.EvaluateTags(ctx, threads.TargetAsset, asset.ID)
 		if err != nil {
@@ -643,7 +943,7 @@ func (s *Service) dimensions(ctx context.Context, groupBy string, asset domain.A
 		}
 		result := make([]dimension, 0, len(links))
 		for _, link := range links {
-			result = append(result, dimension{key: link.GoalID, label: firstNonEmpty(goalNames[link.GoalID], link.GoalID)})
+			result = append(result, dimension{key: link.GoalID, label: firstNonEmpty(forecastCtx.goalNames[link.GoalID], link.GoalID)})
 		}
 		if len(result) == 0 {
 			result = append(result, dimension{key: "unassigned", label: "No linked goal"})
@@ -809,10 +1109,49 @@ func versionFromPlan(plan Plan, actorID string, recordedAt time.Time) PlanVersio
 }
 
 func namedDimension(value, emptyLabel string) dimension {
+	value = strings.TrimSpace(value)
 	if value == "" {
-		return dimension{key: "unassigned", label: emptyLabel}
+		return dimension{key: emptyLabel, label: emptyLabel}
 	}
 	return dimension{key: value, label: value}
+}
+
+func (s *Service) classifyAsset(ctx context.Context, asset domain.Asset, manufacturerByModel map[string]string) (department, kind, manufacturer, building string, err error) {
+	manufacturer, err = s.assetManufacturer(ctx, asset, manufacturerByModel)
+	if err != nil {
+		return "", "", "", "", err
+	}
+	return firstNonEmpty(strings.TrimSpace(asset.DepartmentID), otherDimension),
+		firstNonEmpty(strings.TrimSpace(asset.Kind), otherDimension),
+		firstNonEmpty(manufacturer, otherDimension),
+		firstNonEmpty(strings.TrimSpace(asset.BuildingID), otherDimension),
+		nil
+}
+
+func (s *Service) assetManufacturer(ctx context.Context, asset domain.Asset, manufacturerByModel map[string]string) (string, error) {
+	if asset.ModelContext != nil {
+		if name := strings.TrimSpace(asset.ModelContext.Manufacturer); name != "" {
+			return name, nil
+		}
+	}
+	modelID := strings.TrimSpace(asset.ModelID)
+	if modelID == "" {
+		return "", nil
+	}
+	if cached, exists := manufacturerByModel[modelID]; exists {
+		return cached, nil
+	}
+	model, err := s.assets.GetModel(ctx, modelID)
+	if err != nil {
+		if errors.Is(err, atlas.ErrNotFound) {
+			manufacturerByModel[modelID] = ""
+			return "", nil
+		}
+		return "", mapAssetError(err)
+	}
+	name := strings.TrimSpace(model.Manufacturer)
+	manufacturerByModel[modelID] = name
+	return name, nil
 }
 
 func normalizeDate(value time.Time) time.Time {
@@ -1006,7 +1345,7 @@ func (s *Service) UpsertKindDefault(ctx context.Context, input UpsertKindDefault
 	if err := s.audit(ctx, "horizon.kind_default.saved", saved.AssetKind, map[string]string{
 		"assetKind": saved.AssetKind, "scenario": saved.Scenario,
 		"expectedUsefulLifeMonths": strconv.Itoa(saved.ExpectedUsefulLifeMonths),
-		"revision": strconv.FormatInt(saved.Revision, 10),
+		"revision":                 strconv.FormatInt(saved.Revision, 10),
 	}); err != nil {
 		return KindDefault{}, fmt.Errorf("audit Horizon kind default: %w", err)
 	}

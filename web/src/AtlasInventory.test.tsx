@@ -38,8 +38,9 @@ test('filters assets, loads lifecycle details, and has no automated accessibilit
     throw new Error(`unexpected request: ${String(input)}`)
   }))
   const { container } = render(<AtlasInventory assets={[asset]} csrfToken="csrf-token" onAssetsChange={() => undefined} permissions={['assets.read']} />)
-  expect(screen.getByRole('heading', { name: 'Atlas — Asset inventory' })).toBeInTheDocument()
-  expect(screen.getByRole('region', { name: 'Atlas inventory workflow' })).toBeInTheDocument()
+  expect(screen.getByRole('heading', { name: 'Asset inventory' })).toBeInTheDocument()
+  expect(screen.getByRole('region', { name: 'Atlas inventory workflow' })).toHaveClass('min-w-0', 'max-w-full')
+  expect(screen.getByRole('tablist')).toHaveClass('min-w-0', 'max-w-full')
   expect(screen.getByRole('tab', { name: 'Assets' })).toHaveAttribute('aria-selected', 'true')
   expect(screen.queryByRole('tab', { name: 'Labels' })).not.toBeInTheDocument()
   expect(screen.queryByRole('button', { name: 'Find asset' })).not.toBeInTheDocument()
@@ -84,7 +85,61 @@ test('shows immutable model defaults, provenance, effective dates, and instance 
   expect(within(section).getByText('Overrides: Kind')).toBeInTheDocument()
   expect(within(section).getByText('Ryzen')).toBeInTheDocument()
   expect(within(section).queryByText(/updated/)).not.toBeInTheDocument()
+  expect(screen.getByText('Instance-specific record')).toBeInTheDocument()
+  expect(screen.getByText('Manufacturer', { selector: 'dt' })).toBeInTheDocument()
+  expect(screen.getAllByText('Framework').length).toBeGreaterThan(0)
   expect((await axe.run(container)).violations).toEqual([])
+})
+
+test('assets expose a manufacturer lookup from the model catalog for search and filter', async () => {
+  const frameworkModel = {
+    id: 'model-1', organizationId: 'example-org', manufacturer: 'Framework', name: 'Laptop 13',
+    kind: 'laptop', status: 'active', instanceCount: 1, revision: 1,
+    createdAt: '2026-08-12T12:00:00Z', updatedAt: '2026-08-12T12:00:00Z',
+  }
+  const dellModel = {
+    id: 'model-2', organizationId: 'example-org', manufacturer: 'Dell', name: 'PowerEdge R760',
+    kind: 'server', status: 'active', instanceCount: 1, revision: 1,
+    createdAt: '2026-08-12T12:00:00Z', updatedAt: '2026-08-12T12:00:00Z',
+  }
+  const frameworkAsset: Asset = {
+    ...asset, id: 'asset-fw', name: 'Framework laptop', kind: 'laptop', modelId: frameworkModel.id,
+    modelContext: {
+      manufacturer: 'Framework', name: 'Laptop 13', kind: 'laptop', modelRevision: 1,
+      defaultsEffectiveAt: '2026-08-12T12:00:00Z', appliedAt: '2026-08-12T12:00:00Z', overrides: [],
+    },
+  }
+  const dellAsset: Asset = {
+    ...asset, id: 'asset-dell', name: 'Dell server', kind: 'server', assetTag: 'DELL-001', serialNumber: 'SERIAL-DELL',
+    hostname: 'dell.example.test', modelId: dellModel.id,
+    modelContext: {
+      manufacturer: 'Dell', name: 'PowerEdge R760', kind: 'server', modelRevision: 1,
+      defaultsEffectiveAt: '2026-08-12T12:00:00Z', appliedAt: '2026-08-12T12:00:00Z', overrides: [],
+    },
+  }
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    const path = String(input)
+    if (path === '/api/v1/asset-models?limit=100') return jsonResponse({ items: [frameworkModel, dellModel] })
+    if (['/api/v1/sites', '/api/v1/buildings', '/api/v1/rooms', '/api/v1/departments', '/api/v1/identities?limit=100'].includes(path)) {
+      return jsonResponse({ items: [] })
+    }
+    throw new Error(`unexpected request: ${path}`)
+  }))
+  render(<AtlasInventory assets={[frameworkAsset, dellAsset]} csrfToken="csrf-token" onAssetsChange={() => undefined} permissions={['assets.read', 'assets.write']} />)
+  expect(await screen.findByRole('columnheader', { name: /Manufacturer/ })).toBeInTheDocument()
+  expect(screen.getByRole('gridcell', { name: 'Framework' })).toBeInTheDocument()
+  expect(screen.getByRole('gridcell', { name: 'Dell' })).toBeInTheDocument()
+  fireEvent.change(screen.getByLabelText('Filter Manufacturer'), { target: { value: 'Frame' } })
+  expect(screen.getByRole('gridcell', { name: 'Framework laptop' })).toBeInTheDocument()
+  expect(screen.queryByRole('gridcell', { name: 'Dell server' })).not.toBeInTheDocument()
+  fireEvent.change(screen.getByLabelText('Filter Manufacturer'), { target: { value: '' } })
+  fireEvent.change(screen.getByLabelText('Search Asset inventory'), { target: { value: 'Dell' } })
+  expect(screen.getByRole('gridcell', { name: 'Dell server' })).toBeInTheDocument()
+  expect(screen.queryByRole('gridcell', { name: 'Framework laptop' })).not.toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Add asset' }))
+  const createForm = within(screen.getByRole('form', { name: 'Add asset' }))
+  expect(createForm.getByLabelText('Manufacturer')).toBeInTheDocument()
+  expect(createForm.getByLabelText('Model')).toBeInTheDocument()
 })
 
 test('creates an asset with CSRF protection and server-managed identity fields', async () => {
@@ -137,8 +192,10 @@ test('creates a model and links a new asset to it', async () => {
   const onAssetsChange = vi.fn()
   render(<AtlasInventory assets={[]} csrfToken="csrf-token" onAssetsChange={onAssetsChange} permissions={['assets.read', 'assets.write']} />)
   openAtlasTab('Models')
+  expect(screen.getByRole('button', { name: 'Scan model identifier' })).toBeInTheDocument()
   fireEvent.click(screen.getByRole('button', { name: 'Add model' }))
   const modelForm = within(screen.getByRole('form', { name: 'Add model' }))
+  expect(modelForm.getByRole('button', { name: 'Scan Model number' })).toBeInTheDocument()
   fireEvent.change(modelForm.getByLabelText('Manufacturer'), { target: { value: 'Framework' } })
   fireEvent.change(modelForm.getByLabelText('Model name'), { target: { value: 'Laptop 13' } })
   fireEvent.change(modelForm.getByLabelText('Model number'), { target: { value: 'FW13' } })
@@ -147,6 +204,7 @@ test('creates a model and links a new asset to it', async () => {
   fireEvent.change(modelForm.getByLabelText('Useful life months'), { target: { value: '48' } })
   fireEvent.click(modelForm.getByRole('button', { name: 'Create model' }))
   expect(await screen.findByText('Model created.')).toBeInTheDocument()
+  expect(screen.getByText(/Scanned model number/)).toBeInTheDocument()
   fireEvent.click(screen.getByRole('button', { name: 'Use' }))
   const assetForm = within(screen.getByRole('form', { name: 'Add asset' }))
   expect(assetForm.getByLabelText('Kind')).toHaveValue('laptop')
@@ -459,9 +517,12 @@ test('creates rows staged past the end of the grid through the atomic bulk endpo
   expect(screen.getByRole('gridcell', { name: 'Lab server' })).toBeInTheDocument()
 
   await waitFor(() => expect(fetchMock.mock.calls.some(([path]) => String(path) === '/api/v1/asset-models?limit=100')).toBe(true))
-  const gridRows = within(screen.getByRole('grid')).getAllByRole('row')
+  const grid = screen.getByRole('grid')
+  const modelIndex = within(grid).getAllByRole('columnheader').findIndex((header) => within(header).queryByText('Model', { exact: true }))
+  expect(modelIndex).toBeGreaterThan(-1)
+  const gridRows = within(grid).getAllByRole('row')
   for (const row of [-2, -1] as const) {
-    fireEvent.doubleClick(within(gridRows.at(row) as HTMLElement).getAllByRole('gridcell')[18])
+    fireEvent.doubleClick(within(gridRows.at(row) as HTMLElement).getAllByRole('gridcell')[modelIndex])
     fireEvent.click(await screen.findByRole('option', { name: /Framework Laptop 13/ }))
   }
 

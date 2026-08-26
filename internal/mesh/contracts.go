@@ -121,6 +121,7 @@ func (s Scope) Empty() bool {
 
 type Query struct {
 	Search        string
+	Node          string
 	Kinds         []NodeKind
 	Relationships []RelationshipKind
 	Limit         int

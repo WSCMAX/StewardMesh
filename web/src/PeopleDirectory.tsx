@@ -2,12 +2,14 @@ import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } fro
 import type { Asset } from './AtlasInventory'
 import { ApiRequestError, isRevision, requestJSON } from './api'
 import DirectoryImportManager from './DirectoryImportManager'
-import PeopleSectionNav, { type PeopleSection } from './PeopleSectionNav'
+import CheckoutDesk from './CheckoutDesk'
+import { overlapFromError, type AssignmentOverlap } from './peopleCheckout'
+import PeopleSectionNav, { peopleHash, peopleSectionFromHash, type PeopleSection } from './PeopleSectionNav'
 import type { WorkspaceRecordFocus } from './graphRecord'
+import { meshRecordHref } from './graphRecord'
 import RecordSearchPicker, { type SearchableRecord } from './RecordSearchPicker'
-import { documentationHref } from './documentation'
 import { RelatedRecordModeChooser, RelatedRecordWorkflowFrame, useRelatedRecordWorkflow } from './RelatedRecordWorkflow'
-import { ProductHeader, buttonClass, cx, inputClass, labelClass, panelClass, plainButtonClass, secondaryButtonClass, subpanelClass } from './ui'
+import { ProductHeader, buttonClass, cx, gridActionButtonClass, inputClass, labelClass, panelClass, plainButtonClass, secondaryButtonClass, subpanelClass } from './ui'
 import DataGrid, { type StagedDraft } from './grid/DataGrid'
 import Drawer from './grid/Drawer'
 import type { GridColumn } from './grid/columns'
@@ -64,8 +66,9 @@ import {
 // Requirements: REQ-PEOPLE-001, REQ-DIRECTORY-EXPANSION-001, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-008, REQ-WORKSPACE-001, A11Y-001, DOC-001, DOC-002.
 // Features: identity.directory, identity.labels, experience.grid, experience.workspace.
 
-type AssigneeKind = 'identity' | 'department'
+type AssigneeKind = 'identity' | 'department' | 'group'
 type AssignmentRole = 'primary' | 'user' | 'department'
+type AssignmentPurpose = 'checkout' | 'reservation'
 
 type AssetAssignment = {
   id: string
@@ -74,7 +77,12 @@ type AssetAssignment = {
   assigneeKind: AssigneeKind
   assigneeId: string
   role: AssignmentRole
+  purpose?: AssignmentPurpose
+  eventSummary?: string
+  groupId?: string
+  bulkCheckoutId?: string
   effectiveFrom: string
+  dueAt?: string
   effectiveTo?: string
   createdBy: string
   createdAt: string
@@ -115,7 +123,6 @@ type PeopleDirectoryProps = {
   identity?: GridIdentity | null
 }
 
-const peopleHelpUrl = documentationHref('people')
 const emptyFilters: Filters = { search: '', kind: '', status: '', departmentId: '', siteId: '' }
 const emptyGuidedPerson: GuidedPersonDraft = { displayName: '', email: '', departmentId: '' }
 const personLocationBoundaries = {
@@ -224,10 +231,11 @@ function isAssignment(value: unknown): value is AssetAssignment {
   if (typeof value !== 'object' || value === null) return false
   const record = value as Record<string, unknown>
   return isString(record.id) && isString(record.organizationId) && isString(record.assetId)
-    && (record.assigneeKind === 'identity' || record.assigneeKind === 'department')
+    && (record.assigneeKind === 'identity' || record.assigneeKind === 'department' || record.assigneeKind === 'group')
     && isString(record.assigneeId)
     && (record.role === 'primary' || record.role === 'user' || record.role === 'department')
-    && isString(record.effectiveFrom) && (record.effectiveTo === undefined || isString(record.effectiveTo))
+    && isString(record.effectiveFrom) && (record.dueAt === undefined || isString(record.dueAt))
+    && (record.effectiveTo === undefined || isString(record.effectiveTo))
     && isString(record.createdBy) && isString(record.createdAt)
 }
 
@@ -258,6 +266,30 @@ function formatDate(value: string) {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return 'Unknown date'
   return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(date)
+}
+
+function localDateToISO(value: string) {
+  if (!value.trim()) return undefined
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value.trim())) throw new Error('Enter a valid calendar date.')
+  return `${value.trim()}T00:00:00.000Z`
+}
+
+function todayInputDate() {
+  const now = new Date()
+  const offset = now.getTimezoneOffset() * 60000
+  return new Date(now.getTime() - offset).toISOString().slice(0, 10)
+}
+
+function assignmentIsActive(assignment: AssetAssignment) {
+  return !assignment.effectiveTo
+}
+
+function assignmentIsOverdue(assignment: AssetAssignment, asOf = Date.now()) {
+  return assignmentIsActive(assignment) && Boolean(assignment.dueAt) && new Date(assignment.dueAt as string).getTime() < asOf
+}
+
+function identityAssignmentsFor(assignments: readonly AssetAssignment[], identityId: string) {
+  return assignments.filter((assignment) => assignment.assigneeKind === 'identity' && assignment.assigneeId === identityId)
 }
 
 function localDateTimeToISO(value: string) {
@@ -529,13 +561,14 @@ function PersonLocationWorkflow({ buildings, canWrite, departments, rooms, sites
   )
 }
 
-export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissions, onOpenHelp, onReportIssue, focusRecord = null, identity = null }: PeopleDirectoryProps) {
+export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissions, onReportIssue, focusRecord = null, identity = null }: PeopleDirectoryProps) {
   const [sites, setSites] = useState<Site[]>([])
   const [buildings, setBuildings] = useState<Building[]>([])
   const [rooms, setRooms] = useState<Room[]>([])
   const [departments, setDepartments] = useState<Department[]>([])
   const [identities, setIdentities] = useState<Identity[]>([])
   const [assignments, setAssignments] = useState<AssetAssignment[]>([])
+  const [directoryAssignments, setDirectoryAssignments] = useState<AssetAssignment[]>([])
   const [filters, setFilters] = useState<Filters>(emptyFilters)
   const [identityKind, setIdentityKind] = useState<IdentityKind>('person')
   const [assigneeKind, setAssigneeKind] = useState<AssigneeKind>('identity')
@@ -546,7 +579,9 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const [status, setStatus] = useState('')
-  const [activeSection, setActiveSection] = useState<PeopleSection>('directory')
+  const [activeSection, setActiveSection] = useState<PeopleSection>(() => peopleSectionFromHash(window.location.hash))
+  const [assignmentAsset, setAssignmentAsset] = useState<SearchableRecord[]>([])
+  const [identityAssignAsset, setIdentityAssignAsset] = useState<SearchableRecord[]>([])
   const [locationSheet, setLocationSheet] = useState<LocationSheet>('sites')
   const [occupancySheet, setOccupancySheet] = useState<OccupancySheet>('references')
   const [locationReferenceTypes, setLocationReferenceTypes] = useState<LocationReferenceType[]>([])
@@ -557,6 +592,13 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
   const [identitySite, setIdentitySite] = useState<SearchableRecord[]>([])
   const [tagColumnFormOpen, setTagColumnFormOpen] = useState(false)
   const [tagColumnBusy, setTagColumnBusy] = useState(false)
+  const [detailIdentity, setDetailIdentity] = useState<Identity | null>(null)
+  const [detailOpen, setDetailOpen] = useState(false)
+  const [assignmentConflict, setAssignmentConflict] = useState<{
+    kind: string
+    conflicts: AssignmentOverlap[]
+    retry: (policy: string) => Promise<void>
+  } | null>(null)
   const [tagColumnRecordType, setTagColumnRecordType] = useState<PeopleRecordType>(peopleRecordTypes.identity)
   const [identityTags, setIdentityTags] = useState<PeopleTagContext>(emptyTagContext(csrfToken, false))
   const [siteTags, setSiteTags] = useState<PeopleTagContext>(emptyTagContext(csrfToken, false))
@@ -573,25 +615,45 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
   const locationReferenceWrites = useWriteQueue()
 
   const canWriteDirectory = permissions.includes('directory.write')
+  const canReadAssignments = permissions.includes('assets.read')
   const canAssignAssets = canWriteDirectory && permissions.includes('assets.write')
   const canReadLabels = permissions.includes('labels.read')
   const canWriteLabels = permissions.includes('labels.write')
   const departmentNames = useMemo(() => new Map(departments.map((department) => [department.id, department.name])), [departments])
   const siteNames = useMemo(() => new Map(sites.map((site) => [site.id, site.name])), [sites])
+  const buildingNames = useMemo(() => new Map(buildings.map((building) => [building.id, building.name])), [buildings])
+  const roomNames = useMemo(() => new Map(rooms.map((room) => [room.id, room.number || room.name || room.id])), [rooms])
   const identityNames = useMemo(() => new Map(identities.map((identity) => [identity.id, identity.displayName])), [identities])
+
+  function openIdentityDetail(identityRecord: Identity) {
+    setDetailIdentity(identityRecord)
+    setDetailOpen(true)
+  }
 
   useEffect(() => {
     if (error) errorRef.current?.focus()
   }, [error])
 
+  const loadDirectoryAssignmentsSafe = useCallback(async (signal?: AbortSignal) => {
+    if (!canReadAssignments) return []
+    try {
+      const response = await requestJSON('/api/v1/people/assignments?assigneeKind=identity', { signal })
+      return readCollection(response, isAssignment)
+    } catch (loadError: unknown) {
+      if (loadError instanceof DOMException && loadError.name === 'AbortError') throw loadError
+      return []
+    }
+  }, [canReadAssignments])
+
   const loadDirectory = useCallback(async (activeFilters: Filters, signal?: AbortSignal) => {
     const query = filtersToQuery(activeFilters)
-    const [siteResponse, buildingResponse, roomResponse, departmentResponse, identityResponse] = await Promise.all([
+    const [siteResponse, buildingResponse, roomResponse, departmentResponse, identityResponse, nextAssignments] = await Promise.all([
       requestJSON('/api/v1/sites', { signal }),
       requestJSON('/api/v1/buildings', { signal }),
       requestJSON('/api/v1/rooms', { signal }),
       requestJSON('/api/v1/departments', { signal }),
       requestJSON(`/api/v1/identities?${query.toString()}`, { signal }),
+      loadDirectoryAssignmentsSafe(signal),
     ])
     const nextSites = readCollection(siteResponse, isSite)
     const nextBuildings = readCollection(buildingResponse, isBuilding)
@@ -603,7 +665,8 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
     setRooms(nextRooms)
     setDepartments(nextDepartments)
     setIdentities(nextIdentities)
-  }, [])
+    setDirectoryAssignments(nextAssignments)
+  }, [loadDirectoryAssignmentsSafe])
 
   const loadOccupancy = useCallback(async (signal?: AbortSignal) => {
     const [typeResponse, referenceResponse] = await Promise.all([
@@ -692,6 +755,15 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
     }
   }, [])
 
+  const loadDirectoryAssignments = useCallback(async (signal?: AbortSignal) => {
+    if (!canReadAssignments) {
+      setDirectoryAssignments([])
+      return
+    }
+    const response = await requestJSON('/api/v1/people/assignments?assigneeKind=identity', { signal })
+    setDirectoryAssignments(readCollection(response, isAssignment))
+  }, [canReadAssignments])
+
   useEffect(() => {
     const controller = new AbortController()
     setLoading(true)
@@ -717,9 +789,24 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
   }, [activeSection, loadOccupancy])
 
   useEffect(() => {
-    if (selectedAssetId && assets.some((asset) => asset.id === selectedAssetId)) return
-    setSelectedAssetId(assets[0]?.id ?? '')
-  }, [assets, selectedAssetId])
+    function syncPeopleSection() {
+      const next = peopleSectionFromHash(window.location.hash)
+      setActiveSection((current) => current === next ? current : next)
+    }
+    window.addEventListener('hashchange', syncPeopleSection)
+    window.addEventListener('popstate', syncPeopleSection)
+    return () => {
+      window.removeEventListener('hashchange', syncPeopleSection)
+      window.removeEventListener('popstate', syncPeopleSection)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (assignmentAsset.length > 0 || assets.length === 0) return
+    const first = assets[0]
+    setAssignmentAsset([{ id: first.id, label: first.name, detail: first.assetTag }])
+    setSelectedAssetId(first.id)
+  }, [assets, assignmentAsset.length])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -947,6 +1034,8 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
         role: assigneeKind === 'department' ? 'department' : assignmentRole,
       }
       if (effectiveFrom) body.effectiveFrom = effectiveFrom
+      const dueAt = localDateTimeToISO(String(values.get('assignmentDueAt') ?? ''))
+      if (dueAt) body.dueAt = dueAt
       readRecord(await requestJSON(`/api/v1/assets/${encodeURIComponent(selectedAssetId)}/assignments`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
@@ -956,6 +1045,7 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
       setAssigneeKind('identity')
       setAssignmentRole('user')
       await loadAssignments(selectedAssetId)
+      await loadDirectoryAssignments()
       setStatus('Asset assignment created. Previous primary or department responsibility was retained in history.')
     } catch (mutationError) {
       reportMutationError(mutationError, 'The asset assignment could not be created.')
@@ -974,6 +1064,7 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
         body: JSON.stringify({}),
       }), isAssignment)
       await loadAssignments(selectedAssetId)
+      await loadDirectoryAssignments()
       setStatus('Assignment ended and retained in history.')
     } catch (mutationError) {
       reportMutationError(mutationError, 'The assignment could not be ended.')
@@ -982,10 +1073,101 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
     }
   }
 
+  async function handleCreateIdentityAssignment(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!detailIdentity) return
+    const form = event.currentTarget
+    const values = new FormData(form)
+    const assetId = String(values.get('identityAssignmentAssetId') ?? '')
+    const purpose = String(values.get('identityAssignmentPurpose') ?? 'checkout')
+    const body: Record<string, string> = {
+      assigneeKind: 'identity',
+      assigneeId: detailIdentity.id,
+      role: String(values.get('identityAssignmentRole') ?? 'user'),
+      purpose,
+    }
+    const checkout = localDateToISO(String(values.get('identityAssignmentCheckout') ?? ''))
+    const dueAt = localDateToISO(String(values.get('identityAssignmentDueAt') ?? ''))
+    const eventSummary = String(values.get('identityAssignmentEvent') ?? '').trim()
+    if (checkout) body.effectiveFrom = checkout
+    if (dueAt) body.dueAt = dueAt
+    if (eventSummary) body.eventSummary = eventSummary
+    setBusy('identity-assignment')
+    setError('')
+    setAssignmentConflict(null)
+    const submit = async (policy = '') => {
+      const payload = { ...body }
+      if (policy) payload.conflictPolicy = policy
+      readRecord(await requestJSON(`/api/v1/assets/${encodeURIComponent(assetId)}/assignments`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+        body: JSON.stringify(payload),
+      }), isAssignment)
+      form.reset()
+      setAssignmentConflict(null)
+      await loadDirectoryAssignments()
+      if (selectedAssetId === assetId) await loadAssignments(assetId)
+      setStatus(purpose === 'reservation' ? 'Asset reserved for this identity.' : 'Asset assigned to this identity.')
+    }
+    try {
+      await submit()
+    } catch (mutationError) {
+      const overlap = overlapFromError(mutationError)
+      if (overlap) {
+        setAssignmentConflict({
+          kind: overlap.kind,
+          conflicts: overlap.conflicts,
+          retry: async (policy) => {
+            setBusy('identity-assignment')
+            setError('')
+            try {
+              await submit(policy)
+            } catch (retryError) {
+              reportMutationError(retryError, 'The asset could not be assigned.')
+            } finally {
+              setBusy('')
+            }
+          },
+        })
+        setError(overlap.message)
+      } else {
+        reportMutationError(mutationError, 'The asset could not be assigned.')
+      }
+    } finally {
+      setBusy('')
+    }
+  }
+
+  async function handleReturnIdentityAssignment(assignment: AssetAssignment, returnedOn: string) {
+    setBusy(`return-${assignment.id}`)
+    setError('')
+    try {
+      const body: Record<string, string> = {}
+      const returned = localDateToISO(returnedOn)
+      if (returned) body.effectiveTo = returned
+      readRecord(await requestJSON(`/api/v1/assets/${encodeURIComponent(assignment.assetId)}/assignments/${encodeURIComponent(assignment.id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+        body: JSON.stringify(body),
+      }), isAssignment)
+      await loadDirectoryAssignments()
+      if (selectedAssetId === assignment.assetId) await loadAssignments(assignment.assetId)
+      setStatus('Asset marked returned.')
+    } catch (mutationError) {
+      reportMutationError(mutationError, 'The assignment could not be returned.')
+    } finally {
+      setBusy('')
+    }
+  }
+
   function assignmentName(assignment: AssetAssignment) {
-    return assignment.assigneeKind === 'identity'
-      ? identityNames.get(assignment.assigneeId) ?? 'Identity outside the current filter'
-      : departmentNames.get(assignment.assigneeId) ?? 'Department outside the current filter'
+    if (assignment.assigneeKind === 'identity') {
+      return identityNames.get(assignment.assigneeId) ?? 'Identity outside the current filter'
+    }
+    if (assignment.assigneeKind === 'group') {
+      return 'Checkout group'
+    }
+    return departmentNames.get(assignment.assigneeId) ?? 'Department outside the current filter'
   }
 
   const columnContext = useMemo((): Omit<PeopleColumnContext, 'tags'> => ({
@@ -999,7 +1181,41 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
     },
   }), [buildings, canWriteDirectory, csrfToken, departments, identities, locationReferenceTypes, rooms, sites])
 
-  const identityColumns = useMemo(() => buildIdentityColumns({ ...columnContext, tags: identityTags }, canWriteDirectory || canWriteLabels), [canWriteDirectory, canWriteLabels, columnContext, identityTags])
+  const identityColumns = useMemo(() => {
+    const columns = buildIdentityColumns({ ...columnContext, tags: identityTags }, canWriteDirectory || canWriteLabels)
+    const assignedAssetsColumn: GridColumn<Identity> = {
+      key: 'assignedAssets',
+      header: 'Assigned assets',
+      kind: 'text',
+      width: 18,
+      text: (row) => identityAssignmentsFor(directoryAssignments, row.id)
+        .filter(assignmentIsActive)
+        .map((assignment) => assets.find((asset) => asset.id === assignment.assetId)?.name ?? assignment.assetId)
+        .join(', '),
+      exportText: (row) => identityAssignmentsFor(directoryAssignments, row.id)
+        .filter(assignmentIsActive)
+        .map((assignment) => assets.find((asset) => asset.id === assignment.assetId)?.name ?? assignment.assetId)
+        .join(', '),
+      display: (row) => {
+        const active = identityAssignmentsFor(directoryAssignments, row.id).filter(assignmentIsActive)
+        const summary = active.length === 0
+          ? 'None'
+          : active.map((assignment) => {
+            const name = assets.find((asset) => asset.id === assignment.assetId)?.name ?? assignment.assetId
+            return assignmentIsOverdue(assignment) ? `${name} (overdue)` : assignment.dueAt ? `${name} (due ${formatDate(assignment.dueAt)})` : name
+          }).join(', ')
+        return (
+          <span className="flex min-w-0 items-center gap-2">
+            <span className="min-w-0 truncate" title={summary}>{summary}</span>
+            <button className={`${gridActionButtonClass} shrink-0`} onClick={(event) => { event.stopPropagation(); openIdentityDetail(row) }} type="button">
+              {canAssignAssets ? 'Assign' : 'View'}
+            </button>
+          </span>
+        )
+      },
+    }
+    return [...columns.slice(0, 2), assignedAssetsColumn, ...columns.slice(2)]
+  }, [assets, canAssignAssets, canWriteDirectory, canWriteLabels, columnContext, directoryAssignments, identityTags])
   const siteColumns = useMemo(() => buildSiteColumns({ ...columnContext, tags: siteTags }, canWriteDirectory || canWriteLabels), [canWriteDirectory, canWriteLabels, columnContext, siteTags])
   const buildingColumns = useMemo(() => buildBuildingColumns({ ...columnContext, tags: buildingTags }, canWriteDirectory || canWriteLabels), [buildingTags, canWriteDirectory, canWriteLabels, columnContext])
   const roomColumns = useMemo(() => buildRoomColumns({ ...columnContext, tags: roomTags }, canWriteDirectory || canWriteLabels), [canWriteDirectory, canWriteLabels, columnContext, roomTags])
@@ -1118,40 +1334,29 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
   const nestedRooms = nestedBuilding ? rooms.filter((room) => room.buildingId === nestedBuilding.id) : []
 
   return (
-    <section aria-labelledby="people-heading" className={`${panelClass} space-y-5 p-4 sm:p-5`} data-feature="identity.directory identity.labels experience.grid experience.workspace" data-requirement="REQ-PEOPLE-001 REQ-DIRECTORY-EXPANSION-001 REQ-DIRECTORY-EXPANSION-008 REQ-WORKSPACE-001">
+    <section aria-labelledby="people-heading" className={`${panelClass} space-y-3 p-3 sm:p-4`} data-feature="identity.directory identity.labels experience.grid experience.workspace" data-requirement="REQ-PEOPLE-001 REQ-DIRECTORY-EXPANSION-001 REQ-DIRECTORY-EXPANSION-008 REQ-WORKSPACE-001">
       <ProductHeader
         actions={<>
-          {onOpenHelp ? <button className={secondaryButtonClass} onClick={onOpenHelp} type="button">People help</button> : <a className={secondaryButtonClass} href={peopleHelpUrl}>People help</a>}
           {onReportIssue ? <button className={plainButtonClass} onClick={onReportIssue} type="button">Report a People issue</button> : <a className={plainButtonClass} href={issuesUrl}>Report a People issue</a>}
+          <a className={plainButtonClass} href="#workspace-mesh">Open Mesh graph</a>
         </>}
-        description="Organize people and shared-use identities by department, site, building, and room. Assign one primary steward, multiple users, and a responsible department while retaining prior assignments."
+        description="Double-click a person to see location and the assets they use or steward."
         headingId="people-heading"
-        kicker="People — Users, locations, departments, and assignments"
         title="Know who uses and stewards each asset"
       />
 
       {error && <div ref={errorRef} className="rounded-xl border border-steward-danger/50 bg-steward-danger/15 p-4 text-[#ffccd1]" role="alert" tabIndex={-1}>{error}</div>}
       <p className="sr-only" aria-live="polite" role="status">{status}</p>
 
-      <PeopleSectionNav active={activeSection} onChange={setActiveSection} />
+      <PeopleSectionNav active={activeSection} onChange={(section) => {
+        setActiveSection(section)
+        const next = peopleHash(section)
+        if (window.location.hash !== next) {
+          window.history.pushState({ workspaceArea: 'people' }, '', `${window.location.pathname}${window.location.search}${next}`)
+        }
+      }} />
 
       <div aria-labelledby={`people-tab-${activeSection}`} hidden={activeSection !== 'directory'} id="people-panel-directory" role="tabpanel">
-      <section aria-labelledby="people-guide-heading" className={`${subpanelClass} border-steward-teal/20 p-4`}>
-        <h3 id="people-guide-heading" className="font-semibold text-steward-mist">Quick guide</h3>
-        <ol className="mt-2 list-decimal space-y-1 pl-5 text-sm leading-6 text-steward-mist-muted">
-          <li>Edit the <strong className="font-semibold text-steward-mist">Directory</strong> spreadsheet in place: type to replace, Enter or Tab to commit, Ctrl+C / Ctrl+V with Excel, Ctrl+D to fill down.</li>
-          <li>Open <strong className="font-semibold text-steward-mist">Locations</strong> for site, building, and room sheets, or drill into a nested sheet from a site or building.</li>
-          <li>Use <strong className="font-semibold text-steward-mist">Location references</strong> for office, classroom, dorm, and lab occupancy, including a catalog of reference types. Group references by room for usage.</li>
-          <li>Add a <strong className="font-semibold text-steward-mist">tag column</strong> for floor numbers or other labels. Relationship browsing lives in Mesh.</li>
-          <li>Use <strong className="font-semibold text-steward-mist">Workflows &amp; assignments</strong> for guided creation and asset history.</li>
-        </ol>
-      </section>
-
-      <p className="mt-4 text-sm leading-6 text-steward-mist-muted">
-        {canWriteDirectory || canWriteLabels
-          ? `Edit cells directly. Group by department, site, type, or status from the toolbar.${canWriteDirectory ? ' Use + to insert a new identity below a row.' : ''}${canReadLabels ? ' Tag columns use configured labels, including floor or other room attributes when you add them here.' : ''}`
-          : 'Sort, filter, group, and copy directory records. Editing requires directory or tag write access.'}
-      </p>
       <div className="mt-4">
         <DataGrid
           columns={identityColumns}
@@ -1168,6 +1373,7 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
             buildingId: values.buildingId,
             roomId: values.roomId,
           }), (value) => readRecord(value, isIdentity), (record) => setIdentities((current) => current.some((item) => item.id === record.id) ? current : [record as Identity, ...current])) : undefined}
+          onOpenRow={openIdentityDetail}
           onSaveEdits={canWriteDirectory || canWriteLabels ? (edits) => saveDirectoryEdits(edits, identities, identityColumns, identityPayload, (row) => `/api/v1/identities/${encodeURIComponent(row.id)}`, (value) => readRecord(value, isIdentity), identityTags, peopleRecordTypes.identity, identityWrites, setIdentities, (definitionId, recordId, assignment) => applyTagAssignment(setIdentityTags, definitionId, recordId, assignment)) : undefined}
           rowId={(row) => row.id}
           rowLabel={(row) => row.displayName}
@@ -1175,6 +1381,8 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
           rowState={(row) => identityWrites.rowState(row.id)}
           rows={identities}
           selectable
+          bulkActions={(selected) => selected[0] ? <a className={plainButtonClass + ' min-h-8 px-2 py-1 text-xs'} href={meshRecordHref(selected[0].kind, selected[0].id)}>Show in Mesh</a> : null}
+          focusRowId={focusRecord && ['person', 'shared', 'public', 'lab'].includes(focusRecord.kind) ? focusRecord.recordId : undefined}
           toolbar={tagToolbar(peopleRecordTypes.identity)}
           viewDefaults={{ groupBy: 'departmentId', filters: { status: 'active' } }}
           viewId="people-identities"
@@ -1664,13 +1872,20 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
       <div className="border-t border-steward-ink-800 pt-6">
         <h3 className="text-lg font-semibold" id="assignment-history-heading">Asset assignment history</h3>
         <p className="mt-1 text-sm text-steward-mist-muted">Multiple users can remain active together. Adding a new primary assignee or responsible department automatically closes the previous matching role at the new effective date.</p>
-        {assets.length === 0 ? (
-          <p className="mt-4 rounded-xl border border-dashed border-steward-ink-800 p-5 text-sm text-steward-mist-muted">Add an Atlas asset before creating People assignments.</p>
-        ) : (
+        {canReadAssignments ? (
           <>
             <div className="mt-4 max-w-xl">
-              <label className={labelClass} htmlFor="assignment-asset">Asset</label>
-              <select className={inputClass} id="assignment-asset" onChange={(event) => setSelectedAssetId(event.target.value)} value={selectedAssetId}>{assets.map((asset) => <option key={asset.id} value={asset.id}>{asset.name}</option>)}</select>
+              <RecordSearchPicker
+                kind="asset"
+                label="Asset"
+                multiple={false}
+                onChange={(records) => {
+                  setAssignmentAsset(records)
+                  setSelectedAssetId(records[0]?.id ?? '')
+                }}
+                options={assets.map((asset) => ({ id: asset.id, label: asset.name, detail: asset.assetTag }))}
+                selected={assignmentAsset}
+              />
             </div>
 
             {canAssignAssets && (
@@ -1691,8 +1906,12 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
                   <select className={inputClass} disabled={assigneeKind === 'department'} id="assignment-role" onChange={(event) => setAssignmentRole(event.target.value as AssignmentRole)} value={assigneeKind === 'department' ? 'department' : assignmentRole}>{assigneeKind === 'department' ? <option value="department">Responsible department</option> : <><option value="user">Additional user</option><option value="primary">Primary assignee</option></>}</select>
                 </div>
                 <div>
-                  <label className={labelClass} htmlFor="assignment-effective-from">Effective from (optional)</label>
+                  <label className={labelClass} htmlFor="assignment-effective-from">Checked out (optional)</label>
                   <input className={inputClass} id="assignment-effective-from" name="assignmentEffectiveFrom" type="datetime-local" />
+                </div>
+                <div>
+                  <label className={labelClass} htmlFor="assignment-due-at">Return by (optional)</label>
+                  <input className={inputClass} id="assignment-due-at" name="assignmentDueAt" type="datetime-local" />
                 </div>
                 <div className="md:col-span-2 lg:col-span-4"><button className={buttonClass} disabled={busy !== '' || !selectedAssetId} type="submit">{busy === 'assignment' ? 'Creating assignment…' : 'Create assignment'}</button></div>
               </form>
@@ -1705,23 +1924,160 @@ export default function PeopleDirectory({ assets, csrfToken, issuesUrl, permissi
                     <li className="flex flex-wrap items-start justify-between gap-4 rounded-xl border border-steward-ink-800 p-4" key={assignment.id}>
                       <div>
                         <p className="font-semibold">{assignmentName(assignment)}</p>
-                        <p className="mt-1 text-sm text-steward-mist-muted">{roleLabels[assignment.role]} · {assignment.effectiveTo ? 'Ended' : 'Active'}</p>
-                        <p className="mt-1 text-sm text-steward-mist-muted">From {formatDate(assignment.effectiveFrom)}{assignment.effectiveTo ? ` to ${formatDate(assignment.effectiveTo)}` : ''}</p>
+                        <p className="mt-1 text-sm text-steward-mist-muted">{roleLabels[assignment.role]} · {assignment.effectiveTo ? 'Returned' : assignmentIsOverdue(assignment) ? 'Overdue' : assignment.dueAt ? 'Temporary' : 'Active'}</p>
+                        <p className="mt-1 text-sm text-steward-mist-muted">Checked out {formatDate(assignment.effectiveFrom)}{assignment.dueAt ? ` · return by ${formatDate(assignment.dueAt)}` : ''}{assignment.effectiveTo ? ` · returned ${formatDate(assignment.effectiveTo)}` : ''}</p>
                       </div>
-                      {!assignment.effectiveTo && canAssignAssets && <button className={secondaryButtonClass} disabled={busy !== ''} onClick={() => handleEndAssignment(assignment.id)} type="button">{busy === `end-${assignment.id}` ? 'Ending…' : 'End assignment'}</button>}
+                      {!assignment.effectiveTo && canAssignAssets && <button className={secondaryButtonClass} disabled={busy !== ''} onClick={() => handleEndAssignment(assignment.id)} type="button">{busy === `end-${assignment.id}` ? 'Returning…' : 'Mark returned'}</button>}
                     </li>
                   ))}
                 </ol>
               )}
             </div>
           </>
+        ) : (
+          <p className="mt-4 rounded-xl border border-dashed border-steward-ink-800 p-5 text-sm text-steward-mist-muted">Asset assignments require <code>assets.read</code>.</p>
         )}
       </div>
+      </div>
+
+      <div aria-labelledby="people-tab-checkouts" hidden={activeSection !== 'checkouts'} id="people-panel-checkouts" role="tabpanel">
+        {activeSection === 'checkouts' ? (
+          <CheckoutDesk assets={assets} canWrite={canAssignAssets} csrfToken={csrfToken} identities={identities} />
+        ) : null}
       </div>
 
       <div aria-labelledby="people-tab-imports" hidden={activeSection !== 'imports'} id="people-panel-imports" role="tabpanel">
         <DirectoryImportManager csrfToken={csrfToken} onApplied={() => loadDirectory(filters)} permissions={permissions} />
       </div>
+
+      <Drawer
+        description={detailIdentity ? `${detailIdentity.kind} · ${detailIdentity.status}` : 'Double-click a row to inspect an identity.'}
+        kicker="People"
+        onClose={() => setDetailOpen(false)}
+        open={detailOpen}
+        title={detailIdentity?.displayName ?? 'Identity details'}
+        wide
+      >
+        {detailIdentity && <>
+          <dl className="grid gap-3 text-sm sm:grid-cols-2">
+            <div><dt className="text-steward-slate">Email</dt><dd className="mt-1 text-steward-mist">{detailIdentity.email || '—'}</dd></div>
+            <div><dt className="text-steward-slate">Department</dt><dd className="mt-1 text-steward-mist">{detailIdentity.departmentId ? departmentNames.get(detailIdentity.departmentId) ?? detailIdentity.departmentId : '—'}</dd></div>
+            <div><dt className="text-steward-slate">Site</dt><dd className="mt-1 text-steward-mist">{detailIdentity.siteId ? siteNames.get(detailIdentity.siteId) ?? detailIdentity.siteId : '—'}</dd></div>
+            <div><dt className="text-steward-slate">Building</dt><dd className="mt-1 text-steward-mist">{detailIdentity.buildingId ? buildingNames.get(detailIdentity.buildingId) ?? detailIdentity.buildingId : '—'}</dd></div>
+            <div><dt className="text-steward-slate">Room</dt><dd className="mt-1 text-steward-mist">{detailIdentity.roomId ? roomNames.get(detailIdentity.roomId) ?? detailIdentity.roomId : '—'}</dd></div>
+            <div><dt className="text-steward-slate">Status</dt><dd className="mt-1 text-steward-mist">{detailIdentity.status}</dd></div>
+          </dl>
+          <section className="mt-6" aria-labelledby="identity-assignments-heading">
+            <h3 className="text-base font-semibold text-steward-mist" id="identity-assignments-heading">Assigned assets</h3>
+            <p className="mt-1 text-sm text-steward-mist-muted">Checkout, return-by, and returned dates are kept in assignment history. Leave return-by blank for an open-ended assignment.</p>
+            {identityAssignmentsFor(directoryAssignments, detailIdentity.id).length === 0 ? (
+              <p className="mt-3 text-sm text-steward-mist-muted">No assets are assigned to this identity yet.</p>
+            ) : (
+              <ul className="mt-3 space-y-3">
+                {identityAssignmentsFor(directoryAssignments, detailIdentity.id).map((assignment) => {
+                  const assetName = assets.find((asset) => asset.id === assignment.assetId)?.name ?? assignment.assetId
+                  return (
+                    <li className="rounded-md border border-white/10 p-3" key={assignment.id}>
+                      <p className="font-medium text-steward-mist">
+                        <a className="text-steward-teal underline-offset-2 hover:underline" href={meshRecordHref('asset', assignment.assetId)}>{assetName}</a>
+                        <span className="ml-2 text-sm font-normal text-steward-mist-muted">{roleLabels[assignment.role]}</span>
+                      </p>
+                      <p className="mt-1 text-sm text-steward-mist-muted">
+                        {assignment.purpose === 'reservation' ? 'Reserved' : 'Checked out'} {formatDate(assignment.effectiveFrom)}
+                        {assignment.dueAt ? ` · return by ${formatDate(assignment.dueAt)}` : ' · open-ended'}
+                        {assignment.effectiveTo ? ` · returned ${formatDate(assignment.effectiveTo)}` : assignmentIsOverdue(assignment) ? ' · overdue' : assignment.purpose === 'reservation' ? ' · reserved' : ' · out'}
+                        {assignment.eventSummary ? ` · ${assignment.eventSummary}` : ''}
+                        {assignment.bulkCheckoutId ? ' · bulk checkout' : ''}
+                      </p>
+                      {assignmentIsActive(assignment) && canAssignAssets && (
+                        <form className="mt-3 flex flex-wrap items-end gap-2" onSubmit={(event) => {
+                          event.preventDefault()
+                          void handleReturnIdentityAssignment(assignment, String(new FormData(event.currentTarget).get('returnedOn') ?? ''))
+                        }}>
+                          <label className={labelClass}>
+                            Returned
+                            <input className={inputClass} defaultValue={todayInputDate()} name="returnedOn" required type="date" />
+                          </label>
+                          <button className={secondaryButtonClass} disabled={busy !== ''} type="submit">{busy === `return-${assignment.id}` ? 'Returning…' : 'Mark returned'}</button>
+                        </form>
+                      )}
+                    </li>
+                  )
+                })}
+              </ul>
+            )}
+            {canAssignAssets && (
+                  <form aria-label="Assign asset" className={`${subpanelClass} mt-4 grid gap-3 p-3 sm:grid-cols-2`} onSubmit={handleCreateIdentityAssignment}>
+                    <div className="sm:col-span-2">
+                      <RecordSearchPicker
+                        kind="asset"
+                        label="Asset"
+                        multiple={false}
+                        name="identityAssignmentAssetId"
+                        onChange={setIdentityAssignAsset}
+                        options={assets.map((asset) => ({ id: asset.id, label: asset.name, detail: asset.assetTag }))}
+                        selected={identityAssignAsset}
+                      />
+                    </div>
+                    <div>
+                      <label className={labelClass} htmlFor="identity-assignment-purpose">Purpose</label>
+                      <select className={inputClass} defaultValue="checkout" id="identity-assignment-purpose" name="identityAssignmentPurpose">
+                        <option value="checkout">Checkout</option>
+                        <option value="reservation">Reservation</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className={labelClass} htmlFor="identity-assignment-role">Relationship</label>
+                      <select className={inputClass} defaultValue="user" id="identity-assignment-role" name="identityAssignmentRole">
+                        <option value="user">Additional user</option>
+                        <option value="primary">Primary assignee</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className={labelClass} htmlFor="identity-assignment-checkout">Checked out / reserved from</label>
+                      <input className={inputClass} defaultValue={todayInputDate()} id="identity-assignment-checkout" name="identityAssignmentCheckout" type="date" />
+                    </div>
+                    <div>
+                      <label className={labelClass} htmlFor="identity-assignment-due">Return by</label>
+                      <input className={inputClass} id="identity-assignment-due" name="identityAssignmentDueAt" type="date" />
+                    </div>
+                    <div className="sm:col-span-2">
+                      <label className={labelClass} htmlFor="identity-assignment-event">Event or note</label>
+                      <input className={inputClass} id="identity-assignment-event" name="identityAssignmentEvent" placeholder="Fall faculty conference" />
+                    </div>
+                    {assignmentConflict && (
+                      <div className="sm:col-span-2 rounded-md border border-steward-gold/40 bg-steward-gold/10 p-3" role="alertdialog">
+                        <p className="font-medium text-steward-mist">This period overlaps another checkout.</p>
+                        <ul className="mt-2 list-disc pl-5 text-sm text-steward-mist-muted">
+                          {assignmentConflict.conflicts.map((conflict) => (
+                            <li key={conflict.assignmentId}>
+                              {conflict.assigneeLabel}
+                              {conflict.eventSummary ? ` · ${conflict.eventSummary}` : ''}
+                              {` · ${formatDate(conflict.effectiveFrom)}${conflict.dueAt ? `–${formatDate(conflict.dueAt)}` : ''}`}
+                            </li>
+                          ))}
+                        </ul>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          {assignmentConflict.kind === 'checkout' ? (
+                            <>
+                              <button className={buttonClass} onClick={() => void assignmentConflict.retry('replace')} type="button">Replace current user</button>
+                              <button className={secondaryButtonClass} onClick={() => void assignmentConflict.retry('group')} type="button">Make group checkout</button>
+                            </>
+                          ) : (
+                            <button className={buttonClass} onClick={() => void assignmentConflict.retry('proceed')} type="button">Continue anyway</button>
+                          )}
+                          <button className={secondaryButtonClass} onClick={() => setAssignmentConflict(null)} type="button">Cancel</button>
+                        </div>
+                      </div>
+                    )}
+                    <div className="sm:col-span-2">
+                      <button className={buttonClass} disabled={busy !== ''} type="submit">{busy === 'identity-assignment' ? 'Assigning…' : 'Assign asset'}</button>
+                    </div>
+                  </form>
+            )}
+          </section>
+        </>}
+      </Drawer>
 
       <Drawer
         kicker="People tags"

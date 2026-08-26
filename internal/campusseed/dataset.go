@@ -66,6 +66,8 @@ type modelDef struct {
 	Name             string
 	ModelNumber      string
 	Kind             string
+	VendorIdentifier string
+	SupportURL       string
 	UnitCostMinor    int64
 	CriticalityScore int
 	Specifications   map[string]string
@@ -81,6 +83,7 @@ var campusWorkforceLaptops = []workforceLaptopDistribution{
 	{ModelSlug: "dell-latitude-7440", Count: 320},
 	{ModelSlug: "dell-latitude-5540", Count: 200},
 	{ModelSlug: "lenovo-thinkpad-t14-gen3", Count: 50},
+	{ModelSlug: "lenovo-thinkpad-t15-gen2", Count: 25},
 	{ModelSlug: "lenovo-thinkpad-t14", Count: 80},
 	{ModelSlug: "hp-elitebook-840", Count: 50},
 }
@@ -230,6 +233,16 @@ var campusModels = []modelDef{
 		Slug: "lenovo-thinkpad-t14-gen3", Manufacturer: "Lenovo", Name: "ThinkPad T14 Gen 3", ModelNumber: "T14-G3", Kind: "laptop",
 		UnitCostMinor: 119900, CriticalityScore: 4,
 		Specifications: map[string]string{"cpu": "Intel Core i5-1145G7", "memory": "16 GB", "storage": "512 GB SSD", "display": "14-inch FHD"},
+	},
+	{
+		// Legacy campus configuration keyed by manufacturer MTM so Scan can resolve labels such as 20W5S51T00.
+		Slug: "lenovo-thinkpad-t15-gen2", Manufacturer: "Lenovo", Name: "ThinkPad T15 Gen 2", ModelNumber: "20W5S51T00", Kind: "laptop",
+		VendorIdentifier: "20W5", SupportURL: "https://pcsupport.lenovo.com/us/en/products/laptops-and-netbooks/thinkpad-t-series-laptops/thinkpad-t15-gen-2-type-20w4-20w5",
+		UnitCostMinor: 109900, CriticalityScore: 4,
+		Specifications: map[string]string{
+			"cpu": "Intel Core i5-1135G7", "memory": "16 GB", "storage": "512 GB SSD", "display": "15.6-inch FHD",
+			"machineTypes": "20W4, 20W5", "mtm": "20W5S51T00",
+		},
 	},
 	{
 		Slug: "lenovo-thinkpad-t14", Manufacturer: "Lenovo", Name: "ThinkPad T14 Gen 5", ModelNumber: "T14-G5", Kind: "laptop",
@@ -387,32 +400,6 @@ func campusResidenceRooms() []residenceRoomDef {
 		})
 	}
 	return rooms
-}
-
-var employeeFirstNames = []string{
-	"James", "Maria", "Robert", "Patricia", "Michael", "Jennifer", "William", "Linda", "David", "Elizabeth",
-	"Richard", "Barbara", "Joseph", "Susan", "Thomas", "Jessica", "Christopher", "Sarah", "Daniel", "Karen",
-	"Matthew", "Lisa", "Anthony", "Nancy", "Mark", "Betty", "Donald", "Margaret", "Steven", "Sandra",
-	"Andrew", "Ashley", "Paul", "Kimberly", "Joshua", "Emily", "Kenneth", "Donna", "Kevin", "Michelle",
-	"Brian", "Carol", "George", "Amanda", "Timothy", "Melissa", "Ronald", "Deborah", "Edward", "Stephanie",
-	"Jason", "Rebecca", "Jeffrey", "Laura", "Ryan", "Sharon", "Jacob", "Cynthia", "Gary", "Kathleen",
-	"Nicholas", "Amy", "Eric", "Angela", "Jonathan", "Shirley", "Stephen", "Anna", "Larry", "Brenda",
-	"Justin", "Pamela", "Scott", "Emma", "Brandon", "Nicole", "Benjamin", "Helen", "Samuel", "Samantha",
-	"Gregory", "Katherine", "Alexander", "Christine", "Patrick", "Debra", "Frank", "Rachel", "Raymond", "Carolyn",
-	"Jack", "Janet", "Dennis", "Catherine", "Jerry", "Maria", "Tyler", "Heather", "Aaron", "Diane",
-}
-
-var employeeLastNames = []string{
-	"Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller", "Davis", "Rodriguez", "Martinez",
-	"Hernandez", "Lopez", "Gonzalez", "Wilson", "Anderson", "Thomas", "Taylor", "Moore", "Jackson", "Martin",
-	"Lee", "Perez", "Thompson", "White", "Harris", "Sanchez", "Clark", "Ramirez", "Lewis", "Robinson",
-	"Walker", "Young", "Allen", "King", "Wright", "Scott", "Torres", "Nguyen", "Hill", "Flores",
-	"Green", "Adams", "Nelson", "Baker", "Hall", "Rivera", "Campbell", "Mitchell", "Carter", "Roberts",
-	"Gomez", "Phillips", "Evans", "Turner", "Diaz", "Parker", "Cruz", "Edwards", "Collins", "Reyes",
-	"Stewart", "Morris", "Morales", "Murphy", "Cook", "Rogers", "Gutierrez", "Ortiz", "Morgan", "Cooper",
-	"Peterson", "Bailey", "Reed", "Kelly", "Howard", "Ramos", "Kim", "Cox", "Ward", "Richardson",
-	"Watson", "Brooks", "Chavez", "Wood", "James", "Bennett", "Gray", "Mendoza", "Ruiz", "Hughes",
-	"Price", "Alvarez", "Castillo", "Sanders", "Patel", "Myers", "Long", "Ross", "Foster", "Jimenez",
 }
 
 type seededEmployee struct {

@@ -1,5 +1,7 @@
-import { type FormEvent, useCallback, useEffect, useRef, useState } from 'react'
+import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ApiRequestError, requestJSON } from './api'
+import DataGrid from './grid/DataGrid'
+import type { GridColumn } from './grid/columns'
 import { buttonClass, inputClass, labelClass, secondaryButtonClass, subpanelClass } from './ui'
 
 // Requirements: REQ-DIRECTORY-EXPANSION-002, REQ-DIRECTORY-EXPANSION-003, REQ-DIRECTORY-EXPANSION-004, REQ-DIRECTORY-EXPANSION-005, REQ-DIRECTORY-EXPANSION-006, REQ-DIRECTORY-EXPANSION-009, A11Y-001.
@@ -120,6 +122,35 @@ export default function DirectoryImportManager({ csrfToken, permissions, onAppli
     return () => { active = false; controller.abort() }
   }, [canRead, loadSummary])
 
+  const batchColumns = useMemo((): GridColumn<Batch>[] => [
+    {
+      key: 'source', header: 'Source', kind: 'text', width: 16,
+      text: (batch) => `${batch.sourceSystemId} ${providerLabel(batch.provider)}`,
+      display: (batch) => <>{batch.sourceSystemId}<span className="mt-1 block text-xs font-normal text-steward-mist-muted">{providerLabel(batch.provider)}</span></>,
+    },
+    {
+      key: 'status', header: 'Status', kind: 'text', width: 12,
+      text: (batch) => `${statusLabel(batch.status)} ${batch.completeSnapshot ? 'Complete snapshot' : 'Partial snapshot'}`,
+      display: (batch) => <>{statusLabel(batch.status)}<span className="mt-1 block text-xs">{batch.completeSnapshot ? 'Complete snapshot' : 'Partial snapshot'}</span></>,
+    },
+    {
+      key: 'plan', header: 'Plan', kind: 'text', width: 18,
+      text: (batch) => `${batch.counts.created} create · ${batch.counts.updated} update · ${batch.counts.deactivated} deactivate · ${batch.counts.conflicts} conflict`,
+    },
+    { key: 'updated', header: 'Updated', kind: 'instant', width: 12, text: (batch) => batch.updatedAt, display: (batch) => formatDate(batch.updatedAt) },
+    {
+      key: 'actions', header: 'Actions', kind: 'text', width: 18, wrap: true,
+      text: () => 'View audit',
+      display: (batch) => (
+        <div className="flex flex-wrap gap-2">
+          <button className={secondaryButtonClass} disabled={busy !== ''} onClick={() => showDetail(batch.id)} type="button">{busy === `detail-${batch.id}` ? 'Loading…' : 'View audit'}</button>
+          {canWrite && batch.status === 'previewed' && <button className={buttonClass} disabled={busy !== ''} onClick={() => run(batch, 'apply')} type="button">{busy === `apply-${batch.id}` ? 'Applying…' : 'Apply exact plan'}</button>}
+          {canWrite && canRetry(batch, detail) && <button className={secondaryButtonClass} disabled={busy !== ''} onClick={() => run(batch, 'retry')} type="button">{busy === `retry-${batch.id}` ? 'Retrying…' : 'Retry failures'}</button>}
+        </div>
+      ),
+    },
+  ], [busy, canWrite, detail])
+
   if (!canRead) {
     return <section aria-labelledby="directory-import-heading" className="border-t border-steward-ink-800 pt-6" data-requirement="REQ-DIRECTORY-EXPANSION-002">
       <h3 className="text-lg font-semibold" id="directory-import-heading">Directory import</h3>
@@ -211,25 +242,16 @@ export default function DirectoryImportManager({ csrfToken, permissions, onAppli
         </form>
       )}
 
-      <div aria-label="Recent directory imports" className="mt-5 overflow-x-auto rounded-xl border border-steward-ink-800" role="region" tabIndex={0}>
-        <table className="min-w-[52rem] w-full text-left text-sm">
-          <caption className="sr-only">Recent directory import batches and available actions</caption>
-          <thead className="bg-steward-ink-950/70 text-steward-mist-muted"><tr><th className="px-3 py-3" scope="col">Source</th><th className="px-3 py-3" scope="col">Status</th><th className="px-3 py-3" scope="col">Plan</th><th className="px-3 py-3" scope="col">Updated</th><th className="px-3 py-3" scope="col">Actions</th></tr></thead>
-          <tbody className="divide-y divide-steward-ink-800">
-            {batches.map((batch) => <tr key={batch.id}>
-              <th className="px-3 py-3 font-semibold text-steward-mist" scope="row">{batch.sourceSystemId}<span className="mt-1 block text-xs font-normal text-steward-mist-muted">{providerLabel(batch.provider)}</span></th>
-              <td className="px-3 py-3 text-steward-mist-muted">{statusLabel(batch.status)}<span className="mt-1 block text-xs">{batch.completeSnapshot ? 'Complete snapshot' : 'Partial snapshot'}</span></td>
-              <td className="px-3 py-3 text-steward-mist-muted">{batch.counts.created} create · {batch.counts.updated} update · {batch.counts.deactivated} deactivate · {batch.counts.conflicts} conflict</td>
-              <td className="px-3 py-3 text-steward-mist-muted">{formatDate(batch.updatedAt)}</td>
-              <td className="px-3 py-3"><div className="flex flex-wrap gap-2">
-                <button className={secondaryButtonClass} disabled={busy !== ''} onClick={() => showDetail(batch.id)} type="button">{busy === `detail-${batch.id}` ? 'Loading…' : 'View audit'}</button>
-                {canWrite && batch.status === 'previewed' && <button className={buttonClass} disabled={busy !== ''} onClick={() => run(batch, 'apply')} type="button">{busy === `apply-${batch.id}` ? 'Applying…' : 'Apply exact plan'}</button>}
-                {canWrite && canRetry(batch, detail) && <button className={secondaryButtonClass} disabled={busy !== ''} onClick={() => run(batch, 'retry')} type="button">{busy === `retry-${batch.id}` ? 'Retrying…' : 'Retry failures'}</button>}
-              </div></td>
-            </tr>)}
-            {batches.length === 0 && <tr><td className="px-3 py-5 text-steward-mist-muted" colSpan={5}>{loading ? 'Loading import history…' : 'No import batches have been previewed.'}</td></tr>}
-          </tbody>
-        </table>
+      <div className="mt-5">
+        <DataGrid
+          columns={batchColumns}
+          emptyMessage={loading ? 'Loading import history…' : 'No import batches have been previewed.'}
+          label="Recent directory imports"
+          rowId={(batch) => batch.id}
+          rowLabel={(batch) => batch.sourceSystemId}
+          rows={batches}
+          viewId="directory-import-batches"
+        />
       </div>
 
       {detail && <ImportAuditDetail detail={detail} />}
@@ -238,20 +260,46 @@ export default function DirectoryImportManager({ csrfToken, permissions, onAppli
 }
 
 function ImportAuditDetail({ detail }: { detail: BatchDetail }) {
+  const columns: GridColumn<ImportItem>[] = [
+    {
+      key: 'record', header: 'Directory record', kind: 'text', width: 20, wrap: true,
+      text: (item) => `${item.record.displayName} ${recordReference(item.record)}`,
+      display: (item) => (
+        <>
+          {item.record.displayName}
+          <span className="mt-1 block break-all text-xs font-normal text-steward-mist-muted">{recordReference(item.record)}</span>
+          {item.record.status === 'inactive' && <span className="mt-1 block text-xs font-normal text-steward-warning">Inactive at {providerLabel(detail.batch.provider)}</span>}
+          <AttributeList attributes={item.record.directoryAttributes} />
+          <AttributeList attributes={item.record.metadata} />
+        </>
+      ),
+    },
+    {
+      key: 'context', header: 'Context', kind: 'text', width: 16, wrap: true,
+      text: (item) => item.record.department || item.record.groupName || item.record.groupSourceId || '',
+      display: (item) => recordContext(item.record),
+    },
+    { key: 'action', header: 'Action', kind: 'text', width: 9, text: (item) => item.action },
+    {
+      key: 'outcome', header: 'Outcome', kind: 'text', width: 14, wrap: true,
+      text: (item) => `${item.outcome} ${item.error ?? ''}`,
+      display: (item) => <>{item.outcome}{item.error && <span className="mt-1 block max-w-sm text-xs text-steward-warning">{item.error}</span>}</>,
+    },
+  ]
   return <section aria-labelledby="directory-import-audit-heading" className={`${subpanelClass} mt-5 min-w-0 p-4`}>
     <h4 className="font-semibold" id="directory-import-audit-heading">Import audit results</h4>
     <p className="mt-1 break-words text-sm text-steward-mist-muted">Batch {detail.batch.id} · {statusLabel(detail.batch.status)} · configuration {detail.batch.configRevision}</p>
-    <div aria-label="Directory import records" className="mt-4 overflow-x-auto" role="region" tabIndex={0}>
-      <table className="min-w-[50rem] w-full text-left text-sm">
-        <caption className="sr-only">Normalized records and reconciliation outcomes</caption>
-        <thead className="text-steward-mist-muted"><tr><th className="px-2 py-2" scope="col">Directory record</th><th className="px-2 py-2" scope="col">Context</th><th className="px-2 py-2" scope="col">Action</th><th className="px-2 py-2" scope="col">Outcome</th></tr></thead>
-        <tbody className="divide-y divide-steward-ink-800">{detail.items.map((item) => <tr key={item.id}>
-          <th className="px-2 py-3 align-top font-semibold text-steward-mist" scope="row">{item.record.displayName}<span className="mt-1 block break-all text-xs font-normal text-steward-mist-muted">{recordReference(item.record)}</span>{item.record.status === 'inactive' && <span className="mt-1 block text-xs font-normal text-steward-warning">Inactive at {providerLabel(detail.batch.provider)}</span>}<AttributeList attributes={item.record.directoryAttributes} /><AttributeList attributes={item.record.metadata} /></th>
-          <td className="px-2 py-3 align-top text-steward-mist-muted">{recordContext(item.record)}</td>
-          <td className="px-2 py-3 align-top text-steward-mist-muted">{item.action}</td>
-          <td className="px-2 py-3 align-top text-steward-mist-muted">{item.outcome}{item.error && <span className="mt-1 block max-w-sm text-xs text-steward-warning">{item.error}</span>}</td>
-        </tr>)}</tbody>
-      </table>
+    <div className="mt-4">
+      <DataGrid
+        columns={columns}
+        emptyMessage="No directory import records are available."
+        label="Directory import records"
+        maximumBodyHeight="24rem"
+        rowId={(item) => item.id}
+        rowLabel={(item) => item.record.displayName}
+        rows={detail.items}
+        viewId="directory-import-records"
+      />
     </div>
     <h5 className="mt-5 font-semibold">Attempts</h5>
     <ol className="mt-3 space-y-2">{detail.attempts.map((attempt) => <li className="rounded-lg border border-steward-ink-800 p-3 text-sm text-steward-mist-muted" key={attempt.id}><strong className="text-steward-mist">Attempt {attempt.number}: {attempt.operation}</strong> · {statusLabel(attempt.status)} · {formatDate(attempt.startedAt)}{attempt.error && <span className="mt-1 block text-steward-warning">{attempt.error}</span>}</li>)}</ol>

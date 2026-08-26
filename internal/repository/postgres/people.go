@@ -99,9 +99,27 @@ func (s *PeopleStore) ExchangeSnapshot(ctx context.Context, organizationID strin
 		return people.ExchangeSnapshot{}, people.ErrTooLarge
 	}
 	remaining -= len(result.Identities)
+	result.CheckoutGroups, err = queryPeopleExchangeRows(ctx, transaction, `
+		SELECT id, organization_id, name, description, status, revision, created_at, updated_at
+		FROM people_checkout_groups WHERE organization_id = $1 ORDER BY id LIMIT $2
+	`, organizationID, remaining+1, scanCheckoutGroup)
+	if err != nil {
+		return people.ExchangeSnapshot{}, fmt.Errorf("list People Exchange checkout groups: %w", err)
+	}
+	if len(result.CheckoutGroups) > remaining {
+		return people.ExchangeSnapshot{}, people.ErrTooLarge
+	}
+	remaining -= len(result.CheckoutGroups)
+	for index := range result.CheckoutGroups {
+		members, memberErr := listCheckoutGroupMembersTx(ctx, transaction, organizationID, result.CheckoutGroups[index].ID)
+		if memberErr != nil {
+			return people.ExchangeSnapshot{}, memberErr
+		}
+		result.CheckoutGroups[index].MemberIDs = members
+	}
 	result.Assignments, err = queryPeopleExchangeRows(ctx, transaction, `
-		SELECT id, organization_id, asset_id, assignee_kind, COALESCE(identity_id, department_id),
-		       role, effective_from, effective_to, created_by, created_at
+		SELECT id, organization_id, asset_id, assignee_kind, COALESCE(identity_id, department_id, group_id),
+		       role, effective_from, due_at, effective_to, created_by, created_at, purpose, COALESCE(event_summary, ''), COALESCE(group_id, ''), COALESCE(bulk_checkout_id, '')
 		FROM people_asset_assignments WHERE organization_id = $1 ORDER BY id LIMIT $2
 	`, organizationID, remaining+1, scanPeopleAssignment)
 	if err != nil {
@@ -1167,7 +1185,7 @@ func (s *PeopleStore) CreateAssetAssignment(ctx context.Context, assignment peop
 		err := transaction.QueryRowContext(ctx, `
 			SELECT id, effective_from
 			FROM people_asset_assignments
-			WHERE organization_id = $1 AND asset_id = $2 AND role = $3 AND effective_to IS NULL
+			WHERE organization_id = $1 AND asset_id = $2 AND role = $3 AND effective_to IS NULL AND purpose = 'checkout'
 			FOR UPDATE
 		`, assignment.OrganizationID, assignment.AssetID, assignment.Role).Scan(&activeID, &activeFrom)
 		switch {
@@ -1184,22 +1202,21 @@ func (s *PeopleStore) CreateAssetAssignment(ctx context.Context, assignment peop
 			return people.AssetAssignment{}, fmt.Errorf("read active assignment: %w", err)
 		}
 	}
-	var identityID any
-	var departmentID any
-	if assignment.AssigneeKind == people.AssigneeIdentity {
-		identityID = assignment.AssigneeID
-	} else {
-		departmentID = assignment.AssigneeID
+	identityID, departmentID, groupID := assignmentAssigneeColumns(assignment)
+	purpose := assignment.Purpose
+	if purpose == "" {
+		purpose = people.PurposeCheckout
 	}
 	row := transaction.QueryRowContext(ctx, `
 		INSERT INTO people_asset_assignments (
-			id, organization_id, asset_id, assignee_kind, identity_id, department_id,
-			role, effective_from, effective_to, created_by, created_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, $9, $10)
-		RETURNING id, organization_id, asset_id, assignee_kind, COALESCE(identity_id, department_id),
-		          role, effective_from, effective_to, created_by, created_at
+			id, organization_id, asset_id, assignee_kind, identity_id, department_id, group_id,
+			role, effective_from, due_at, effective_to, created_by, created_at, purpose, event_summary, bulk_checkout_id
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULL, $11, $12, $13, $14, $15)
+		RETURNING id, organization_id, asset_id, assignee_kind, COALESCE(identity_id, department_id, group_id),
+		          role, effective_from, due_at, effective_to, created_by, created_at, purpose, COALESCE(event_summary, ''), COALESCE(group_id, ''), COALESCE(bulk_checkout_id, '')
 	`, assignment.ID, assignment.OrganizationID, assignment.AssetID, assignment.AssigneeKind,
-		identityID, departmentID, assignment.Role, assignment.EffectiveFrom, assignment.CreatedBy, assignment.CreatedAt)
+		identityID, departmentID, groupID, assignment.Role, assignment.EffectiveFrom, assignment.DueAt, assignment.CreatedBy, assignment.CreatedAt,
+		purpose, assignment.EventSummary, nullIfEmpty(assignment.BulkCheckoutID))
 	created, err := scanPeopleAssignment(row)
 	if err != nil {
 		return people.AssetAssignment{}, mapPeopleStoreError("create asset assignment", err)
@@ -1211,23 +1228,21 @@ func (s *PeopleStore) CreateAssetAssignment(ctx context.Context, assignment peop
 }
 
 func (s *PeopleStore) ImportAssetAssignment(ctx context.Context, assignment people.AssetAssignment) (people.AssetAssignment, error) {
-	var identityID any
-	var departmentID any
-	if assignment.AssigneeKind == people.AssigneeIdentity {
-		identityID = assignment.AssigneeID
-	} else {
-		departmentID = assignment.AssigneeID
+	identityID, departmentID, groupID := assignmentAssigneeColumns(assignment)
+	purpose := assignment.Purpose
+	if purpose == "" {
+		purpose = people.PurposeCheckout
 	}
 	row := s.database.QueryRowContext(ctx, `
 		INSERT INTO people_asset_assignments (
-			id, organization_id, asset_id, assignee_kind, identity_id, department_id,
-			role, effective_from, effective_to, created_by, created_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-		RETURNING id, organization_id, asset_id, assignee_kind, COALESCE(identity_id, department_id),
-		          role, effective_from, effective_to, created_by, created_at
+			id, organization_id, asset_id, assignee_kind, identity_id, department_id, group_id,
+			role, effective_from, due_at, effective_to, created_by, created_at, purpose, event_summary, bulk_checkout_id
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+		RETURNING id, organization_id, asset_id, assignee_kind, COALESCE(identity_id, department_id, group_id),
+		          role, effective_from, due_at, effective_to, created_by, created_at, purpose, COALESCE(event_summary, ''), COALESCE(group_id, ''), COALESCE(bulk_checkout_id, '')
 	`, assignment.ID, assignment.OrganizationID, assignment.AssetID, assignment.AssigneeKind,
-		identityID, departmentID, assignment.Role, assignment.EffectiveFrom, assignment.EffectiveTo,
-		assignment.CreatedBy, assignment.CreatedAt)
+		identityID, departmentID, groupID, assignment.Role, assignment.EffectiveFrom, assignment.DueAt, assignment.EffectiveTo,
+		assignment.CreatedBy, assignment.CreatedAt, purpose, assignment.EventSummary, nullIfEmpty(assignment.BulkCheckoutID))
 	created, err := scanPeopleAssignment(row)
 	if err != nil {
 		return people.AssetAssignment{}, mapPeopleStoreError("import asset assignment", err)
@@ -1237,8 +1252,8 @@ func (s *PeopleStore) ImportAssetAssignment(ctx context.Context, assignment peop
 
 func (s *PeopleStore) GetAssetAssignment(ctx context.Context, organizationID, assignmentID string) (people.AssetAssignment, error) {
 	assignment, err := scanPeopleAssignment(s.database.QueryRowContext(ctx, `
-		SELECT id, organization_id, asset_id, assignee_kind, COALESCE(identity_id, department_id),
-		       role, effective_from, effective_to, created_by, created_at
+		SELECT id, organization_id, asset_id, assignee_kind, COALESCE(identity_id, department_id, group_id),
+		       role, effective_from, due_at, effective_to, created_by, created_at, purpose, COALESCE(event_summary, ''), COALESCE(group_id, ''), COALESCE(bulk_checkout_id, '')
 		FROM people_asset_assignments
 		WHERE organization_id = $1 AND id = $2
 	`, organizationID, assignmentID))
@@ -1265,8 +1280,8 @@ func (s *PeopleStore) EndAssetAssignment(ctx context.Context, organizationID, as
 		SET effective_to = $4
 		WHERE organization_id = $1 AND asset_id = $2 AND id = $3
 		  AND effective_to IS NULL AND effective_from < $4
-		RETURNING id, organization_id, asset_id, assignee_kind, COALESCE(identity_id, department_id),
-		          role, effective_from, effective_to, created_by, created_at
+		RETURNING id, organization_id, asset_id, assignee_kind, COALESCE(identity_id, department_id, group_id),
+		          role, effective_from, due_at, effective_to, created_by, created_at, purpose, COALESCE(event_summary, ''), COALESCE(group_id, ''), COALESCE(bulk_checkout_id, '')
 	`, organizationID, assetID, assignmentID, effectiveTo)
 	ended, err := scanPeopleAssignment(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -1295,8 +1310,8 @@ func (s *PeopleStore) EndAssetAssignment(ctx context.Context, organizationID, as
 
 func (s *PeopleStore) ListAssetAssignments(ctx context.Context, organizationID, assetID string) ([]people.AssetAssignment, error) {
 	rows, err := s.database.QueryContext(ctx, `
-		SELECT id, organization_id, asset_id, assignee_kind, COALESCE(identity_id, department_id),
-		       role, effective_from, effective_to, created_by, created_at
+		SELECT id, organization_id, asset_id, assignee_kind, COALESCE(identity_id, department_id, group_id),
+		       role, effective_from, due_at, effective_to, created_by, created_at, purpose, COALESCE(event_summary, ''), COALESCE(group_id, ''), COALESCE(bulk_checkout_id, '')
 		FROM people_asset_assignments
 		WHERE organization_id = $1 AND asset_id = $2
 		ORDER BY effective_from DESC, id DESC
@@ -1319,6 +1334,76 @@ func (s *PeopleStore) ListAssetAssignments(ctx context.Context, organizationID, 
 	return result, nil
 }
 
+func (s *PeopleStore) ListAssetAssignmentsByAssignee(ctx context.Context, organizationID string, assigneeKind people.AssigneeKind, assigneeID string) ([]people.AssetAssignment, error) {
+	query := `
+		SELECT id, organization_id, asset_id, assignee_kind, COALESCE(identity_id, department_id, group_id),
+		       role, effective_from, due_at, effective_to, created_by, created_at, purpose, COALESCE(event_summary, ''), COALESCE(group_id, ''), COALESCE(bulk_checkout_id, '')
+		FROM people_asset_assignments
+		WHERE organization_id = $1 AND assignee_kind = $2
+	`
+	arguments := []any{organizationID, assigneeKind}
+	if assigneeID != "" {
+		switch assigneeKind {
+		case people.AssigneeIdentity:
+			query += ` AND identity_id = $3`
+		case people.AssigneeGroup:
+			query += ` AND group_id = $3`
+		default:
+			query += ` AND department_id = $3`
+		}
+		arguments = append(arguments, assigneeID)
+	}
+	query += ` ORDER BY effective_from DESC, id DESC`
+	rows, err := s.database.QueryContext(ctx, query, arguments...)
+	if err != nil {
+		return nil, fmt.Errorf("list assignee asset assignments: %w", err)
+	}
+	defer rows.Close()
+	result := make([]people.AssetAssignment, 0)
+	for rows.Next() {
+		assignment, err := scanPeopleAssignment(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan assignee asset assignment: %w", err)
+		}
+		result = append(result, assignment)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate assignee asset assignments: %w", err)
+	}
+	return result, nil
+}
+
+func (s *PeopleStore) ListAssetAssignmentsForAssets(ctx context.Context, organizationID string, assetIDs []string) ([]people.AssetAssignment, error) {
+	if len(assetIDs) == 0 {
+		return []people.AssetAssignment{}, nil
+	}
+	arguments := []any{organizationID}
+	query := `
+		SELECT id, organization_id, asset_id, assignee_kind, COALESCE(identity_id, department_id, group_id),
+		       role, effective_from, due_at, effective_to, created_by, created_at, purpose, COALESCE(event_summary, ''), COALESCE(group_id, ''), COALESCE(bulk_checkout_id, '')
+		FROM people_asset_assignments
+		WHERE organization_id = $1 AND ` + inPredicate("asset_id", assetIDs, &arguments) + `
+		ORDER BY effective_from DESC, id DESC
+	`
+	rows, err := s.database.QueryContext(ctx, query, arguments...)
+	if err != nil {
+		return nil, fmt.Errorf("list asset assignments for assets: %w", err)
+	}
+	defer rows.Close()
+	result := make([]people.AssetAssignment, 0)
+	for rows.Next() {
+		assignment, err := scanPeopleAssignment(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan asset assignment: %w", err)
+		}
+		result = append(result, assignment)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate asset assignments for assets: %w", err)
+	}
+	return result, nil
+}
+
 func verifyPeopleAssignee(ctx context.Context, transaction *sql.Tx, assignment people.AssetAssignment) error {
 	var exists bool
 	var err error
@@ -1333,6 +1418,12 @@ func verifyPeopleAssignee(ctx context.Context, transaction *sql.Tx, assignment p
 		err = transaction.QueryRowContext(ctx, `
 			SELECT EXISTS (
 				SELECT 1 FROM people_departments WHERE organization_id = $1 AND id = $2
+			)
+		`, assignment.OrganizationID, assignment.AssigneeID).Scan(&exists)
+	case people.AssigneeGroup:
+		err = transaction.QueryRowContext(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM people_checkout_groups WHERE organization_id = $1 AND id = $2
 			)
 		`, assignment.OrganizationID, assignment.AssigneeID).Scan(&exists)
 	default:
@@ -1391,14 +1482,41 @@ func scanPeopleIdentity(row peopleRowScanner) (people.Identity, error) {
 
 func scanPeopleAssignment(row peopleRowScanner) (people.AssetAssignment, error) {
 	var assignment people.AssetAssignment
+	var dueAt sql.NullTime
 	var effectiveTo sql.NullTime
 	err := row.Scan(&assignment.ID, &assignment.OrganizationID, &assignment.AssetID, &assignment.AssigneeKind,
-		&assignment.AssigneeID, &assignment.Role, &assignment.EffectiveFrom, &effectiveTo,
-		&assignment.CreatedBy, &assignment.CreatedAt)
+		&assignment.AssigneeID, &assignment.Role, &assignment.EffectiveFrom, &dueAt, &effectiveTo,
+		&assignment.CreatedBy, &assignment.CreatedAt, &assignment.Purpose, &assignment.EventSummary,
+		&assignment.GroupID, &assignment.BulkCheckoutID)
+	if dueAt.Valid {
+		assignment.DueAt = &dueAt.Time
+	}
 	if effectiveTo.Valid {
 		assignment.EffectiveTo = &effectiveTo.Time
 	}
+	if assignment.Purpose == "" {
+		assignment.Purpose = people.PurposeCheckout
+	}
 	return assignment, err
+}
+
+func assignmentAssigneeColumns(assignment people.AssetAssignment) (identityID, departmentID, groupID any) {
+	switch assignment.AssigneeKind {
+	case people.AssigneeIdentity:
+		identityID = assignment.AssigneeID
+	case people.AssigneeDepartment:
+		departmentID = assignment.AssigneeID
+	case people.AssigneeGroup:
+		groupID = assignment.AssigneeID
+	}
+	return identityID, departmentID, groupID
+}
+
+func nullIfEmpty(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
 }
 
 func inPredicate(column string, values []string, arguments *[]any) string {

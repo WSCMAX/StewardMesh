@@ -45,7 +45,10 @@ test('documents the People spreadsheet and Mesh relationship graph', () => {
 test('documents the cross-product Mesh graph', () => {
   expect(searchDocumentation('mesh graph').map((page) => page.id)).toContain('mesh')
   expect(searchDocumentation('cross-product graph').map((page) => page.id)).toContain('mesh')
-  expect(documentationByID.mesh.sections.some((section) => section.id === 'graph')).toBe(true)
+  expect(searchDocumentation('unlinked').map((page) => page.id)).toContain('mesh')
+  expect(searchDocumentation('Show in Mesh').map((page) => page.id)).toContain('mesh')
+  expect(searchDocumentation('occupancy').map((page) => page.id)).toContain('mesh')
+  expect(documentationByID.mesh.sections.find((section) => section.id === 'graph')?.bullets?.join(' ')).toContain('Show unlinked records')
   expect(documentationByID.mesh.sections.find((section) => section.id === 'graph')?.callout?.body).toContain('finance-only')
 })
 
@@ -53,6 +56,25 @@ test('documents the optional read-only PeopleSoft workflow', () => {
   const results = searchDocumentation('campus solutions')
   expect(results.map((page) => page.id)).toContain('people')
   expect(documentationByID.people.sections.some((section) => section.id === 'peoplesoft-sync')).toBe(true)
+})
+
+test('documents the Riverside campus demo workflow', () => {
+  const results = searchDocumentation('campus demo')
+  expect(results.map((page) => page.id)).toContain('people')
+  expect(documentationByID.people.sections.some((section) => section.id === 'campus-demo')).toBe(true)
+})
+
+test('documents People checkout, reservations, and bulk loans', () => {
+  expect(searchDocumentation('checkout').map((page) => page.id)).toContain('people')
+  expect(searchDocumentation('reservation').map((page) => page.id)).toContain('people')
+  expect(searchDocumentation('bulk checkout').map((page) => page.id)).toContain('people')
+  expect(documentationByID.people.sections.find((section) => section.id === 'assignments')?.bullets?.join(' ')).toContain('group checkout')
+})
+
+test('documents Horizon replacement plans and forecast views', () => {
+  expect(searchDocumentation('replacement plan').map((page) => page.id)).toContain('horizon')
+  expect(searchDocumentation('due now').map((page) => page.id)).toContain('horizon')
+  expect(documentationByID.horizon.sections.find((section) => section.id === 'forecast')?.steps?.some((step) => step.body.includes('named replacement plan'))).toBe(true)
 })
 
 test('searches titles, summaries, and product vocabulary', () => {

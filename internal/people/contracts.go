@@ -20,12 +20,13 @@ const (
 )
 
 var (
-	ErrNotFound         = errors.New("people record not found")
-	ErrReferenceMissing = errors.New("people reference not found")
-	ErrConflict         = errors.New("people record conflicts with existing data")
-	ErrInvalidInput     = errors.New("invalid people input")
-	ErrScopeRequired    = errors.New("directory visibility scope is required")
-	ErrTooLarge         = errors.New("people snapshot exceeds a configured limit")
+	ErrNotFound           = errors.New("people record not found")
+	ErrReferenceMissing   = errors.New("people reference not found")
+	ErrConflict           = errors.New("people record conflicts with existing data")
+	ErrInvalidInput       = errors.New("invalid people input")
+	ErrScopeRequired      = errors.New("directory visibility scope is required")
+	ErrTooLarge           = errors.New("people snapshot exceeds a configured limit")
+	ErrAssignmentOverlap  = errors.New("assignment overlaps an existing checkout or reservation")
 )
 
 type RecordStatus string
@@ -49,6 +50,22 @@ type AssigneeKind string
 const (
 	AssigneeIdentity   AssigneeKind = "identity"
 	AssigneeDepartment AssigneeKind = "department"
+	AssigneeGroup      AssigneeKind = "group"
+)
+
+type AssignmentPurpose string
+
+const (
+	PurposeCheckout    AssignmentPurpose = "checkout"
+	PurposeReservation AssignmentPurpose = "reservation"
+)
+
+type ConflictPolicy string
+
+const (
+	ConflictReplace ConflictPolicy = "replace"
+	ConflictGroup   ConflictPolicy = "group"
+	ConflictProceed ConflictPolicy = "proceed"
 )
 
 type AssignmentRole string
@@ -149,16 +166,120 @@ type Identity struct {
 }
 
 type AssetAssignment struct {
-	ID             string         `json:"id"`
-	OrganizationID string         `json:"organizationId"`
-	AssetID        string         `json:"assetId"`
-	AssigneeKind   AssigneeKind   `json:"assigneeKind"`
-	AssigneeID     string         `json:"assigneeId"`
-	Role           AssignmentRole `json:"role"`
-	EffectiveFrom  time.Time      `json:"effectiveFrom"`
-	EffectiveTo    *time.Time     `json:"effectiveTo,omitempty"`
-	CreatedBy      string         `json:"createdBy"`
-	CreatedAt      time.Time      `json:"createdAt"`
+	ID             string             `json:"id"`
+	OrganizationID string             `json:"organizationId"`
+	AssetID        string             `json:"assetId"`
+	AssigneeKind   AssigneeKind       `json:"assigneeKind"`
+	AssigneeID     string             `json:"assigneeId"`
+	Role           AssignmentRole     `json:"role"`
+	Purpose        AssignmentPurpose  `json:"purpose"`
+	EventSummary   string             `json:"eventSummary,omitempty"`
+	GroupID        string             `json:"groupId,omitempty"`
+	BulkCheckoutID string             `json:"bulkCheckoutId,omitempty"`
+	EffectiveFrom  time.Time          `json:"effectiveFrom"`
+	DueAt          *time.Time         `json:"dueAt,omitempty"`
+	EffectiveTo    *time.Time         `json:"effectiveTo,omitempty"`
+	CreatedBy      string             `json:"createdBy"`
+	CreatedAt      time.Time          `json:"createdAt"`
+}
+
+type CheckoutGroup struct {
+	ID             string       `json:"id"`
+	OrganizationID string       `json:"organizationId"`
+	Name           string       `json:"name"`
+	Description    string       `json:"description,omitempty"`
+	MemberIDs      []string     `json:"memberIds"`
+	Status         RecordStatus `json:"status"`
+	Revision       uint64       `json:"revision"`
+	CreatedAt      time.Time    `json:"createdAt"`
+	UpdatedAt      time.Time    `json:"updatedAt"`
+}
+
+type BulkCheckout struct {
+	ID                string            `json:"id"`
+	OrganizationID    string            `json:"organizationId"`
+	AssigneeKind      AssigneeKind      `json:"assigneeKind"`
+	AssigneeID        string            `json:"assigneeId"`
+	Purpose           AssignmentPurpose `json:"purpose"`
+	EffectiveFrom     time.Time         `json:"effectiveFrom"`
+	DueAt             *time.Time        `json:"dueAt,omitempty"`
+	EventSummary      string            `json:"eventSummary,omitempty"`
+	LabelDefinitionID string            `json:"labelDefinitionId,omitempty"`
+	LabelValue        string            `json:"labelValue,omitempty"`
+	RequestedCount    int               `json:"requestedCount"`
+	CreatedBy         string            `json:"createdBy"`
+	CreatedAt         time.Time         `json:"createdAt"`
+}
+
+type AssignmentOverlap struct {
+	AssetID       string            `json:"assetId"`
+	AssignmentID  string            `json:"assignmentId"`
+	AssigneeKind  AssigneeKind      `json:"assigneeKind"`
+	AssigneeID    string            `json:"assigneeId"`
+	AssigneeLabel string            `json:"assigneeLabel"`
+	Role          AssignmentRole    `json:"role"`
+	Purpose       AssignmentPurpose `json:"purpose"`
+	EventSummary  string            `json:"eventSummary,omitempty"`
+	EffectiveFrom time.Time         `json:"effectiveFrom"`
+	DueAt         *time.Time        `json:"dueAt,omitempty"`
+	EffectiveTo   *time.Time        `json:"effectiveTo,omitempty"`
+}
+
+type OverlapError struct {
+	ConflictKind string
+	Conflicts    []AssignmentOverlap
+}
+
+func (e *OverlapError) Error() string {
+	if e == nil {
+		return ErrAssignmentOverlap.Error()
+	}
+	if e.ConflictKind == string(PurposeReservation) {
+		return "this period overlaps a reserved checkout"
+	}
+	return "this asset is already checked out"
+}
+
+func (e *OverlapError) Unwrap() error {
+	return ErrAssignmentOverlap
+}
+
+type CheckoutCandidate struct {
+	AssetID    string              `json:"assetId"`
+	Name       string              `json:"name"`
+	Kind       string              `json:"kind"`
+	AssetTag   string              `json:"assetTag,omitempty"`
+	ModelID    string              `json:"modelId,omitempty"`
+	ModelName  string              `json:"modelName,omitempty"`
+	Rating     int                 `json:"rating"`
+	Overlaps   []AssignmentOverlap `json:"overlaps"`
+}
+
+type RankCheckoutInput struct {
+	AssetIDs          []string
+	From              time.Time
+	To                time.Time
+	PreferredModelIDs []string
+	Visibility        Visibility
+}
+
+type CreateBulkCheckoutInput struct {
+	AssigneeKind      AssigneeKind
+	AssigneeID        string
+	Purpose           AssignmentPurpose
+	EffectiveFrom     time.Time
+	DueAt             *time.Time
+	EventSummary      string
+	LabelDefinitionID string
+	LabelValue        string
+	AssetIDs          []string
+	ConflictPolicy    ConflictPolicy
+}
+
+type CreateCheckoutGroupInput struct {
+	Name        string   `json:"name"`
+	Description string   `json:"description,omitempty"`
+	MemberIDs   []string `json:"memberIds"`
 }
 
 type LocationKind string
@@ -469,11 +590,22 @@ type LocationReferenceQuery struct {
 }
 
 type CreateAssetAssignmentInput struct {
-	AssetID       string
-	AssigneeKind  AssigneeKind
-	AssigneeID    string
-	Role          AssignmentRole
-	EffectiveFrom time.Time
+	AssetID        string
+	AssigneeKind   AssigneeKind
+	AssigneeID     string
+	Role           AssignmentRole
+	Purpose        AssignmentPurpose
+	EventSummary   string
+	BulkCheckoutID string
+	EffectiveFrom  time.Time
+	DueAt          *time.Time
+	ConflictPolicy ConflictPolicy
+}
+
+type AssignmentQuery struct {
+	AssetID      string
+	AssigneeKind AssigneeKind
+	AssigneeID   string
 }
 
 type EndAssetAssignmentInput struct {
@@ -486,12 +618,13 @@ type EndAssetAssignmentInput struct {
 // portable People record. Repository adapters own the consistency boundary so
 // Exchange never stitches together independently changing list results.
 type ExchangeSnapshot struct {
-	Sites       []Site
-	Buildings   []Building
-	Rooms       []Room
-	Departments []Department
-	Identities  []Identity
-	Assignments []AssetAssignment
+	Sites          []Site
+	Buildings      []Building
+	Rooms          []Room
+	Departments    []Department
+	Identities     []Identity
+	CheckoutGroups []CheckoutGroup
+	Assignments    []AssetAssignment
 }
 
 // ExchangeImportOperation is the durable mutation identity reserved by
@@ -515,6 +648,7 @@ type ExchangeImporter interface {
 	ImportRoom(context.Context, ExchangeImportOperation, Room) (ExchangeImportResult, error)
 	ImportDepartment(context.Context, ExchangeImportOperation, Department) (ExchangeImportResult, error)
 	ImportIdentity(context.Context, ExchangeImportOperation, Identity) (ExchangeImportResult, error)
+	ImportCheckoutGroup(context.Context, ExchangeImportOperation, CheckoutGroup) (ExchangeImportResult, error)
 	ImportAssetAssignment(context.Context, ExchangeImportOperation, AssetAssignment) (ExchangeImportResult, error)
 }
 
@@ -581,4 +715,16 @@ type Store interface {
 	GetAssetAssignment(ctx context.Context, organizationID, assignmentID string) (AssetAssignment, error)
 	EndAssetAssignment(ctx context.Context, organizationID, assetID, assignmentID string, effectiveTo time.Time) (AssetAssignment, error)
 	ListAssetAssignments(ctx context.Context, organizationID, assetID string) ([]AssetAssignment, error)
+	ListAssetAssignmentsByAssignee(ctx context.Context, organizationID string, assigneeKind AssigneeKind, assigneeID string) ([]AssetAssignment, error)
+	ListAssetAssignmentsForAssets(ctx context.Context, organizationID string, assetIDs []string) ([]AssetAssignment, error)
+
+	CreateCheckoutGroup(ctx context.Context, group CheckoutGroup) (CheckoutGroup, error)
+	GetCheckoutGroup(ctx context.Context, organizationID, id string) (CheckoutGroup, error)
+	ListCheckoutGroups(ctx context.Context, organizationID string) ([]CheckoutGroup, error)
+	AddCheckoutGroupMember(ctx context.Context, organizationID, groupID, identityID string) (CheckoutGroup, error)
+
+	CreateBulkCheckout(ctx context.Context, item BulkCheckout) (BulkCheckout, error)
+	GetBulkCheckout(ctx context.Context, organizationID, id string) (BulkCheckout, error)
+	ListBulkCheckouts(ctx context.Context, organizationID string) ([]BulkCheckout, error)
+	DeleteBulkCheckout(ctx context.Context, organizationID, id string) error
 }

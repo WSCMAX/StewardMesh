@@ -27,6 +27,7 @@ function response(body: unknown, status = 200) {
 beforeEach(() => {
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
+  window.location.hash = ''
 })
 
 test('loads the mesh graph, type filters, legend, sliders, and data table', async () => {
@@ -46,6 +47,7 @@ test('loads the mesh graph, type filters, legend, sliders, and data table', asyn
   expect(screen.getByRole('button', { name: 'Fullscreen' })).toBeInTheDocument()
   expect(screen.getByText(/Included products: People, Ledger, Tags/)).toBeInTheDocument()
 
+  fireEvent.click(screen.getByLabelText('Show unlinked records'))
   fireEvent.click(screen.getByRole('button', { name: 'Show graph options' }))
   fireEvent.click(within(screen.getByRole('group', { name: 'Record types to graph' })).getByRole('checkbox', { name: 'Person' }))
   expect(document.querySelector('[data-node-id="person:ada"]')).toBeNull()
@@ -78,6 +80,9 @@ test('lets a finance-only operator load purchase orders without directory access
   vi.stubGlobal('fetch', fetchMock)
   render(<MeshExplorer permissions={['finance.read']} />)
   expect(await screen.findByText(/Mesh graph loaded with 1 record and 0 relationships from Ledger/)).toBeInTheDocument()
+  expect(document.querySelector('[data-node-id="purchase_order:po-1"]')).toBeNull()
+  expect(screen.getByText(/Turn on Show unlinked records to include 1 isolated record/)).toBeInTheDocument()
+  fireEvent.click(screen.getByLabelText('Show unlinked records'))
   expect(document.querySelector('[data-node-id="purchase_order:po-1"]')).not.toBeNull()
 })
 
@@ -107,21 +112,67 @@ test('opens a node inspector with a link into the owning product area', async ()
   expect(onOpenRecord).toHaveBeenCalledWith(expect.objectContaining({ id: 'purchase_order:po-1', kind: 'purchase_order' }))
 })
 
+test('hides unlinked records until the toggle is turned on', async () => {
+  vi.stubGlobal('fetch', vi.fn(async () => response({ nodes, edges, sources: ['people', 'ledger', 'labels'] })))
+  render(<MeshExplorer permissions={['directory.read', 'finance.read', 'labels.read']} />)
+  expect(await screen.findByText(/Mesh graph loaded with 8 records and 2 relationships/)).toBeInTheDocument()
+  expect(document.querySelector('[data-node-id="purchase_order:po-1"]')).not.toBeNull()
+  expect(document.querySelector('[data-node-id="vendor:vendor-1"]')).not.toBeNull()
+  expect(document.querySelector('[data-node-id="label:goal-tag"]')).not.toBeNull()
+  expect(document.querySelector('[data-node-id="person:ada"]')).toBeNull()
+  expect(document.querySelector('[data-node-id="asset:a"]')).toBeNull()
+  expect(screen.getByText(/5 unlinked records hidden/)).toBeInTheDocument()
+  fireEvent.click(screen.getByLabelText('Show unlinked records'))
+  expect(document.querySelector('[data-node-id="person:ada"]')).not.toBeNull()
+  expect(document.querySelector('[data-node-id="asset:a"]')).not.toBeNull()
+})
+
+test('lists isolated records and plots them when that filter is on', async () => {
+  vi.stubGlobal('fetch', vi.fn(async () => response({ nodes, edges, sources: ['people', 'ledger', 'labels'] })))
+  render(<MeshExplorer permissions={['directory.read', 'finance.read', 'labels.read']} />)
+  expect(await screen.findByText(/Mesh graph loaded with 8 records and 2 relationships/)).toBeInTheDocument()
+  fireEvent.click(screen.getByLabelText('Isolated records only'))
+  expect(document.querySelector('[data-node-id="person:ada"]')).not.toBeNull()
+  expect(document.querySelector('[data-node-id="purchase_order:po-1"]')).toBeNull()
+  fireEvent.click(screen.getByRole('tab', { name: 'Data' }))
+  const records = screen.getByRole('region', { name: 'Mesh records' })
+  expect(within(records).getByText('Ada Lovelace')).toBeInTheDocument()
+  expect(within(records).queryByText('PO-1001')).not.toBeInTheDocument()
+})
+
+test('loads a neighborhood from the workspace hash', async () => {
+  window.location.hash = '#workspace-mesh?node=purchase_order%3Apo-1'
+  const fetchMock = vi.fn(async () => response({
+    nodes: [
+      { id: 'purchase_order:po-1', kind: 'purchase_order', label: 'PO-1001', attributes: { source: 'ledger' } },
+      { id: 'vendor:vendor-1', kind: 'vendor', label: 'Acme Supply', attributes: { source: 'ledger' } },
+    ],
+    edges: [{ id: 'edge-po-vendor', from: 'purchase_order:po-1', to: 'vendor:vendor-1', kind: 'supplied_by' }],
+    sources: ['ledger'],
+  }))
+  vi.stubGlobal('fetch', fetchMock)
+  render(<MeshExplorer permissions={['finance.read']} />)
+  await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/v1/mesh/graph?node=purchase_order%3Apo-1&limit=100', expect.any(Object)))
+  expect(document.querySelector('[data-node-id="purchase_order:po-1"]')).not.toBeNull()
+  expect(await screen.findByRole('heading', { name: 'PO-1001' })).toBeInTheDocument()
+})
+
 test('hides a type from the legend and restores it', async () => {
   vi.stubGlobal('fetch', vi.fn(async () => response({ nodes, edges, sources: ['people', 'ledger', 'labels'] })))
   render(<MeshExplorer permissions={['directory.read', 'finance.read', 'labels.read']} />)
   expect(await screen.findByText(/Mesh graph loaded with 8 records and 2 relationships/)).toBeInTheDocument()
-  expect(document.querySelector('[data-node-id="person:ada"]')).not.toBeNull()
-  fireEvent.click(screen.getByRole('button', { name: 'Hide Person from the graph' }))
-  expect(document.querySelector('[data-node-id="person:ada"]')).toBeNull()
-  fireEvent.click(screen.getByRole('button', { name: 'Show Person' }))
-  expect(document.querySelector('[data-node-id="person:ada"]')).not.toBeNull()
+  expect(document.querySelector('[data-node-id="vendor:vendor-1"]')).not.toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: 'Hide Vendor from the graph' }))
+  expect(document.querySelector('[data-node-id="vendor:vendor-1"]')).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: 'Show Vendor' }))
+  expect(document.querySelector('[data-node-id="vendor:vendor-1"]')).not.toBeNull()
 })
 
 test('adds product hubs and grouped records as extra chart nodes', async () => {
   vi.stubGlobal('fetch', vi.fn(async () => response({ nodes, edges, sources: ['people', 'ledger', 'labels'] })))
   render(<MeshExplorer permissions={['directory.read', 'finance.read', 'labels.read']} />)
   expect(await screen.findByText(/Mesh graph loaded with 8 records and 2 relationships/)).toBeInTheDocument()
+  fireEvent.click(screen.getByLabelText('Show unlinked records'))
   fireEvent.click(screen.getByRole('button', { name: 'Show Atlas' }))
   await waitFor(() => expect(document.querySelector('[data-node-id="source_group:atlas"]')).not.toBeNull())
   fireEvent.change(screen.getByLabelText('Group as nodes'), { target: { value: 'type' } })
@@ -138,4 +189,37 @@ test('exposes the Atlas query editor and group-by dropdown on the data tab', asy
   expect(screen.getAllByRole('button', { name: 'Export' }).length).toBeGreaterThan(0)
   fireEvent.click(screen.getAllByRole('button', { name: 'Filter' })[0])
   expect(screen.getByLabelText('Query')).toBeInTheDocument()
+})
+
+test('campus view hides inactive people and adds occupancy hubs', async () => {
+  vi.stubGlobal('fetch', vi.fn(async () => response({
+    nodes: [
+      { id: 'person:ada', kind: 'person', label: 'Ada Lovelace', attributes: { source: 'people', status: 'active' } },
+      { id: 'person:old', kind: 'person', label: 'Former Faculty', attributes: { source: 'people', status: 'inactive' } },
+      { id: 'room:studio', kind: 'room', label: 'Studio Arts', attributes: { source: 'people', status: 'active' } },
+      { id: 'room:hall', kind: 'room', label: 'Lecture Hall', attributes: { source: 'people', status: 'active' } },
+      { id: 'asset:retired', kind: 'asset', label: 'Retired Mac', attributes: { source: 'atlas', status: 'retired' } },
+      { id: 'model:m1', kind: 'model', label: 'MacBook Pro 14', attributes: { source: 'atlas', status: 'active' } },
+    ],
+    edges: [
+      { id: 'e-teach', from: 'person:ada', to: 'room:studio', kind: 'teaches_in' },
+      { id: 'e-attend', from: 'person:ada', to: 'room:hall', kind: 'attends_class' },
+      { id: 'e-old', from: 'person:old', to: 'room:studio', kind: 'teaches_in' },
+      { id: 'e-model', from: 'asset:retired', to: 'model:m1', kind: 'modeled_as' },
+    ],
+    sources: ['people', 'atlas'],
+  })))
+  render(<MeshExplorer permissions={['directory.read', 'assets.read']} />)
+  expect(await screen.findByText(/Mesh graph loaded with 6 records/)).toBeInTheDocument()
+  expect(screen.getByRole('combobox', { name: 'Campus view' })).toHaveValue('campus')
+  expect(screen.getByRole('button', { name: 'Active people' })).toHaveAttribute('aria-pressed', 'true')
+  expect(screen.getByRole('button', { name: 'Active assets' })).toHaveAttribute('aria-pressed', 'true')
+  expect(screen.getByRole('button', { name: 'User-type nodes' })).toHaveAttribute('aria-pressed', 'true')
+  expect(document.querySelector('[data-node-id="person:ada"]')).not.toBeNull()
+  expect(document.querySelector('[data-node-id="person:old"]')).toBeNull()
+  expect(document.querySelector('[data-node-id="asset:retired"]')).toBeNull()
+  expect(document.querySelector('[data-node-id="role_group:instructor"]')).not.toBeNull()
+  expect(document.querySelector('[data-node-id="role_group:student"]')).not.toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: 'Active people' }))
+  expect(document.querySelector('[data-node-id="person:old"]')).not.toBeNull()
 })

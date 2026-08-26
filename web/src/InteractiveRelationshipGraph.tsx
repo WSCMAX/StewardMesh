@@ -31,7 +31,7 @@ import {
   type LayoutLink,
   type LayoutNode,
 } from './graphLayout'
-import { colorsForNode, defaultKindColorKey, displayType, graphPaletteColor, graphTypePalette, sourceForKind, sourceLabels, type GraphColorMode, type GraphPaletteKey } from './graphModel'
+import { colorsForNode, defaultKindColorKey, displayType, gradientDOMID, graphPaletteColor, graphTypePalette, occupancyRoleMeta, occupancyRoles, paintFill, sourceForKind, sourceLabels, type GraphColorMode, type GraphPaletteKey } from './graphModel'
 import { startGraphSimulation, type GraphSimulationHandle } from './graphSimulationClient'
 import { lockScroll } from './scrollLock'
 import { cx, menuSurfaceClass, secondaryButtonClass } from './ui'
@@ -197,8 +197,51 @@ function legendPillStyle(colors: { fill: string; stroke: string }) {
   return {
     backgroundColor: `${colors.fill}e6`,
     borderColor: `${colors.stroke}66`,
+    color: colors.stroke,
     boxShadow: `inset 0 0 0 1px ${colors.stroke}22`,
   } as const
+}
+
+function syncNodeGradients(
+  svgElement: SVGSVGElement,
+  nodes: readonly SimNode[],
+  colorMode: GraphColorMode,
+  kindColorOverrides?: Readonly<Record<string, GraphPaletteKey>>,
+) {
+  let defs = select(svgElement).select<SVGDefsElement>('defs')
+  if (defs.empty()) defs = select(svgElement).append('defs')
+  const painted = nodes.map((node) => ({ node, paint: paintNode(node, '', colorMode, kindColorOverrides) }))
+    .filter((item) => item.paint.fills && item.paint.fills.length >= 2)
+  defs.selectAll<SVGLinearGradientElement, typeof painted[number]>('linearGradient.mesh-role')
+    .data(painted, (item) => item.node.id)
+    .join(
+      (enter) => {
+        const gradient = enter.append('linearGradient')
+          .attr('class', 'mesh-role')
+          .attr('id', (item) => gradientDOMID(item.node.id))
+          .attr('x1', '0%')
+          .attr('y1', '0%')
+          .attr('x2', '100%')
+          .attr('y2', '100%')
+        gradient.each(function (item) {
+          const fills = item.paint.fills ?? []
+          select(this).selectAll('stop').data(fills).join('stop')
+            .attr('offset', (_color, index) => `${Math.round((index / Math.max(fills.length - 1, 1)) * 100)}%`)
+            .attr('stop-color', (color) => color)
+        })
+        return gradient
+      },
+      (update) => {
+        update.attr('id', (item) => gradientDOMID(item.node.id))
+        update.each(function (item) {
+          const fills = item.paint.fills ?? []
+          select(this).selectAll('stop').data(fills).join('stop')
+            .attr('offset', (_color, index) => `${Math.round((index / Math.max(fills.length - 1, 1)) * 100)}%`)
+            .attr('stop-color', (color) => color)
+        })
+        return update
+      },
+    )
 }
 
 function LegendColorPicker({
@@ -351,11 +394,13 @@ function paintNode(
   kindColorOverrides?: Readonly<Record<string, GraphPaletteKey>>,
 ) {
   const colors = colorsForNode(simNode.kind, simNode.attributes, colorMode, kindColorOverrides)
+  const fill = colors.fills && colors.fills.length >= 2 ? paintFill({ ...colors, fill: colors.stroke }, simNode.id) : colors.stroke
   return {
-    fill: colors.stroke,
+    fill,
     stroke: simNode.id === selectedNodeID ? '#ffffff' : simNode.degree === 0 ? '#f0b429' : '#071018',
     width: simNode.id === selectedNodeID ? 2.4 : 1.15,
     dash: simNode.degree === 0 ? '3 3' : null,
+    fills: colors.fills,
   }
 }
 
@@ -724,6 +769,7 @@ export default function InteractiveRelationshipGraph({
     const merge = glow.append('feMerge')
     merge.append('feMergeNode').attr('in', 'blur')
     merge.append('feMergeNode').attr('in', 'SourceGraphic')
+    syncNodeGradients(svgElement, simNodes, colorModeRef.current, kindColorOverridesRef.current)
 
     const root = svg.append('g').attr('class', 'graph-root')
     root.attr('transform', transformRef.current.toString())
@@ -907,6 +953,7 @@ export default function InteractiveRelationshipGraph({
     if (!svgElement) return
     const renderedNodes = select(svgElement).selectAll<SVGGElement, SimNode>('g.nodes g').data()
     const threshold = labelDegreeThreshold(renderedNodes.map((node) => node.degree))
+    syncNodeGradients(svgElement, renderedNodes, colorMode, kindColorOverrides)
     select(svgElement)
       .selectAll<SVGCircleElement, SimNode>('g.nodes g circle.node-dot')
       .attr('fill', (node) => paintNode(node, selectedNodeID, colorMode, kindColorOverrides).fill)
@@ -975,7 +1022,17 @@ export default function InteractiveRelationshipGraph({
   }
 
   const denseLayout = isDenseGraph(focusedIDs.size)
-  const legendCaption = colorMode === 'source' ? 'Colored by product' : colorMode === 'status' ? 'Colored by status' : 'Colored by record type'
+  const legendCaption = colorMode === 'source'
+    ? 'Colored by product'
+    : colorMode === 'status'
+      ? 'Colored by status'
+      : colorMode === 'occupancy'
+        ? 'People colored by occupancy role'
+        : colorMode === 'model'
+          ? 'Assets colored by model'
+          : colorMode === 'campus'
+            ? 'People by occupancy, assets by model. Dual roles use a gradient.'
+            : 'Colored by record type'
   const statusText = [
     focusNodeID ? `Focused on one record and its ${focusedIDs.size - 1} direct connections.` : `Showing ${focusedIDs.size} records.`,
     denseLayout ? (isLargeGraph(focusedIDs.size)
@@ -1006,6 +1063,17 @@ export default function InteractiveRelationshipGraph({
   const legendList = legend.length > 0 ? (
     <ul aria-label="Record type legend" className="flex flex-wrap gap-1.5">
       <li className="sr-only">{legendCaption}. Select a type to highlight those records in the graph.</li>
+      {(colorMode === 'campus' || colorMode === 'occupancy') && occupancyRoles.map((role) => {
+        const colors = graphPaletteColor(occupancyRoleMeta[role].colorKey)
+        return (
+          <li key={`occupancy-${role}`}>
+            <span className="inline-flex items-center gap-1.5 rounded-full border py-0.5 pl-1.5 pr-2 text-xs text-steward-mist" style={legendPillStyle(colors)}>
+              <span aria-hidden="true" className="size-2 rounded-full" style={{ backgroundColor: colors.stroke }} />
+              {occupancyRoleMeta[role].label}
+            </span>
+          </li>
+        )
+      })}
       {legend.map((item) => {
         const label = colorMode === 'source'
           ? (sourceLabels[sourceForKind(item.kind)] ?? displayType(item.kind))

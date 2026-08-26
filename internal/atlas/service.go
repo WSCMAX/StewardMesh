@@ -37,7 +37,7 @@ var (
 	validStatuses = map[string]struct{}{
 		"draft": {}, "active": {}, "inactive": {}, "retired": {}, "disposed": {},
 	}
-	validModelStatuses = map[string]struct{}{"active": {}, "retired": {}}
+	validModelStatuses      = map[string]struct{}{"active": {}, "retired": {}}
 	validTemplateFieldKinds = map[string]struct{}{"text": {}, "number": {}, "select": {}}
 	validComponentKinds     = map[string]struct{}{
 		"monitor": {}, "mouse": {}, "keyboard": {}, "combo": {}, "dock": {}, "other": {},
@@ -107,7 +107,17 @@ func (s *Service) ListAssetsPage(ctx context.Context, query Query) (AssetPage, e
 		nextCursor = items[pageLimit-1].ID
 		items = items[:pageLimit]
 	}
-	return AssetPage{Items: items, NextCursor: nextCursor}, nil
+	filteredCount := 0
+	if strings.TrimSpace(query.Cursor) == "" {
+		countQuery := query
+		countQuery.Cursor = ""
+		countQuery.Limit = pageLimit
+		filteredCount, err = s.store.CountAssets(ctx, s.organizationID, countQuery)
+		if err != nil {
+			return AssetPage{}, err
+		}
+	}
+	return AssetPage{Items: items, NextCursor: nextCursor, FilteredCount: filteredCount}, nil
 }
 
 // ListAuthorizedAssets returns an ID-keyset page after applying the
@@ -228,7 +238,7 @@ func (s *Service) CreateModel(ctx context.Context, input CreateModelInput) (doma
 		SupportURL: normalized.SupportURL, WarrantyMonths: normalized.WarrantyMonths, UsefulLifeMonths: normalized.UsefulLifeMonths,
 		LastEffectiveDate: cloneDate(normalized.LastEffectiveDate), ReplacementModelID: normalized.ReplacementModelID,
 		CriticalityScore: normalized.CriticalityScore,
-		UnitCostMinor: normalized.UnitCostMinor, Currency: normalized.Currency, Status: "active",
+		UnitCostMinor:    normalized.UnitCostMinor, Currency: normalized.Currency, Status: "active",
 		SourceSystemID: normalized.SourceSystemID, SourceRecordID: normalized.SourceRecordID, Revision: 1,
 		CreatedAt: now, UpdatedAt: now,
 	}
@@ -410,8 +420,8 @@ func (s *Service) CreateAsset(ctx context.Context, input CreateAssetInput) (doma
 		PurchaseDate: cloneDate(normalized.PurchaseDate), LifecycleStartDate: cloneDate(normalized.LifecycleStartDate),
 		InstalledDate: cloneDate(normalized.InstalledDate), ReplacementModelID: normalized.ReplacementModelID,
 		CriticalityScore: normalized.CriticalityScore,
-		Attributes: cloneSpecifications(normalized.Attributes),
-		Components: cloneComponents(normalized.Components), UnitCostMinor: normalized.UnitCostMinor,
+		Attributes:       cloneSpecifications(normalized.Attributes),
+		Components:       cloneComponents(normalized.Components), UnitCostMinor: normalized.UnitCostMinor,
 		Currency: normalized.Currency, Revision: 1, CreatedAt: now, UpdatedAt: now,
 	}
 	event, err := s.lifecycleEvent(ctx, asset, "", asset.Status, "Asset registered")
@@ -473,7 +483,7 @@ func (s *Service) CreateAssetsFromModel(ctx context.Context, input BulkCreateAss
 			return BulkCreateAssetsResult{}, validateErr
 		}
 		if normalized.ReplacementModelID != "" {
-		if _, validateErr := s.validateModelLineageReference(ctx, normalized.ReplacementModelID); validateErr != nil {
+			if _, validateErr := s.validateModelLineageReference(ctx, normalized.ReplacementModelID); validateErr != nil {
 				return BulkCreateAssetsResult{}, validateErr
 			}
 		} else if model.ReplacementModelID != "" {
@@ -505,8 +515,8 @@ func (s *Service) CreateAssetsFromModel(ctx context.Context, input BulkCreateAss
 			PurchaseDate: cloneDate(normalized.PurchaseDate), LifecycleStartDate: cloneDate(normalized.LifecycleStartDate),
 			InstalledDate: cloneDate(normalized.InstalledDate), ReplacementModelID: normalized.ReplacementModelID,
 			CriticalityScore: normalized.CriticalityScore,
-			Attributes: cloneSpecifications(normalized.Attributes),
-			Components: cloneComponents(normalized.Components), UnitCostMinor: normalized.UnitCostMinor,
+			Attributes:       cloneSpecifications(normalized.Attributes),
+			Components:       cloneComponents(normalized.Components), UnitCostMinor: normalized.UnitCostMinor,
 			Currency: normalized.Currency, Revision: 1, CreatedAt: now, UpdatedAt: now,
 		}
 		event, eventErr := s.lifecycleEvent(ctx, asset, "", asset.Status, "Asset registered from model bulk intake")
@@ -819,18 +829,29 @@ func normalizeModelIdentity(identity ModelIdentity) (ModelIdentity, error) {
 
 func normalizeQuery(query Query) (Query, error) {
 	query.Search = strings.ToLower(strings.TrimSpace(query.Search))
+	query.Name = strings.ToLower(strings.TrimSpace(query.Name))
+	query.AssetTag = strings.ToLower(strings.TrimSpace(query.AssetTag))
+	query.SerialNumber = strings.ToLower(strings.TrimSpace(query.SerialNumber))
+	query.Hostname = strings.ToLower(strings.TrimSpace(query.Hostname))
+	query.Manufacturer = strings.ToLower(strings.TrimSpace(query.Manufacturer))
 	query.Kind = strings.ToLower(strings.TrimSpace(query.Kind))
 	query.Status = strings.ToLower(strings.TrimSpace(query.Status))
 	query.ModelID = strings.TrimSpace(query.ModelID)
 	query.SiteID = strings.TrimSpace(query.SiteID)
+	query.BuildingID = strings.TrimSpace(query.BuildingID)
+	query.RoomID = strings.TrimSpace(query.RoomID)
 	query.DepartmentID = strings.TrimSpace(query.DepartmentID)
 	query.UserID = strings.TrimSpace(query.UserID)
 	query.DeploymentContext = strings.ToLower(strings.TrimSpace(query.DeploymentContext))
 	query.Cursor = strings.TrimSpace(query.Cursor)
-	if !validText(query.Search, 200) || (query.Kind != "" && !validKind(query.Kind)) ||
+	if !validText(query.Search, 200) || !validText(query.Name, 200) || !validText(query.AssetTag, 200) ||
+		!validText(query.SerialNumber, 200) || !validText(query.Hostname, 200) || !validText(query.Manufacturer, 200) ||
+		(query.Kind != "" && !validKind(query.Kind)) ||
 		(query.Status != "" && !validStatus(query.Status)) ||
 		(query.ModelID != "" && !assetIDPattern.MatchString(query.ModelID)) ||
 		(query.SiteID != "" && !referencePattern.MatchString(query.SiteID)) ||
+		(query.BuildingID != "" && !referencePattern.MatchString(query.BuildingID)) ||
+		(query.RoomID != "" && !referencePattern.MatchString(query.RoomID)) ||
 		(query.DepartmentID != "" && !referencePattern.MatchString(query.DepartmentID)) ||
 		(query.UserID != "" && !referencePattern.MatchString(query.UserID)) ||
 		(query.Cursor != "" && !assetIDPattern.MatchString(query.Cursor)) ||
@@ -1258,7 +1279,7 @@ func snapshotModelContext(model domain.AssetModel, assetKind string, appliedAt t
 		VendorIdentifier: model.VendorIdentifier, Specifications: cloneSpecifications(model.Specifications),
 		SupportURL: model.SupportURL, WarrantyMonths: model.WarrantyMonths, UsefulLifeMonths: model.UsefulLifeMonths,
 		CriticalityScore: model.CriticalityScore,
-		UnitCostMinor: model.UnitCostMinor, Currency: model.Currency,
+		UnitCostMinor:    model.UnitCostMinor, Currency: model.Currency,
 		SourceSystemID: model.SourceSystemID, SourceRecordID: model.SourceRecordID, ModelRevision: model.Revision,
 		DefaultsEffectiveAt: portabletime.Normalize(model.UpdatedAt), AppliedAt: portabletime.Normalize(appliedAt), Overrides: []string{},
 	}

@@ -24,7 +24,7 @@ type ExcludedRecordType struct {
 var portableRecordTypes = []string{
 	"atlas.asset", "atlas.model", "atlas.identifier", "atlas.lifecycle-event",
 	"atlas.catalog-configuration", "atlas.catalog-price", "atlas.catalog-upgrade-path",
-	"people.site", "people.building", "people.room", "people.department", "people.identity", "people.assignment",
+	"people.site", "people.building", "people.room", "people.department", "people.identity", "people.checkout-group", "people.assignment",
 	"threads.tag", "threads.goal", "threads.tag-rule", "threads.goal-link",
 	"labels.definition", "labels.assignment",
 	"vault.blob",

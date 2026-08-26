@@ -327,6 +327,10 @@ func PeopleStore(t *testing.T, store people.Store, organizationID string) {
 	if err != nil || len(history) != 4 {
 		t.Fatalf("unexpected assignment history %#v, %v", history, err)
 	}
+	byPerson, err := store.ListAssetAssignmentsByAssignee(ctx, organizationID, people.AssigneeIdentity, person.ID)
+	if err != nil || len(byPerson) != 2 {
+		t.Fatalf("unexpected identity assignments %#v, %v", byPerson, err)
+	}
 	var previousPrimaryFound bool
 	var activeUsers int
 	for _, assignment := range history {

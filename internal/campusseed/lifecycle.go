@@ -13,12 +13,14 @@ import (
 	"github.com/maxlemke/stewardmesh/internal/domain"
 	"github.com/maxlemke/stewardmesh/internal/foundation"
 	"github.com/maxlemke/stewardmesh/internal/horizon"
+	"github.com/maxlemke/stewardmesh/internal/ledger"
 )
 
 type LifecycleDependencies struct {
 	OrganizationID string
 	Atlas          *atlas.Service
 	Horizon        *horizon.Service
+	Ledger         *ledger.Service
 }
 
 type campusAssetRef struct {
@@ -45,8 +47,8 @@ func defaultModelCriticality(definition modelDef) int {
 
 func SeedLifecycle(ctx context.Context, dependencies LifecycleDependencies) error {
 	organizationID := strings.ToLower(strings.TrimSpace(dependencies.OrganizationID))
-	if ctx == nil || !strings.HasPrefix(organizationID, "demo-") || dependencies.Atlas == nil || dependencies.Horizon == nil {
-		return errors.New("campus lifecycle seeding requires a demo-* organization and initialized Atlas and Horizon services")
+	if ctx == nil || !strings.HasPrefix(organizationID, "demo-") || dependencies.Atlas == nil || dependencies.Horizon == nil || dependencies.Ledger == nil {
+		return errors.New("campus lifecycle seeding requires a demo-* organization and initialized Atlas, Horizon, and Ledger services")
 	}
 	correlationID, err := foundation.NewCorrelationID()
 	if err != nil {
@@ -124,7 +126,60 @@ func SeedLifecycle(ctx context.Context, dependencies LifecycleDependencies) erro
 			return fmt.Errorf("create Horizon plan for %q: %w", ref.ID, err)
 		}
 	}
+	if err := seedCampusReplacementPlans(ctx, dependencies.Horizon, refs); err != nil {
+		return err
+	}
+	return seedCampusForecastCosts(ctx, dependencies.Horizon, dependencies.Ledger, now)
+}
+
+func seedCampusReplacementPlans(ctx context.Context, horizonService *horizon.Service, refs []campusAssetRef) error {
+	existing, err := horizonService.ListReplacementPlans(ctx)
+	if err != nil {
+		return fmt.Errorf("list campus replacement plans: %w", err)
+	}
+	if len(existing) > 0 {
+		return nil
+	}
+	plans := []horizon.ReplacementPlanInput{
+		{ID: "laptop-refresh", Name: "Laptop refresh", Grouping: "type", GroupKey: "laptop", Scenario: "baseline"},
+		{ID: "server-refresh", Name: "Server refresh", Grouping: "type", GroupKey: "server", Scenario: "baseline"},
+		{ID: "lab-refresh", Name: "Lab refresh", Grouping: "custom", GroupKey: "lab", Scenario: "baseline"},
+		{ID: "desktop-refresh", Name: "Desktop refresh", Grouping: "type", GroupKey: "desktop", Scenario: "baseline"},
+	}
+	for _, input := range plans {
+		if _, err := horizonService.CreateReplacementPlan(ctx, input); err != nil && !errors.Is(err, horizon.ErrConflict) {
+			return fmt.Errorf("create campus replacement plan %q: %w", input.ID, err)
+		}
+	}
+	for _, ref := range refs {
+		planID := campusReplacementPlanID(ref)
+		if planID == "" {
+			continue
+		}
+		if err := horizonService.SetAssetReplacementPlan(ctx, ref.ID, planID); err != nil {
+			if errors.Is(err, horizon.ErrNotFound) || errors.Is(err, horizon.ErrReferenceMissing) {
+				continue
+			}
+			return fmt.Errorf("assign campus replacement plan for %q: %w", ref.ID, err)
+		}
+	}
 	return nil
+}
+
+func campusReplacementPlanID(ref campusAssetRef) string {
+	if strings.Contains(ref.ID, "-station-") {
+		return "lab-refresh"
+	}
+	switch ref.Kind {
+	case "laptop":
+		return "laptop-refresh"
+	case "server":
+		return "server-refresh"
+	case "desktop":
+		return "desktop-refresh"
+	default:
+		return ""
+	}
 }
 
 func resolveCampusModelIDs(ctx context.Context, atlasService *atlas.Service) (map[string]string, error) {
@@ -156,16 +211,17 @@ func seedCampusModelLifecycle(ctx context.Context, atlasService *atlas.Service, 
 		RetireAfterUpdate    bool
 	}{
 		"dell-latitude-5540":       {UsefulLifeMonths: 48, LastEffectiveDate: dateUTC(2026, time.June, 1), ReplacementModelSlug: "dell-latitude-7440", CriticalityScore: 4},
-		"hp-elitebook-840":          {UsefulLifeMonths: 48, LastEffectiveDate: dateUTC(2025, time.December, 1), ReplacementModelSlug: "dell-latitude-7440", CriticalityScore: 4},
-		"lenovo-thinkpad-t14-gen3":  {UsefulLifeMonths: 48, LastEffectiveDate: dateUTC(2024, time.January, 1), ReplacementModelSlug: "dell-latitude-7440", CriticalityScore: 4, RetireAfterUpdate: true},
-		"lenovo-thinkpad-t14":       {UsefulLifeMonths: 48, LastEffectiveDate: dateUTC(2025, time.September, 1), ReplacementModelSlug: "dell-latitude-7440", CriticalityScore: 4, RetireAfterUpdate: true},
-		"dell-optiplex-7020":        {UsefulLifeMonths: 60, CriticalityScore: 3},
-		"dell-latitude-7440":        {UsefulLifeMonths: 48, CriticalityScore: 4},
-		"imac-m3":                   {UsefulLifeMonths: 60, CriticalityScore: 5},
-		"mac-studio-m2":             {UsefulLifeMonths: 72, CriticalityScore: 5},
-		"macbook-pro-m3":            {UsefulLifeMonths: 48, CriticalityScore: 5},
-		"dell-precision-7865":       {UsefulLifeMonths: 72, CriticalityScore: 5},
-		"apple-ipad-air":            {UsefulLifeMonths: 36, CriticalityScore: 3},
+		"hp-elitebook-840":         {UsefulLifeMonths: 48, LastEffectiveDate: dateUTC(2025, time.December, 1), ReplacementModelSlug: "dell-latitude-7440", CriticalityScore: 4},
+		"lenovo-thinkpad-t14-gen3": {UsefulLifeMonths: 48, LastEffectiveDate: dateUTC(2024, time.January, 1), ReplacementModelSlug: "dell-latitude-7440", CriticalityScore: 4, RetireAfterUpdate: true},
+		"lenovo-thinkpad-t15-gen2": {UsefulLifeMonths: 48, LastEffectiveDate: dateUTC(2023, time.June, 1), ReplacementModelSlug: "dell-latitude-7440", CriticalityScore: 4, RetireAfterUpdate: true},
+		"lenovo-thinkpad-t14":      {UsefulLifeMonths: 48, LastEffectiveDate: dateUTC(2025, time.September, 1), ReplacementModelSlug: "dell-latitude-7440", CriticalityScore: 4, RetireAfterUpdate: true},
+		"dell-optiplex-7020":       {UsefulLifeMonths: 60, CriticalityScore: 3},
+		"dell-latitude-7440":       {UsefulLifeMonths: 48, CriticalityScore: 4},
+		"imac-m3":                  {UsefulLifeMonths: 60, CriticalityScore: 5},
+		"mac-studio-m2":            {UsefulLifeMonths: 72, CriticalityScore: 5},
+		"macbook-pro-m3":           {UsefulLifeMonths: 48, CriticalityScore: 5},
+		"dell-precision-7865":      {UsefulLifeMonths: 72, CriticalityScore: 5},
+		"apple-ipad-air":           {UsefulLifeMonths: 36, CriticalityScore: 3},
 	}
 	for slug, patch := range updates {
 		modelID := modelIDs[slug]
@@ -258,10 +314,10 @@ func patchCampusAssetLifecycle(ctx context.Context, atlasService *atlas.Service,
 			DepartmentID: asset.DepartmentID, UserID: asset.UserID,
 		},
 		AdditionalUserIDs: asset.AdditionalUserIDs,
-		Status: targetStatus, PurchaseDate: &purchaseDate, InstalledDate: &installedDate,
+		Status:            targetStatus, PurchaseDate: &purchaseDate, InstalledDate: &installedDate,
 		LifecycleStartDate: &lifecycleStartDate, ReplacementModelID: replacementModelID,
 		CriticalityScore: targetCriticality,
-		Attributes: asset.Attributes, Components: asset.Components,
+		Attributes:       asset.Attributes, Components: asset.Components,
 		UnitCostMinor: asset.UnitCostMinor, Currency: asset.Currency, Revision: asset.Revision,
 		LifecycleNote: note,
 	})
@@ -339,7 +395,7 @@ func workforceAssetProfile(modelSlug string, index int) string {
 		default:
 			return "asset-disposed"
 		}
-	case "lenovo-thinkpad-t14-gen3":
+	case "lenovo-thinkpad-t14-gen3", "lenovo-thinkpad-t15-gen2":
 		return "legacy-active"
 	}
 	return ""

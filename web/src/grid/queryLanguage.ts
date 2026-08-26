@@ -41,6 +41,20 @@ export type QueryField = {
   options?: readonly string[]
 }
 
+/** One pickable value for a query condition, e.g. a manufacturer or a person. */
+export type QueryValueOption = {
+  /** Canonical text stored in the condition, such as a record id. */
+  value: string
+  /** What the picker shows. Defaults to the value itself. */
+  label?: string
+  /** How many visible rows carry this value, when known. */
+  count?: number
+}
+
+export function queryValueOptionLabel(option: QueryValueOption) {
+  return option.label?.trim() || option.value
+}
+
 export type QueryParseResult =
   | { ok: true; model: QueryModel }
   | { ok: false; error: string }
@@ -445,13 +459,29 @@ export function matchQueryValue(text: string, operator: QueryOperator, value: st
   }
 }
 
-function matchCondition<T>(row: T, fields: readonly QueryField[], condition: QueryCondition, textOf: (row: T, field: string) => string) {
+/**
+ * Cell text a query condition is checked against. A single string keeps the
+ * legacy behavior; an array supplies each candidate separately (raw id, display
+ * label, each selected record of a multi-lookup) so "is" and "is one of" can
+ * match a label or an id exactly instead of the concatenated search text.
+ */
+export type QueryText = string | readonly string[]
+
+/** Operators that must hold for every candidate rather than for at least one. */
+const operatorsOverAllCandidates = new Set<QueryOperator>(['neq', 'not_contains', 'not_in', 'is_empty'])
+
+function matchCondition<T>(row: T, fields: readonly QueryField[], condition: QueryCondition, textOf: (row: T, field: string) => QueryText) {
   const field = fields.find((candidate) => candidate.key === condition.field)
   if (!field || !isSafeFieldName(field.key)) return false
-  return matchQueryValue(textOf(row, field.key), condition.operator, condition.value.slice(0, maximumQueryValueLength), field.kind)
+  const text = textOf(row, field.key)
+  const candidates = typeof text === 'string' ? [text] : text.length > 0 ? text : ['']
+  const value = condition.value.slice(0, maximumQueryValueLength)
+  return operatorsOverAllCandidates.has(condition.operator)
+    ? candidates.every((candidate) => matchQueryValue(candidate, condition.operator, value, field.kind))
+    : candidates.some((candidate) => matchQueryValue(candidate, condition.operator, value, field.kind))
 }
 
-function matchGroup<T>(row: T, fields: readonly QueryField[], group: QueryGroup, textOf: (row: T, field: string) => string) {
+function matchGroup<T>(row: T, fields: readonly QueryField[], group: QueryGroup, textOf: (row: T, field: string) => QueryText) {
   const conditions = group.conditions.filter(isConditionActive)
   if (conditions.length === 0) return true
   return group.join === 'OR'
@@ -459,7 +489,7 @@ function matchGroup<T>(row: T, fields: readonly QueryField[], group: QueryGroup,
     : conditions.every((condition) => matchCondition(row, fields, condition, textOf))
 }
 
-export function matchQuery<T>(row: T, fields: readonly QueryField[], model: QueryModel, textOf: (row: T, field: string) => string) {
+export function matchQuery<T>(row: T, fields: readonly QueryField[], model: QueryModel, textOf: (row: T, field: string) => QueryText) {
   const active = activeQuery(model)
   if (active.groups.length === 0) return true
   return active.groupJoin === 'OR'

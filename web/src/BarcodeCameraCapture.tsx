@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
+import { identityBarcodeFormats, symbologyFromFormat, type CapturedSymbology } from './barcodeCapture'
+import CameraPreview from './CameraPreview'
 import { secondaryButtonClass } from './ui'
 
 // Requirement: REQ-ATLAS-CODES-001. Feature: inventory.identifiers.
 
-export type CapturedCode = { value: string; symbology: 'code128' | 'qr' }
+export type CapturedCode = { value: string; symbology: CapturedSymbology }
 
 type BarcodeDetection = {
   format?: string
@@ -18,16 +20,20 @@ type BarcodeDetectorConstructor = new (options?: { formats?: string[] }) => Barc
 
 type BarcodeCameraCaptureProps = {
   disabled?: boolean
-  onCapture: (code: CapturedCode) => void
+  onCapture?: (code: CapturedCode) => void
+  /** Receives every distinct code in the current frame so a sticker sheet can fill several fields. */
+  onCaptures?: (codes: CapturedCode[]) => void
   /** Starts the camera as soon as the control mounts, used by the in-cell scanner. */
   autoStart?: boolean
+  /** Keeps decoding after a capture so serial, tag, and model can be read in one pass. */
+  continuous?: boolean
 }
 
 function barcodeDetectorConstructor() {
   return (globalThis as typeof globalThis & { BarcodeDetector?: BarcodeDetectorConstructor }).BarcodeDetector
 }
 
-export default function BarcodeCameraCapture({ disabled, onCapture, autoStart = false }: BarcodeCameraCaptureProps) {
+export default function BarcodeCameraCapture({ disabled, onCapture, onCaptures, autoStart = false, continuous = false }: BarcodeCameraCaptureProps) {
   const [cameraActive, setCameraActive] = useState(false)
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
@@ -35,6 +41,7 @@ export default function BarcodeCameraCapture({ disabled, onCapture, autoStart = 
   const streamRef = useRef<MediaStream | null>(null)
   const frameRef = useRef<number | null>(null)
   const scanGenerationRef = useRef(0)
+  const seenRef = useRef(new Set<string>())
 
   function stopCamera(status = '') {
     scanGenerationRef.current += 1
@@ -63,6 +70,7 @@ export default function BarcodeCameraCapture({ disabled, onCapture, autoStart = 
   async function startCamera() {
     setError('')
     setMessage('')
+    seenRef.current = new Set()
     const Detector = barcodeDetectorConstructor()
     if (!Detector || !navigator.mediaDevices?.getUserMedia) {
       setError('Camera scanning is not available in this browser. Use a keyboard scanner, paste, or manual entry.')
@@ -85,22 +93,31 @@ export default function BarcodeCameraCapture({ disabled, onCapture, autoStart = 
       video.srcObject = stream
       await video.play()
       setCameraActive(true)
-      setMessage('Camera active. Frames stay in this browser and are not uploaded or retained.')
-      const detector = new Detector({ formats: ['code_128', 'qr_code'] })
+      setMessage(continuous
+        ? 'Camera active. Point at the serial, asset tag, and model barcodes. Frames stay in this browser.'
+        : 'Camera active. Frames stay in this browser and are not uploaded or retained.')
+      const detector = new Detector({ formats: [...identityBarcodeFormats] })
       const detect = async () => {
         if (scanGenerationRef.current !== generation || !streamRef.current || !videoRef.current) return
         try {
           const detections = await detector.detect(videoRef.current)
-          const detection = detections.find((item) => typeof item.rawValue === 'string' && item.rawValue.length > 0)
-          if (detection?.rawValue) {
-            const detected = detection.format === 'qr_code' ? 'qr' : detection.format === 'code_128' ? 'code128' : null
-            if (!detected) {
-              setError('That barcode format is unsupported. Use Code 128 or QR.')
-            } else {
-              stopCamera('Code captured. Review the value, then save to associate it.')
-              onCapture({ value: detection.rawValue, symbology: detected })
+          const codes = detections.flatMap((item) => {
+            const symbology = symbologyFromFormat(item.format)
+            const value = item.rawValue?.trim() ?? ''
+            if (!symbology || !value || seenRef.current.has(value)) return []
+            return [{ value, symbology }]
+          })
+          if (codes.length > 0) {
+            for (const code of codes) seenRef.current.add(code.value)
+            onCaptures?.(codes)
+            if (!onCaptures) {
+              for (const code of codes) onCapture?.(code)
+            }
+            if (!continuous) {
+              stopCamera(codes.length > 1 ? 'Codes captured. Review the values, then save.' : 'Code captured. Review the value, then save to associate it.')
               return
             }
+            setMessage(`${codes.length === 1 ? 'Code' : `${codes.length} codes`} captured. Keep scanning or stop the camera when finished.`)
           }
         } catch {
           setError('The camera frame could not be decoded. Try again or use manual entry.')
@@ -115,14 +132,14 @@ export default function BarcodeCameraCapture({ disabled, onCapture, autoStart = 
   }
 
   return (
-    <div>
-      <div className="flex flex-wrap gap-2">
+    <div className="min-w-0">
+      <div className="flex flex-wrap items-center gap-2">
         {!cameraActive && <button className={secondaryButtonClass} disabled={disabled} onClick={() => void startCamera()} type="button">Scan with camera</button>}
         {cameraActive && <button className={secondaryButtonClass} onClick={() => stopCamera('Camera stopped. Manual and keyboard-scanner input remain available.')} type="button">Stop camera</button>}
       </div>
-      {message && <p className="mt-3 rounded-lg border border-steward-green/40 bg-steward-green/10 p-3 text-sm" role="status">{message}</p>}
-      {error && <p className="mt-3 rounded-lg border border-red-400/50 bg-red-950/50 p-3 text-sm" role="alert">{error}</p>}
-      <video aria-label="Live barcode camera preview" className={`${cameraActive ? 'mt-3 block' : 'hidden'} max-h-56 w-full rounded-xl bg-black object-contain`} muted playsInline ref={videoRef} />
+      {message && <p className="mt-2 rounded-md border border-steward-success/35 bg-steward-success/10 px-3 py-2 text-sm text-[#98eab9]" role="status">{message}</p>}
+      {error && <p className="mt-2 rounded-md border border-steward-danger/45 bg-steward-danger/10 px-3 py-2 text-sm text-[#ffccd1]" role="alert">{error}</p>}
+      <CameraPreview active={cameraActive} compact videoRef={videoRef} />
     </div>
   )
 }

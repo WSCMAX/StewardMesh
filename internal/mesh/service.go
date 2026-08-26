@@ -112,7 +112,6 @@ func (s *Service) Graph(ctx context.Context, query Query) (Graph, error) {
 }
 
 func (s *Service) projectAtlas(ctx context.Context, builder *graphBuilder, query Query) error {
-	orgID := typedNodeID(NodeOrganization, s.organizationID)
 	modelsByNumber := map[string]string{}
 	if !wantsAny(query.Kinds, NodeAsset) && !wantsAny(query.Kinds, NodeModel) {
 		return nil
@@ -144,7 +143,6 @@ func (s *Service) projectAtlas(ctx context.Context, builder *graphBuilder, query
 				ID: id, Kind: NodeModel, Label: firstNonEmpty(label, model.Name, model.ID),
 				Attributes: attributes(SourceAtlas, model.Status, firstNonEmpty(model.ModelNumber, model.Kind)),
 			})
-			builder.addEdge(RelationshipContains, orgID, id, nil)
 			if number := normalizeModelNumber(model.ModelNumber); number != "" {
 				modelsByNumber[number] = id
 			}
@@ -197,12 +195,8 @@ func (s *Service) linkAsset(builder *graphBuilder, asset domain.Asset, modelsByN
 	if !builder.hasNode(assetID) {
 		return
 	}
-	orgID := typedNodeID(NodeOrganization, s.organizationID)
-	builder.addEdge(RelationshipContains, orgID, assetID, nil)
 	if asset.DepartmentID != "" {
-		departmentID := typedNodeID(NodeDepartment, asset.DepartmentID)
-		builder.addEdge(RelationshipBelongsTo, assetID, departmentID, nil)
-		builder.addEdge(RelationshipContains, orgID, departmentID, nil)
+		builder.addEdge(RelationshipBelongsTo, assetID, typedNodeID(NodeDepartment, asset.DepartmentID), nil)
 	}
 	for _, reference := range []struct {
 		kind NodeKind
@@ -231,12 +225,10 @@ func (s *Service) projectLedger(ctx context.Context, builder *graphBuilder, quer
 	if err != nil {
 		return err
 	}
-	orgID := typedNodeID(NodeOrganization, s.organizationID)
 	if wantsAny(query.Kinds, NodeVendor) {
 		for _, vendor := range snapshot.Vendors {
 			id := typedNodeID(NodeVendor, vendor.ID)
 			builder.addNode(Node{ID: id, Kind: NodeVendor, Label: firstNonEmpty(vendor.Name, vendor.ID), Attributes: attributes(SourceLedger, vendor.Status, "")})
-			builder.addEdge(RelationshipContains, orgID, id, nil)
 		}
 	}
 	if wantsAny(query.Kinds, NodePurchaseOrder) {
@@ -286,9 +278,6 @@ func (s *Service) projectLedger(ctx context.Context, builder *graphBuilder, quer
 			if budget.SiteID != "" {
 				builder.addEdge(RelationshipLocatedAt, id, typedNodeID(NodeSite, budget.SiteID), nil)
 			}
-			if budget.DepartmentID == "" && budget.SiteID == "" {
-				builder.addEdge(RelationshipContains, orgID, id, nil)
-			}
 		}
 	}
 	if wantsAny(query.Kinds, NodeCommitment) {
@@ -306,12 +295,10 @@ func (s *Service) projectStack(ctx context.Context, builder *graphBuilder, query
 	if err != nil {
 		return err
 	}
-	orgID := typedNodeID(NodeOrganization, s.organizationID)
 	if wantsAny(query.Kinds, NodeProduct) {
 		for _, product := range snapshot.Products {
 			id := typedNodeID(NodeProduct, product.ID)
 			builder.addNode(Node{ID: id, Kind: NodeProduct, Label: firstNonEmpty(product.Name, product.ID), Attributes: attributes(SourceStack, product.Status, product.Publisher)})
-			builder.addEdge(RelationshipContains, orgID, id, nil)
 		}
 	}
 	if wantsAny(query.Kinds, NodeVersion) {
@@ -368,7 +355,6 @@ func (s *Service) projectLabels(ctx context.Context, builder *graphBuilder, quer
 	if err != nil {
 		return err
 	}
-	orgID := typedNodeID(NodeOrganization, s.organizationID)
 	if wantsAny(query.Kinds, NodeLabel) {
 		for _, definition := range snapshot.Definitions {
 			if definition.Status != labels.StatusActive {
@@ -381,8 +367,6 @@ func (s *Service) projectLabels(ctx context.Context, builder *graphBuilder, quer
 			})
 			if definition.ParentID != "" {
 				builder.addEdge(RelationshipContains, typedNodeID(NodeLabel, definition.ParentID), id, nil)
-			} else {
-				builder.addEdge(RelationshipContains, orgID, id, nil)
 			}
 			if definition.GoalID != "" {
 				builder.addEdge(RelationshipAdvances, id, typedNodeID(NodeGoal, definition.GoalID), nil)
@@ -404,15 +388,12 @@ func (s *Service) projectGoals(ctx context.Context, builder *graphBuilder, query
 	if err != nil {
 		return err
 	}
-	orgID := typedNodeID(NodeOrganization, s.organizationID)
 	if wantsAny(query.Kinds, NodeGoal) {
 		for _, goal := range snapshot.Goals {
 			id := typedNodeID(NodeGoal, goal.ID)
 			builder.addNode(Node{ID: id, Kind: NodeGoal, Label: firstNonEmpty(goal.Name, goal.ID), Attributes: attributes(SourceGoals, "", "")})
 			if goal.ParentID != "" {
 				builder.addEdge(RelationshipContains, typedNodeID(NodeGoal, goal.ParentID), id, nil)
-			} else {
-				builder.addEdge(RelationshipContains, orgID, id, nil)
 			}
 		}
 	}
@@ -434,17 +415,14 @@ func (s *Service) projectVault(ctx context.Context, builder *graphBuilder, query
 	if err != nil {
 		return err
 	}
-	orgID := typedNodeID(NodeOrganization, s.organizationID)
 	for _, blob := range blobs {
 		id := typedNodeID(NodeDocument, blob.ID)
 		builder.addNode(Node{ID: id, Kind: NodeDocument, Label: firstNonEmpty(blob.Name, blob.ID), Attributes: attributes(SourceVault, blob.MediaType, "")})
 		if blob.ResourceType != "" && blob.ResourceID != "" {
 			if owner := builder.nodeIDForRecord(blob.ResourceType, blob.ResourceID); owner != "" {
 				builder.addEdge(RelationshipDocumentedBy, owner, id, nil)
-				continue
 			}
 		}
-		builder.addEdge(RelationshipContains, orgID, id, nil)
 	}
 	return nil
 }
@@ -597,6 +575,10 @@ func normalizeQuery(query Query) (Query, error) {
 	if !validGraphText(query.Search, 200) {
 		return Query{}, ErrInvalidInput
 	}
+	query.Node = strings.TrimSpace(query.Node)
+	if query.Node != "" && !validTypedNodeID(query.Node) {
+		return Query{}, ErrInvalidInput
+	}
 	kinds := uniqueNodeKinds(query.Kinds)
 	for _, kind := range kinds {
 		if !validNodeKind(kind) || kind == "" {
@@ -671,15 +653,27 @@ func filterGraph(graph Graph, query Query) Graph {
 	anchors := make([]Node, 0, len(nodes))
 	for _, node := range nodes {
 		available[node.ID] = node
+		if query.Node != "" {
+			continue
+		}
 		if len(kindAllowed) > 0 {
 			if _, ok := kindAllowed[node.Kind]; !ok {
 				continue
 			}
 		}
-		if search != "" && !strings.Contains(strings.ToLower(node.Label), search) {
+		if search != "" && !nodeMatchesSearch(node, search) {
 			continue
 		}
 		anchors = append(anchors, node)
+	}
+	if query.Node != "" {
+		if node, ok := available[query.Node]; ok {
+			if len(kindAllowed) == 0 {
+				anchors = append(anchors, node)
+			} else if _, allowed := kindAllowed[node.Kind]; allowed {
+				anchors = append(anchors, node)
+			}
+		}
 	}
 	edges := append([]Edge(nil), graph.Edges...)
 	sort.Slice(edges, func(i, j int) bool {
@@ -915,6 +909,21 @@ func assetModelNumber(asset domain.Asset) string {
 		return ""
 	}
 	return asset.ModelContext.ModelNumber
+}
+
+func nodeMatchesSearch(node Node, search string) bool {
+	if strings.Contains(strings.ToLower(node.Label), search) {
+		return true
+	}
+	return strings.Contains(strings.ToLower(node.ID), search)
+}
+
+func validTypedNodeID(value string) bool {
+	kind, recordID, ok := strings.Cut(value, ":")
+	if !ok || recordID == "" || !validNodeKind(NodeKind(kind)) || kind == "" {
+		return false
+	}
+	return validGraphText(value, 320)
 }
 
 func validGraphText(value string, maximum int) bool {

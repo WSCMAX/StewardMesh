@@ -40,7 +40,7 @@ test('renders cycles, deduplicates repeated relationships, and provides an acces
   expect(within(disconnected).getByText('Example Org')).toBeInTheDocument()
   expect(within(disconnected).getByText('Isolated group')).toBeInTheDocument()
   expect(relationships).toHaveAttribute('tabindex', '0')
-  expect(disconnected).toHaveClass('overflow-x-auto')
+  expect(disconnected).toHaveClass('overflow-auto')
   expect((await axe.run(container)).violations).toEqual([])
 
   fireEvent.change(screen.getByLabelText('Search record names'), { target: { value: 'alpha' } })

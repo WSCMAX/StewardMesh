@@ -94,21 +94,59 @@ func NewService(store Store, auditor foundation.Auditor, ownership ownershipMana
 
 func (s *Service) SourceSystemID() string { return s.sourceSystemID }
 
-func (s *Service) ListRecords(ctx context.Context) ([]RecordDescriptor, error) {
-	records, _, err := s.catalog(ctx)
-	if err != nil {
-		return nil, err
+func (s *Service) ListRecords(ctx context.Context) ([]RecordDescriptor, bool, error) {
+	return s.listRecordDescriptors(ctx)
+}
+
+// listRecordDescriptors builds the Exchange picker without validating every payload.
+// Export and import still use catalog, which performs full schema validation.
+func (s *Service) listRecordDescriptors(ctx context.Context) ([]RecordDescriptor, bool, error) {
+	result := make([]RecordDescriptor, 0, 256)
+	seen := make(map[string]struct{})
+	truncated := false
+	for _, provider := range s.providerList {
+		items, err := provider.ListRecords(ctx)
+		if errors.Is(err, ErrTooLarge) {
+			truncated = true
+			continue
+		}
+		if err != nil {
+			return nil, false, fmt.Errorf("list Exchange provider records: %w", err)
+		}
+		for _, item := range items {
+			key := Reference{Type: item.Type, ID: item.ID}.Key()
+			if _, duplicate := seen[key]; duplicate {
+				return nil, false, ErrConflict
+			}
+			seen[key] = struct{}{}
+			template, err := s.schemas.ActiveTemplateForRecordType(ctx, item.Type)
+			if err != nil || template.RecordType != item.Type || template.Status != patterns.StatusActive {
+				return nil, false, fmt.Errorf("resolve Exchange Patterns schema: %w", errors.Join(ErrInvalidInput, err))
+			}
+			dependencies := item.Dependencies
+			if dependencies == nil {
+				dependencies = []Reference{}
+			}
+			result = append(result, RecordDescriptor{
+				Type: item.Type, ID: item.ID, Revision: item.Revision, TemplateID: template.ID, TemplateVersion: template.Version,
+				Dependencies: append([]Reference{}, dependencies...), HasFile: item.File != nil,
+			})
+			if len(result) > MaximumRecords {
+				result = result[:MaximumRecords]
+				truncated = true
+				break
+			}
+		}
+		if truncated {
+			break
+		}
 	}
-	result := make([]RecordDescriptor, 0, len(records))
-	keys := sortedRecordKeys(records)
-	for _, key := range keys {
-		record := records[key]
-		result = append(result, RecordDescriptor{
-			Type: record.Type, ID: record.ID, Revision: record.Revision, TemplateID: record.TemplateID, TemplateVersion: record.TemplateVersion,
-			Dependencies: append([]Reference{}, record.Dependencies...), HasFile: record.File != nil,
-		})
-	}
-	return result, nil
+	sort.Slice(result, func(i, j int) bool {
+		left := Reference{Type: result[i].Type, ID: result[i].ID}.Key()
+		right := Reference{Type: result[j].Type, ID: result[j].ID}.Key()
+		return left < right
+	})
+	return result, truncated, nil
 }
 
 // RegisteredRecordTypes returns the deterministic provider ownership surface

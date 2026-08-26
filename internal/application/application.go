@@ -19,7 +19,6 @@ import (
 	"github.com/maxlemke/stewardmesh/internal/bootstrap"
 	"github.com/maxlemke/stewardmesh/internal/bridge"
 	"github.com/maxlemke/stewardmesh/internal/cache"
-	"github.com/maxlemke/stewardmesh/internal/campusseed"
 	"github.com/maxlemke/stewardmesh/internal/catalog"
 	"github.com/maxlemke/stewardmesh/internal/config"
 	"github.com/maxlemke/stewardmesh/internal/directoryexpansion"
@@ -308,38 +307,8 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 	if err != nil {
 		return fail(fmt.Errorf("initialize Stack: %w", err))
 	}
-	if options.RunCampusSeed || cfg.SeedCampus {
-		campusPeopleService, campusPeopleErr := people.NewService(runtime.peopleStore, atlasService, runtime.auditor, people.ServiceConfig{
-			OrganizationID: cfg.OrganizationID,
-		})
-		if campusPeopleErr != nil {
-			return fail(fmt.Errorf("initialize campus demo People service: %w", campusPeopleErr))
-		}
-		campusAtlasService, campusAtlasErr := atlas.NewService(runtime.assetStore, peopleAssetReferenceValidator{store: runtime.peopleStore}, runtime.auditor, atlas.ServiceConfig{
-			OrganizationID: cfg.OrganizationID,
-		})
-		if campusAtlasErr != nil {
-			return fail(fmt.Errorf("initialize campus demo Atlas service: %w", campusAtlasErr))
-		}
-		campusLedgerService, campusLedgerErr := ledger.NewService(runtime.ledgerStore, ledgerReferenceValidator{
-			atlas: campusAtlasService, vault: vaultService, people: runtime.peopleStore, organizationID: cfg.OrganizationID,
-		}, runtime.auditor, ledger.ServiceConfig{OrganizationID: cfg.OrganizationID})
-		if campusLedgerErr != nil {
-			return fail(fmt.Errorf("initialize campus demo Ledger service: %w", campusLedgerErr))
-		}
-		if _, err := campusseed.Seed(ctx, campusseed.Dependencies{
-			OrganizationID: cfg.OrganizationID,
-			People:         campusPeopleService,
-			Atlas:          campusAtlasService,
-			Stack:          stackService,
-			Ledger:         campusLedgerService,
-			Vault:          vaultService,
-			Guard:          guardService,
-			GuardStore:     runtime.guardStore,
-			Auditor:        runtime.auditor,
-		}); err != nil {
-			return fail(fmt.Errorf("seed campus demo data: %w", err))
-		}
+	if err := seedCampusCore(ctx, cfg, options, runtime, vaultService, guardService, atlasService, stackService); err != nil {
+		return fail(err)
 	}
 	horizonService, horizonImporter, err := horizon.NewServiceWithExchangeImporter(
 		runtime.horizonStore, atlasService, ledgerService, threadsService, horizonWriteGate{guard: guardService}, runtime.auditor,
@@ -349,20 +318,8 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 		return fail(fmt.Errorf("initialize Horizon: %w", err))
 	}
 	application.horizon = horizonService
-	if options.RunCampusSeed || cfg.SeedCampus {
-		campusAtlasService, campusAtlasErr := atlas.NewService(runtime.assetStore, peopleAssetReferenceValidator{store: runtime.peopleStore}, runtime.auditor, atlas.ServiceConfig{
-			OrganizationID: cfg.OrganizationID,
-		})
-		if campusAtlasErr != nil {
-			return fail(fmt.Errorf("initialize campus lifecycle Atlas service: %w", campusAtlasErr))
-		}
-		if err := campusseed.SeedLifecycle(ctx, campusseed.LifecycleDependencies{
-			OrganizationID: cfg.OrganizationID,
-			Atlas:          campusAtlasService,
-			Horizon:        horizonService,
-		}); err != nil {
-			return fail(fmt.Errorf("seed campus lifecycle data: %w", err))
-		}
+	if err := seedCampusLifecycle(ctx, cfg, options, runtime, vaultService, horizonService); err != nil {
+		return fail(err)
 	}
 	reachEndpoints := append([]reach.Endpoint(nil), options.ReachEndpoints...)
 	if options.ReachEndpoints == nil {
@@ -510,6 +467,9 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 	if err != nil {
 		return fail(fmt.Errorf("initialize Exchange: %w", err))
 	}
+	if err := seedCampusExtended(ctx, cfg, options, runtime, vaultService, atlasService, stackService, horizonService, patternsService, reachEndpointCatalog, reachTransports, reachSecrets, reachEndpoints); err != nil {
+		return fail(err)
+	}
 	application.handler = httpapi.NewServer(httpapi.Dependencies{
 		Atlas:               atlasService,
 		AtlasCodes:          atlasCodesService,
@@ -518,7 +478,7 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 		DirectoryImports:    directoryService,
 		Graph:               directoryGraph,
 		Threads:             threadsService,
-		Labels:                labelsService,
+		Labels:              labelsService,
 		Vault:               vaultService,
 		Ledger:              ledgerService,
 		Stack:               stackService,
@@ -532,6 +492,7 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Application,
 		OIDC:                oidcFlow,
 		SAML:                samlFlow,
 		SessionCookieSecure: cfg.SessionCookieSecure,
+		WebDir:              cfg.WebDir,
 	}, cfg.AllowedOrigin, runtime.organization)
 	return application, nil
 }
@@ -1348,6 +1309,8 @@ func (v labelsRecordValidator) ValidateRecord(ctx context.Context, organizationI
 		_, err = v.people.GetDepartment(ctx, organizationID, recordID)
 	case "people.identity":
 		_, err = v.people.GetIdentity(ctx, organizationID, recordID)
+	case "people.checkout-group":
+		_, err = v.people.GetCheckoutGroup(ctx, organizationID, recordID)
 	case "people.assignment":
 		_, err = v.people.GetAssetAssignment(ctx, organizationID, recordID)
 	case "atlas.asset":

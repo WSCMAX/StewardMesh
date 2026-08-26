@@ -22,7 +22,7 @@ func (s *Server) listExchangeRecords(w http.ResponseWriter, r *http.Request, _ g
 		writeError(w, r, http.StatusServiceUnavailable, "exchange_unavailable", "Exchange packages are unavailable")
 		return
 	}
-	records, err := s.exchange.ListRecords(r.Context())
+	records, truncated, err := s.exchange.ListRecords(r.Context())
 	if err != nil {
 		writeExchangeError(w, r, err)
 		return
@@ -40,6 +40,7 @@ func (s *Server) listExchangeRecords(w http.ResponseWriter, r *http.Request, _ g
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"items":                    records,
+		"truncated":                truncated,
 		"excludedRecordTypes":      exchange.ExplicitlyExcludedRecordTypes(),
 		"portableRecordTypes":      portableRecordTypes,
 		"registeredRecordTypes":    registeredRecordTypes,

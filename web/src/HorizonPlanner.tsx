@@ -1,16 +1,24 @@
 import { type FormEvent, type ReactNode, useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { Asset, AssetModel } from './AtlasInventory'
 import { isAssetModel } from './AtlasInventory'
+import DataGrid from './grid/DataGrid'
+import { calendarText, dollarsFromMinor, type GridColumn } from './grid/columns'
+import type { GridIdentity } from './grid/viewState'
 import Drawer from './grid/Drawer'
 import { addCalendarMonthsUTC, fiscalMonthInYear, fiscalYearForDate, fiscalYearStartISO, groupByDeployment, replacementDateFromPlan } from './horizonPlanning'
 import { calendarDateText, lifecyclePercent, modelPastLifecycle } from './lifecyclePlanning'
 import { ApiRequestError, isRevision, requestJSON, type Revision } from './api'
-import { ProductHeader, buttonClass, inputClass, panelClass, secondaryButtonClass, subpanelClass, tableWrapClass } from './ui'
+import HorizonForecastCharts from './HorizonForecastCharts'
+import HorizonReplacementPlans from './HorizonReplacementPlans'
+import HorizonSectionNav, { type HorizonSection } from './HorizonSectionNav'
+import { forecastViewGroupBy, otherBucket, resolveBucketLabel, type ForecastView, type ForecastViewItem } from './horizonForecastViews'
+import { ProductHeader, buttonClass, cx, inputClass, panelClass, secondaryButtonClass, subpanelClass } from './ui'
 
 // Requirement: REQ-HORIZON-001. Feature: lifecycle.planning.
 
 type LifecycleStage = 'planned' | 'in_service' | 'refresh_due' | 'approved' | 'retired'
-type GroupBy = 'fiscal_year' | 'department' | 'site' | 'tag' | 'goal' | 'asset_class'
+type GroupBy = 'fiscal_year' | 'department' | 'site' | 'tag' | 'goal' | 'asset_class' | 'manufacturer' | 'building'
+type AmountKind = 'planned' | 'actual' | 'estimated' | 'committed' | 'normalized_real' | 'tco'
 
 type HorizonPlan = {
   id: string
@@ -64,6 +72,32 @@ type ForecastGroupAssets = {
   items: ForecastGroupAsset[]
 }
 
+type ForecastAmountItem = {
+  assetId: string
+  assetName: string
+  planId?: string
+  costId?: string
+  description: string
+  fiscalYear: number
+  fiscalPeriod?: string
+  scenario: string
+  amountMinor: number
+  currency: string
+  kind: AmountKind
+}
+
+type ForecastAmountBreakdown = {
+  amountKind: AmountKind
+  scenario?: string
+  groupKey?: string
+  label: string
+  groupBy: GroupBy
+  currency: string
+  totalMinor: number
+  itemCount: number
+  items: ForecastAmountItem[]
+}
+
 type HorizonForecast = {
   asOf: string
   groupBy: GroupBy
@@ -73,6 +107,7 @@ type HorizonForecast = {
   assetCount: number
   totalsByKindMinor: Record<string, number>
   groups: ForecastGroup[]
+  items?: ForecastViewItem[]
 }
 
 type KindDefault = {
@@ -86,17 +121,34 @@ type KindDefault = {
   updatedAt: string
 }
 
+type DueNowRow = {
+  plan: HorizonPlan
+  asset: Asset
+  linkedModel?: AssetModel
+  reason: string
+}
+
 type HorizonPlannerProps = {
   csrfToken: string
   permissions: readonly string[]
   assets: readonly Asset[]
+  identity?: GridIdentity | null
   onOpenHelp?: () => void
   onOpenAtlasInventory?: (assetIds: readonly string[], label: string, fiscalYearStartMonth: number) => void
 }
 
 const lifecycleStages: LifecycleStage[] = ['planned', 'in_service', 'refresh_due', 'approved', 'retired']
-const groupOptions: GroupBy[] = ['fiscal_year', 'department', 'site', 'tag', 'goal', 'asset_class']
+const groupOptions: GroupBy[] = ['fiscal_year', 'department', 'site', 'tag', 'goal', 'asset_class', 'manufacturer', 'building']
+const forecastViews: { id: ForecastView; label: string }[] = [
+  { id: 'fiscal_year', label: 'Year' },
+  { id: 'department', label: 'Department' },
+  { id: 'asset_class', label: 'Type' },
+  { id: 'manufacturer', label: 'Manufacturer' },
+  { id: 'building', label: 'Building' },
+  { id: 'department_type', label: 'Department + type' },
+]
 const costKinds = ['actual', 'estimated', 'committed', 'normalized_real', 'tco'] as const
+const amountKinds: readonly AmountKind[] = ['planned', ...costKinds]
 const maximumReplacementCost = '90071992547409.91'
 const initialYear = new Date().getFullYear()
 const initialAsOf = localDateTimeValue(new Date())
@@ -163,6 +215,88 @@ function responseItems(value: unknown, keys: string[]): unknown[] {
   return []
 }
 
+function namedValue(names: ReadonlyMap<string, string>, id?: string) {
+  if (!id) return ''
+  return names.get(id) ?? id
+}
+
+function modelLabel(model: AssetModel) {
+  return `${model.manufacturer} ${model.name}`.trim()
+}
+
+function successorLabel(model: AssetModel, models: readonly AssetModel[]) {
+  const successor = models.find((item) => item.id === model.replacementModelId)
+  return successor ? modelLabel(successor) : model.replacementModelId ?? 'Unknown'
+}
+
+function dueNowColumns(
+  models: readonly AssetModel[],
+  siteNames: ReadonlyMap<string, string>,
+  buildingNames: ReadonlyMap<string, string>,
+  roomNames: ReadonlyMap<string, string>,
+  departmentNames: ReadonlyMap<string, string>,
+  formatMoney: (minor: number, currency: string) => string,
+): GridColumn<DueNowRow>[] {
+  return [
+    { key: 'name', header: 'Asset', kind: 'text', width: 16, text: (row) => row.asset.name },
+    {
+      key: 'model', header: 'Model', kind: 'text', width: 14,
+      text: (row) => row.linkedModel ? modelLabel(row.linkedModel) : row.asset.modelId ?? '',
+      display: (row) => {
+        const name = row.linkedModel ? modelLabel(row.linkedModel) : row.asset.modelId ?? ''
+        if (!name) return ''
+        return row.linkedModel?.status === 'retired' ? `${name} · retired model` : name
+      },
+    },
+    { key: 'criticality', header: 'Criticality', kind: 'number', width: 8, text: (row) => row.asset.criticalityScore ? String(row.asset.criticalityScore) : '' },
+    { key: 'reason', header: 'Reason', kind: 'text', width: 22, text: (row) => row.reason },
+    {
+      key: 'successor', header: 'Successor', kind: 'text', width: 14,
+      text: (row) => row.linkedModel?.replacementModelId ? successorLabel(row.linkedModel, models) : '',
+    },
+    {
+      key: 'replacementCost', header: 'Replacement cost', kind: 'money', align: 'right', width: 10,
+      text: (row) => dollarsFromMinor(row.plan.replacementCostMinor),
+      display: (row) => formatMoney(row.plan.replacementCostMinor, row.plan.currency),
+    },
+    { key: 'assetId', header: 'Asset ID', kind: 'text', width: 12, hiddenByDefault: true, text: (row) => row.asset.id },
+    { key: 'assetTag', header: 'Asset tag', kind: 'text', width: 10, hiddenByDefault: true, text: (row) => row.asset.assetTag ?? '' },
+    { key: 'serialNumber', header: 'Serial number', kind: 'text', width: 12, hiddenByDefault: true, text: (row) => row.asset.serialNumber ?? '' },
+    { key: 'kind', header: 'Kind', kind: 'text', width: 8, hiddenByDefault: true, text: (row) => row.asset.kind },
+    { key: 'status', header: 'Status', kind: 'text', width: 8, hiddenByDefault: true, text: (row) => row.asset.status },
+    { key: 'hostname', header: 'Hostname', kind: 'text', width: 12, hiddenByDefault: true, text: (row) => row.asset.hostname ?? '' },
+    { key: 'site', header: 'Site', kind: 'text', width: 10, hiddenByDefault: true, text: (row) => namedValue(siteNames, row.asset.siteId) },
+    { key: 'building', header: 'Building', kind: 'text', width: 10, hiddenByDefault: true, text: (row) => namedValue(buildingNames, row.asset.buildingId) },
+    { key: 'room', header: 'Room', kind: 'text', width: 10, hiddenByDefault: true, text: (row) => namedValue(roomNames, row.asset.roomId) },
+    { key: 'department', header: 'Department', kind: 'text', width: 12, hiddenByDefault: true, text: (row) => namedValue(departmentNames, row.asset.departmentId) },
+    { key: 'purchaseDate', header: 'Purchase date', kind: 'date', width: 9, hiddenByDefault: true, text: (row) => calendarText(row.asset.purchaseDate) },
+    { key: 'lifecycleStartDate', header: 'Lifecycle start', kind: 'date', width: 9, hiddenByDefault: true, text: (row) => calendarText(row.asset.lifecycleStartDate) },
+    { key: 'installedDate', header: 'Installed date', kind: 'date', width: 9, hiddenByDefault: true, text: (row) => calendarText(row.asset.installedDate) },
+    {
+      key: 'unitCost', header: 'Unit cost', kind: 'money', align: 'right', width: 8, hiddenByDefault: true,
+      text: (row) => dollarsFromMinor(row.asset.unitCostMinor),
+      display: (row) => row.asset.unitCostMinor ? formatMoney(row.asset.unitCostMinor, row.asset.currency ?? row.plan.currency) : '',
+    },
+    { key: 'deploymentNotes', header: 'Deployment notes', kind: 'text', width: 16, hiddenByDefault: true, text: (row) => row.asset.deploymentNotes ?? '' },
+    { key: 'lifecycleStage', header: 'Plan stage', kind: 'text', width: 10, hiddenByDefault: true, text: (row) => row.plan.lifecycleStage },
+    { key: 'usefulLife', header: 'Useful life', kind: 'number', width: 8, hiddenByDefault: true, text: (row) => String(row.plan.expectedUsefulLifeMonths) },
+    {
+      key: 'replacementDate', header: 'Replacement date', kind: 'date', width: 10, hiddenByDefault: true,
+      text: (row) => calendarText(row.plan.replacementDate ?? row.plan.derivedReplacementDate),
+    },
+  ]
+}
+
+function namedRecordMap(value: unknown) {
+  const map = new Map<string, string>()
+  for (const item of responseItems(value, ['items'])) {
+    if (isObject(item) && typeof item.id === 'string' && typeof item.name === 'string' && item.name.trim()) {
+      map.set(item.id, item.name)
+    }
+  }
+  return map
+}
+
 function parsePlans(value: unknown): HorizonPlan[] {
   const items = responseItems(value, ['items', 'plans'])
   if (!items.every(isPlan)) throw new Error('invalid Horizon plans response')
@@ -209,7 +343,19 @@ function parseForecast(value: unknown): HorizonForecast {
     && isSafeNonNegativeInteger(item.assetCount) && isAmounts(item.amountsByKindMinor))) {
     throw new Error('invalid Horizon forecast response')
   }
+  if (value.items !== undefined && (!Array.isArray(value.items) || !value.items.every(isForecastViewItem))) {
+    throw new Error('invalid Horizon forecast response')
+  }
   return value as HorizonForecast
+}
+
+function isForecastViewItem(value: unknown): value is ForecastViewItem {
+  if (!isObject(value)) return false
+  return typeof value.planId === 'string' && typeof value.assetId === 'string' && typeof value.assetName === 'string'
+    && typeof value.scenario === 'string' && Number.isInteger(value.fiscalYear)
+    && isSafeNonNegativeInteger(value.replacementCostMinor) && typeof value.currency === 'string'
+    && typeof value.department === 'string' && typeof value.kind === 'string'
+    && typeof value.manufacturer === 'string' && typeof value.building === 'string'
 }
 
 function isForecastGroupAsset(value: unknown): value is ForecastGroupAsset {
@@ -229,6 +375,33 @@ function parseForecastGroupAssets(value: unknown): ForecastGroupAssets {
     throw new Error('invalid Horizon forecast group assets response')
   }
   return value as ForecastGroupAssets
+}
+
+function isAmountKind(value: unknown): value is AmountKind {
+  return typeof value === 'string' && (amountKinds as readonly string[]).includes(value)
+}
+
+function isForecastAmountItem(value: unknown): value is ForecastAmountItem {
+  if (!isObject(value)) return false
+  return typeof value.assetId === 'string' && typeof value.assetName === 'string'
+    && (value.planId === undefined || typeof value.planId === 'string')
+    && (value.costId === undefined || typeof value.costId === 'string')
+    && typeof value.description === 'string' && Number.isInteger(value.fiscalYear)
+    && (value.fiscalPeriod === undefined || typeof value.fiscalPeriod === 'string')
+    && typeof value.scenario === 'string' && isSafeNonNegativeInteger(value.amountMinor)
+    && typeof value.currency === 'string' && isAmountKind(value.kind)
+}
+
+function parseForecastAmountBreakdown(value: unknown): ForecastAmountBreakdown {
+  if (!isObject(value) || !isAmountKind(value.amountKind)
+    || (value.scenario !== undefined && typeof value.scenario !== 'string')
+    || (value.groupKey !== undefined && typeof value.groupKey !== 'string')
+    || typeof value.label !== 'string' || !isGroupBy(value.groupBy) || typeof value.currency !== 'string'
+    || !isSafeNonNegativeInteger(value.totalMinor) || !isSafeNonNegativeInteger(value.itemCount)
+    || !Array.isArray(value.items) || !value.items.every(isForecastAmountItem)) {
+    throw new Error('invalid Horizon forecast amount breakdown response')
+  }
+  return value as ForecastAmountBreakdown
 }
 
 function label(value: string) {
@@ -283,7 +456,7 @@ function primaryScenario(value: string) {
   return value.split(',').map((item) => item.trim().toLowerCase()).find(Boolean) ?? 'baseline'
 }
 
-function reportPath(base: '/api/v1/horizon/forecast' | '/api/v1/horizon/forecast/assets' | '/api/v1/horizon/export.csv', scenarios: string, asOf: string, fromYear: number, toYear: number, fiscalYearStartMonth: number, groupBy: GroupBy) {
+function reportPath(base: '/api/v1/horizon/forecast' | '/api/v1/horizon/forecast/assets' | '/api/v1/horizon/forecast/amounts' | '/api/v1/horizon/export.csv', scenarios: string, asOf: string, fromYear: number, toYear: number, fiscalYearStartMonth: number, groupBy: GroupBy) {
   const parameters = new URLSearchParams()
   parameters.set('scenarios', scenarios.split(',').map((item) => item.trim().toLowerCase()).filter(Boolean).join(','))
   parameters.set('asOf', timestampValue(asOf))
@@ -291,6 +464,7 @@ function reportPath(base: '/api/v1/horizon/forecast' | '/api/v1/horizon/forecast
   parameters.set('toYear', String(toYear))
   parameters.set('fiscalYearStartMonth', String(fiscalYearStartMonth))
   parameters.set('groupBy', groupBy)
+  if (base === '/api/v1/horizon/forecast') parameters.set('includeItems', 'true')
   return `${base}?${parameters.toString()}`
 }
 
@@ -316,6 +490,16 @@ function forecastGroupAssetsPath(scenarios: string, asOf: string, fromYear: numb
   parameters.set('scenario', scenario)
   parameters.set('groupKey', groupKey)
   return `/api/v1/horizon/forecast/assets?${parameters.toString()}`
+}
+
+function forecastAmountBreakdownPath(scenarios: string, asOf: string, fromYear: number, toYear: number, fiscalYearStartMonth: number, groupBy: GroupBy, amountKind: AmountKind, group?: Pick<ForecastGroup, 'scenario' | 'key'>) {
+  const parameters = new URLSearchParams(reportPath('/api/v1/horizon/forecast/amounts', scenarios, asOf, fromYear, toYear, fiscalYearStartMonth, groupBy).split('?')[1])
+  parameters.set('amountKind', amountKind)
+  if (group) {
+    parameters.set('scenario', group.scenario)
+    parameters.set('groupKey', group.key)
+  }
+  return `/api/v1/horizon/forecast/amounts?${parameters.toString()}`
 }
 
 function planReplacementDate(item: Pick<ForecastGroupAsset, 'replacementDate' | 'derivedReplacementDate'>) {
@@ -345,7 +529,47 @@ function simulateFiscalYearShift(
   return { before, after }
 }
 
-export default function HorizonPlanner({ csrfToken, permissions, assets, onOpenHelp, onOpenAtlasInventory }: HorizonPlannerProps) {
+
+function forecastGroupLabel(
+  forecast: HorizonForecast | null,
+  departmentNames: ReadonlyMap<string, string>,
+  buildingNames: ReadonlyMap<string, string>,
+  group: ForecastGroup,
+) {
+  if (forecast?.groupBy === 'department') return resolveBucketLabel(group.key, departmentNames)
+  if (forecast?.groupBy === 'building') return resolveBucketLabel(group.key, buildingNames)
+  if (forecast?.groupBy === 'asset_class') return group.key === otherBucket ? otherBucket : label(group.key)
+  return group.label
+}
+
+const amountBreakdownColumns: GridColumn<ForecastAmountItem>[] = [
+  {
+    key: 'asset', header: 'Asset', kind: 'text', width: 16, wrap: true,
+    text: (item) => `${item.assetName} ${item.assetId}`,
+    display: (item) => <><strong>{item.assetName}</strong><span className="mt-1 block text-xs text-steward-mist-muted">{item.assetId}</span></>,
+  },
+  { key: 'description', header: 'Description', kind: 'text', width: 18, wrap: true, text: (item) => item.description },
+  { key: 'fiscalYear', header: 'Fiscal year', kind: 'text', width: 10, text: (item) => item.fiscalPeriod || `FY${item.fiscalYear}` },
+  { key: 'scenario', header: 'Scenario', kind: 'text', width: 10, text: (item) => label(item.scenario) },
+  { key: 'amount', header: 'Amount', kind: 'money', width: 10, text: (item) => money(item.amountMinor, item.currency) },
+]
+
+const historyColumns: GridColumn<HorizonPlanVersion>[] = [
+  { key: 'revision', header: 'Revision', kind: 'number', width: 8, text: (version) => String(version.revision) },
+  { key: 'effectiveFrom', header: 'Effective from', kind: 'date', width: 12, text: (version) => version.effectiveFrom, display: (version) => displayDate(version.effectiveFrom) },
+  { key: 'recordedAt', header: 'Recorded', kind: 'instant', width: 14, text: (version) => version.recordedAt, display: (version) => displayDate(version.recordedAt, true) },
+  { key: 'stage', header: 'Stage', kind: 'text', width: 10, text: (version) => label(version.lifecycleStage) },
+  { key: 'usefulLife', header: 'Useful life', kind: 'text', width: 10, text: (version) => `${version.expectedUsefulLifeMonths} months` },
+  {
+    key: 'replacementDate', header: 'Replacement date', kind: 'date', width: 14,
+    text: (version) => version.replacementDate ?? version.derivedReplacementDate ?? '',
+    display: (version) => version.replacementDate ? displayDate(version.replacementDate) : version.derivedReplacementDate ? `${displayDate(version.derivedReplacementDate)} (derived)` : 'Not dated',
+  },
+  { key: 'cost', header: 'Cost', kind: 'money', width: 10, text: (version) => money(version.replacementCostMinor, version.currency) },
+  { key: 'actor', header: 'Actor', kind: 'text', width: 12, text: (version) => version.actorId },
+]
+
+export default function HorizonPlanner({ csrfToken, permissions, assets, identity, onOpenHelp, onOpenAtlasInventory }: HorizonPlannerProps) {
   const canRead = permissions.includes('planning.read')
   const canWrite = permissions.includes('planning.write')
   const [plans, setPlans] = useState<HorizonPlan[]>([])
@@ -356,6 +580,11 @@ export default function HorizonPlanner({ csrfToken, permissions, assets, onOpenH
   const [toYear, setToYear] = useState(initialYear + 10)
   const [fiscalYearStartMonth, setFiscalYearStartMonth] = useState(1)
   const [groupBy, setGroupBy] = useState<GroupBy>('fiscal_year')
+  const [forecastView, setForecastView] = useState<ForecastView>('fiscal_year')
+  const [departmentNames, setDepartmentNames] = useState<ReadonlyMap<string, string>>(() => new Map())
+  const [buildingNames, setBuildingNames] = useState<ReadonlyMap<string, string>>(() => new Map())
+  const [siteNames, setSiteNames] = useState<ReadonlyMap<string, string>>(() => new Map())
+  const [roomNames, setRoomNames] = useState<ReadonlyMap<string, string>>(() => new Map())
   const [formOpen, setFormOpen] = useState(false)
   const [editing, setEditing] = useState<HorizonPlan | null>(null)
   const [historyPlan, setHistoryPlan] = useState<HorizonPlan | null>(null)
@@ -367,8 +596,11 @@ export default function HorizonPlanner({ csrfToken, permissions, assets, onOpenH
   const [error, setError] = useState('')
   const [selectedGroup, setSelectedGroup] = useState<ForecastGroup | null>(null)
   const [groupAssets, setGroupAssets] = useState<ForecastGroupAssets | null>(null)
+  const [selectedAmount, setSelectedAmount] = useState<{ kind: AmountKind; group?: ForecastGroup } | null>(null)
+  const [amountBreakdown, setAmountBreakdown] = useState<ForecastAmountBreakdown | null>(null)
   const [selectedPlanIDs, setSelectedPlanIDs] = useState<readonly string[]>([])
   const [shiftMonths, setShiftMonths] = useState(12)
+  const [section, setSection] = useState<HorizonSection>('queue')
   const errorRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -393,6 +625,24 @@ export default function HorizonPlanner({ csrfToken, permissions, assets, onOpenH
       setModels(modelItems.filter(isAssetModel))
     }).catch(() => {
       if (active) showError('Horizon plans and forecast could not be loaded.')
+    })
+    return () => { active = false }
+  }, [canRead])
+
+  useEffect(() => {
+    if (!canRead) return
+    let active = true
+    Promise.all([
+      requestJSON('/api/v1/departments').catch(() => ({ items: [] })),
+      requestJSON('/api/v1/buildings').catch(() => ({ items: [] })),
+      requestJSON('/api/v1/sites').catch(() => ({ items: [] })),
+      requestJSON('/api/v1/rooms').catch(() => ({ items: [] })),
+    ]).then(([departmentsValue, buildingsValue, sitesValue, roomsValue]) => {
+      if (!active) return
+      setDepartmentNames(namedRecordMap(departmentsValue))
+      setBuildingNames(namedRecordMap(buildingsValue))
+      setSiteNames(namedRecordMap(sitesValue))
+      setRoomNames(namedRecordMap(roomsValue))
     })
     return () => { active = false }
   }, [canRead])
@@ -427,13 +677,44 @@ export default function HorizonPlanner({ csrfToken, permissions, assets, onOpenH
     }
   }
 
+  function applyForecastView(view: ForecastView) {
+    const nextGroup = forecastViewGroupBy(view)
+    setForecastView(view)
+    setGroupBy(nextGroup)
+    setBusy('refresh')
+    setError('')
+    setMessage('')
+    try {
+      validateReportInputs(scenarios, asOf, fromYear, toYear, fiscalYearStartMonth)
+    } catch (cause) {
+      setBusy('')
+      showError(cause instanceof Error ? cause.message : 'Forecast controls are invalid.')
+      return
+    }
+    void requestJSON(reportPath('/api/v1/horizon/forecast', scenarios, asOf, fromYear, toYear, fiscalYearStartMonth, nextGroup))
+      .then((forecastValue) => {
+        setForecast(parseForecast(forecastValue))
+        setMessage(`Showing forecast by ${view === 'department_type' ? 'department and type' : label(nextGroup).toLowerCase()}.`)
+      })
+      .catch((cause) => {
+        showError(cause instanceof ApiRequestError || cause instanceof Error ? cause.message : 'The Horizon forecast could not be refreshed.')
+      })
+      .finally(() => setBusy(''))
+  }
+
   function closeGroupDrawer() {
     setSelectedGroup(null)
     setGroupAssets(null)
     setSelectedPlanIDs([])
   }
 
+  function closeAmountDrawer() {
+    setSelectedAmount(null)
+    setAmountBreakdown(null)
+  }
+
   async function openForecastGroup(group: ForecastGroup) {
+    closeAmountDrawer()
     setBusy(`group-${group.scenario}-${group.key}`)
     setError('')
     setMessage('')
@@ -458,8 +739,34 @@ export default function HorizonPlanner({ csrfToken, permissions, assets, onOpenH
     }
   }
 
-  function togglePlanSelection(planID: string) {
-    setSelectedPlanIDs((current) => current.includes(planID) ? current.filter((item) => item !== planID) : [...current, planID])
+  async function openAmountBreakdown(kind: AmountKind, group?: ForecastGroup) {
+    closeGroupDrawer()
+    setBusy(`amount-${kind}-${group?.scenario ?? 'all'}-${group?.key ?? 'all'}`)
+    setError('')
+    setMessage('')
+    setSelectedAmount({ kind, group })
+    setAmountBreakdown(null)
+    try {
+      validateReportInputs(scenarios, asOf, fromYear, toYear, fiscalYearStartMonth)
+      const value = await requestJSON(forecastAmountBreakdownPath(scenarios, asOf, fromYear, toYear, fiscalYearStartMonth, groupBy, kind, group ? { scenario: group.scenario, key: group.key } : undefined))
+      setAmountBreakdown(parseForecastAmountBreakdown(value))
+    } catch (cause) {
+      closeAmountDrawer()
+      if (cause instanceof ApiRequestError && cause.status === 404) {
+        showError('Forecast amount breakdown is unavailable on this API server. Restart dev services to load the latest Horizon changes.')
+      } else {
+        showError(cause instanceof ApiRequestError || cause instanceof Error ? cause.message : 'Forecast amount items could not be loaded.')
+      }
+    } finally {
+      setBusy('')
+    }
+  }
+
+  function openAmountInAtlas() {
+    if (!amountBreakdown || !onOpenAtlasInventory) return
+    const ids = [...new Set(amountBreakdown.items.map((item) => item.assetId))]
+    onOpenAtlasInventory(ids, `${label(amountBreakdown.amountKind)} · ${amountBreakdown.label}`, fiscalYearStartMonth)
+    closeAmountDrawer()
   }
 
   function openGroupInAtlas(assetIds?: readonly string[], scopeLabel?: string) {
@@ -544,6 +851,7 @@ export default function HorizonPlanner({ csrfToken, permissions, assets, onOpenH
   function openCreate() {
     setEditing(null)
     setFormOpen(true)
+    setSection('plans')
     setError('')
     setMessage('')
   }
@@ -551,6 +859,7 @@ export default function HorizonPlanner({ csrfToken, permissions, assets, onOpenH
   function openEdit(plan: HorizonPlan) {
     setEditing(plan)
     setFormOpen(true)
+    setSection('plans')
     setError('')
     setMessage('')
   }
@@ -664,6 +973,75 @@ export default function HorizonPlanner({ csrfToken, permissions, assets, onOpenH
     return groupByDeployment(groupAssets.items, (assetId) => assetsById.get(assetId))
   }, [assetsById, groupAssets])
 
+
+  const forecastColumns = useMemo((): GridColumn<ForecastGroup>[] => [
+    {
+      key: 'group', header: 'Group', kind: 'text', width: 16, wrap: true,
+      text: (group) => forecastGroupLabel(forecast, departmentNames, buildingNames, group),
+      display: (group) => <button className="rounded-md text-left font-medium text-[#a9c7ff] underline-offset-2 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-steward-blue" disabled={busy !== ''} onClick={() => void openForecastGroup(group)} type="button">{forecastGroupLabel(forecast, departmentNames, buildingNames, group)}</button>,
+    },
+    { key: 'scenario', header: 'Scenario', kind: 'text', width: 10, text: (group) => label(group.scenario) },
+    { key: 'assets', header: 'Assets', kind: 'number', width: 8, text: (group) => String(group.assetCount) },
+    {
+      key: 'need', header: 'Replacement need', kind: 'money', width: 12,
+      text: (group) => money(group.plannedReplacementMinor, forecast?.currency ?? ''),
+      display: (group) => <AmountButton disabled={busy !== ''} label={`${forecastGroupLabel(forecast, departmentNames, buildingNames, group)} replacement need`} onClick={() => void openAmountBreakdown('planned', group)} value={money(group.plannedReplacementMinor, forecast?.currency ?? '')} />,
+    },
+    ...costKinds.map((kind): GridColumn<ForecastGroup> => ({
+      key: kind, header: label(kind), kind: 'money', width: 11,
+      text: (group) => money(group.amountsByKindMinor[kind] ?? 0, forecast?.currency ?? ''),
+      display: (group) => <AmountButton disabled={busy !== ''} label={`${forecastGroupLabel(forecast, departmentNames, buildingNames, group)} ${label(kind).toLowerCase()}`} onClick={() => void openAmountBreakdown(kind, group)} value={money(group.amountsByKindMinor[kind] ?? 0, forecast?.currency ?? '')} />,
+    })),
+  ], [buildingNames, busy, departmentNames, forecast])
+
+  const deploymentAssetColumns = useMemo((): GridColumn<ForecastGroupAsset>[] => [
+    {
+      key: 'asset', header: 'Asset', kind: 'text', width: 16, wrap: true,
+      text: (item) => `${item.assetName} ${item.assetId}`,
+      display: (item) => <><strong>{item.assetName}</strong><span className="mt-1 block text-xs text-steward-mist-muted">{item.assetId}</span></>,
+    },
+    { key: 'stage', header: 'Stage', kind: 'text', width: 10, text: (item) => label(item.lifecycleStage) },
+    { key: 'usefulLife', header: 'Useful life', kind: 'text', width: 10, text: (item) => `${item.expectedUsefulLifeMonths} months` },
+    {
+      key: 'replacementDate', header: 'Replacement date', kind: 'date', width: 14,
+      text: (item) => item.replacementDate ?? item.derivedReplacementDate ?? '',
+      display: (item) => item.replacementDate ? displayDate(item.replacementDate) : item.derivedReplacementDate ? `${displayDate(item.derivedReplacementDate)} (derived)` : 'Not dated',
+    },
+    {
+      key: 'replacementFy', header: 'Replacement FY', kind: 'text', width: 10,
+      text: (item) => { const replacement = planReplacementDate(item); return replacement ? `FY${fiscalYearForDate(replacement, fiscalYearStartMonth)}` : '—' },
+    },
+    {
+      key: 'monthInFy', header: 'Month in FY', kind: 'number', width: 8,
+      text: (item) => { const replacement = planReplacementDate(item); return replacement ? String(fiscalMonthInYear(replacement, fiscalYearStartMonth)) : '—' },
+    },
+    { key: 'cost', header: 'Replacement cost', kind: 'money', width: 12, text: (item) => money(item.replacementCostMinor, item.currency) },
+  ], [fiscalYearStartMonth])
+
+  const planColumns = useMemo((): GridColumn<HorizonPlan>[] => [
+    {
+      key: 'asset', header: 'Asset', kind: 'text', width: 16, wrap: true,
+      text: (plan) => `${assetName(assets, plan.assetId)} ${plan.assetId}`,
+      display: (plan) => <><strong>{assetName(assets, plan.assetId)}</strong><span className="mt-1 block text-xs text-steward-mist-muted">{plan.assetId}</span></>,
+    },
+    { key: 'scenario', header: 'Scenario', kind: 'text', width: 10, text: (plan) => label(plan.scenario) },
+    { key: 'stage', header: 'Stage', kind: 'text', width: 10, text: (plan) => label(plan.lifecycleStage) },
+    { key: 'usefulLife', header: 'Useful life', kind: 'text', width: 10, text: (plan) => `${plan.expectedUsefulLifeMonths} months` },
+    { key: 'replacementDate', header: 'Replacement date', kind: 'text', width: 14, text: (plan) => replacementDate(plan) },
+    { key: 'cost', header: 'Replacement cost', kind: 'money', width: 12, text: (plan) => money(plan.replacementCostMinor, plan.currency) },
+    { key: 'revision', header: 'Revision', kind: 'number', width: 8, text: (plan) => String(plan.revision) },
+    {
+      key: 'actions', header: 'Actions', kind: 'text', width: 18, wrap: true,
+      text: () => 'Edit plan View history',
+      display: (plan) => (
+        <div className="flex min-w-56 flex-wrap gap-2">
+          {canWrite && <button aria-label={`Edit plan for ${assetName(assets, plan.assetId)}`} className={secondaryButtonClass} onClick={() => openEdit(plan)} type="button">Edit plan</button>}
+          <button aria-expanded={historyPlan?.id === plan.id} aria-label={`${busy === `history-${plan.id}` ? 'Loading history' : historyPlan?.id === plan.id ? 'Hide history' : 'View history'} for ${assetName(assets, plan.assetId)}`} className={secondaryButtonClass} disabled={busy !== ''} onClick={() => void toggleHistory(plan)} type="button">{busy === `history-${plan.id}` ? 'Loading…' : historyPlan?.id === plan.id ? 'Hide history' : 'View history'}</button>
+        </div>
+      ),
+    },
+  ], [assets, busy, canWrite, historyPlan])
+
   if (!canRead) {
     return (
       <section aria-labelledby="horizon-heading" className={`${panelClass} p-5 sm:p-6`} data-feature="lifecycle.planning" data-requirement="REQ-HORIZON-001">
@@ -682,20 +1060,16 @@ export default function HorizonPlanner({ csrfToken, permissions, assets, onOpenH
   const lineageModels = models.filter((model) => model.replacementModelId)
   const assetKinds = ['desktop', 'laptop', 'tablet', 'peripheral', 'server', 'other']
   const kindDefaultFor = (assetKind: string) => kindDefaults.find((item) => item.assetKind === assetKind && item.scenario === 'baseline')
-  const modelLabel = (model: AssetModel) => `${model.manufacturer} ${model.name}`.trim()
-  const successorLabel = (model: AssetModel) => {
-    const successor = models.find((item) => item.id === model.replacementModelId)
-    return successor ? modelLabel(successor) : model.replacementModelId ?? 'Unknown'
-  }
   const upgradeRecommendations = plans
     .filter((plan) => plan.lifecycleStage === 'refresh_due')
-    .map((plan) => {
+    .flatMap((plan) => {
       const asset = assets.find((item) => item.id === plan.assetId)
-      const linkedModel = asset?.modelId ? models.find((item) => item.id === asset.modelId) : undefined
-      return { plan, asset, linkedModel, reason: upgradeReason(asset, linkedModel) }
+      if (!asset || asset.status !== 'active') return []
+      const linkedModel = asset.modelId ? models.find((item) => item.id === asset.modelId) : undefined
+      return [{ plan, asset, linkedModel, reason: upgradeReason(asset, linkedModel) }]
     })
-    .filter((item) => item.asset && item.asset.status === 'active')
-    .sort((left, right) => (right.asset?.criticalityScore ?? 0) - (left.asset?.criticalityScore ?? 0) || assetName(assets, left.plan.assetId).localeCompare(assetName(assets, right.plan.assetId)))
+    .sort((left, right) => (right.asset.criticalityScore ?? 0) - (left.asset.criticalityScore ?? 0) || left.asset.name.localeCompare(right.asset.name))
+  const dueNowGridColumns = dueNowColumns(models, siteNames, buildingNames, roomNames, departmentNames, money)
 
   const selectedGroupAssets = groupAssets?.items.filter((item) => selectedPlanIDs.includes(item.planId)) ?? []
   const canViewAtlas = Boolean(onOpenAtlasInventory && permissions.includes('assets.read'))
@@ -708,6 +1082,9 @@ export default function HorizonPlanner({ csrfToken, permissions, assets, onOpenH
   const previewMaximum = normalizationPreview
     ? Math.max(1, ...previewYears.map((key) => Math.max(normalizationPreview.before.get(key) ?? 0, normalizationPreview.after.get(key) ?? 0)))
     : 1
+  const forecastItems = forecast?.items ?? []
+  const departmentLabel = (key: string) => resolveBucketLabel(key, departmentNames)
+  const kindLabel = (key: string) => key === otherBucket ? otherBucket : label(key)
 
   return (
     <section aria-labelledby="horizon-heading" className={`${panelClass} min-w-0 p-4 sm:p-5`} data-feature="lifecycle.planning" data-requirement="REQ-HORIZON-001">
@@ -715,8 +1092,9 @@ export default function HorizonPlanner({ csrfToken, permissions, assets, onOpenH
         actions={<>
           {canWrite && <button className={buttonClass} onClick={openCreate} type="button">Add lifecycle plan</button>}
           {onOpenHelp && <button className={secondaryButtonClass} onClick={onOpenHelp} type="button">Horizon help</button>}
+          <a className={secondaryButtonClass} href="#workspace-mesh">Open Mesh graph</a>
         </>}
-        description="Version useful-life and replacement assumptions, compare scenarios, and forecast needs by fiscal year or organization context."
+        description="Start with what is due, then forecast replacement spend, then edit the plans and defaults that drive those answers."
         headingId="horizon-heading"
         kicker="Horizon"
         title="Lifecycle planning and forecasting"
@@ -727,64 +1105,74 @@ export default function HorizonPlanner({ csrfToken, permissions, assets, onOpenH
 
       {canWrite && formOpen && <PlanEditor assets={assets} busy={busy === 'save'} editing={editing} onCancel={closeForm} onSubmit={savePlan} />}
 
-      <section aria-labelledby="horizon-kind-defaults-heading" className={`${subpanelClass} mt-6 p-4`}>
-        <h3 className="text-lg font-semibold" id="horizon-kind-defaults-heading">Lifecycle plan by asset type</h3>
-        <p className="mt-1 text-sm leading-6 text-steward-mist-muted">Baseline expected useful life applies when a per-asset plan leaves useful life unset. Useful life also comes from the linked Atlas model when present. Replacement models are configured in the Atlas model catalog lineage field.</p>
-        <div className="mt-4 grid gap-4 xl:grid-cols-2">
-          {assetKinds.map((assetKind) => {
-            const current = kindDefaultFor(assetKind)
-            return (
-              <form className="rounded-xl border border-white/10 bg-white/[0.025] p-4" key={assetKind} onSubmit={(event) => void saveKindDefault(event, assetKind, current?.revision)}>
-                <h4 className="font-semibold">{label(assetKind)}</h4>
-                <div className="mt-3">
-                  <Field id={`kind-life-${assetKind}`} label="Expected useful life (months)"><input className={inputClass} defaultValue={current?.expectedUsefulLifeMonths ?? ''} id={`kind-life-${assetKind}`} max={1200} min={1} name="expectedUsefulLifeMonths" placeholder="From model" required type="number" /></Field>
-                </div>
-                {canWrite && <button className={`${secondaryButtonClass} mt-4`} disabled={busy !== ''} type="submit">{busy === `kind-${assetKind}` ? 'Saving…' : current ? 'Update defaults' : 'Save defaults'}</button>}
-              </form>
-            )
-          })}
+      <div className="mt-6">
+        <HorizonSectionNav active={section} onChange={setSection} />
+      </div>
+
+      <div hidden={section !== 'queue'} id="horizon-panel-queue" role="tabpanel" aria-labelledby="horizon-tab-queue">
+        <div className="mt-4 grid gap-3 sm:grid-cols-3" aria-label="Work due now">
+          <Metric label="Assets due now" value={upgradeRecommendations.length.toLocaleString()} />
+          <Metric label="Models past lifecycle" value={pastLifecycleModels.length.toLocaleString()} />
+          <Metric label="Planned replacement" value={forecast ? money(forecast.plannedReplacementMinor, forecast.currency) : '—'} />
         </div>
-      </section>
 
-      <section aria-labelledby="horizon-model-lineage-heading" className={`${subpanelClass} mt-6 p-4`}>
-        <h3 className="text-lg font-semibold" id="horizon-model-lineage-heading">Atlas model replacement lineage</h3>
-        <p className="mt-1 text-sm leading-6 text-steward-mist-muted">Horizon resolves replacement targets from asset overrides, then the linked model&apos;s lineage in Atlas. Edit lineage in Atlas → Models.</p>
-        {lineageModels.length === 0
-          ? <p className="mt-3 text-sm text-steward-mist-muted">No catalog models define a replacement successor yet.</p>
-          : <ul className="mt-4 grid gap-3 sm:grid-cols-2">{lineageModels.map((model) => <li className="rounded-lg border border-white/10 bg-white/[0.025] p-3 text-sm" key={model.id}><strong>{modelLabel(model)}</strong>{model.status === 'retired' && <span className="ml-2 text-steward-warning">retired</span>}<p className="mt-1 text-steward-mist-muted">{label(model.kind)} · replaces with {successorLabel(model)}</p></li>)}</ul>}
-      </section>
+        <section aria-labelledby="horizon-upgrade-heading" className="mt-6 min-w-0">
+          <h3 className="text-lg font-semibold" id="horizon-upgrade-heading">Upgrade and retire recommendations</h3>
+          <p className="mt-1 text-sm leading-6 text-steward-mist-muted">Active assets with baseline plans in refresh due — past useful life or linked to a retired catalog model. Use the gear to add Atlas asset columns. Sorted by criticality.</p>
+          <div className="mt-4">
+            <DataGrid
+              columns={dueNowGridColumns}
+              emptyMessage="No active assets currently need replacement under the baseline scenario."
+              identity={identity}
+              label="Due now assets"
+              onOpenRow={canViewAtlas ? (row) => onOpenAtlasInventory?.([row.asset.id], row.asset.name, fiscalYearStartMonth) : undefined}
+              rowId={(row) => row.plan.id}
+              rowLabel={(row) => row.asset.name}
+              rows={upgradeRecommendations}
+              viewId="horizon-due-now"
+            />
+          </div>
+        </section>
 
-      <section aria-labelledby="horizon-past-models-heading" className={`${subpanelClass} mt-6 p-4`}>
-        <h3 className="text-lg font-semibold" id="horizon-past-models-heading">Models past lifecycle</h3>
-        <p className="mt-1 text-sm leading-6 text-steward-mist-muted">Models with a last effective date on or before today are no longer expected to continue operation. Search retired models and adjust lineage in Atlas → Models.</p>
-        {pastLifecycleModels.length === 0
-          ? <p className="mt-3 text-sm text-steward-mist-muted">No catalog models are past their last effective date.</p>
-          : <ul className="mt-4 grid gap-3 sm:grid-cols-2">{pastLifecycleModels.map((model) => <li className="rounded-lg border border-steward-warning/40 bg-steward-warning/10 p-3 text-sm" key={model.id}><strong>{modelLabel(model)}</strong>{model.status === 'retired' && <span className="ml-2">· retired</span>}<p className="mt-1 text-steward-mist-muted">{label(model.kind)} · last effective {calendarDateText(model.lastEffectiveDate)} · {model.usefulLifeMonths || '—'} month useful life{model.replacementModelId ? ` · successor ${successorLabel(model)}` : ''}</p></li>)}</ul>}
-      </section>
+        <section aria-labelledby="horizon-past-models-heading" className={`${subpanelClass} mt-6 p-4`}>
+          <h3 className="text-lg font-semibold" id="horizon-past-models-heading">Models past lifecycle</h3>
+          <p className="mt-1 text-sm leading-6 text-steward-mist-muted">Models with a last effective date on or before today are no longer expected to continue operation. Search retired models and adjust lineage in Atlas → Models.</p>
+          {pastLifecycleModels.length === 0
+            ? <p className="mt-3 text-sm text-steward-mist-muted">No catalog models are past their last effective date.</p>
+            : <ul className="mt-4 grid gap-3 sm:grid-cols-2">{pastLifecycleModels.map((model) => <li className="rounded-lg border border-steward-warning/40 bg-steward-warning/10 p-3 text-sm" key={model.id}><strong>{modelLabel(model)}</strong>{model.status === 'retired' && <span className="ml-2">· retired</span>}<p className="mt-1 text-steward-mist-muted">{label(model.kind)} · last effective {calendarDateText(model.lastEffectiveDate)} · {model.usefulLifeMonths || '—'} month useful life{model.replacementModelId ? ` · successor ${successorLabel(model, models)}` : ''}</p></li>)}</ul>}
+        </section>
+      </div>
 
-      <section aria-labelledby="horizon-upgrade-heading" className={`${subpanelClass} mt-6 p-4`}>
-        <h3 className="text-lg font-semibold" id="horizon-upgrade-heading">Upgrade and retire recommendations</h3>
-        <p className="mt-1 text-sm leading-6 text-steward-mist-muted">Active assets with baseline plans in refresh due — past useful life or linked to a retired catalog model. Sorted by criticality.</p>
-        {upgradeRecommendations.length === 0
-          ? <p className="mt-3 text-sm text-steward-mist-muted">No active assets currently need replacement under the baseline scenario.</p>
-          : <div aria-label="Scrollable upgrade recommendations" className={`${tableWrapClass} mt-4`} role="region" tabIndex={0}>
-            <table className="w-full min-w-[920px] border-collapse text-left text-sm">
-              <thead><tr className="border-b border-steward-ink-800 text-steward-mist-muted"><Header>Asset</Header><Header>Model</Header><Header>Criticality</Header><Header>Reason</Header><Header>Successor</Header><Header>Replacement cost</Header></tr></thead>
-              <tbody>{upgradeRecommendations.map(({ plan, asset, linkedModel, reason }) => <tr className="border-b border-steward-ink-800/70 align-top" key={plan.id}><Cell><strong>{asset ? asset.name : plan.assetId}</strong><span className="mt-1 block text-xs text-steward-mist-muted">{plan.assetId}</span></Cell><Cell>{linkedModel ? modelLabel(linkedModel) : asset?.modelId ?? '—'}{linkedModel?.status === 'retired' && <span className="ml-1 text-steward-warning">· retired model</span>}</Cell><Cell>{asset?.criticalityScore ? `${asset.criticalityScore} / 5` : '—'}</Cell><Cell>{reason}</Cell><Cell>{linkedModel?.replacementModelId ? successorLabel(linkedModel) : '—'}</Cell><Cell>{money(plan.replacementCostMinor, plan.currency)}</Cell></tr>)}</tbody>
-            </table>
-          </div>}
-      </section>
-
+      <div hidden={section !== 'forecast'} id="horizon-panel-forecast" role="tabpanel" aria-labelledby="horizon-tab-forecast">
       <section aria-labelledby="horizon-forecast-controls-heading" className={`${subpanelClass} mt-6 p-4`}>
         <h3 className="text-lg font-semibold" id="horizon-forecast-controls-heading">Forecast controls</h3>
-        <p className="mt-1 text-sm leading-6 text-steward-mist-muted">Use comma-separated scenarios. Years are inclusive; month 1 is January.</p>
+        <p className="mt-1 text-sm leading-6 text-steward-mist-muted">Use comma-separated scenarios. Years are inclusive; month 1 is January. Missing department, type, manufacturer, or building is Other.</p>
+        <div className="mt-4" role="group" aria-label="Forecast views">
+          <div className="flex flex-wrap gap-1">
+            {forecastViews.map((view) => (
+              <button
+                aria-pressed={forecastView === view.id}
+                className={cx(
+                  'rounded-md px-3 py-1.5 text-sm font-medium',
+                  forecastView === view.id ? 'bg-white/[0.08] text-steward-mist' : 'text-steward-mist-muted hover:bg-white/[0.04] hover:text-steward-mist',
+                )}
+                disabled={busy !== ''}
+                key={view.id}
+                onClick={() => applyForecastView(view.id)}
+                type="button"
+              >
+                {view.label}
+              </button>
+            ))}
+          </div>
+        </div>
         <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
           <Field id="horizon-scenarios" label="Scenarios"><input className={inputClass} id="horizon-scenarios" onChange={(event) => setScenarios(event.target.value)} value={scenarios} /></Field>
           <Field id="horizon-as-of" label="As of"><input className={inputClass} id="horizon-as-of" onChange={(event) => setAsOf(event.target.value)} type="datetime-local" value={asOf} /></Field>
           <Field id="horizon-from-year" label="From year"><input className={inputClass} id="horizon-from-year" max={9999} min={1970} onChange={(event) => setFromYear(Number(event.target.value))} type="number" value={fromYear} /></Field>
           <Field id="horizon-to-year" label="To year"><input className={inputClass} id="horizon-to-year" max={9999} min={1970} onChange={(event) => setToYear(Number(event.target.value))} type="number" value={toYear} /></Field>
           <Field id="horizon-fiscal-month" label="Fiscal year start month"><input className={inputClass} id="horizon-fiscal-month" max={12} min={1} onChange={(event) => setFiscalYearStartMonth(Number(event.target.value))} type="number" value={fiscalYearStartMonth} /></Field>
-          <Field id="horizon-group-by" label="Group by"><select className={inputClass} id="horizon-group-by" onChange={(event) => setGroupBy(event.target.value as GroupBy)} value={groupBy}>{groupOptions.map((option) => <option key={option} value={option}>{label(option)}</option>)}</select></Field>
+          <Field id="horizon-group-by" label="Group by"><select className={inputClass} id="horizon-group-by" onChange={(event) => { const next = event.target.value as GroupBy; setGroupBy(next); setForecastView(next) }} value={groupBy}>{groupOptions.map((option) => <option key={option} value={option}>{option === 'asset_class' ? 'Type' : option === 'fiscal_year' ? 'Year' : label(option)}</option>)}</select></Field>
         </div>
         <div className="mt-4 flex flex-wrap gap-3">
           <button className={buttonClass} disabled={busy !== ''} onClick={() => void refreshReport()} type="button">{busy === 'refresh' ? 'Refreshing…' : 'Refresh forecast'}</button>
@@ -795,41 +1183,50 @@ export default function HorizonPlanner({ csrfToken, permissions, assets, onOpenH
       </section>
 
       {forecast ? <section aria-labelledby="horizon-forecast-heading" className="mt-6 min-w-0">
-        <div className="flex flex-wrap items-end justify-between gap-3"><div><h3 className="text-lg font-semibold" id="horizon-forecast-heading">Forecast results</h3><p className="mt-1 text-sm text-steward-mist-muted">As of {displayDate(forecast.asOf, true)} · {forecast.scenarios.map(label).join(', ')}</p></div><p className="text-sm font-semibold text-steward-mist-muted">Currency: {forecast.currency || 'No monetary rows'}</p></div>
+        <div className="flex flex-wrap items-end justify-between gap-3"><div><h3 className="text-lg font-semibold" id="horizon-forecast-heading">Forecast results</h3><p className="mt-1 text-sm text-steward-mist-muted">As of {displayDate(forecast.asOf, true)} · {forecast.scenarios.map(label).join(', ')}. Actual, estimated, committed, normalized real, and TCO come from Ledger costs on the same asset, scenario, and replacement fiscal year.</p></div><p className="text-sm font-semibold text-steward-mist-muted">Currency: {forecast.currency || 'No monetary rows'}</p></div>
         <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-7" aria-label="Forecast totals">
-          <Metric label="Planned replacement" value={money(forecast.plannedReplacementMinor, forecast.currency)} />
+          <Metric disabled={busy !== ''} label="Planned replacement" onClick={() => void openAmountBreakdown('planned')} value={money(forecast.plannedReplacementMinor, forecast.currency)} />
           <Metric label="Unique assets" value={forecast.assetCount.toLocaleString()} />
-          {costKinds.map((kind) => <Metric key={kind} label={label(kind)} value={money(forecast.totalsByKindMinor[kind] ?? 0, forecast.currency)} />)}
+          {costKinds.map((kind) => <Metric disabled={busy !== ''} key={kind} label={label(kind)} onClick={() => void openAmountBreakdown(kind)} value={money(forecast.totalsByKindMinor[kind] ?? 0, forecast.currency)} />)}
         </div>
+
+        {forecastView === 'department_type' && <HorizonForecastCharts
+          currency={forecast.currency}
+          departmentLabel={departmentLabel}
+          items={forecastItems}
+          kindLabel={kindLabel}
+          money={money}
+        />}
 
         <div className={`${subpanelClass} mt-5 p-4`}>
           <h4 className="font-semibold">Replacement need overview</h4>
           <p className="mt-1 text-sm leading-6 text-steward-mist-muted">Supplemental compact bars. Exact values and asset counts are in the authoritative table below.</p>
           <ul className="mt-4 grid gap-3">
             {forecast.groups.map((group) => <li className="grid gap-2 sm:grid-cols-[minmax(9rem,0.6fr)_minmax(10rem,1fr)_auto] sm:items-center" key={`${group.scenario}-${group.key}`}>
-              <button className="rounded-md text-left text-sm font-medium text-[#a9c7ff] underline-offset-2 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-steward-blue" disabled={busy !== ''} onClick={() => void openForecastGroup(group)} type="button">{group.label} · {label(group.scenario)}</button>
+              <button className="rounded-md text-left text-sm font-medium text-[#a9c7ff] underline-offset-2 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-steward-blue" disabled={busy !== ''} onClick={() => void openForecastGroup(group)} type="button">{forecastGroupLabel(forecast, departmentNames, buildingNames, group)} · {label(group.scenario)}</button>
               <span aria-hidden="true" className="h-3 overflow-hidden rounded-sm bg-steward-ink-800"><span className="block h-full rounded-sm bg-steward-blue" style={{ width: `${group.plannedReplacementMinor === 0 ? 0 : Math.max(2, Math.round(group.plannedReplacementMinor / maxReplacement * 100))}%` }} /></span>
-              <span className="text-sm tabular-nums">{money(group.plannedReplacementMinor, forecast.currency)}</span>
+              <AmountButton disabled={busy !== ''} label={`${forecastGroupLabel(forecast, departmentNames, buildingNames, group)} planned replacement`} onClick={() => void openAmountBreakdown('planned', group)} value={money(group.plannedReplacementMinor, forecast.currency)} />
             </li>)}
             {forecast.groups.length === 0 && <li className="text-sm text-steward-mist-muted">No replacement needs match these forecast controls.</li>}
           </ul>
         </div>
 
         {nonAdditive && <p className="mt-4 rounded-lg border border-steward-warning/60 bg-steward-warning/10 p-3 text-sm leading-6 text-[#ffd596]"><strong>Non-additive grouping:</strong> one asset can appear in multiple {groupBy} rows. Do not add these rows together as an organization total.</p>}
-        <div aria-labelledby="horizon-forecast-table-heading" className={`${tableWrapClass} mt-5`} role="region" tabIndex={0}>
-          <table className="w-full min-w-[1080px] border-collapse text-left text-sm">
-            <caption className="pb-3 text-left text-sm text-steward-mist-muted" id="horizon-forecast-table-heading">Authoritative forecast values by {label(forecast.groupBy).toLowerCase()} and scenario.</caption>
-            <thead><tr className="border-b border-steward-ink-800 text-steward-mist-muted"><Header>Group</Header><Header>Scenario</Header><Header>Assets</Header><Header>Replacement need</Header>{costKinds.map((kind) => <Header key={kind}>{label(kind)}</Header>)}</tr></thead>
-            <tbody>{forecast.groups.map((group) => <tr className="border-b border-steward-ink-800/70 align-top" key={`${group.scenario}-${group.key}`}>
-              <Cell><button className="rounded-md text-left font-medium text-[#a9c7ff] underline-offset-2 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-steward-blue" disabled={busy !== ''} onClick={() => void openForecastGroup(group)} type="button">{group.label}</button></Cell>
-              <Cell>{label(group.scenario)}</Cell>
-              <Cell>{group.assetCount}</Cell>
-              <Cell>{money(group.plannedReplacementMinor, forecast.currency)}</Cell>
-              {costKinds.map((kind) => <Cell key={kind}>{money(group.amountsByKindMinor[kind] ?? 0, forecast.currency)}</Cell>)}
-            </tr>)}{forecast.groups.length === 0 && <tr><td className="px-3 py-6 text-steward-mist-muted" colSpan={9}>No forecast rows match these controls.</td></tr>}</tbody>
-          </table>
+        <p className="mt-5 text-sm text-steward-mist-muted" id="horizon-forecast-table-heading">Authoritative forecast values by {label(forecast.groupBy).toLowerCase()} and scenario.</p>
+        <div className="mt-3">
+          <DataGrid
+            columns={forecastColumns}
+            emptyMessage="No forecast rows match these controls."
+            identity={identity}
+            label={`Authoritative forecast values by ${label(forecast.groupBy).toLowerCase()} and scenario.`}
+            rowId={(group) => `${group.scenario}-${group.key}`}
+            rowLabel={(group) => forecastGroupLabel(forecast, departmentNames, buildingNames, group)}
+            rows={forecast.groups}
+            viewId="horizon-forecast-groups"
+          />
         </div>
       </section> : <p className="mt-6 text-steward-mist-muted" role="status">Loading Horizon forecast…</p>}
+      </div>
 
       <Drawer
         actions={groupAssets && canViewAtlas
@@ -868,26 +1265,21 @@ export default function HorizonPlanner({ csrfToken, permissions, assets, onOpenH
                       {canViewAtlas && <button className={secondaryButtonClass} disabled={busy !== ''} onClick={() => openGroupInAtlas(deployment.items.map((item) => item.assetId), `${groupAssets.label} · ${deployment.label}`)} type="button">View in Atlas</button>}
                     </div>
                   </div>
-                  <div className={`${tableWrapClass} border-0 bg-transparent`}>
-                    <table className="w-full min-w-[920px] border-collapse text-left text-sm">
-                      <thead><tr className="border-b border-steward-ink-800 text-steward-mist-muted">
-                        {groupBy === 'fiscal_year' && canWrite && <Header>Select</Header>}
-                        <Header>Asset</Header><Header>Stage</Header><Header>Useful life</Header><Header>Replacement date</Header><Header>Replacement FY</Header><Header>Month in FY</Header><Header>Replacement cost</Header>
-                      </tr></thead>
-                      <tbody>{deployment.items.map((item) => {
-                        const replacement = planReplacementDate(item)
-                        return <tr className="border-b border-steward-ink-800/70 align-top" key={item.planId}>
-                          {groupBy === 'fiscal_year' && canWrite && <Cell><input aria-label={`Select ${item.assetName}`} checked={selectedPlanIDs.includes(item.planId)} onChange={() => togglePlanSelection(item.planId)} type="checkbox" /></Cell>}
-                          <Cell><strong>{item.assetName}</strong><span className="mt-1 block text-xs text-steward-mist-muted">{item.assetId}</span></Cell>
-                          <Cell>{label(item.lifecycleStage)}</Cell>
-                          <Cell>{item.expectedUsefulLifeMonths} months</Cell>
-                          <Cell>{item.replacementDate ? displayDate(item.replacementDate) : item.derivedReplacementDate ? `${displayDate(item.derivedReplacementDate)} (derived)` : 'Not dated'}</Cell>
-                          <Cell>{replacement ? `FY${fiscalYearForDate(replacement, fiscalYearStartMonth)}` : '—'}</Cell>
-                          <Cell>{replacement ? fiscalMonthInYear(replacement, fiscalYearStartMonth) : '—'}</Cell>
-                          <Cell>{money(item.replacementCostMinor, item.currency)}</Cell>
-                        </tr>
-                      })}</tbody>
-                    </table>
+                  <div className="min-w-0">
+                    <DataGrid
+                      columns={deploymentAssetColumns}
+                      emptyMessage="No assets match this forecast group."
+                      identity={identity}
+                      label={`${deployment.label} assets`}
+                      maximumBodyHeight="24rem"
+                      onSelectedRowIdsChange={setSelectedPlanIDs}
+                      rowId={(item) => item.planId}
+                      rowLabel={(item) => item.assetName}
+                      rows={deployment.items}
+                      selectable={groupBy === 'fiscal_year' && canWrite}
+                      selectedRowIds={selectedPlanIDs}
+                      viewId={`horizon-forecast-deployment-${deployment.key}`}
+                    />
                   </div>
                 </section>
               })}
@@ -930,22 +1322,123 @@ export default function HorizonPlanner({ csrfToken, permissions, assets, onOpenH
           </>}
       </Drawer>
 
-      <section aria-labelledby="horizon-plans-heading" className="mt-8 min-w-0">
-        <h3 className="text-lg font-semibold" id="horizon-plans-heading">Lifecycle plans</h3>
-        <p className="mt-1 text-sm leading-6 text-steward-mist-muted">Plans shown for scenario {primaryScenario(scenarios)}. Earlier effective assumptions remain available in version history.</p>
-        <div aria-label="Scrollable lifecycle plans table" className={`${tableWrapClass} mt-3`} role="region" tabIndex={0}>
-          <table className="w-full min-w-[920px] border-collapse text-left text-sm">
-            <thead><tr className="border-b border-steward-ink-800 text-steward-mist-muted"><Header>Asset</Header><Header>Scenario</Header><Header>Stage</Header><Header>Useful life</Header><Header>Replacement date</Header><Header>Replacement cost</Header><Header>Revision</Header><Header>Actions</Header></tr></thead>
-            <tbody>{plans.map((plan) => <tr className="border-b border-steward-ink-800/70 align-top" key={plan.id}><Cell><strong>{assetName(assets, plan.assetId)}</strong><span className="mt-1 block text-xs text-steward-mist-muted">{plan.assetId}</span></Cell><Cell>{label(plan.scenario)}</Cell><Cell>{label(plan.lifecycleStage)}</Cell><Cell>{plan.expectedUsefulLifeMonths} months</Cell><Cell>{replacementDate(plan)}</Cell><Cell>{money(plan.replacementCostMinor, plan.currency)}</Cell><Cell>{plan.revision}</Cell><Cell><div className="flex min-w-56 flex-wrap gap-2">{canWrite && <button aria-label={`Edit plan for ${assetName(assets, plan.assetId)}`} className={secondaryButtonClass} onClick={() => openEdit(plan)} type="button">Edit plan</button>}<button aria-expanded={historyPlan?.id === plan.id} aria-label={`${busy === `history-${plan.id}` ? 'Loading history' : historyPlan?.id === plan.id ? 'Hide history' : 'View history'} for ${assetName(assets, plan.assetId)}`} className={secondaryButtonClass} disabled={busy !== ''} onClick={() => void toggleHistory(plan)} type="button">{busy === `history-${plan.id}` ? 'Loading…' : historyPlan?.id === plan.id ? 'Hide history' : 'View history'}</button></div></Cell></tr>)}{plans.length === 0 && <tr><td className="px-3 py-6 text-steward-mist-muted" colSpan={8}>No lifecycle plans match {primaryScenario(scenarios)}.</td></tr>}</tbody>
-          </table>
+      <Drawer
+        actions={amountBreakdown && amountBreakdown.items.length > 0 && canViewAtlas
+          ? <button className={buttonClass} disabled={busy !== ''} onClick={() => openAmountInAtlas()} type="button">View in Atlas</button>
+          : undefined}
+        description={selectedAmount
+          ? `${amountBreakdown ? `${amountBreakdown.itemCount} ${amountBreakdown.itemCount === 1 ? 'item' : 'items'} · ` : ''}${money(amountBreakdown?.totalMinor ?? (selectedAmount.group
+            ? selectedAmount.kind === 'planned' ? selectedAmount.group.plannedReplacementMinor : selectedAmount.group.amountsByKindMinor[selectedAmount.kind] ?? 0
+            : selectedAmount.kind === 'planned' ? forecast?.plannedReplacementMinor ?? 0 : forecast?.totalsByKindMinor[selectedAmount.kind] ?? 0), forecast?.currency ?? '')}`
+          : undefined}
+        kicker="Amount breakdown"
+        onClose={closeAmountDrawer}
+        open={selectedAmount !== null}
+        title={selectedAmount
+          ? selectedAmount.group
+            ? `${label(selectedAmount.kind)} · ${forecastGroupLabel(forecast, departmentNames, buildingNames, selectedAmount.group)}`
+            : label(selectedAmount.kind)
+          : 'Amount breakdown'}
+        wide
+      >
+        {!amountBreakdown
+          ? <p className="text-sm text-steward-mist-muted" role="status">Loading items that make up this amount…</p>
+          : <>
+            <p className="text-sm leading-6 text-steward-mist-muted">
+              {amountBreakdown.amountKind === 'planned'
+                ? 'Each row is a lifecycle plan whose replacement cost is included in this planned replacement total.'
+                : 'Each row is a Ledger cost on the same asset, scenario, and replacement fiscal year as a matching lifecycle plan.'}
+            </p>
+            <div className="mt-4 min-w-0">
+              <DataGrid
+                columns={amountBreakdownColumns}
+                emptyMessage="No items make up this amount for the current forecast controls."
+                identity={identity}
+                label="Amount breakdown items"
+                maximumBodyHeight="24rem"
+                rowId={(item) => item.costId || item.planId || `${item.assetId}-${item.kind}-${item.fiscalYear}-${item.amountMinor}`}
+                rowLabel={(item) => item.assetName}
+                rows={amountBreakdown.items}
+                viewId="horizon-amount-breakdown"
+              />
+              {amountBreakdown.items.length > 0 && <p className="mt-3 text-sm font-semibold tabular-nums">Total {money(amountBreakdown.totalMinor, amountBreakdown.currency)}</p>}
+            </div>
+          </>}
+      </Drawer>
+
+      <div hidden={section !== 'plans'} id="horizon-panel-plans" role="tabpanel" aria-labelledby="horizon-tab-plans">
+      <HorizonReplacementPlans
+        canWrite={canWrite}
+        csrfToken={csrfToken}
+        fiscalYearStartMonth={fiscalYearStartMonth}
+        onError={showError}
+        onMessage={(value) => { setError(''); setMessage(value) }}
+        onOpenAtlasInventory={canViewAtlas ? onOpenAtlasInventory : undefined}
+      />
+      <section aria-labelledby="horizon-plans-heading" className="mt-6 min-w-0">
+        <h3 className="text-lg font-semibold" id="horizon-plans-heading">Asset assumptions</h3>
+        <p className="mt-1 text-sm leading-6 text-steward-mist-muted">Per-asset useful life, replacement date, and cost for scenario {primaryScenario(scenarios)}. These still drive the forecast. Earlier effective assumptions remain available in version history.</p>
+        <div className="mt-3 min-w-0">
+          <DataGrid
+            columns={planColumns}
+            emptyMessage={`No lifecycle plans match ${primaryScenario(scenarios)}.`}
+            identity={identity}
+            label="Scrollable lifecycle plans table"
+            rowId={(plan) => plan.id}
+            rowLabel={(plan) => assetName(assets, plan.assetId)}
+            rows={plans}
+            viewId="horizon-asset-assumptions"
+          />
         </div>
       </section>
 
       {historyPlan && <section aria-labelledby="horizon-history-heading" className={`${subpanelClass} mt-6 min-w-0 p-4`}>
         <h3 className="text-lg font-semibold" id="horizon-history-heading">Version history for {assetName(assets, historyPlan.assetId)}</h3>
         <p className="mt-1 text-sm text-steward-mist-muted">Immutable assumptions ordered by the service.</p>
-        <div aria-label={`Scrollable version history for ${assetName(assets, historyPlan.assetId)}`} className="mt-3 overflow-x-auto" role="region" tabIndex={0}><table className="w-full min-w-[920px] border-collapse text-left text-sm"><thead><tr className="border-b border-steward-ink-800 text-steward-mist-muted"><Header>Revision</Header><Header>Effective from</Header><Header>Recorded</Header><Header>Stage</Header><Header>Useful life</Header><Header>Replacement date</Header><Header>Cost</Header><Header>Actor</Header></tr></thead><tbody>{history.map((version) => <tr className="border-b border-steward-ink-800/70" key={`${version.planId}-${version.revision}`}><Cell>{version.revision}</Cell><Cell>{displayDate(version.effectiveFrom)}</Cell><Cell>{displayDate(version.recordedAt, true)}</Cell><Cell>{label(version.lifecycleStage)}</Cell><Cell>{version.expectedUsefulLifeMonths} months</Cell><Cell>{version.replacementDate ? displayDate(version.replacementDate) : version.derivedReplacementDate ? `${displayDate(version.derivedReplacementDate)} (derived)` : 'Not dated'}</Cell><Cell>{money(version.replacementCostMinor, version.currency)}</Cell><Cell>{version.actorId}</Cell></tr>)}{history.length === 0 && <tr><td className="px-3 py-6 text-steward-mist-muted" colSpan={8}>No earlier plan versions are available.</td></tr>}</tbody></table></div>
+        <div className="mt-3 min-w-0">
+          <DataGrid
+            columns={historyColumns}
+            emptyMessage="No earlier plan versions are available."
+            identity={identity}
+            label={`Scrollable version history for ${assetName(assets, historyPlan.assetId)}`}
+            maximumBodyHeight="24rem"
+            rowId={(version) => `${version.planId}-${version.revision}`}
+            rowLabel={(version) => `Revision ${version.revision}`}
+            rows={history}
+            viewId="horizon-plan-history"
+          />
+        </div>
       </section>}
+      </div>
+
+      <div hidden={section !== 'defaults'} id="horizon-panel-defaults" role="tabpanel" aria-labelledby="horizon-tab-defaults">
+        <section aria-labelledby="horizon-kind-defaults-heading" className={`${subpanelClass} mt-6 p-4`}>
+          <h3 className="text-lg font-semibold" id="horizon-kind-defaults-heading">Lifecycle plan by asset type</h3>
+          <p className="mt-1 text-sm leading-6 text-steward-mist-muted">Baseline expected useful life applies when a per-asset plan leaves useful life unset. Useful life also comes from the linked Atlas model when present. Replacement models are configured in the Atlas model catalog lineage field.</p>
+          <div className="mt-4 grid gap-4 xl:grid-cols-2">
+            {assetKinds.map((assetKind) => {
+              const current = kindDefaultFor(assetKind)
+              return (
+                <form className="rounded-xl border border-white/10 bg-white/[0.025] p-4" key={assetKind} onSubmit={(event) => void saveKindDefault(event, assetKind, current?.revision)}>
+                  <h4 className="font-semibold">{label(assetKind)}</h4>
+                  <div className="mt-3">
+                    <Field id={`kind-life-${assetKind}`} label="Expected useful life (months)"><input className={inputClass} defaultValue={current?.expectedUsefulLifeMonths ?? ''} id={`kind-life-${assetKind}`} max={1200} min={1} name="expectedUsefulLifeMonths" placeholder="From model" required type="number" /></Field>
+                  </div>
+                  {canWrite && <button className={`${secondaryButtonClass} mt-4`} disabled={busy !== ''} type="submit">{busy === `kind-${assetKind}` ? 'Saving…' : current ? 'Update defaults' : 'Save defaults'}</button>}
+                </form>
+              )
+            })}
+          </div>
+        </section>
+
+        <section aria-labelledby="horizon-model-lineage-heading" className={`${subpanelClass} mt-6 p-4`}>
+          <h3 className="text-lg font-semibold" id="horizon-model-lineage-heading">Atlas model replacement lineage</h3>
+          <p className="mt-1 text-sm leading-6 text-steward-mist-muted">Horizon resolves replacement targets from asset overrides, then the linked model&apos;s lineage in Atlas. Edit lineage in Atlas → Models.</p>
+          {lineageModels.length === 0
+            ? <p className="mt-3 text-sm text-steward-mist-muted">No catalog models define a replacement successor yet.</p>
+            : <ul className="mt-4 grid gap-3 sm:grid-cols-2">{lineageModels.map((model) => <li className="rounded-lg border border-white/10 bg-white/[0.025] p-3 text-sm" key={model.id}><strong>{modelLabel(model)}</strong>{model.status === 'retired' && <span className="ml-2 text-steward-warning">retired</span>}<p className="mt-1 text-steward-mist-muted">{label(model.kind)} · replaces with {successorLabel(model, models)}</p></li>)}</ul>}
+        </section>
+      </div>
     </section>
   )
 }
@@ -982,16 +1475,19 @@ function Field({ id, label: fieldLabel, help, children }: { id: string; label: s
   return <div><label className="block text-sm font-semibold text-steward-mist-muted" htmlFor={id}>{fieldLabel}</label>{help && <p className="mt-1 text-xs leading-5 text-steward-mist-muted" id={`${id}-help`}>{help}</p>}{children}</div>
 }
 
-function Metric({ label: metricLabel, value }: { label: string; value: string }) {
-  return <div className="rounded-md border border-steward-ink-800 bg-steward-ink-950/40 p-3"><p className="text-xs font-medium text-steward-mist-muted">{metricLabel}</p><p className="mt-1 text-xl font-semibold tabular-nums">{value}</p></div>
+const amountLinkClass = 'rounded-md text-left font-medium tabular-nums text-[#a9c7ff] underline-offset-2 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-steward-blue disabled:text-steward-mist disabled:no-underline'
+
+function Metric({ label: metricLabel, value, onClick, disabled }: { label: string; value: string; onClick?: () => void; disabled?: boolean }) {
+  return <div className="rounded-md border border-steward-ink-800 bg-steward-ink-950/40 p-3">
+    <p className="text-xs font-medium text-steward-mist-muted">{metricLabel}</p>
+    {onClick
+      ? <button aria-label={`Show ${metricLabel.toLowerCase()} items totaling ${value}`} className={`${amountLinkClass} mt-1 text-xl font-semibold`} disabled={disabled} onClick={onClick} type="button">{value}</button>
+      : <p className="mt-1 text-xl font-semibold tabular-nums">{value}</p>}
+  </div>
 }
 
-function Header({ children }: { children: ReactNode }) {
-  return <th className="px-3 py-3 font-semibold" scope="col">{children}</th>
-}
-
-function Cell({ children }: { children: ReactNode }) {
-  return <td className="px-3 py-4">{children}</td>
+function AmountButton({ label: amountLabel, value, onClick, disabled }: { label: string; value: string; onClick: () => void; disabled?: boolean }) {
+  return <button aria-label={`Show ${amountLabel} items totaling ${value}`} className={amountLinkClass} disabled={disabled} onClick={onClick} type="button">{value}</button>
 }
 
 function assetName(assets: readonly Asset[], assetID: string) {

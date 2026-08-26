@@ -272,7 +272,7 @@ export function graphCanvasHeight(nodeCount: number) {
 }
 
 export function viewportGraphHeight(nodeCount: number, viewportHeight = typeof window === 'undefined' ? 800 : window.innerHeight) {
-  return Math.max(480, Math.min(graphCanvasHeight(nodeCount), Math.round(viewportHeight * 0.58)))
+  return Math.max(560, Math.min(graphCanvasHeight(nodeCount), Math.round(viewportHeight * 0.72)))
 }
 
 export { denseGraphNodeThreshold, largeGraphNodeThreshold }
